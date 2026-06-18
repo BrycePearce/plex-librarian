@@ -6,8 +6,17 @@ import { items, libraries } from '../db/schema.ts';
 const router = new Hono();
 
 router.get('/', async (c) => {
-  const rows = await db.select().from(libraries).orderBy(asc(libraries.title));
-  return c.json(rows);
+  const rawLimit = parseInt(c.req.query('limit') ?? '100', 10);
+  const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 100 : Math.min(rawLimit, 1000);
+  const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
+  const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+
+  const [[{ total }], rows] = await Promise.all([
+    db.select({ total: count() }).from(libraries),
+    db.select().from(libraries).orderBy(asc(libraries.title)).limit(limit).offset(offset),
+  ]);
+
+  return c.json({ limit, offset, total, libraries: rows });
 });
 
 router.get('/:key/stale', async (c) => {

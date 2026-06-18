@@ -23,14 +23,14 @@ export async function runSync(syncId: number): Promise<void> {
           set: { title: lib.title, type: lib.type, syncedAt: now },
         });
 
-      const plexItems = await plex.libraryItems(lib.key);
-
-      const CHUNK = 500;
-      for (let i = 0; i < plexItems.length; i += CHUNK) {
+      let hasItems = false;
+      for await (const page of plex.libraryItems(lib.key)) {
+        if (page.length === 0) continue;
+        hasItems = true;
         await db
           .insert(items)
           .values(
-            plexItems.slice(i, i + CHUNK).map((item) => ({
+            page.map((item) => ({
               ratingKey: item.ratingKey,
               libraryKey: lib.key,
               title: item.title,
@@ -59,16 +59,15 @@ export async function runSync(syncId: number): Promise<void> {
               updatedAt: excl(items.updatedAt),
             },
           });
+        totalItems += page.length;
       }
 
       // Skip pruning when Plex returned zero items — could be a transient 200 with
       // no Metadata key rather than a genuinely empty library, and a false empty
       // would wipe all rows for the library.
-      if (plexItems.length > 0) {
+      if (hasItems) {
         await db.delete(items).where(and(eq(items.libraryKey, lib.key), lt(items.updatedAt, now)));
       }
-
-      totalItems += plexItems.length;
     }
 
     await db

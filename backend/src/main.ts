@@ -9,9 +9,6 @@ import libraries from './routes/libraries.ts';
 import sync from './routes/sync.ts';
 import webhook from './routes/webhook.ts';
 
-// Env is loaded via --env-file=.env in deno.json tasks. @std/dotenv is available
-// in the import map if you need programmatic loading in other scripts.
-
 // Any sync that was 'pending' at startup was orphaned by a previous crash.
 await db
   .update(syncLog)
@@ -36,7 +33,7 @@ void (async () => {
     }
   } catch (err) {
     const msg = err instanceof PlexConfigError
-      ? 'PLEX_URL not configured — skipping Plex Pass check'
+      ? `${err.message} — skipping Plex Pass check`
       : 'Could not reach Plex at startup — skipping Plex Pass check';
     console.log(msg);
   }
