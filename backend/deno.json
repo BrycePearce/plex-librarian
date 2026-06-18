@@ -1,0 +1,32 @@
+{
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
+    "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
+    "db:generate": "deno run -A --env-file=.env npm:drizzle-kit generate",
+    "db:migrate": "deno run --allow-read --allow-write --allow-env --allow-ffi --allow-net --env-file=.env src/db/migrate.ts",
+    "fmt": "deno fmt",
+    "lint": "deno lint"
+  },
+  "fmt": {
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "singleQuote": true
+  },
+  "imports": {
+    "hono": "jsr:@hono/hono@^4",
+    "hono/logger": "https://jsr.io/@hono/hono/4.12.23/src/middleware/logger/index.ts",
+    "hono/body-limit": "https://jsr.io/@hono/hono/4.12.23/src/middleware/body-limit/index.ts",
+    "@std/crypto": "jsr:@std/crypto@^1",
+    "@std/dotenv": "jsr:@std/dotenv@^0.225",
+    "@std/path": "jsr:@std/path@^1",
+    "@db/sqlite": "jsr:@db/sqlite@^0.13",
+    "drizzle-orm": "npm:drizzle-orm@^0.36.1",
+    "drizzle-orm/sqlite-proxy": "npm:drizzle-orm@^0.36.1/sqlite-proxy",
+    "drizzle-orm/sqlite-core": "npm:drizzle-orm@^0.36.1/sqlite-core",
+    "drizzle-kit": "npm:drizzle-kit@^0.27.0"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}
