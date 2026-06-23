@@ -1,9 +1,19 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, isNull, isNotNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries } from '../db/schema.ts';
 
 const router = new Hono();
+
+const SORT_COLUMNS = {
+  fileSize: items.fileSize,
+  lastViewedAt: items.lastViewedAt,
+  addedAt: items.addedAt,
+  title: items.title,
+  year: items.year,
+} as const;
+
+type SortKey = keyof typeof SORT_COLUMNS;
 
 router.get('/', async (c) => {
   const rawLimit = parseInt(c.req.query('limit') ?? '100', 10);
@@ -27,28 +37,79 @@ router.get('/:key/stale', async (c) => {
   ).limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
+  // Minimum staleness: items not viewed in at least this many days (default 365).
+  // Use filter=unwatched for never-watched items regardless of age.
   const rawDays = parseInt(c.req.query('days') ?? '365', 10);
-  const days = Number.isNaN(rawDays) || rawDays < 0 ? 365 : rawDays;
-  const cutoff = days === 0 ? null : Math.floor(Date.now() / 1000) - days * 24 * 60 * 60;
+  if (!Number.isNaN(rawDays) && rawDays < 1) {
+    return c.json({ error: 'days must be at least 1; use filter=unwatched for never-watched items' }, 400);
+  }
+  const days = Number.isNaN(rawDays) ? 365 : rawDays;
+
+  // Maximum staleness: upper bound for range-bucket queries (e.g. days=365&maxDays=730 → 1-2 yr).
+  // Must be greater than days; otherwise the time window is inverted and matches nothing.
+  const rawMaxDays = c.req.query('maxDays');
+  const parsedMaxDays = rawMaxDays !== undefined ? parseInt(rawMaxDays, 10) : null;
+  if (parsedMaxDays !== null && (Number.isNaN(parsedMaxDays) || parsedMaxDays < 1)) {
+    return c.json({ error: 'maxDays must be at least 1' }, 400);
+  }
+  const maxDays = parsedMaxDays;
+  if (maxDays !== null && maxDays <= days) {
+    return c.json({ error: 'maxDays must be greater than days' }, 400);
+  }
+
+  // Items added within this window are excluded from unwatched results (default 90 days).
+  const rawMinAgeDays = parseInt(c.req.query('minAgeDays') ?? '90', 10);
+  const minAgeDays = Number.isNaN(rawMinAgeDays) || rawMinAgeDays < 0 ? 90 : rawMinAgeDays;
+
+  // filter=all (default): watched-stale + unwatched
+  // filter=watched: only items with a lastViewedAt in the stale range
+  // filter=unwatched: only items never watched (respects minAgeDays)
+  const rawFilter = c.req.query('filter') ?? 'all';
+  const filter = ['all', 'watched', 'unwatched'].includes(rawFilter) ? rawFilter : 'all';
+
+  // sort=fileSize (default) | lastViewedAt | addedAt | title | year
+  // order=desc (default) | asc
+  const rawSort = c.req.query('sort') ?? 'fileSize';
+  const sort: SortKey = rawSort in SORT_COLUMNS ? rawSort as SortKey : 'fileSize';
+  const orderStr = c.req.query('order') === 'asc' ? 'asc' : 'desc';
+  const order = orderStr === 'asc' ? asc : desc;
 
   const rawLimit = parseInt(c.req.query('limit') ?? '500', 10);
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 500 : Math.min(rawLimit, 1000);
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
-  const staleWhere = and(
-    eq(items.libraryKey, key),
-    cutoff === null ? isNull(items.lastViewedAt) : or(isNull(items.lastViewedAt), lt(items.lastViewedAt, cutoff)),
+  const now = Math.floor(Date.now() / 1000);
+  const minCutoff = now - days * 86400;
+  const maxCutoff = maxDays !== null ? now - maxDays * 86400 : null;
+  const ageCutoff = now - minAgeDays * 86400;
+
+  // Watched but stale: viewed before minCutoff, and (if maxDays set) after maxCutoff.
+  const watchedStaleCond = and(
+    isNotNull(items.lastViewedAt),
+    maxCutoff !== null
+      ? and(lt(items.lastViewedAt, minCutoff), gte(items.lastViewedAt, maxCutoff))
+      : lt(items.lastViewedAt, minCutoff),
   );
+
+  // Unwatched: null lastViewedAt AND added before the minAgeDays cutoff.
+  // Items with null addedAt are included — unknown add date doesn't mean recently added.
+  const unwatchedCond = and(isNull(items.lastViewedAt), or(isNull(items.addedAt), lt(items.addedAt, ageCutoff)));
+
+  const staleCond = filter === 'unwatched'
+    ? unwatchedCond
+    : filter === 'watched'
+    ? watchedStaleCond
+    : or(unwatchedCond, watchedStaleCond);
+
+  const staleWhere = and(eq(items.libraryKey, key), staleCond);
 
   const [[{ total }], staleItems] = await Promise.all([
     db.select({ total: count() }).from(items).where(staleWhere),
-    db.select().from(items).where(staleWhere).orderBy(desc(items.fileSize)).limit(limit).offset(
-      offset,
-    ),
+    db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(offset),
   ]);
 
-  return c.json({ days, limit, offset, total, items: staleItems });
+  return c.json({ days, maxDays, minAgeDays, filter, sort, order: orderStr, limit, offset, total, items: staleItems });
 });
 
 export default router;

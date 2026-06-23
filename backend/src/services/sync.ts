@@ -1,7 +1,7 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries, syncLog } from '../db/schema.ts';
-import { createPlexClient } from '../lib/plex.ts';
+import { createPlexClient, PLEX_TYPE } from '../lib/plex.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
 // a rename in schema.ts + migration automatically updates the upsert set clause.
@@ -9,7 +9,7 @@ const excl = (c: { name: string }) => sql.raw(`excluded.${c.name}`);
 
 export async function runSync(syncId: number): Promise<void> {
   try {
-    const plex = createPlexClient();
+    const plex = await createPlexClient();
     const plexLibraries = await plex.libraries();
     const now = Math.floor(Date.now() / 1000);
     let totalItems = 0;
@@ -23,8 +23,15 @@ export async function runSync(syncId: number): Promise<void> {
           set: { title: lib.title, type: lib.type, syncedAt: now },
         });
 
+      // Fetch at the top-level container type so each synced row represents a
+      // meaningful unit: show for TV, artist for music. Movie libraries need no
+      // filter — Plex returns movies by default.
+      const typeFilter = lib.type === 'show' ? PLEX_TYPE.SHOW
+        : lib.type === 'artist' ? PLEX_TYPE.ARTIST
+        : undefined;
+
       let hasItems = false;
-      for await (const page of plex.libraryItems(lib.key)) {
+      for await (const page of plex.libraryItems(lib.key, typeFilter)) {
         if (page.length === 0) continue;
         hasItems = true;
         await db
@@ -35,6 +42,7 @@ export async function runSync(syncId: number): Promise<void> {
               libraryKey: lib.key,
               title: item.title,
               type: item.type,
+              thumb: item.thumb,
               addedAt: item.addedAt,
               lastViewedAt: item.lastViewedAt,
               viewCount: item.viewCount,
@@ -50,6 +58,7 @@ export async function runSync(syncId: number): Promise<void> {
               libraryKey: excl(items.libraryKey),
               title: excl(items.title),
               type: excl(items.type),
+              thumb: excl(items.thumb),
               addedAt: excl(items.addedAt),
               lastViewedAt: excl(items.lastViewedAt),
               viewCount: excl(items.viewCount),

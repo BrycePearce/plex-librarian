@@ -1,0 +1,1 @@
+CREATE INDEX `items_library_file_size_idx` ON `items` (`library_key`,`file_size`);

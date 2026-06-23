@@ -5,7 +5,9 @@ import { eq } from 'drizzle-orm';
 import { db } from './db/index.ts';
 import { syncLog } from './db/schema.ts';
 import { createPlexClient, PlexConfigError } from './lib/plex.ts';
+import auth from './routes/auth.ts';
 import libraries from './routes/libraries.ts';
+import proxy from './routes/proxy.ts';
 import sync from './routes/sync.ts';
 import webhook from './routes/webhook.ts';
 
@@ -22,7 +24,7 @@ await db
 // Check Plex Pass availability in the background — don't block server startup
 void (async () => {
   try {
-    const plex = createPlexClient();
+    const plex = await createPlexClient();
     const hasPass = await plex.hasPlexPass();
     const secret = Deno.env.get('PLEX_WEBHOOK_SECRET');
     if (hasPass) {
@@ -51,7 +53,9 @@ app.onError((err, c) => {
 
 app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));
 
+app.route('/api/auth', auth);
 app.route('/api/libraries', libraries);
+app.route('/api/proxy', proxy);
 app.route('/api/sync', sync);
 app.route('/api/webhook', webhook);
 

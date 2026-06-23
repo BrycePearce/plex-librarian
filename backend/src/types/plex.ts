@@ -8,6 +8,7 @@ export interface PlexItem {
   ratingKey: string;
   title: string;
   type: string;
+  thumb: string | null;
   addedAt: number | null;
   lastViewedAt: number | null;
   viewCount: number;

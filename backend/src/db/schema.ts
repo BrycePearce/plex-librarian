@@ -17,6 +17,7 @@ export const items = sqliteTable(
     }),
     title: text('title').notNull(),
     type: text('type').notNull(),
+    thumb: text('thumb'),
     addedAt: integer('added_at'),
     lastViewedAt: integer('last_viewed_at'),
     viewCount: integer('view_count').default(0),
@@ -28,8 +29,21 @@ export const items = sqliteTable(
   (table) => ({
     lastViewedAtIdx: index('items_last_viewed_at_idx').on(table.lastViewedAt),
     libraryStaleIdx: index('items_library_stale_idx').on(table.libraryKey, table.lastViewedAt),
+    libraryFileSizeIdx: index('items_library_file_size_idx').on(table.libraryKey, table.fileSize),
   }),
 );
+
+// Singleton row (id = 1) — stores installation identity and Plex credentials.
+// Env vars PLEX_URL + PLEX_TOKEN take precedence over this table at runtime.
+export const settings = sqliteTable('settings', {
+  id: integer('id').primaryKey(),
+  clientId: text('client_id').notNull(),
+  publicJwk: text('public_jwk'),
+  privateJwk: text('private_jwk'),
+  plexToken: text('plex_token'),
+  plexTokenExpiresAt: integer('plex_token_expires_at'), // reserved for future JWT expiry — PIN tokens don't expire
+  plexUrl: text('plex_url'),
+});
 
 export const syncLog = sqliteTable(
   'sync_log',

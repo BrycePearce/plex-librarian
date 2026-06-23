@@ -1,0 +1,1 @@
+UPDATE `items` SET `file_size` = `file_size` + 4294967296 WHERE `file_size` < 0;
