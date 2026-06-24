@@ -16,8 +16,8 @@
     "npm:@tailwindcss/vite@^4.3.1": "4.3.1_vite@8.1.0__esbuild@0.28.1_esbuild@0.28.1",
     "npm:@tanstack/react-query-devtools@^5.101.1": "5.101.1_@tanstack+react-query@5.101.1__react@19.2.7_react@19.2.7",
     "npm:@tanstack/react-query@^5.101.1": "5.101.1_react@19.2.7",
+    "npm:@tanstack/react-router-devtools@^1.167.0": "1.167.0_@tanstack+react-router@1.170.16__react@19.2.7__react-dom@19.2.7___react@19.2.7_@tanstack+router-core@1.171.13_react@19.2.7_react-dom@19.2.7__react@19.2.7_csstype@3.2.3",
     "npm:@tanstack/react-router@^1.170.16": "1.170.16_react@19.2.7_react-dom@19.2.7__react@19.2.7",
-    "npm:@tanstack/router-devtools@^1.167.0": "1.167.0_@tanstack+react-router@1.170.16__react@19.2.7__react-dom@19.2.7___react@19.2.7_csstype@3.2.3_react@19.2.7_react-dom@19.2.7__react@19.2.7_@tanstack+router-core@1.171.13",
     "npm:@tanstack/router-plugin@^1.168.18": "1.168.18_@tanstack+react-router@1.170.16__react@19.2.7__react-dom@19.2.7___react@19.2.7_vite@8.1.0__esbuild@0.28.1_esbuild@0.28.1_react@19.2.7_react-dom@19.2.7__react@19.2.7",
     "npm:@types/react-dom@^19.2.3": "19.2.3_@types+react@19.2.17",
     "npm:@types/react@^19.2.17": "19.2.17",
@@ -895,21 +895,6 @@
         "csstype"
       ]
     },
-    "@tanstack/router-devtools@1.167.0_@tanstack+react-router@1.170.16__react@19.2.7__react-dom@19.2.7___react@19.2.7_csstype@3.2.3_react@19.2.7_react-dom@19.2.7__react@19.2.7_@tanstack+router-core@1.171.13": {
-      "integrity": "sha512-NwHy3SNoEgGraWtOstykkBPCTv7QRWBuPH49ww3prsyzQWXSSb7/2Jp7HHndpDrAIn0XNCCaxho90+6RFLSpUA==",
-      "dependencies": [
-        "@tanstack/react-router",
-        "@tanstack/react-router-devtools",
-        "clsx",
-        "csstype",
-        "goober",
-        "react",
-        "react-dom"
-      ],
-      "optionalPeers": [
-        "csstype"
-      ]
-    },
     "@tanstack/router-generator@1.167.17": {
       "integrity": "sha512-xtB9tB2Ws0tWR6Pi7nc3Qk9IYgoh1mQCKWjHqIl9tf6BNUpKoqniJoPAQ4+LGrK8FeZYU0o0p/qlZEyj9FAulA==",
       "dependencies": [
@@ -1518,8 +1503,8 @@
           "npm:@tailwindcss/vite@^4.3.1",
           "npm:@tanstack/react-query-devtools@^5.101.1",
           "npm:@tanstack/react-query@^5.101.1",
+          "npm:@tanstack/react-router-devtools@^1.167.0",
           "npm:@tanstack/react-router@^1.170.16",
-          "npm:@tanstack/router-devtools@^1.167.0",
           "npm:@tanstack/router-plugin@^1.168.18",
           "npm:@types/react-dom@^19.2.3",
           "npm:@types/react@^19.2.17",

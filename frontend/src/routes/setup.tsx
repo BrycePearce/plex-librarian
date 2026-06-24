@@ -1,92 +1,100 @@
-import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useState, useEffect } from 'react'
-import { useMutation, useQuery, useQueryClient, skipToken } from '@tanstack/react-query'
-import { Server } from 'lucide-react'
-import { api } from '../lib/api'
-import type { PlexServer } from '../lib/api'
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { useState, useEffect, useRef } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  skipToken,
+} from "@tanstack/react-query";
+import { Server, ExternalLink } from "lucide-react";
+import { api } from "../lib/api";
+import type { PlexServer } from "../lib/api";
 
-export const Route = createFileRoute('/setup')({
+export const Route = createFileRoute("/setup")({
   beforeLoad: async ({ context }) => {
     const status = await context.queryClient.ensureQueryData({
-      queryKey: ['auth', 'status'],
+      queryKey: ["auth", "status"],
       queryFn: api.auth.status,
-    })
-    if (status.configured) throw redirect({ to: '/dashboard' })
+    });
+    if (status.configured) throw redirect({ to: "/dashboard" });
   },
   component: SetupPage,
-})
+});
 
-type Step = 'initial' | 'polling' | 'pick-server'
+type Step = "initial" | "polling" | "pick-server";
 
 function SetupPage() {
-  const navigate = useNavigate()
-  const qc = useQueryClient()
-  const [step, setStep] = useState<Step>('initial')
-  const [pinId, setPinId] = useState<number | null>(null)
-  const [pinCode, setPinCode] = useState('')
-  const [pinExpired, setPinExpired] = useState(false)
-  const [servers, setServers] = useState<PlexServer[]>([])
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const [step, setStep] = useState<Step>("initial");
+  const [pinId, setPinId] = useState<number | null>(null);
+  const [authUrl, setAuthUrl] = useState("");
+  const [pinExpired, setPinExpired] = useState(false);
+  const authPopup = useRef<Window | null>(null);
+  const [servers, setServers] = useState<PlexServer[]>([]);
 
   const createPin = useMutation({
     mutationFn: () => api.auth.createPin(),
     onSuccess: (data) => {
-      setPinId(data.pinId)
-      setPinCode(data.code)
-      setPinExpired(false)
-      window.open(data.authUrl, '_blank', 'noopener,noreferrer')
-      setStep('polling')
+      setPinId(data.pinId);
+      setAuthUrl(data.authUrl);
+      setPinExpired(false);
+      authPopup.current = window.open(data.authUrl, "plex-auth", "width=800,height=700");
+      setStep("polling");
     },
-  })
+  });
 
   useEffect(() => {
-    if (step !== 'polling') return
-    const timer = setTimeout(() => setPinExpired(true), 5 * 60 * 1000)
-    return () => clearTimeout(timer)
-  }, [step])
+    if (step !== "polling") return;
+    const timer = setTimeout(() => setPinExpired(true), 5 * 60 * 1000);
+    return () => clearTimeout(timer);
+  }, [step]);
 
   const { data: pollData } = useQuery({
-    queryKey: ['auth', 'pin', pinId],
-    queryFn: step === 'polling' && pinId !== null && !pinExpired
-      ? () => api.auth.pollPin(pinId)
-      : skipToken,
+    queryKey: ["auth", "pin", pinId],
+    queryFn:
+      step === "polling" && pinId !== null && !pinExpired
+        ? () => api.auth.pollPin(pinId)
+        : skipToken,
     refetchInterval: 2_000,
-  })
+  });
 
   useEffect(() => {
-    if (pollData?.status === 'complete') {
-      setServers(pollData.servers)
-      setStep('pick-server')
+    if (pollData?.status === "complete") {
+      authPopup.current?.close();
+      setServers(pollData.servers);
+      setStep("pick-server");
     }
-  }, [pollData])
+  }, [pollData]);
 
   const chooseServer = useMutation({
     mutationFn: ({ server, uri }: { server: PlexServer; uri: string }) =>
       api.auth.chooseServer(uri, server.accessToken),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ['auth', 'status'] })
-      void navigate({ to: '/dashboard' })
+      await qc.refetchQueries({ queryKey: ["auth", "status"] });
+      void navigate({ to: "/dashboard" });
     },
-  })
+  });
 
   return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-4rem)]">
-      {step === 'initial' && (
+    <div className="flex items-center justify-center min-h-[calc(100vh-8rem)]">
+      {step === "initial" && (
         <div className="card bg-base-200 shadow-xl w-full max-w-md">
           <div className="card-body items-center text-center gap-6">
             <h1 className="card-title text-3xl">Welcome</h1>
             <p className="text-base-content/60">
-              Sign in with Plex to get started. We'll need read access to your server to
-              track library health.
+              Sign in with Plex to get started.
             </p>
             <button
-              className="btn btn-primary btn-lg w-full"
+              className="btn w-full bg-plex hover:bg-plex/90 border-plex hover:border-plex/90 text-white px-7.5 py-3.25 font-plex text-[16px] font-bold"
               onClick={() => createPin.mutate()}
               disabled={createPin.isPending}
             >
-              {createPin.isPending
-                ? <span className="loading loading-spinner" />
-                : 'Sign in with Plex'
-              }
+              {createPin.isPending ? (
+                <span className="loading loading-spinner" />
+              ) : (
+                "Sign in with Plex"
+              )}
             </button>
             {createPin.isError && (
               <div className="alert alert-error text-sm">
@@ -97,30 +105,41 @@ function SetupPage() {
         </div>
       )}
 
-      {step === 'polling' && (
+      {step === "polling" && (
         <div className="card bg-base-200 shadow-xl w-full max-w-md">
-          <div className="card-body items-center text-center gap-6">
-            <h2 className="card-title text-2xl">Authorize in Plex</h2>
+          <div className="card-body items-center text-center gap-6 py-10">
             {pinExpired ? (
-              <>
-                <div className="alert alert-warning text-sm">
-                  PIN expired. Start over to get a new one.
-                </div>
-              </>
+              <div className="alert alert-warning text-sm w-full">
+                Link expired. Start over to try again.
+              </div>
             ) : (
               <>
-                <p className="text-base-content/60">
-                  Complete sign-in in the Plex tab that just opened. Your PIN:
-                </p>
-                <div className="font-mono text-5xl font-bold tracking-widest text-primary">
-                  {pinCode}
+                <span className="loading loading-ring w-16 text-plex" />
+                <div className="flex flex-col gap-1">
+                  <h2 className="card-title text-2xl justify-center">
+                    Waiting for authorization
+                  </h2>
+                  <p className="text-base-content/60">
+                    Complete sign-in in the Plex tab that just opened.
+                  </p>
                 </div>
-                <span className="loading loading-dots loading-lg text-primary" />
+                <a
+                  href={authUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-outline btn-sm gap-2"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Open Plex
+                </a>
               </>
             )}
             <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => { setStep('initial'); setPinId(null) }}
+              className="btn btn-ghost btn-sm text-base-content/50"
+              onClick={() => {
+                setStep("initial");
+                setPinId(null);
+              }}
             >
               Start over
             </button>
@@ -128,37 +147,46 @@ function SetupPage() {
         </div>
       )}
 
-      {step === 'pick-server' && (
+      {step === "pick-server" && (
         <div className="card bg-base-200 shadow-xl w-full max-w-md">
           <div className="card-body gap-4">
             <h2 className="card-title text-2xl">Choose your server</h2>
-            <p className="text-base-content/60 text-sm">
-              Select the Plex Media Server you want to monitor.
+            <p className="text-base-content/60 text-sm text-center">
+              Select the server you want to monitor. Only servers you own are
+              shown.
             </p>
             <div className="flex flex-col gap-2">
               {servers.map((server) => {
-                const bestConn = server.connections[0]
-                if (!bestConn) return null
+                const bestConn = server.connections[0];
+                if (!bestConn) return null;
                 return (
                   <button
                     key={`${server.name}:${bestConn.uri}`}
                     className="btn btn-outline justify-start gap-3 h-auto py-3"
-                    onClick={() => chooseServer.mutate({ server, uri: bestConn.uri })}
+                    onClick={() =>
+                      chooseServer.mutate({ server, uri: bestConn.uri })
+                    }
                     disabled={chooseServer.isPending}
                   >
                     <Server className="w-5 h-5 shrink-0" />
                     <div className="text-left min-w-0">
                       <div className="font-semibold">{server.name}</div>
-                      <div className="text-xs text-base-content/50 truncate">{bestConn.uri}</div>
+                      <div className="text-xs text-base-content/50 truncate">
+                        {bestConn.uri}
+                      </div>
                     </div>
                     {bestConn.local && (
-                      <span className="badge badge-success badge-sm ml-auto shrink-0">local</span>
+                      <span className="badge badge-success badge-sm ml-auto shrink-0">
+                        local
+                      </span>
                     )}
                     {!bestConn.local && bestConn.relay && (
-                      <span className="badge badge-warning badge-sm ml-auto shrink-0">relay</span>
+                      <span className="badge badge-warning badge-sm ml-auto shrink-0">
+                        relay
+                      </span>
                     )}
                   </button>
-                )
+                );
               })}
               {servers.length === 0 && (
                 <p className="text-base-content/40 text-sm text-center py-4">
@@ -175,5 +203,5 @@ function SetupPage() {
         </div>
       )}
     </div>
-  )
+  );
 }

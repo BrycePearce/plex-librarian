@@ -87,6 +87,7 @@ router.get('/plex/pin/:id', async (c) => {
   const resources = await resourcesRes.json() as Array<{
     name: string;
     provides: string;
+    owned: boolean;
     accessToken: string;
     connections: Array<{ uri: string; local: boolean; relay: boolean }>;
   }>;
@@ -94,7 +95,7 @@ router.get('/plex/pin/:id', async (c) => {
   const connScore = (conn: { local: boolean; relay: boolean }) =>
     conn.local ? 0 : conn.relay ? 2 : 1;
   const servers = resources
-    .filter((r) => r.provides.split(',').map((s) => s.trim()).includes('server'))
+    .filter((r) => r.owned && r.provides.split(',').map((s) => s.trim()).includes('server'))
     .map((r) => ({
       name: r.name,
       accessToken: r.accessToken,
@@ -124,10 +125,10 @@ router.post('/plex/server', async (c) => {
     return c.json({ error: 'serverUrl must be a valid http/https URL' }, 400);
   }
 
-  const clientId = await getOrCreateClientId();
-  await db.insert(settings)
-    .values({ id: 1, clientId, plexUrl: body.serverUrl, plexToken: body.accessToken })
-    .onConflictDoUpdate({ target: settings.id, set: { plexUrl: body.serverUrl, plexToken: body.accessToken } });
+  await getOrCreateClientId();
+  await db.update(settings)
+    .set({ plexUrl: body.serverUrl, plexToken: body.accessToken })
+    .where(eq(settings.id, 1));
 
   clearPlexClientCache();
 
