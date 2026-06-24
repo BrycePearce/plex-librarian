@@ -25,7 +25,8 @@ COPY deno.json deno.lock /app/
 COPY shared/ /app/shared/
 COPY backend/ .
 
-# Copy built frontend assets
+# Copy built frontend assets and its deno.json (workspace member config required by Deno)
+COPY frontend/deno.json /app/frontend/deno.json
 COPY --from=builder /app/frontend/dist/ /app/frontend/dist/
 
 # Cache TypeScript modules
