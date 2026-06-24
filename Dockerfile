@@ -33,9 +33,9 @@ COPY --from=builder /app/frontend/dist/ /app/frontend/dist/
 RUN deno cache src/main.ts
 
 # Pre-download the @db/sqlite native FFI DLL so first boot doesn't need internet
-RUN printf 'import "@db/sqlite";\n' > /tmp/warmup.ts \
- && deno run --allow-net --allow-ffi --allow-env --allow-write --allow-read /tmp/warmup.ts \
- && rm /tmp/warmup.ts
+RUN printf 'import "@db/sqlite";\n' > warmup.ts \
+ && deno run --allow-net --allow-ffi --allow-env --allow-write --allow-read warmup.ts \
+ && rm warmup.ts
 
 ENV PORT=8080
 ENV STATIC_DIR=/app/frontend/dist
