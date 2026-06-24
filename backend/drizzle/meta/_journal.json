@@ -50,6 +50,13 @@
       "when": 1750291200003,
       "tag": "0006_fix_negative_file_sizes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1782256309009,
+      "tag": "0007_chemical_scream",
+      "breakpoints": true
     }
   ]
 }

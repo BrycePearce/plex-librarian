@@ -1,5 +1,8 @@
+.git/
 .env
+.env.*
 backend/data/
+backend/.deno/
 node_modules/
 frontend/dist/
 frontend/.vite/

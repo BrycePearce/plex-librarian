@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { and, asc, count, desc, eq, gte, isNull, isNotNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries } from '../db/schema.ts';
+import type { LibrariesResponse, StaleResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono();
 
@@ -26,7 +27,7 @@ router.get('/', async (c) => {
     db.select().from(libraries).orderBy(asc(libraries.title)).limit(limit).offset(offset),
   ]);
 
-  return c.json({ limit, offset, total, libraries: rows });
+  return c.json({ limit, offset, total, libraries: rows } satisfies LibrariesResponse);
 });
 
 router.get('/:key/stale', async (c) => {
@@ -109,7 +110,7 @@ router.get('/:key/stale', async (c) => {
     db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(offset),
   ]);
 
-  return c.json({ days, maxDays, minAgeDays, filter, sort, order: orderStr, limit, offset, total, items: staleItems });
+  return c.json({ days, maxDays, minAgeDays, filter, sort, order: orderStr, limit, offset, total, items: staleItems } satisfies StaleResponse);
 });
 
 export default router;

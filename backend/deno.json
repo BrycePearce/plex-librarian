@@ -1,5 +1,6 @@
 {
-  "nodeModulesDir": "auto",
+  "name": "backend",
+  "exports": {},
   "tasks": {
     "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
     "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
@@ -17,6 +18,7 @@
     "hono": "jsr:@hono/hono@^4",
     "hono/logger": "https://jsr.io/@hono/hono/4.12.23/src/middleware/logger/index.ts",
     "hono/body-limit": "https://jsr.io/@hono/hono/4.12.23/src/middleware/body-limit/index.ts",
+    "hono/deno": "https://jsr.io/@hono/hono/4.12.23/src/adapter/deno/index.ts",
     "@std/crypto": "jsr:@std/crypto@^1",
     "@std/dotenv": "jsr:@std/dotenv@^0.225",
     "@std/path": "jsr:@std/path@^1",
