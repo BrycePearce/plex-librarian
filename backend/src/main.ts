@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { bodyLimit } from 'hono/body-limit';
+import { serveStatic } from 'hono/deno';
+import { join, resolve } from '@std/path';
+import { runMigrations } from './db/migrate.ts';
 import { eq } from 'drizzle-orm';
 import { db } from './db/index.ts';
 import { syncLog } from './db/schema.ts';
@@ -10,6 +13,11 @@ import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
 import sync from './routes/sync.ts';
 import webhook from './routes/webhook.ts';
+
+await runMigrations(
+  Deno.env.get('DB_PATH') ?? './data/librarian.db',
+  resolve(import.meta.dirname!, '../drizzle'),
+);
 
 // Any sync that was 'pending' at startup was orphaned by a previous crash.
 await db
@@ -58,6 +66,12 @@ app.route('/api/libraries', libraries);
 app.route('/api/proxy', proxy);
 app.route('/api/sync', sync);
 app.route('/api/webhook', webhook);
+
+const staticDir = Deno.env.get('STATIC_DIR');
+if (staticDir) {
+  app.use('/*', serveStatic({ root: staticDir }));
+  app.get('/*', async (c) => c.html(await Deno.readTextFile(join(staticDir, 'index.html'))));
+}
 
 const port = parseInt(Deno.env.get('PORT') ?? '', 10) || 8080;
 console.log(`plex-purger listening on http://localhost:${port}`);

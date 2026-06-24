@@ -1,0 +1,1 @@
+-- snapshot sync: changes from 0003-0006 were hand-written; this entry aligns drizzle-kit's snapshot baseline

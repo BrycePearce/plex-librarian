@@ -1,88 +1,118 @@
 # plex-librarian
 
-Insights into Plex library health — stale content, last-watched dates, and disk-usage-weighted staleness.
+Library health insights for your Plex server — find stale content, track viewing patterns, and reclaim disk space.
 
-## Setup
+## Unraid / Docker
 
-1. [Install Deno 2.x](https://deno.com/manual/getting_started/installation)
+### Unraid (Community Applications)
 
-2. Copy `.env.example` to `.env` and fill in your values:
-   ```bash
-   cp backend/.env.example backend/.env
-   ```
+Add the template repository URL in **Settings → Docker → Template Repositories**:
 
-   **Getting your Plex token:** Play any media in Plex Web, click the three-dot menu
-   on the item → "Get Info" → "View XML". Your token is the `X-Plex-Token` query
-   parameter in the URL.
+```
+https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/
+```
 
-3. Generate the initial migration:
-   ```bash
-   cd backend && deno task db:generate
-   ```
+Then install **PlexLibrarian** from the Apps tab. Map `/data` to a persistent path (e.g. `/mnt/user/appdata/plex-librarian`) and open the web UI to complete setup.
 
-4. Apply the migration (creates the SQLite database):
-   ```bash
-   deno task db:migrate
-   ```
+### Docker Compose
 
-5. Start the dev server:
-   ```bash
-   deno task dev
-   ```
+```yaml
+services:
+  plex-librarian:
+    image: ghcr.io/BrycePearce/plex-librarian:latest
+    container_name: plex-librarian
+    ports:
+      - "8080:8080"
+    volumes:
+      - /path/to/appdata:/data
+    environment:
+      # Optional: skip the OAuth wizard by providing credentials directly
+      # PLEX_URL: http://192.168.1.100:32400
+      # PLEX_TOKEN: your-plex-token
+    restart: unless-stopped
+```
 
-The server starts on `http://localhost:8080` (or the `PORT` from your `.env`).
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DB_PATH` | No | Path to SQLite database (default: `/data/librarian.db`) |
+| `PORT` | No | HTTP port (default: `8080`) |
+| `PLEX_URL` | No | Skip OAuth — direct URL to your Plex server |
+| `PLEX_TOKEN` | No | Skip OAuth — your Plex auth token |
+| `PLEX_WEBHOOK_SECRET` | No | Validates incoming Plex webhook requests |
+
+Migrations run automatically on startup. No manual database setup required.
+
+### Manual Plex setup (skip OAuth)
+
+Set both `PLEX_URL` and `PLEX_TOKEN` to bypass the setup wizard entirely.
+
+**Finding your token:** In Plex Web, play any item, then click the three-dot menu → "Get Info" → "View XML". Your token is the `X-Plex-Token` query parameter in the URL. Alternatively, browse to `http://<your-plex-host>:32400/identity?X-Plex-Token=<token>` — if you get a valid response, the token works.
+
+**Finding your server URL:** Use `http://<local-ip>:32400` for a local server. plex.tv relay URLs (`https://xxx.plex.direct:...`) also work but local is faster.
+
+## Webhooks (Plex Pass only)
+
+Webhooks enable real-time `lastViewedAt` updates when someone plays or finishes a title, without waiting for a manual sync.
+
+In Plex Web, go to **Settings → Webhooks → Add Webhook** and enter:
+
+```
+http://<your-host>:8080/api/webhook/plex
+```
+
+If you set `PLEX_WEBHOOK_SECRET`, append `?token=<secret>` to the URL. Requests without a matching token are rejected with 401.
+
+| Event | Effect |
+|-------|--------|
+| `media.play` | Updates `lastViewedAt` to now |
+| `media.scrobble` | Updates `lastViewedAt` + `viewCount` (Plex's 90%-watched threshold) |
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
+| GET | `/api/settings` | Returns `{ configured }` — false redirects the UI to setup |
+| POST | `/api/auth/plex/pin` | Start OAuth PIN flow, returns `{ pinId, authUrl }` |
+| GET | `/api/auth/plex/pin/:id` | Poll PIN status, returns `{ status, servers? }` |
+| POST | `/api/auth/plex/server` | Save chosen server after OAuth |
+| GET | `/api/auth/status` | Check token validity |
+| DELETE | `/api/auth/plex` | Disconnect / switch servers |
 | GET | `/api/libraries` | All synced libraries |
-| GET | `/api/libraries/:key/stale?days=365` | Stale items in a library |
+| GET | `/api/libraries/:key/stale` | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.) |
+| GET | `/api/proxy/thumb` | Server-side Plex thumbnail proxy |
 | POST | `/api/sync` | Trigger a full sync from Plex |
 | GET | `/api/sync/history` | Last 20 sync runs |
 | GET | `/api/sync/:id` | Status of a specific sync run |
-| POST | `/api/webhook/plex` | Plex webhook receiver (requires Plex Pass) |
+| POST | `/api/webhook/plex` | Plex webhook receiver (Plex Pass only) |
 
-## Webhooks (Plex Pass only)
+## Development
 
-Webhooks enable real-time `lastViewedAt` updates — when someone plays or finishes
-a title, the database updates immediately without waiting for a manual sync.
+**Prerequisites:** [Deno 2.x](https://deno.com/manual/getting_started/installation)
 
-On startup, the server checks whether your Plex account has Plex Pass and logs
-the result. Without Plex Pass, everything works normally via manual sync; the
-webhook endpoint simply won't receive any traffic.
+```bash
+# Copy and fill in env vars
+cp backend/.env.example backend/.env
 
-### Configuring the webhook in Plex
-
-1. In Plex Web, go to **Settings → Webhooks → Add Webhook**.
-2. Enter your server's webhook URL:
-   ```
-   http://<your-server-host>:<PORT>/api/webhook/plex
-   ```
-3. Save. Plex will now POST an event every time media is played or scrobbled.
-
-### Optional: secure the endpoint
-
-If your server is reachable from the internet, set `PLEX_WEBHOOK_SECRET` in your `.env`:
-
-```env
-PLEX_WEBHOOK_SECRET=some-random-string
+# Start backend + frontend dev servers
+deno task dev
 ```
 
-Then append `?token=<your-secret>` to the webhook URL you register in Plex:
+Backend: `http://localhost:8080` · Frontend: `http://localhost:5173`
 
+### Database
+
+Migrations run automatically when the server starts. To generate a new migration after schema changes:
+
+```bash
+cd backend && deno task db:generate
 ```
-http://<your-server-host>:<PORT>/api/webhook/plex?token=some-random-string
+
+Other backend tasks (run from `backend/`):
+
+```bash
+deno task fmt    # format
+deno task lint   # lint
 ```
-
-Requests without a matching token will be rejected with `401`.
-
-### Events handled
-
-| Event | Effect |
-|-------|--------|
-| `media.play` | Updates `lastViewedAt` to now (immediate timer reset) |
-| `media.scrobble` | Updates `lastViewedAt` + `viewCount` (Plex's 90%-watched threshold) |
-
-All other Plex events are acknowledged and ignored.

@@ -1,0 +1,33 @@
+{
+  "name": "frontend",
+  "exports": {},
+  "tasks": {
+    "dev": "deno run -A npm:vite",
+    "build": "deno run -A npm:vite build",
+    "preview": "deno run -A npm:vite preview"
+  },
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "imports": {
+    "react": "npm:react@^19.2.7",
+    "react/jsx-runtime": "npm:react@^19.2.7/jsx-runtime",
+    "react-dom": "npm:react-dom@^19.2.7",
+    "react-dom/client": "npm:react-dom@^19.2.7/client",
+    "@tanstack/react-query": "npm:@tanstack/react-query@^5.101.1",
+    "@tanstack/react-router": "npm:@tanstack/react-router@^1.170.16",
+    "@tanstack/react-query-devtools": "npm:@tanstack/react-query-devtools@^5.101.1",
+    "@tanstack/router-devtools": "npm:@tanstack/router-devtools@^1.167.0",
+    "@tanstack/router-plugin": "npm:@tanstack/router-plugin@^1.168.18",
+    "@types/react": "npm:@types/react@^19.2.17",
+    "@types/react-dom": "npm:@types/react-dom@^19.2.3",
+    "@vitejs/plugin-react": "npm:@vitejs/plugin-react@^6.0.3",
+    "@tailwindcss/vite": "npm:@tailwindcss/vite@^4.3.1",
+    "daisyui": "npm:daisyui@^5.5.23",
+    "lucide-react": "npm:lucide-react@^1.21.0",
+    "tailwindcss": "npm:tailwindcss@^4.3.1",
+    "typescript": "npm:typescript@^6.0.3",
+    "vite": "npm:vite@^8.1.0"
+  }
+}
