@@ -1,5 +1,5 @@
 # ── Stage 1: build frontend ───────────────────────────────────────────────────
-FROM denoland/deno:2 AS builder
+FROM denoland/deno:2.8.3 AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY frontend/ ./frontend/
 RUN deno install && deno task build
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM denoland/deno:2
+FROM denoland/deno:2.8.3
 
 USER root
 
