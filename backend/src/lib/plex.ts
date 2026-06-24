@@ -43,12 +43,14 @@ export function buildPlexHeaders(clientId?: string, token?: string): Record<stri
 // Plex reports sizes as 32-bit signed integers. Values 2–4 GB wrap negative and are
 // corrected here. Values ≥ 4 GB wrap back to a smaller positive number and cannot be
 // recovered — fileSize will be under-reported for those items.
+// Result is stored in kilobytes to keep values well within 32-bit range for @db/sqlite.
 const normalizeSize = (s: number) => s < 0 ? s + 2 ** 32 : s;
 
 function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
   return raw.map((item) => {
     const parts = item.Media?.flatMap((m) => m.Part ?? []).filter((p) => p.size != null) ?? [];
-    const fileSize = parts.length > 0 ? parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0) : null;
+    const bytes = parts.length > 0 ? parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0) : null;
+    const fileSize = bytes !== null ? Math.round(bytes / 1000) : null;
     return {
       ratingKey: item.ratingKey,
       title: item.title,

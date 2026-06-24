@@ -1,8 +1,8 @@
-export function formatBytes(bytes: number): string {
-  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`
-  return `${(bytes / 1e3).toFixed(0)} KB`
+export function formatKilobytes(kb: number): string {
+  if (kb >= 1e9) return `${(kb / 1e9).toFixed(1)} TB`
+  if (kb >= 1e6) return `${(kb / 1e6).toFixed(1)} GB`
+  if (kb >= 1e3) return `${(kb / 1e3).toFixed(0)} MB`
+  return `${kb.toFixed(0)} KB`
 }
 
 export function formatDate(unixSec: number): string {

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { ArrowLeft, ArrowDown, ArrowUp } from 'lucide-react'
 import { api } from '../lib/api'
 import type { StaleParams, StaleItem, SortKey } from '../lib/api'
-import { formatBytes, formatDate } from '../lib/format'
+import { formatKilobytes, formatDate } from '../lib/format'
 
 export const Route = createFileRoute('/libraries/$key/stale')({
   beforeLoad: async ({ context }) => {
@@ -59,7 +59,7 @@ function StalePage() {
           <h1 className="text-2xl font-bold">Stale Items</h1>
           {data && (
             <p className="text-base-content/50 text-sm">
-              {data.total.toLocaleString()} items · {formatBytes(pageFileSize(data.items))} on this page
+              {data.total.toLocaleString()} items · {formatKilobytes(pageFileSize(data.items))} on this page
             </p>
           )}
         </div>
@@ -207,7 +207,7 @@ function ItemRow({ item }: { item: StaleItem }) {
         </div>
       </td>
       <td className="text-sm font-mono whitespace-nowrap">
-        {item.fileSize != null ? formatBytes(item.fileSize) : '—'}
+        {item.fileSize != null ? formatKilobytes(item.fileSize) : '—'}
       </td>
       <td className="text-sm text-base-content/70 whitespace-nowrap">
         {item.lastViewedAt

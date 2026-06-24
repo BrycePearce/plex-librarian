@@ -1,9 +1,9 @@
-import { createFileRoute, redirect, Link } from '@tanstack/react-router'
+import { createFileRoute, redirect, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { useState, useEffect } from 'react'
-import { RefreshCw, Film, Tv, Music, AlertCircle, CheckCircle } from 'lucide-react'
+import { RefreshCw, Film, Tv, Music, AlertCircle, CheckCircle, LogOut } from 'lucide-react'
 import { api } from '../lib/api'
-import type { SyncLog } from '../lib/api'
+import type { SyncLog, AuthStatus } from '../lib/api'
 import { formatRelativeTime, formatDuration } from '../lib/format'
 
 export const Route = createFileRoute('/dashboard')({
@@ -20,7 +20,22 @@ export const Route = createFileRoute('/dashboard')({
 
 function DashboardPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [activeSyncId, setActiveSyncId] = useState<number | null>(null)
+
+  const { data: authStatus } = useQuery<AuthStatus>({
+    queryKey: ['auth', 'status'],
+    queryFn: api.auth.status,
+    staleTime: 60_000,
+  })
+
+  const disconnect = useMutation({
+    mutationFn: api.auth.disconnect,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['auth', 'status'] })
+      void navigate({ to: '/setup' })
+    },
+  })
 
   const { data: librariesData, isLoading: libsLoading, error: libsError } = useQuery({
     queryKey: ['libraries'],
@@ -69,14 +84,27 @@ function DashboardPage() {
             {librariesData ? `${librariesData.total} libraries` : '—'}
           </p>
         </div>
-        <button
-          className="btn btn-primary gap-2"
-          onClick={() => triggerSync.mutate()}
-          disabled={isSyncing}
-        >
-          <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-          {isSyncing ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div className="flex gap-2">
+          {authStatus?.source !== 'env' && (
+            <button
+              className="btn btn-ghost gap-2"
+              onClick={() => disconnect.mutate()}
+              disabled={disconnect.isPending}
+              title="Disconnect from Plex"
+            >
+              <LogOut className="w-4 h-4" />
+              Disconnect
+            </button>
+          )}
+          <button
+            className="btn btn-primary gap-2"
+            onClick={() => triggerSync.mutate()}
+            disabled={isSyncing}
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            {isSyncing ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
 
       {activeSync?.status === 'pending' && (
