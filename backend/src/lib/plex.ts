@@ -15,7 +15,25 @@ interface PlexRawMetadata {
   viewCount?: number;
   duration?: number;
   year?: number;
+  // Episode-level parent references — only present on type=4 responses.
+  parentRatingKey?: string;  // season ratingKey
+  parentIndex?: number;      // season number
+  parentTitle?: string;      // season title
+  grandparentRatingKey?: string; // show ratingKey
   Media?: Array<{ Part?: Array<{ size?: number }> }>;
+}
+
+// Minimal episode shape used by syncShowSizes to aggregate season file sizes.
+// Not exposed via API — purely internal to the sync pipeline.
+export interface PlexEpisode {
+  ratingKey: string;
+  seasonRatingKey: string;
+  showRatingKey: string;
+  seasonIndex: number;
+  seasonTitle: string;
+  fileSize: number | null;
+  duration: number | null;
+  viewCount: number;
 }
 
 const ITEMS_PAGE_SIZE = 300;
@@ -46,24 +64,41 @@ export function buildPlexHeaders(clientId?: string, token?: string): Record<stri
 // Result is stored in kilobytes to keep values well within 32-bit range for @db/sqlite.
 const normalizeSize = (s: number) => s < 0 ? s + 2 ** 32 : s;
 
+function extractFileSize(item: PlexRawMetadata): number | null {
+  const parts = item.Media?.flatMap((m) => m.Part ?? []).filter((p) => p.size != null) ?? [];
+  if (parts.length === 0) return null;
+  const bytes = parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0);
+  return Math.round(bytes / 1000);
+}
+
 function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
-  return raw.map((item) => {
-    const parts = item.Media?.flatMap((m) => m.Part ?? []).filter((p) => p.size != null) ?? [];
-    const bytes = parts.length > 0 ? parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0) : null;
-    const fileSize = bytes !== null ? Math.round(bytes / 1000) : null;
-    return {
+  return raw.map((item) => ({
+    ratingKey: item.ratingKey,
+    title: item.title,
+    type: item.type,
+    thumb: item.thumb ?? null,
+    addedAt: item.addedAt ?? null,
+    lastViewedAt: item.lastViewedAt ?? null,
+    viewCount: item.viewCount ?? 0,
+    fileSize: extractFileSize(item),
+    duration: item.duration ?? null,
+    year: item.year ?? null,
+  }));
+}
+
+function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
+  return raw
+    .filter((item) => item.parentRatingKey && item.grandparentRatingKey && item.parentIndex != null)
+    .map((item) => ({
       ratingKey: item.ratingKey,
-      title: item.title,
-      type: item.type,
-      thumb: item.thumb ?? null,
-      addedAt: item.addedAt ?? null,
-      lastViewedAt: item.lastViewedAt ?? null,
-      viewCount: item.viewCount ?? 0,
-      fileSize,
+      seasonRatingKey: item.parentRatingKey!,
+      showRatingKey: item.grandparentRatingKey!,
+      seasonIndex: item.parentIndex!,
+      seasonTitle: item.parentTitle ?? `Season ${item.parentIndex}`,
+      fileSize: extractFileSize(item),
       duration: item.duration ?? null,
-      year: item.year ?? null,
-    };
-  });
+      viewCount: item.viewCount ?? 0,
+    }));
 }
 
 export class PlexClient {
@@ -134,7 +169,10 @@ export class PlexClient {
     return `${this.url}/photo/:/transcode?${params}`;
   }
 
-  async *libraryItems(libraryKey: string, typeFilter?: number): AsyncGenerator<PlexItem[]> {
+  private async *paginatedMetadata(
+    libraryKey: string,
+    typeFilter?: number,
+  ): AsyncGenerator<PlexRawMetadata[]> {
     const basePath = typeFilter !== undefined
       ? `/library/sections/${libraryKey}/all?type=${typeFilter}`
       : `/library/sections/${libraryKey}/all`;
@@ -148,14 +186,12 @@ export class PlexClient {
       );
 
     const first = await fetchPage(0);
-    const firstPage = first.MediaContainer.Metadata ?? [];
     const total = first.MediaContainer.totalSize;
-
     if (total === undefined) {
       throw new Error(`Plex did not return totalSize for library ${libraryKey}`);
     }
 
-    yield mapItems(firstPage);
+    yield first.MediaContainer.Metadata ?? [];
 
     const remainingStarts: number[] = [];
     for (let s = ITEMS_PAGE_SIZE; s < total; s += ITEMS_PAGE_SIZE) {
@@ -166,7 +202,19 @@ export class PlexClient {
       const batch = await Promise.all(
         remainingStarts.slice(i, i + FETCH_CONCURRENCY).map(fetchPage),
       );
-      yield batch.flatMap((d) => mapItems(d.MediaContainer.Metadata ?? []));
+      yield batch.flatMap((d) => d.MediaContainer.Metadata ?? []);
+    }
+  }
+
+  async *libraryItems(libraryKey: string, typeFilter?: number): AsyncGenerator<PlexItem[]> {
+    for await (const page of this.paginatedMetadata(libraryKey, typeFilter)) {
+      yield mapItems(page);
+    }
+  }
+
+  async *libraryEpisodes(libraryKey: string): AsyncGenerator<PlexEpisode[]> {
+    for await (const page of this.paginatedMetadata(libraryKey, PLEX_TYPE.EPISODE)) {
+      yield mapEpisodes(page);
     }
   }
 }

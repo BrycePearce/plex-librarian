@@ -1,5 +1,4 @@
-import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const libraries = sqliteTable('libraries', {
   key: text('key').primaryKey(),
@@ -45,19 +44,36 @@ export const settings = sqliteTable('settings', {
   plexUrl: text('plex_url'),
 });
 
-export const syncLog = sqliteTable(
-  'sync_log',
+export const seasons = sqliteTable(
+  'seasons',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    startedAt: integer('started_at').notNull(),
-    finishedAt: integer('finished_at'),
-    status: text('status', { enum: ['pending', 'success', 'error'] }).notNull(),
-    itemsProcessed: integer('items_processed').default(0),
-    error: text('error'),
+    ratingKey: text('rating_key').primaryKey(),
+    showRatingKey: text('show_rating_key').notNull().references(() => items.ratingKey, {
+      onDelete: 'cascade',
+    }),
+    libraryKey: text('library_key').notNull().references(() => libraries.key, {
+      onDelete: 'cascade',
+    }),
+    seasonIndex: integer('season_index').notNull(),
+    title: text('title').notNull(),
+    fileSize: integer('file_size'),
+    duration: integer('duration'),
+    leafCount: integer('leaf_count'),
+    viewCount: integer('view_count').default(0),
+    updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    onePendingSync: uniqueIndex('sync_log_one_pending_idx')
-      .on(table.status)
-      .where(sql`${table.status} = 'pending'`),
+    showIdx: index('seasons_show_idx').on(table.showRatingKey),
+    libraryIdx: index('seasons_library_idx').on(table.libraryKey),
   }),
 );
+
+export const syncLog = sqliteTable('sync_log', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  libraryKey: text('library_key'),
+  startedAt: integer('started_at').notNull(),
+  finishedAt: integer('finished_at'),
+  status: text('status', { enum: ['pending', 'success', 'error'] }).notNull(),
+  itemsProcessed: integer('items_processed').default(0),
+  error: text('error'),
+});

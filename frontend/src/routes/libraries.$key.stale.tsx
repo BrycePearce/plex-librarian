@@ -1,7 +1,7 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import { ArrowLeft, ArrowDown, ArrowUp } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
+import { ArrowLeft, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import type { StaleParams, StaleItem, SortKey } from '../lib/api'
 import { formatKilobytes, formatDate } from '../lib/format'
@@ -22,6 +22,7 @@ const PAGE_SIZE = 50
 
 function StalePage() {
   const { key } = Route.useParams()
+  const qc = useQueryClient()
   const [params, setParams] = useState<StaleParams>({
     days: 365,
     filter: 'all',
@@ -36,6 +37,32 @@ function StalePage() {
     queryFn: () => api.libraries.stale(key, params),
     placeholderData: (prev) => prev,
   })
+
+  const [activeSyncId, setActiveSyncId] = useState<number | null>(null)
+
+  const { data: activeSync } = useQuery({
+    queryKey: ['sync', activeSyncId],
+    queryFn: activeSyncId !== null ? () => api.sync.poll(activeSyncId) : skipToken,
+    refetchInterval: (q) => q.state.data?.status === 'pending' ? 2_000 : false,
+  })
+
+  useEffect(() => {
+    if (activeSyncId === null) return
+    if (activeSync?.status === 'success') {
+      void qc.invalidateQueries({ queryKey: ['stale', key] })
+      setActiveSyncId(null)
+    } else if (activeSync?.status === 'error') {
+      setActiveSyncId(null)
+    }
+  }, [activeSync, activeSyncId, key, qc])
+
+  const triggerSync = useMutation({
+    mutationFn: () => api.sync.triggerLibrary(key),
+    onSuccess: (data) => setActiveSyncId(data.syncId),
+    onError: () => setActiveSyncId(null),
+  })
+
+  const isSyncing = activeSyncId !== null || triggerSync.isPending
 
   const page = Math.floor((params.offset ?? 0) / PAGE_SIZE)
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -55,12 +82,27 @@ function StalePage() {
         <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
           <ArrowLeft className="w-4 h-4" /> Back
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold">Stale Items</h1>
           {data && (
             <p className="text-base-content/50 text-sm">
               {data.total.toLocaleString()} items · {formatKilobytes(pageFileSize(data.items))} on this page
             </p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            className="btn btn-sm gap-2"
+            onClick={() => triggerSync.mutate()}
+            disabled={isSyncing}
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            {isSyncing ? 'Syncing…' : 'Sync'}
+          </button>
+          {triggerSync.isError && (
+            <span className="text-xs text-error">
+              {triggerSync.error instanceof Error ? triggerSync.error.message : 'Sync failed'}
+            </span>
           )}
         </div>
       </div>
@@ -186,6 +228,13 @@ function ItemRow({ item }: { item: StaleItem }) {
     ? `/api/proxy/thumb?path=${encodeURIComponent(item.thumb)}&width=60&height=90`
     : null
 
+  const titleEl = (
+    <div className="min-w-0">
+      <div className="font-medium truncate max-w-xs">{item.title}</div>
+      {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
+    </div>
+  )
+
   return (
     <tr className="hover">
       <td>
@@ -200,10 +249,15 @@ function ItemRow({ item }: { item: StaleItem }) {
           ) : (
             <div className="w-10 h-14 rounded bg-base-300 shrink-0" />
           )}
-          <div className="min-w-0">
-            <div className="font-medium truncate max-w-xs">{item.title}</div>
-            {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
-          </div>
+          {item.type === 'show' ? (
+            <Link
+              to="/libraries/$key/shows/$ratingKey"
+              params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
+              className="hover:text-primary transition-colors min-w-0"
+            >
+              {titleEl}
+            </Link>
+          ) : titleEl}
         </div>
       </td>
       <td className="text-sm font-mono whitespace-nowrap">

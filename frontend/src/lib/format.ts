@@ -1,8 +1,11 @@
 export function formatKilobytes(kb: number): string {
-  if (kb >= 1e9) return `${(kb / 1e9).toFixed(1)} TB`
-  if (kb >= 1e6) return `${(kb / 1e6).toFixed(1)} GB`
-  if (kb >= 1e3) return `${(kb / 1e3).toFixed(0)} MB`
-  return `${kb.toFixed(0)} KB`
+  // Sizes are stored as decimal KB (1000 bytes/KB). Display uses binary thresholds
+  // (1024-based) to match what Windows Explorer shows when users verify sizes.
+  const bytes = kb * 1000
+  if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(1)} TB`
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(0)} MB`
+  return `${(bytes / 1024).toFixed(0)} KB`
 }
 
 export function formatDate(unixSec: number): string {

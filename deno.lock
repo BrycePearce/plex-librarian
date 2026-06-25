@@ -21,7 +21,8 @@
     "npm:@tanstack/router-plugin@^1.168.18": "1.168.18_@tanstack+react-router@1.170.16__react@19.2.7__react-dom@19.2.7___react@19.2.7_vite@8.1.0__esbuild@0.28.1_esbuild@0.28.1_react@19.2.7_react-dom@19.2.7__react@19.2.7",
     "npm:@types/react-dom@^19.2.3": "19.2.3_@types+react@19.2.17",
     "npm:@types/react@^19.2.17": "19.2.17",
-    "npm:@vitejs/plugin-react@^6.0.3": "6.0.3_vite@8.1.0__esbuild@0.28.1_esbuild@0.28.1",
+    "npm:@vitejs/plugin-react@^6.0.3": "6.0.3_babel-plugin-react-compiler@1.0.0_vite@8.1.0__esbuild@0.28.1",
+    "npm:babel-plugin-react-compiler@1": "1.0.0",
     "npm:daisyui@^5.5.23": "5.5.23",
     "npm:drizzle-kit@*": "0.27.2",
     "npm:drizzle-kit@0.27": "0.27.2",
@@ -965,11 +966,15 @@
         "csstype"
       ]
     },
-    "@vitejs/plugin-react@6.0.3_vite@8.1.0__esbuild@0.28.1_esbuild@0.28.1": {
+    "@vitejs/plugin-react@6.0.3_babel-plugin-react-compiler@1.0.0_vite@8.1.0__esbuild@0.28.1": {
       "integrity": "sha512-vmFvco5/QuC2f9Oj+wTk0+9XeDFkHxSamwZKYc7MxYwKICfvUvlMhqKI0VuICPltGqh1neqBKDvO4kes1ya8vg==",
       "dependencies": [
         "@rolldown/pluginutils",
+        "babel-plugin-react-compiler",
         "vite"
+      ],
+      "optionalPeers": [
+        "babel-plugin-react-compiler"
       ]
     },
     "ansis@4.3.1": {
@@ -981,6 +986,12 @@
         "@babel/core",
         "@babel/parser",
         "@babel/traverse",
+        "@babel/types"
+      ]
+    },
+    "babel-plugin-react-compiler@1.0.0": {
+      "integrity": "sha512-Ixm8tFfoKKIPYdCCKYTsqv+Fd4IJ0DQqMyEimo+pxUOMUR9cVPlwTrFt9Avu+3cb6Zp3mAzl+t1MrG2fxxKsxw==",
+      "dependencies": [
         "@babel/types"
       ]
     },
@@ -1509,6 +1520,7 @@
           "npm:@types/react-dom@^19.2.3",
           "npm:@types/react@^19.2.17",
           "npm:@vitejs/plugin-react@^6.0.3",
+          "npm:babel-plugin-react-compiler@1",
           "npm:daisyui@^5.5.23",
           "npm:lucide-react@^1.21.0",
           "npm:react-dom@^19.2.7",

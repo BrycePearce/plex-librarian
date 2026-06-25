@@ -1,10 +1,14 @@
-import { type BindValue, type Statement } from '@db/sqlite';
+import type { BindValue, Statement } from '@db/sqlite';
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
 import * as schema from './schema.ts';
 import { openSqliteDb } from './util.ts';
 
 const dbPath = Deno.env.get('DB_PATH') ?? './data/librarian.db';
 const sqlite = openSqliteDb(dbPath);
+
+export function withTransaction<T>(fn: (client: typeof sqlite) => T): T {
+  return sqlite.transaction(() => fn(sqlite))();
+}
 
 const stmtCache = new Map<string, Statement>();
 

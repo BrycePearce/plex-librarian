@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { and, asc, count, desc, eq, gte, isNull, isNotNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { items, libraries } from '../db/schema.ts';
-import type { LibrariesResponse, StaleResponse } from '@plex-librarian/shared/types.ts';
+import { items, libraries, seasons } from '../db/schema.ts';
+import type { LibrariesResponse, ShowDetail, StaleResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono();
 
@@ -111,6 +111,26 @@ router.get('/:key/stale', async (c) => {
   ]);
 
   return c.json({ days, maxDays, minAgeDays, filter, sort, order: orderStr, limit, offset, total, items: staleItems } satisfies StaleResponse);
+});
+
+router.get('/:key/shows/:ratingKey', async (c) => {
+  const key = c.req.param('key');
+  const ratingKey = c.req.param('ratingKey');
+
+  const [show] = await db
+    .select()
+    .from(items)
+    .where(and(eq(items.ratingKey, ratingKey), eq(items.libraryKey, key)))
+    .limit(1);
+  if (!show) return c.json({ error: 'show not found' }, 404);
+
+  const showSeasons = await db
+    .select()
+    .from(seasons)
+    .where(and(eq(seasons.showRatingKey, ratingKey), eq(seasons.libraryKey, key)))
+    .orderBy(asc(seasons.seasonIndex));
+
+  return c.json({ show, seasons: showSeasons } satisfies ShowDetail);
 });
 
 export default router;
