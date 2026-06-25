@@ -4,6 +4,7 @@ import type {
   PinPollResult,
   LibrariesResponse,
   StaleResponse,
+  ShowDetail,
   SyncLog,
   SyncTriggerResponse,
 } from '@shared/types'
@@ -18,6 +19,8 @@ export type {
   LibrariesResponse,
   StaleItem,
   StaleResponse,
+  Season,
+  ShowDetail,
   SyncLog,
   SyncTriggerResponse,
 } from '@shared/types'
@@ -78,10 +81,14 @@ export const api = {
       }
       return apiFetch<StaleResponse>(`/libraries/${encodeURIComponent(key)}/stale?${q}`)
     },
+    showDetail: (key: string, ratingKey: string) =>
+      apiFetch<ShowDetail>(`/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(ratingKey)}`),
   },
   sync: {
     trigger: () =>
       apiFetch<SyncTriggerResponse>('/sync', { method: 'POST' }),
+    triggerLibrary: (key: string) =>
+      apiFetch<SyncTriggerResponse>(`/sync/libraries/${encodeURIComponent(key)}`, { method: 'POST' }),
     poll: (id: number) =>
       apiFetch<SyncLog>(`/sync/${id}`),
     history: (limit = 20) =>

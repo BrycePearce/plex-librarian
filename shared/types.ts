@@ -78,10 +78,31 @@ export interface StaleResponse {
   items: StaleItem[]
 }
 
+// --- Seasons / Show detail ---
+
+export interface Season {
+  ratingKey: string
+  showRatingKey: string
+  libraryKey: string
+  seasonIndex: number
+  title: string
+  fileSize: number | null
+  duration: number | null
+  leafCount: number | null
+  viewCount: number | null
+  updatedAt: number
+}
+
+export interface ShowDetail {
+  show: StaleItem
+  seasons: Season[]
+}
+
 // --- Sync ---
 
 export interface SyncLog {
   id: number
+  libraryKey: string | null
   startedAt: number
   finishedAt: number | null
   status: 'pending' | 'success' | 'error'

@@ -13,6 +13,7 @@ import { Route as SetupRouteImport } from './routes/setup'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
+import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 
 const SetupRoute = SetupRouteImport.update({
   id: '/setup',
@@ -34,18 +35,26 @@ const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   path: '/libraries/$key/stale',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LibrariesKeyShowsRatingKeyRoute =
+  LibrariesKeyShowsRatingKeyRouteImport.update({
+    id: '/libraries/$key/shows/$ratingKey',
+    path: '/libraries/$key/shows/$ratingKey',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +62,30 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/setup' | '/libraries/$key/stale'
+  fullPaths:
+    | '/'
+    | '/dashboard'
+    | '/setup'
+    | '/libraries/$key/stale'
+    | '/libraries/$key/shows/$ratingKey'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/setup' | '/libraries/$key/stale'
-  id: '__root__' | '/' | '/dashboard' | '/setup' | '/libraries/$key/stale'
+  to:
+    | '/'
+    | '/dashboard'
+    | '/setup'
+    | '/libraries/$key/stale'
+    | '/libraries/$key/shows/$ratingKey'
+  id:
+    | '__root__'
+    | '/'
+    | '/dashboard'
+    | '/setup'
+    | '/libraries/$key/stale'
+    | '/libraries/$key/shows/$ratingKey'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +93,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   SetupRoute: typeof SetupRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
+  LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +126,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibrariesKeyStaleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/libraries/$key/shows/$ratingKey': {
+      id: '/libraries/$key/shows/$ratingKey'
+      path: '/libraries/$key/shows/$ratingKey'
+      fullPath: '/libraries/$key/shows/$ratingKey'
+      preLoaderRoute: typeof LibrariesKeyShowsRatingKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +141,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   SetupRoute: SetupRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
+  LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
