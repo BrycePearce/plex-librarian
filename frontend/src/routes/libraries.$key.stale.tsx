@@ -1,10 +1,11 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router'
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
-import { useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { ArrowLeft, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import type { StaleParams, StaleItem, SortKey } from '../lib/api'
 import { formatKilobytes, formatDate } from '../lib/format'
+import { useLibrarySync } from '../lib/useLibrarySync'
 
 export const Route = createFileRoute('/libraries/$key/stale')({
   beforeLoad: async ({ context }) => {
@@ -22,7 +23,7 @@ const PAGE_SIZE = 50
 
 function StalePage() {
   const { key } = Route.useParams()
-  const qc = useQueryClient()
+  const { isSyncing, trigger, isError, error } = useLibrarySync(key)
   const [params, setParams] = useState<StaleParams>({
     days: 365,
     filter: 'all',
@@ -37,32 +38,6 @@ function StalePage() {
     queryFn: () => api.libraries.stale(key, params),
     placeholderData: (prev) => prev,
   })
-
-  const [activeSyncId, setActiveSyncId] = useState<number | null>(null)
-
-  const { data: activeSync } = useQuery({
-    queryKey: ['sync', activeSyncId],
-    queryFn: activeSyncId !== null ? () => api.sync.poll(activeSyncId) : skipToken,
-    refetchInterval: (q) => q.state.data?.status === 'pending' ? 2_000 : false,
-  })
-
-  useEffect(() => {
-    if (activeSyncId === null) return
-    if (activeSync?.status === 'success') {
-      void qc.invalidateQueries({ queryKey: ['stale', key] })
-      setActiveSyncId(null)
-    } else if (activeSync?.status === 'error') {
-      setActiveSyncId(null)
-    }
-  }, [activeSync, activeSyncId, key, qc])
-
-  const triggerSync = useMutation({
-    mutationFn: () => api.sync.triggerLibrary(key),
-    onSuccess: (data) => setActiveSyncId(data.syncId),
-    onError: () => setActiveSyncId(null),
-  })
-
-  const isSyncing = activeSyncId !== null || triggerSync.isPending
 
   const page = Math.floor((params.offset ?? 0) / PAGE_SIZE)
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -93,15 +68,15 @@ function StalePage() {
         <div className="flex flex-col items-end gap-1">
           <button
             className="btn btn-sm gap-2"
-            onClick={() => triggerSync.mutate()}
+            onClick={trigger}
             disabled={isSyncing}
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
             {isSyncing ? 'Syncing…' : 'Sync'}
           </button>
-          {triggerSync.isError && (
+          {isError && (
             <span className="text-xs text-error">
-              {triggerSync.error instanceof Error ? triggerSync.error.message : 'Sync failed'}
+              {error instanceof Error ? error.message : 'Sync failed'}
             </span>
           )}
         </div>

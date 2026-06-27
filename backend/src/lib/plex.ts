@@ -1,9 +1,43 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { settings } from '../db/schema.ts';
-import type { PlexItem, PlexLibrary } from '../types/plex.ts';
 
-export type { PlexItem, PlexLibrary };
+export interface PlexLibrary {
+  key: string;
+  title: string;
+  type: string;
+}
+
+export interface PlexItem {
+  ratingKey: string;
+  title: string;
+  type: string;
+  thumb: string | null;
+  addedAt: number | null;
+  lastViewedAt: number | null;
+  viewCount: number;
+  fileSize: number | null;
+  duration: number | null;
+  year: number | null;
+}
+
+export interface PlexWebhookPayload {
+  event: string;
+  user: boolean;
+  owner: boolean;
+  Account: { id: number; title: string };
+  Server: { title: string; uuid: string };
+  Player: { local: boolean; publicAddress: string; title: string; uuid: string };
+  Metadata?: {
+    librarySectionType: string;
+    ratingKey: string;
+    type: string;
+    title: string;
+    grandparentRatingKey?: string; // show ratingKey when type === 'episode'
+    viewCount?: number;
+    lastViewedAt?: number;
+  };
+}
 
 interface PlexRawMetadata {
   ratingKey: string;
@@ -35,6 +69,22 @@ export interface PlexEpisode {
   duration: number | null;
   viewCount: number;
 }
+
+// Minimal track shape used by syncArtistSizes to aggregate artist file sizes.
+// Not exposed via API — purely internal to the sync pipeline.
+export interface PlexTrack {
+  ratingKey: string;
+  artistRatingKey: string;
+  fileSize: number | null;
+}
+
+// History entry returned by /status/sessions/history/all — cross-user, all accounts.
+interface PlexHistoryEntry {
+  ratingKey: string;
+  grandparentRatingKey?: string; // show ratingKey when type === 'episode'
+  viewedAt?: number;
+}
+
 
 const ITEMS_PAGE_SIZE = 300;
 const FETCH_CONCURRENCY = 8;
@@ -84,6 +134,16 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
     duration: item.duration ?? null,
     year: item.year ?? null,
   }));
+}
+
+function mapTracks(raw: PlexRawMetadata[]): PlexTrack[] {
+  return raw
+    .filter((item) => item.grandparentRatingKey)
+    .map((item) => ({
+      ratingKey: item.ratingKey,
+      artistRatingKey: item.grandparentRatingKey!,
+      fileSize: extractFileSize(item),
+    }));
 }
 
 function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
@@ -215,6 +275,45 @@ export class PlexClient {
   async *libraryEpisodes(libraryKey: string): AsyncGenerator<PlexEpisode[]> {
     for await (const page of this.paginatedMetadata(libraryKey, PLEX_TYPE.EPISODE)) {
       yield mapEpisodes(page);
+    }
+  }
+
+  async *libraryTracks(libraryKey: string): AsyncGenerator<PlexTrack[]> {
+    for await (const page of this.paginatedMetadata(libraryKey, PLEX_TYPE.TRACK)) {
+      yield mapTracks(page);
+    }
+  }
+
+  // Streams all play history for a library section across ALL users.
+  // Episodes are returned at episode granularity; use grandparentRatingKey to attribute to show.
+  async *libraryHistory(libraryKey: string): AsyncGenerator<PlexHistoryEntry[]> {
+    const fetchPage = (start: number) =>
+      this.get<{ MediaContainer: { Metadata?: PlexHistoryEntry[]; totalSize?: number } }>(
+        `/status/sessions/history/all?librarySectionID=${libraryKey}&sort=viewedAt:desc`,
+        {
+          'X-Plex-Container-Start': String(start),
+          'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
+        },
+      );
+
+    const first = await fetchPage(0);
+    const total = first.MediaContainer.totalSize;
+    if (total === undefined) {
+      throw new Error(`Plex did not return totalSize for history of library ${libraryKey}`);
+    }
+
+    yield first.MediaContainer.Metadata ?? [];
+
+    const remainingStarts: number[] = [];
+    for (let s = ITEMS_PAGE_SIZE; s < total; s += ITEMS_PAGE_SIZE) {
+      remainingStarts.push(s);
+    }
+
+    for (let i = 0; i < remainingStarts.length; i += FETCH_CONCURRENCY) {
+      const batch = await Promise.all(
+        remainingStarts.slice(i, i + FETCH_CONCURRENCY).map(fetchPage),
+      );
+      yield batch.flatMap((d) => d.MediaContainer.Metadata ?? []);
     }
   }
 }
