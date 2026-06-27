@@ -1,9 +1,8 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
-import { db } from '../db/index.ts';
+import { db, withTransaction } from '../db/index.ts';
 import { items, libraries, seasons, syncLog } from '../db/schema.ts';
 import { createPlexClient, PLEX_TYPE } from '../lib/plex.ts';
-import type { PlexClient } from '../lib/plex.ts';
-import type { PlexLibrary } from '../types/plex.ts';
+import type { PlexClient, PlexLibrary } from '../lib/plex.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
 // a rename in schema.ts + migration automatically updates the upsert set clause.
@@ -121,6 +120,70 @@ async function syncShowSizes(
   `);
 }
 
+// Fetches all tracks for a music library and rolls their file sizes up to the artist row.
+// Mirrors syncShowSizes: artists have no Media[] in Plex's artist-level response, so sizes
+// must be aggregated from the leaf type (tracks, type=10) instead.
+async function syncArtistSizes(
+  plex: PlexClient,
+  lib: PlexLibrary,
+): Promise<void> {
+  const artistTotals = new Map<string, number>();
+
+  for await (const page of plex.libraryTracks(lib.key)) {
+    for (const track of page) {
+      if (track.fileSize == null) continue;
+      artistTotals.set(track.artistRatingKey, (artistTotals.get(track.artistRatingKey) ?? 0) + track.fileSize);
+    }
+  }
+
+  if (artistTotals.size === 0) return;
+
+  withTransaction((client) => {
+    const stmt = client.prepare(
+      `UPDATE items SET file_size = ? WHERE rating_key = ? AND library_key = ? AND type = 'artist'`,
+    );
+    for (const [ratingKey, fileSize] of artistTotals) {
+      stmt.run(fileSize, ratingKey, lib.key);
+    }
+  });
+}
+
+// Walks /status/sessions/history/all?librarySectionID=<key> to get cross-user play history
+// for the entire library in one paginated stream instead of one request per item.
+// For episodes the play is attributed to the show (grandparentRatingKey); for movies the
+// movie ratingKey is used directly. Artist libraries have no useful play history here.
+async function syncLibraryHistory(plex: PlexClient, lib: PlexLibrary): Promise<void> {
+  if (lib.type === 'artist') return;
+
+  // Build ratingKey → max(viewedAt) across all users and all pages before writing.
+  // The map is bounded by unique items in the library (not total play count).
+  const maxViewedAt = new Map<string, number>();
+
+  for await (const page of plex.libraryHistory(lib.key)) {
+    for (const entry of page) {
+      if (!entry.viewedAt) continue;
+      // Episodes → attribute to show; movies → use ratingKey directly.
+      const key = entry.grandparentRatingKey ?? entry.ratingKey;
+      const cur = maxViewedAt.get(key);
+      if (!cur || entry.viewedAt > cur) maxViewedAt.set(key, entry.viewedAt);
+    }
+  }
+
+  if (maxViewedAt.size === 0) return;
+
+  // All UPDATEs in a single transaction — one commit instead of N individual fsyncs.
+  withTransaction((client) => {
+    const stmt = client.prepare(
+      `UPDATE items SET last_viewed_at = ?
+       WHERE rating_key = ? AND library_key = ?
+         AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+    );
+    for (const [ratingKey, viewedAt] of maxViewedAt) {
+      stmt.run(viewedAt, ratingKey, lib.key, viewedAt);
+    }
+  });
+}
+
 async function syncLibrary(
   plex: PlexClient,
   lib: PlexLibrary,
@@ -179,13 +242,25 @@ async function syncLibrary(
     itemCount += page.length;
   }
 
+  // Both size-rollup functions run before the prune, for different reasons.
+  // syncShowSizes: the seasons table has FK(show_rating_key) → items.rating_key
+  // ON DELETE CASCADE. If shows were pruned first and Plex's episode endpoint
+  // still returns episodes for a recently-deleted show (cache lag), the subsequent
+  // season INSERT would hit a FK constraint violation. Running before the prune
+  // means orphaned season rows are cascade-deleted by the prune step instead.
+  // syncArtistSizes: runs before the prune so its UPDATEs land on live item rows;
+  // after the prune, deleted artists are gone and the UPDATEs would silently no-op.
+  if (lib.type === 'show') {
+    await syncShowSizes(plex, lib, now);
+  } else if (lib.type === 'artist') {
+    await syncArtistSizes(plex, lib);
+  }
+
   if (itemCount > 0) {
     await db.delete(items).where(and(eq(items.libraryKey, lib.key), lt(items.updatedAt, now)));
   }
 
-  if (lib.type === 'show') {
-    await syncShowSizes(plex, lib, now);
-  }
+  await syncLibraryHistory(plex, lib);
 
   return itemCount;
 }

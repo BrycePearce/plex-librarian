@@ -23,6 +23,7 @@ import {
 import { api } from "../lib/api";
 import type { SyncLog, AuthStatus, Library } from "../lib/api";
 import { formatRelativeTime, formatDuration } from "../lib/format";
+import { useLibrarySync, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: async ({ context }) => {
@@ -37,19 +38,19 @@ export const Route = createFileRoute("/dashboard")({
 });
 
 function DashboardPage() {
+  return (
+    <LibrarySyncProvider>
+      <DashboardInner />
+    </LibrarySyncProvider>
+  );
+}
+
+function DashboardInner() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
-  const [activeLibrarySyncIds, setActiveLibrarySyncIds] = useState<
-    Map<string, number>
-  >(new Map());
-
-  const activePairs: [string, number][] = [...activeLibrarySyncIds.entries()];
-
-  const hasActiveSyncs =
-    activeGlobalSyncId !== null || activeLibrarySyncIds.size > 0;
 
   const { data: authStatus } = useQuery<AuthStatus>({
     queryKey: ["auth", "status"],
@@ -74,10 +75,19 @@ function DashboardPage() {
     queryFn: () => api.libraries.list(),
   });
 
+  const triggerSync = useMutation({
+    mutationFn: () => api.sync.trigger(),
+    onSuccess: (data) => setActiveGlobalSyncId(data.syncId),
+  });
+
+  const isSyncing = activeGlobalSyncId !== null || triggerSync.isPending;
+  const anyLibrarySyncing = useAnyLibrarySyncing();
+  const isAnySyncing = isSyncing || anyLibrarySyncing;
+
   const { data: history } = useQuery({
     queryKey: ["sync", "history"],
     queryFn: () => api.sync.history(10),
-    refetchInterval: hasActiveSyncs ? 3_000 : false,
+    refetchInterval: isAnySyncing ? 3_000 : false,
   });
 
   // Poll the global sync individually for real-time item count in the progress banner.
@@ -91,17 +101,6 @@ function DashboardPage() {
       q.state.data?.status === "pending" ? 2_000 : false,
   });
 
-  // Poll each active per-library sync individually so completion is detected regardless
-  // of how many entries the history window holds.
-  const { data: librarySyncPolls } = useQuery({
-    queryKey: ["sync", "library-polls", activePairs.map(([, id]) => id)],
-    queryFn: activePairs.length > 0
-      ? () => Promise.all(activePairs.map(([, id]) => api.sync.poll(id)))
-      : skipToken,
-    refetchInterval: activePairs.length > 0 ? 2_000 : false,
-  });
-
-  // Detect global sync completion.
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
     if (activeSync?.status === "success") {
@@ -115,39 +114,6 @@ function DashboardPage() {
       setActiveGlobalSyncId(null);
     }
   }, [activeSync, activeGlobalSyncId, qc]);
-
-  // Detect per-library sync completions via individual polls.
-  useEffect(() => {
-    if (!librarySyncPolls || activePairs.length === 0) return;
-    const completed = new Set<string>();
-    activePairs.forEach(([key], i) => {
-      const poll = librarySyncPolls[i];
-      if (poll?.status === "success" || poll?.status === "error")
-        completed.add(key);
-    });
-    if (completed.size === 0) return;
-    void qc.invalidateQueries({ queryKey: ["libraries"] });
-    for (const key of completed)
-      void qc.invalidateQueries({ queryKey: ["stale", key] });
-    setActiveLibrarySyncIds((prev) => {
-      const next = new Map(prev);
-      for (const key of completed) next.delete(key);
-      return next;
-    });
-  }, [librarySyncPolls, activePairs, qc]);
-
-  const triggerSync = useMutation({
-    mutationFn: () => api.sync.trigger(),
-    onSuccess: (data) => setActiveGlobalSyncId(data.syncId),
-  });
-
-  const triggerLibrarySync = useMutation({
-    mutationFn: (key: string) => api.sync.triggerLibrary(key),
-    onSuccess: (data, key) =>
-      setActiveLibrarySyncIds((prev) => new Map(prev).set(key, data.syncId)),
-  });
-
-  const isSyncing = activeGlobalSyncId !== null || triggerSync.isPending;
 
   return (
     <div className="space-y-8">
@@ -173,7 +139,7 @@ function DashboardPage() {
           <button
             className="btn btn-primary gap-2"
             onClick={() => triggerSync.mutate()}
-            disabled={hasActiveSyncs}
+            disabled={isAnySyncing}
           >
             <RefreshCw
               className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
@@ -218,18 +184,9 @@ function DashboardPage() {
       )}
       {librariesData && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {librariesData.libraries.map((lib) => {
-            const syncing = activeLibrarySyncIds.has(lib.key);
-            return (
-              <LibraryCard
-                key={lib.key}
-                lib={lib}
-                syncing={syncing}
-                disabled={isSyncing || syncing}
-                onSync={() => triggerLibrarySync.mutate(lib.key)}
-              />
-            );
-          })}
+          {librariesData.libraries.map((lib) => (
+            <LibraryCard key={lib.key} lib={lib} globalSyncing={isSyncing} />
+          ))}
         </div>
       )}
 
@@ -270,17 +227,8 @@ function DashboardPage() {
   );
 }
 
-function LibraryCard({
-  lib,
-  syncing,
-  disabled,
-  onSync,
-}: {
-  lib: Library;
-  syncing: boolean;
-  disabled: boolean;
-  onSync: () => void;
-}) {
+function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: boolean }) {
+  const { isSyncing, trigger } = useLibrarySync(lib.key);
   return (
     <div className="card bg-base-200 hover:bg-base-300 transition-colors">
       <div className="card-body gap-3">
@@ -300,11 +248,11 @@ function LibraryCard({
           </Link>
           <button
             className="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/40 hover:text-base-content"
-            onClick={onSync}
-            disabled={disabled}
+            onClick={trigger}
+            disabled={isSyncing || globalSyncing}
             title="Sync this library"
           >
-            <RefreshCw className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
           </button>
         </div>
         <div className="text-xs text-base-content/40">
@@ -337,17 +285,17 @@ function SyncRow({
     <tr>
       <td>
         {sync.status === "pending" && (
-          <span className="badge badge-info gap-1">
+          <span className="badge badge-info gap-1 min-w-22 justify-center">
             <span className="loading loading-spinner loading-xs" /> pending
           </span>
         )}
         {sync.status === "success" && (
-          <span className="badge badge-success gap-1">
+          <span className="badge badge-success gap-1 min-w-22 justify-center">
             <CheckCircle className="w-3 h-3" /> success
           </span>
         )}
         {sync.status === "error" && (
-          <span className="badge badge-error gap-1" title={sync.error ?? ""}>
+          <span className="badge badge-error gap-1 min-w-22 justify-center" title={sync.error ?? ""}>
             <AlertCircle className="w-3 h-3" /> error
           </span>
         )}
