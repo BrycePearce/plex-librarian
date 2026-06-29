@@ -79,9 +79,10 @@ export interface PlexTrack {
 }
 
 // History entry returned by /status/sessions/history/all — cross-user, all accounts.
+// grandparentKey is a path ("/library/metadata/76749"), not a bare ratingKey.
 interface PlexHistoryEntry {
   ratingKey: string;
-  grandparentRatingKey?: string; // show ratingKey when type === 'episode'
+  grandparentKey?: string; // "/library/metadata/<showRatingKey>" when type === 'episode'
   viewedAt?: number;
 }
 

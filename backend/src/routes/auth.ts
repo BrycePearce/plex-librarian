@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { settings } from '../db/schema.ts';
 import { buildPlexHeaders, clearPlexClientCache, PLEX_CLIENT_PRODUCT } from '../lib/plex.ts';
+import { triggerFullSync } from '../services/sync.ts';
 
 const router = new Hono();
 
@@ -131,6 +132,7 @@ router.post('/plex/server', async (c) => {
     .where(eq(settings.id, 1));
 
   clearPlexClientCache();
+  triggerFullSync();
 
   return c.json({ ok: true });
 });

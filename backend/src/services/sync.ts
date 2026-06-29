@@ -3,6 +3,7 @@ import { db, withTransaction } from '../db/index.ts';
 import { items, libraries, seasons, syncLog } from '../db/schema.ts';
 import { createPlexClient, PLEX_TYPE } from '../lib/plex.ts';
 import type { PlexClient, PlexLibrary } from '../lib/plex.ts';
+import type { LibraryPhase, LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
 // a rename in schema.ts + migration automatically updates the upsert set clause.
@@ -11,6 +12,20 @@ const excl = (c: { name: string }) => sql.raw(`excluded.${c.name}`);
 // Max libraries synced concurrently. Each library already uses FETCH_CONCURRENCY=8
 // parallel Plex requests internally, so this keeps total concurrent requests bounded.
 const LIBRARY_SYNC_CONCURRENCY = 3;
+
+// In-memory progress for active syncs. Keyed by syncId; entries deleted on finalization.
+// Each entry is an array of per-library state mutated in-place as sync progresses.
+// The poll endpoint reads this so updates are per-page, not per-library-batch.
+const syncProgress = new Map<number, LibrarySyncProgress[]>();
+
+export function getSyncProgress(syncId: number): LibrarySyncProgress[] | undefined {
+  return syncProgress.get(syncId);
+}
+
+type LibraryCallbacks = {
+  onCount: (delta: number) => void;
+  onPhase: (phase: LibraryPhase) => void;
+};
 
 // Max rows per seasons INSERT to avoid oversized statements on large TV libraries.
 const SEASON_UPSERT_BATCH = 500;
@@ -162,8 +177,11 @@ async function syncLibraryHistory(plex: PlexClient, lib: PlexLibrary): Promise<v
   for await (const page of plex.libraryHistory(lib.key)) {
     for (const entry of page) {
       if (!entry.viewedAt) continue;
-      // Episodes → attribute to show; movies → use ratingKey directly.
-      const key = entry.grandparentRatingKey ?? entry.ratingKey;
+      // Episodes carry grandparentKey as a path ("/library/metadata/76749") — extract the
+      // trailing ID so we can match against items.ratingKey. Movies use ratingKey directly.
+      const key = entry.grandparentKey
+        ? entry.grandparentKey.split('/').pop()!
+        : entry.ratingKey;
       const cur = maxViewedAt.get(key);
       if (!cur || entry.viewedAt > cur) maxViewedAt.set(key, entry.viewedAt);
     }
@@ -188,7 +206,10 @@ async function syncLibrary(
   plex: PlexClient,
   lib: PlexLibrary,
   now: number,
+  callbacks?: LibraryCallbacks,
 ): Promise<number> {
+  callbacks?.onPhase('items');
+
   await db
     .insert(libraries)
     .values({ key: lib.key, title: lib.title, type: lib.type, syncedAt: now })
@@ -240,6 +261,7 @@ async function syncLibrary(
         },
       });
     itemCount += page.length;
+    callbacks?.onCount(page.length);
   }
 
   // Both size-rollup functions run before the prune, for different reasons.
@@ -251,8 +273,10 @@ async function syncLibrary(
   // syncArtistSizes: runs before the prune so its UPDATEs land on live item rows;
   // after the prune, deleted artists are gone and the UPDATEs would silently no-op.
   if (lib.type === 'show') {
+    callbacks?.onPhase('episodes');
     await syncShowSizes(plex, lib, now);
   } else if (lib.type === 'artist') {
+    callbacks?.onPhase('episodes');
     await syncArtistSizes(plex, lib);
   }
 
@@ -260,7 +284,10 @@ async function syncLibrary(
     await db.delete(items).where(and(eq(items.libraryKey, lib.key), lt(items.updatedAt, now)));
   }
 
+  callbacks?.onPhase('history');
   await syncLibraryHistory(plex, lib);
+
+  callbacks?.onPhase('done');
 
   return itemCount;
 }
@@ -277,22 +304,65 @@ async function finalizeSyncLog(
   }
 }
 
+// Atomically inserts a pending sync_log row and fires runSync() in the background.
+// Returns the new syncId, or null if a sync is already pending.
+export function triggerFullSync(): number | null {
+  const startedAt = Math.floor(Date.now() / 1000);
+  const result = withTransaction((client): { conflict: number } | { id: number } => {
+    const existing = client
+      .prepare("SELECT id FROM sync_log WHERE status = 'pending' LIMIT 1")
+      .value<[number]>();
+    if (existing) return { conflict: existing[0] };
+    const row = client
+      .prepare("INSERT INTO sync_log (started_at, status, items_processed) VALUES (?, 'pending', 0) RETURNING id")
+      .value<[number]>(startedAt);
+    if (!row) throw new Error('sync_log insert returned no id');
+    return { id: row[0] };
+  });
+  if ('conflict' in result) return null;
+  void runSync(result.id);
+  return result.id;
+}
+
 export async function runSync(syncId: number): Promise<void> {
   try {
     const plex = await createPlexClient();
     const plexLibraries = await plex.libraries();
     const now = Math.floor(Date.now() / 1000);
+
+    const progress: LibrarySyncProgress[] = plexLibraries.map((lib) => ({
+      key: lib.key,
+      title: lib.title,
+      phase: 'pending' as LibraryPhase,
+      count: 0,
+    }));
+    syncProgress.set(syncId, progress);
+
     let totalItems = 0;
+
+    const makeCallbacks = (libraryKey: string): LibraryCallbacks => {
+      const entry = progress.find((p) => p.key === libraryKey)!;
+      let startedAt = 0;
+      return {
+        onCount: (delta) => { entry.count += delta; totalItems += delta; },
+        onPhase: (phase) => {
+          entry.phase = phase;
+          if (phase === 'items') startedAt = performance.now();
+          if (phase === 'done') entry.elapsedSeconds = Math.round((performance.now() - startedAt) / 1000);
+        },
+      };
+    };
 
     for (let i = 0; i < plexLibraries.length; i += LIBRARY_SYNC_CONCURRENCY) {
       const batch = plexLibraries.slice(i, i + LIBRARY_SYNC_CONCURRENCY);
-      const counts = await Promise.all(batch.map((lib) => syncLibrary(plex, lib, now)));
-      totalItems += counts.reduce((a, b) => a + b, 0);
+      await Promise.all(batch.map((lib) => syncLibrary(plex, lib, now, makeCallbacks(lib.key))));
     }
 
     await finalizeSyncLog(syncId, { ok: true, itemsProcessed: totalItems });
   } catch (err) {
     await finalizeSyncLog(syncId, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    syncProgress.delete(syncId);
   }
 }
 
@@ -306,10 +376,25 @@ export async function runLibrarySync(libraryKey: string, syncId: number): Promis
       .limit(1);
     if (!lib) throw new Error(`Library ${libraryKey} not found`);
 
+    const progress: LibrarySyncProgress[] = [{ key: lib.key, title: lib.title, phase: 'pending', count: 0 }];
+    syncProgress.set(syncId, progress);
+
     const now = Math.floor(Date.now() / 1000);
-    const itemCount = await syncLibrary(plex, lib, now);
+    let itemCount = 0;
+    let startedAt = 0;
+    const entry = progress[0];
+    await syncLibrary(plex, lib, now, {
+      onCount: (delta) => { itemCount += delta; entry.count += delta; },
+      onPhase: (phase) => {
+        entry.phase = phase;
+        if (phase === 'items') startedAt = Date.now();
+        if (phase === 'done') entry.elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+      },
+    });
     await finalizeSyncLog(syncId, { ok: true, itemsProcessed: itemCount });
   } catch (err) {
     await finalizeSyncLog(syncId, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    syncProgress.delete(syncId);
   }
 }

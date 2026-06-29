@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { db } from './db/index.ts';
 import { syncLog } from './db/schema.ts';
 import { createPlexClient, PlexConfigError } from './lib/plex.ts';
+import { startupSyncIfStale, startScheduler } from './services/scheduler.ts';
 import auth from './routes/auth.ts';
 import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
@@ -28,6 +29,9 @@ await db
     error: 'interrupted by server restart',
   })
   .where(eq(syncLog.status, 'pending'));
+
+void startupSyncIfStale();
+startScheduler();
 
 // Check Plex Pass availability in the background — don't block server startup
 void (async () => {

@@ -42,6 +42,8 @@ export const settings = sqliteTable('settings', {
   plexToken: text('plex_token'),
   plexTokenExpiresAt: integer('plex_token_expires_at'), // reserved for future JWT expiry — PIN tokens don't expire
   plexUrl: text('plex_url'),
+  autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).default(true),
+  autoSyncHour: integer('auto_sync_hour').default(3), // 0–23 local server time; default 3am
 });
 
 export const seasons = sqliteTable(

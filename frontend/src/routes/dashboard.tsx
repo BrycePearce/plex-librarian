@@ -10,7 +10,7 @@ import {
   useQueryClient,
   skipToken,
 } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   RefreshCw,
   Film,
@@ -19,9 +19,10 @@ import {
   AlertCircle,
   CheckCircle,
   LogOut,
+  ChevronDown,
 } from "lucide-react";
 import { api } from "../lib/api";
-import type { SyncLog, AuthStatus, Library } from "../lib/api";
+import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
 import { formatRelativeTime, formatDuration } from "../lib/format";
 import { useLibrarySync, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
 
@@ -150,13 +151,7 @@ function DashboardInner() {
       </div>
 
       {activeSync?.status === "pending" && (
-        <div className="alert">
-          <span className="loading loading-spinner loading-sm" />
-          <span>
-            Sync in progress —{" "}
-            {(activeSync.itemsProcessed ?? 0).toLocaleString()} items processed
-          </span>
-        </div>
+        <SyncProgressPanel progress={activeSync.progress} />
       )}
       {activeSync?.status === "error" && (
         <div className="alert alert-error">
@@ -223,6 +218,125 @@ function DashboardInner() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function useCountUp(target: number, duration = 800) {
+  const [display, setDisplay] = useState(target);
+  const prevRef = useRef(target);
+
+  useEffect(() => {
+    const start = prevRef.current;
+    const diff = target - start;
+    if (diff <= 0) { setDisplay(target); prevRef.current = target; return; }
+
+    const startTime = performance.now();
+    let raf: number;
+    const tick = (now: number) => {
+      const t = Math.min((now - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(Math.round(start + diff * eased));
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else prevRef.current = target;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+
+  return display;
+}
+
+const PHASE_LABEL: Record<LibraryPhase, string> = {
+  pending: 'Waiting',
+  items: 'Syncing items',
+  episodes: 'Indexing episodes',
+  history: 'Syncing history',
+  done: 'Done',
+};
+
+function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
+  const count = useCountUp(lib.count);
+  const done = lib.phase === 'done';
+  const pending = lib.phase === 'pending';
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <div className="w-4 shrink-0 flex items-center justify-center">
+        {done
+          ? <CheckCircle className="w-4 h-4 text-success" />
+          : pending
+          ? null
+          : <span className="loading loading-spinner loading-xs" />}
+      </div>
+      <span className={`w-36 truncate font-medium ${pending ? 'text-base-content/30' : ''}`}>
+        {lib.title}
+      </span>
+      <span className="text-base-content/40 w-36">
+        {PHASE_LABEL[lib.phase]}
+        {lib.phase === 'done' && lib.elapsedSeconds != null && (
+          <span className="ml-1">· {formatDuration(lib.elapsedSeconds)}</span>
+        )}
+      </span>
+      {!pending && (
+        <span className="font-mono text-base-content/40 ml-auto">
+          {count.toLocaleString()}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SyncProgressPanel({ progress }: { progress?: LibrarySyncProgress[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const totalItems = progress?.reduce((sum, l) => sum + l.count, 0) ?? 0;
+  const animatedTotal = useCountUp(totalItems);
+
+  if (!progress?.length) {
+    return (
+      <div className="alert">
+        <span className="loading loading-spinner loading-sm" />
+        <span>Sync starting…</span>
+      </div>
+    );
+  }
+
+  const doneCount = progress.filter((l) => l.phase === 'done').length;
+  const isSingle = progress.length === 1;
+
+  return (
+    <div className="card bg-base-200">
+      <div className="card-body gap-0 py-3">
+        <button
+          className="flex items-center gap-3 text-sm w-full text-left"
+          onClick={() => setExpanded((e) => !e)}
+        >
+          <span className="loading loading-spinner loading-xs shrink-0" />
+          <span className="font-medium flex-1">
+            {isSingle
+              ? `${progress[0].title} — ${PHASE_LABEL[progress[0].phase]}`
+              : `Syncing ${progress.length} libraries`}
+          </span>
+          {!isSingle && (
+            <span className="text-base-content/40 text-xs">
+              {doneCount} of {progress.length} done
+            </span>
+          )}
+          <span className="font-mono text-base-content/40 text-xs">
+            {animatedTotal.toLocaleString()} items
+          </span>
+          <ChevronDown
+            className={`w-4 h-4 text-base-content/40 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+          />
+        </button>
+
+        {expanded && (
+          <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-base-300">
+            {progress.map((lib) => (
+              <LibraryProgressRow key={lib.key} lib={lib} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

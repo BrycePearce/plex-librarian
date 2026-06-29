@@ -23,6 +23,8 @@ export type {
   ShowDetail,
   SyncLog,
   SyncTriggerResponse,
+  LibraryPhase,
+  LibrarySyncProgress,
 } from '@shared/types'
 
 // Frontend-only types (not part of the API contract)

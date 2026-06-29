@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { desc, eq } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
 import { libraries, syncLog } from '../db/schema.ts';
-import { runSync, runLibrarySync } from '../services/sync.ts';
+import { runSync, runLibrarySync, getSyncProgress } from '../services/sync.ts';
 import type { SyncLog, SyncTriggerResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono();
@@ -81,6 +81,11 @@ router.get('/:id', async (c) => {
   if (Number.isNaN(id)) return c.json({ error: 'invalid id' }, 400);
   const [row] = await db.select().from(syncLog).where(eq(syncLog.id, id)).limit(1);
   if (!row) return c.json({ error: 'not found' }, 404);
+  const progress = getSyncProgress(id);
+  if (progress) {
+    const itemsProcessed = progress.reduce((sum, l) => sum + l.count, 0);
+    return c.json({ ...row, itemsProcessed, progress } satisfies SyncLog);
+  }
   return c.json(row satisfies SyncLog);
 });
 

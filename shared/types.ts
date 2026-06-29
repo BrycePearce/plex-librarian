@@ -100,6 +100,16 @@ export interface ShowDetail {
 
 // --- Sync ---
 
+export type LibraryPhase = 'pending' | 'items' | 'episodes' | 'history' | 'done'
+
+export interface LibrarySyncProgress {
+  key: string
+  title: string
+  phase: LibraryPhase
+  count: number
+  elapsedSeconds?: number // set when phase === 'done'
+}
+
 export interface SyncLog {
   id: number
   libraryKey: string | null
@@ -108,6 +118,7 @@ export interface SyncLog {
   status: 'pending' | 'success' | 'error'
   itemsProcessed: number | null
   error: string | null
+  progress?: LibrarySyncProgress[] // only present while status === 'pending'
 }
 
 export interface SyncTriggerResponse {
