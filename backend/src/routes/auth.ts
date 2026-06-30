@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { settings } from '../db/schema.ts';
 import { buildPlexHeaders, clearPlexClientCache, PLEX_CLIENT_PRODUCT } from '../lib/plex.ts';
-import { triggerFullSync } from '../services/sync.ts';
+import { triggerFullSync } from '../services/syncManager.ts';
 
 const router = new Hono();
 
@@ -132,7 +132,10 @@ router.post('/plex/server', async (c) => {
     .where(eq(settings.id, 1));
 
   clearPlexClientCache();
-  triggerFullSync();
+  const syncResult = triggerFullSync();
+  if ('conflict' in syncResult) {
+    console.log(`Auto-sync: sync ${syncResult.conflict} already running after server config — will pick up new credentials on next run`);
+  }
 
   return c.json({ ok: true });
 });

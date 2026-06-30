@@ -14,5 +14,6 @@ export function openSqliteDb(path: string): Database {
   db.exec('PRAGMA journal_mode=WAL');
   db.exec('PRAGMA synchronous=NORMAL');
   db.exec('PRAGMA foreign_keys=ON');
+  db.exec('PRAGMA busy_timeout=30000');
   return db;
 }

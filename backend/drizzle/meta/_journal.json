@@ -78,6 +78,13 @@
       "when": 1750291200006,
       "tag": "0010_relax_pending_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1750291200007,
+      "tag": "0011_add_auto_sync_settings",
+      "breakpoints": true
     }
   ]
 }

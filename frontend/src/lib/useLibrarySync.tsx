@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, createContext, useContext, useCallback } from 'react'
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { api } from './api'
+import { useSyncStream } from './useSyncStream'
 
 type SyncContextValue = {
   increment: () => void
@@ -35,25 +36,23 @@ export function useLibrarySync(libraryKey: string) {
   const { increment, decrement } = useContext(ActiveSyncContext)
   const [activeSyncId, setActiveSyncId] = useState<number | null>(null)
 
-  const { data: activeSync, isError: pollError } = useQuery({
-    queryKey: ['sync', activeSyncId],
-    queryFn: activeSyncId !== null ? () => api.sync.poll(activeSyncId) : skipToken,
-    refetchInterval: (q) => (q.state.data?.status === 'pending' ? 2_000 : false),
-  })
+  const { isDone, error: syncError } = useSyncStream(activeSyncId)
 
   useEffect(() => {
     if (activeSyncId === null) return
-    if (pollError || activeSync?.status === 'success' || activeSync?.status === 'error') {
-      void qc.invalidateQueries({ queryKey: ['libraries'] })
-      void qc.invalidateQueries({ queryKey: ['stale', libraryKey] })
-      void qc.invalidateQueries({ queryKey: ['sync', 'history'] })
-      setActiveSyncId(null)
-    }
-  }, [activeSync, activeSyncId, pollError, libraryKey, qc])
+    if (!isDone && syncError === null) return
+    void qc.invalidateQueries({ queryKey: ['libraries'] })
+    void qc.invalidateQueries({ queryKey: ['stale', libraryKey] })
+    void qc.invalidateQueries({ queryKey: ['sync', 'history'] })
+    setActiveSyncId(null)
+  }, [isDone, syncError, activeSyncId, libraryKey, qc])
 
   const mutation = useMutation({
     mutationFn: () => api.sync.triggerLibrary(libraryKey),
-    onSuccess: (data) => setActiveSyncId(data.syncId),
+    onSuccess: (data) => {
+      setActiveSyncId(data.syncId)
+      void qc.invalidateQueries({ queryKey: ['sync', 'history'] })
+    },
   })
 
   const isSyncing = activeSyncId !== null || mutation.isPending

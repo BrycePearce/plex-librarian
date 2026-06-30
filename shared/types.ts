@@ -100,7 +100,7 @@ export interface ShowDetail {
 
 // --- Sync ---
 
-export type LibraryPhase = 'pending' | 'items' | 'episodes' | 'history' | 'done'
+export type LibraryPhase = 'pending' | 'items' | 'episodes' | 'tracks' | 'history' | 'done'
 
 export interface LibrarySyncProgress {
   key: string

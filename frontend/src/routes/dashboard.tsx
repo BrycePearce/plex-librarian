@@ -1,14 +1,12 @@
 import {
   createFileRoute,
   redirect,
-  Link,
   useNavigate,
 } from "@tanstack/react-router";
 import {
   useQuery,
   useMutation,
   useQueryClient,
-  skipToken,
 } from "@tanstack/react-query";
 import { useState, useEffect, useRef } from "react";
 import {
@@ -25,6 +23,7 @@ import { api } from "../lib/api";
 import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
 import { formatRelativeTime, formatDuration } from "../lib/format";
 import { useLibrarySync, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
+import { useSyncStream } from "../lib/useSyncStream";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: async ({ context }) => {
@@ -78,7 +77,10 @@ function DashboardInner() {
 
   const triggerSync = useMutation({
     mutationFn: () => api.sync.trigger(),
-    onSuccess: (data) => setActiveGlobalSyncId(data.syncId),
+    onSuccess: (data) => {
+      setActiveGlobalSyncId(data.syncId);
+      void qc.invalidateQueries({ queryKey: ["sync", "history"] });
+    },
   });
 
   const isSyncing = activeGlobalSyncId !== null || triggerSync.isPending;
@@ -88,33 +90,25 @@ function DashboardInner() {
   const { data: history } = useQuery({
     queryKey: ["sync", "history"],
     queryFn: () => api.sync.history(10),
-    refetchInterval: isAnySyncing ? 3_000 : false,
   });
 
-  // Poll the global sync individually for real-time item count in the progress banner.
-  const { data: activeSync } = useQuery({
-    queryKey: ["sync", activeGlobalSyncId],
-    queryFn:
-      activeGlobalSyncId !== null
-        ? () => api.sync.poll(activeGlobalSyncId)
-        : skipToken,
-    refetchInterval: (q) =>
-      q.state.data?.status === "pending" ? 2_000 : false,
-  });
+  // Re-attach to a pending global sync after a page refresh.
+  useEffect(() => {
+    if (activeGlobalSyncId !== null) return;
+    const pending = history?.find((h) => h.status === 'pending' && h.libraryKey === null);
+    if (pending) setActiveGlobalSyncId(pending.id);
+  }, [history, activeGlobalSyncId]);
+
+  const { progress: globalSyncProgress, isDone: globalSyncDone, error: globalSyncError } =
+    useSyncStream(activeGlobalSyncId);
 
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
-    if (activeSync?.status === "success") {
-      void (async () => {
-        await qc.invalidateQueries({ queryKey: ["libraries"] });
-        await qc.invalidateQueries({ queryKey: ["sync", "history"] });
-        setActiveGlobalSyncId(null);
-      })();
-    } else if (activeSync?.status === "error") {
-      void qc.invalidateQueries({ queryKey: ["sync", "history"] });
-      setActiveGlobalSyncId(null);
-    }
-  }, [activeSync, activeGlobalSyncId, qc]);
+    if (!globalSyncDone && globalSyncError === null) return;
+    void qc.invalidateQueries({ queryKey: ["libraries"] });
+    void qc.invalidateQueries({ queryKey: ["sync", "history"] });
+    setActiveGlobalSyncId(null);
+  }, [globalSyncDone, globalSyncError, activeGlobalSyncId, qc]);
 
   return (
     <div className="space-y-8">
@@ -150,13 +144,13 @@ function DashboardInner() {
         </div>
       </div>
 
-      {activeSync?.status === "pending" && (
-        <SyncProgressPanel progress={activeSync.progress} />
+      {activeGlobalSyncId !== null && (
+        <SyncProgressPanel progress={globalSyncProgress ?? undefined} />
       )}
-      {activeSync?.status === "error" && (
+      {globalSyncError !== null && (
         <div className="alert alert-error">
           <AlertCircle className="w-4 h-4" />
-          <span>Sync failed: {activeSync.error}</span>
+          <span>Sync failed: {globalSyncError}</span>
         </div>
       )}
       {triggerSync.isError && (
@@ -251,6 +245,7 @@ const PHASE_LABEL: Record<LibraryPhase, string> = {
   pending: 'Waiting',
   items: 'Syncing items',
   episodes: 'Indexing episodes',
+  tracks: 'Indexing tracks',
   history: 'Syncing history',
   done: 'Done',
 };
@@ -343,15 +338,15 @@ function SyncProgressPanel({ progress }: { progress?: LibrarySyncProgress[] }) {
 
 function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: boolean }) {
   const { isSyncing, trigger } = useLibrarySync(lib.key);
+  const navigate = useNavigate();
   return (
-    <div className="card bg-base-200 hover:bg-base-300 transition-colors">
+    <div
+      className="card bg-base-200 hover:bg-base-300 transition-colors cursor-pointer"
+      onClick={() => void navigate({ to: "/libraries/$key/stale", params: { key: lib.key } })}
+    >
       <div className="card-body gap-3">
         <div className="flex items-center gap-3">
-          <Link
-            to="/libraries/$key/stale"
-            params={{ key: lib.key }}
-            className="flex items-center gap-3 min-w-0 flex-1"
-          >
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <LibraryIcon type={lib.type} />
             <div className="min-w-0">
               <h2 className="font-semibold truncate">{lib.title}</h2>
@@ -359,10 +354,10 @@ function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: bool
                 {lib.type}
               </p>
             </div>
-          </Link>
+          </div>
           <button
             className="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/40 hover:text-base-content"
-            onClick={trigger}
+            onClick={(e) => { e.stopPropagation(); trigger(); }}
             disabled={isSyncing || globalSyncing}
             title="Sync this library"
           >
