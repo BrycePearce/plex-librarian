@@ -4,11 +4,11 @@ import { desc, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { libraries, syncLog } from '../db/schema.ts';
 import {
-  triggerFullSync,
-  triggerLibrarySync,
   getSyncProgress,
   isSyncActive,
   registerStream,
+  triggerFullSync,
+  triggerLibrarySync,
   unregisterStream,
 } from '../services/syncManager.ts';
 import type { SyncLog, SyncTriggerResponse } from '@plex-librarian/shared/types.ts';
@@ -82,7 +82,10 @@ router.get('/:id/events', async (c) => {
         if (lib.elapsedSeconds !== undefined) phaseData.elapsedSeconds = lib.elapsedSeconds;
         await stream.writeSSE({ event: 'phase', data: JSON.stringify(phaseData) });
         if (lib.count > 0) {
-          await stream.writeSSE({ event: 'count', data: JSON.stringify({ libraryKey: lib.key, delta: lib.count }) });
+          await stream.writeSSE({
+            event: 'count',
+            data: JSON.stringify({ libraryKey: lib.key, delta: lib.count }),
+          });
         }
       }
     }
@@ -95,9 +98,15 @@ router.get('/:id/events', async (c) => {
       unregisterStream(id, stream);
       const [row] = await db.select().from(syncLog).where(eq(syncLog.id, id)).limit(1);
       if (row?.status === 'success') {
-        await stream.writeSSE({ event: 'complete', data: JSON.stringify({ itemsProcessed: row.itemsProcessed ?? 0 }) });
+        await stream.writeSSE({
+          event: 'complete',
+          data: JSON.stringify({ itemsProcessed: row.itemsProcessed ?? 0 }),
+        });
       } else if (row?.status === 'error') {
-        await stream.writeSSE({ event: 'sync-error', data: JSON.stringify({ error: row.error ?? 'unknown' }) });
+        await stream.writeSSE({
+          event: 'sync-error',
+          data: JSON.stringify({ error: row.error ?? 'unknown' }),
+        });
       }
       return;
     }

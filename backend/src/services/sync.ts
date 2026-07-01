@@ -30,7 +30,10 @@ function buildCallbacks(
   accumulate: (delta: number) => void,
 ): LibraryCallbacks {
   return {
-    onCount: (delta) => { accumulate(delta); reporter?.onCount?.(libraryKey, delta); },
+    onCount: (delta) => {
+      accumulate(delta);
+      reporter?.onCount?.(libraryKey, delta);
+    },
     onPhase: (phase) => reporter?.onPhase?.(libraryKey, phase),
   };
 }
@@ -155,7 +158,10 @@ async function syncArtistSizes(
   for await (const page of plex.libraryTracks(lib.key)) {
     for (const track of page) {
       if (track.fileSize == null) continue;
-      artistTotals.set(track.artistRatingKey, (artistTotals.get(track.artistRatingKey) ?? 0) + track.fileSize);
+      artistTotals.set(
+        track.artistRatingKey,
+        (artistTotals.get(track.artistRatingKey) ?? 0) + track.fileSize,
+      );
     }
   }
 
@@ -228,8 +234,10 @@ async function syncLibrary(
       set: { title: lib.title, type: lib.type, syncedAt: now },
     });
 
-  const typeFilter = lib.type === 'show' ? PLEX_TYPE.SHOW
-    : lib.type === 'artist' ? PLEX_TYPE.ARTIST
+  const typeFilter = lib.type === 'show'
+    ? PLEX_TYPE.SHOW
+    : lib.type === 'artist'
+    ? PLEX_TYPE.ARTIST
     : undefined;
 
   let itemCount = 0;
@@ -312,7 +320,11 @@ export async function finalizeSyncLog(
   if (!result.ok) {
     await db.update(syncLog).set({ status: 'error', finishedAt, error: result.error }).where(where);
   } else {
-    await db.update(syncLog).set({ status: 'success', finishedAt, itemsProcessed: result.itemsProcessed }).where(where);
+    await db.update(syncLog).set({
+      status: 'success',
+      finishedAt,
+      itemsProcessed: result.itemsProcessed,
+    }).where(where);
   }
 }
 
@@ -329,7 +341,18 @@ export async function runSync(reporter?: SyncReporter): Promise<number> {
 
   for (let i = 0; i < plexLibraries.length; i += LIBRARY_SYNC_CONCURRENCY) {
     const batch = plexLibraries.slice(i, i + LIBRARY_SYNC_CONCURRENCY);
-    await Promise.all(batch.map((lib) => syncLibrary(plex, lib, now, buildCallbacks(reporter, lib.key, (d) => { totalItems += d; }))));
+    await Promise.all(
+      batch.map((lib) =>
+        syncLibrary(
+          plex,
+          lib,
+          now,
+          buildCallbacks(reporter, lib.key, (d) => {
+            totalItems += d;
+          }),
+        )
+      ),
+    );
   }
 
   return totalItems;
@@ -350,6 +373,13 @@ export async function runLibrarySync(libraryKey: string, reporter?: SyncReporter
 
   const now = Math.floor(Date.now() / 1000);
   let itemCount = 0;
-  await syncLibrary(plex, lib, now, buildCallbacks(reporter, libraryKey, (d) => { itemCount += d; }));
+  await syncLibrary(
+    plex,
+    lib,
+    now,
+    buildCallbacks(reporter, libraryKey, (d) => {
+      itemCount += d;
+    }),
+  );
   return itemCount;
 }

@@ -48,7 +48,9 @@ router.post('/plex', async (c) => {
   // in items — only show-level rows are, so we must use grandparentRatingKey.
   const itemKey = isEpisode ? Metadata.grandparentRatingKey : Metadata.ratingKey;
   if (!itemKey) {
-    console.warn(`webhook ${payload.event}: episode missing grandparentRatingKey — skipping DB update`);
+    console.warn(
+      `webhook ${payload.event}: episode missing grandparentRatingKey — skipping DB update`,
+    );
     return c.json({ ok: true });
   }
 
@@ -58,14 +60,18 @@ router.post('/plex', async (c) => {
       lastViewedAt: now,
       updatedAt: now,
       // viewCount on episodes reflects that episode only, not the show total — skip it.
-      ...(!isEpisode && isScrobble && Metadata.viewCount != null ? { viewCount: Metadata.viewCount } : {}),
+      ...(!isEpisode && isScrobble && Metadata.viewCount != null
+        ? { viewCount: Metadata.viewCount }
+        : {}),
     })
     .where(eq(items.ratingKey, itemKey))
     .returning({ ratingKey: items.ratingKey });
 
   if (updated.length === 0) {
     console.warn(
-      `webhook ${payload.event}: ${isEpisode ? 'show' : 'item'} ratingKey ${itemKey} not in DB — sync first`,
+      `webhook ${payload.event}: ${
+        isEpisode ? 'show' : 'item'
+      } ratingKey ${itemKey} not in DB — sync first`,
     );
   }
 

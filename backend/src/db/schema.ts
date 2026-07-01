@@ -5,6 +5,7 @@ export const libraries = sqliteTable('libraries', {
   title: text('title').notNull(),
   type: text('type').notNull(),
   syncedAt: integer('synced_at').notNull(),
+  staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
 });
 
 export const items = sqliteTable(
@@ -44,6 +45,7 @@ export const settings = sqliteTable('settings', {
   plexUrl: text('plex_url'),
   autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).default(true),
   autoSyncHour: integer('auto_sync_hour').default(3), // 0–23 local server time; default 3am
+  staleMinAgeDays: integer('stale_min_age_days').notNull().default(90),
 });
 
 export const seasons = sqliteTable(

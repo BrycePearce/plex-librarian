@@ -1,5 +1,5 @@
 import { withTransaction } from '../db/index.ts';
-import { finalizeSyncLog, runSync, runLibrarySync } from './sync.ts';
+import { finalizeSyncLog, runLibrarySync, runSync } from './sync.ts';
 import type { SyncReporter } from './sync.ts';
 import type { LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
 
@@ -64,7 +64,11 @@ function makeReporter(syncId: number): SyncReporter {
     onLibraries: (libs) => {
       syncProgress.set(
         syncId,
-        new Map(libs.map((lib) => [lib.key, { key: lib.key, title: lib.title, phase: 'pending', count: 0 }])),
+        new Map(
+          libs.map((
+            lib,
+          ) => [lib.key, { key: lib.key, title: lib.title, phase: 'pending', count: 0 }]),
+        ),
       );
       void pushEvent(syncId, 'libraries', { libraries: libs });
     },
@@ -141,7 +145,9 @@ export function triggerFullSync(): { syncId: number } | { conflict: number } {
       .value<[number]>();
     if (existing) return { conflict: existing[0] };
     const row = client
-      .prepare("INSERT INTO sync_log (started_at, status, items_processed) VALUES (?, 'pending', 0) RETURNING id")
+      .prepare(
+        "INSERT INTO sync_log (started_at, status, items_processed) VALUES (?, 'pending', 0) RETURNING id",
+      )
       .value<[number]>(startedAt);
     if (!row) throw new Error('sync_log insert returned no id');
     return { id: row[0] };
@@ -157,11 +163,15 @@ export function triggerLibrarySync(libraryKey: string): { syncId: number } | { c
   const startedAt = Math.floor(Date.now() / 1000);
   const result = withTransaction((client): { conflict: number } | { id: number } => {
     const existing = client
-      .prepare("SELECT id FROM sync_log WHERE status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1")
+      .prepare(
+        "SELECT id FROM sync_log WHERE status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1",
+      )
       .value<[number]>(libraryKey);
     if (existing) return { conflict: existing[0] };
     const row = client
-      .prepare("INSERT INTO sync_log (library_key, started_at, status, items_processed) VALUES (?, ?, 'pending', 0) RETURNING id")
+      .prepare(
+        "INSERT INTO sync_log (library_key, started_at, status, items_processed) VALUES (?, ?, 'pending', 0) RETURNING id",
+      )
       .value<[number]>(libraryKey, startedAt);
     if (!row) throw new Error('sync_log insert returned no id');
     return { id: row[0] };

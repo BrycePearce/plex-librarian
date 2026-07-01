@@ -2,9 +2,11 @@ import type {
   AuthStatus,
   PlexPin,
   PinPollResult,
+  Library,
   LibrariesResponse,
   StaleResponse,
   ShowDetail,
+  Settings,
   SyncLog,
   SyncTriggerResponse,
 } from '@shared/types'
@@ -21,6 +23,7 @@ export type {
   StaleResponse,
   Season,
   ShowDetail,
+  Settings,
   SyncLog,
   SyncTriggerResponse,
   LibraryPhase,
@@ -28,7 +31,7 @@ export type {
 } from '@shared/types'
 
 // Frontend-only types (not part of the API contract)
-export type SortKey = 'fileSize' | 'lastViewedAt' | 'addedAt' | 'title' | 'year'
+export type SortKey = 'fileSize' | 'lastViewedAt' | 'addedAt' | 'title' | 'year' | 'viewCount'
 
 export interface StaleParams {
   days?: number
@@ -52,7 +55,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string }
-    throw new Error(body.error ?? res.statusText)
+    const message = body.error ?? res.statusText
+    throw new Error(message.charAt(0).toUpperCase() + message.slice(1))
   }
   return res.json() as Promise<T>
 }
@@ -85,6 +89,20 @@ export const api = {
     },
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(`/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(ratingKey)}`),
+    updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
+      apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ staleMinAgeDays }),
+      }),
+  },
+  settings: {
+    get: () =>
+      apiFetch<Settings>('/settings'),
+    update: (staleMinAgeDays: number) =>
+      apiFetch<Settings>('/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ staleMinAgeDays }),
+      }),
   },
   sync: {
     trigger: () =>

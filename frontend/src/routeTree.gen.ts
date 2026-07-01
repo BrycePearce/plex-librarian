@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SetupRouteImport } from './routes/setup'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
@@ -18,6 +19,11 @@ import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/librari
 const SetupRoute = SetupRouteImport.update({
   id: '/setup',
   path: '/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -45,6 +51,7 @@ const LibrariesKeyShowsRatingKeyRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -52,6 +59,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -60,6 +68,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -69,6 +78,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/dashboard'
+    | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
     | '/libraries/$key/shows/$ratingKey'
@@ -76,6 +86,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/dashboard'
+    | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
     | '/libraries/$key/shows/$ratingKey'
@@ -83,6 +94,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/dashboard'
+    | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
     | '/libraries/$key/shows/$ratingKey'
@@ -91,6 +103,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
+  SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
   LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
@@ -103,6 +116,13 @@ declare module '@tanstack/react-router' {
       path: '/setup'
       fullPath: '/setup'
       preLoaderRoute: typeof SetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -139,6 +159,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
+  SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
   LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,

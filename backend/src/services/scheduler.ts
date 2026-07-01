@@ -65,7 +65,9 @@ export async function startupSyncIfStale(): Promise<void> {
     console.log('Auto-sync: triggering startup sync');
     const startupResult = triggerFullSync();
     if ('conflict' in startupResult) {
-      console.log(`Auto-sync: sync ${startupResult.conflict} already running — startup sync skipped`);
+      console.log(
+        `Auto-sync: sync ${startupResult.conflict} already running — startup sync skipped`,
+      );
     }
   } catch (err) {
     console.error('Auto-sync: startup check failed:', err);
@@ -92,7 +94,9 @@ export function startScheduler(): void {
       console.log(`Auto-sync: triggering scheduled sync (hour=${hour})`);
       const schedResult = triggerFullSync();
       if ('conflict' in schedResult) {
-        console.log(`Auto-sync: sync ${schedResult.conflict} already running — scheduled sync skipped`);
+        console.log(
+          `Auto-sync: sync ${schedResult.conflict} already running — scheduled sync skipped`,
+        );
       }
     } catch (err) {
       console.error('Auto-sync: scheduled check failed:', err);

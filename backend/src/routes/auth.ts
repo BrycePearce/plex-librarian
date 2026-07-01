@@ -110,7 +110,9 @@ router.get('/plex/pin/:id', async (c) => {
 // Saves the user's chosen server URL and token to settings.
 router.post('/plex/server', async (c) => {
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
-    return c.json({ error: 'credentials are set via environment variables and cannot be overridden here' }, 409);
+    return c.json({
+      error: 'credentials are set via environment variables and cannot be overridden here',
+    }, 409);
   }
 
   const body = await c.req.json() as { serverUrl?: string; accessToken?: string };
@@ -134,7 +136,9 @@ router.post('/plex/server', async (c) => {
   clearPlexClientCache();
   const syncResult = triggerFullSync();
   if ('conflict' in syncResult) {
-    console.log(`Auto-sync: sync ${syncResult.conflict} already running after server config — will pick up new credentials on next run`);
+    console.log(
+      `Auto-sync: sync ${syncResult.conflict} already running after server config — will pick up new credentials on next run`,
+    );
   }
 
   return c.json({ ok: true });
@@ -145,7 +149,9 @@ router.post('/plex/server', async (c) => {
 // No-op when credentials come from env vars (can't clear those at runtime).
 router.delete('/plex', async (c) => {
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
-    return c.json({ error: 'credentials are set via environment variables and cannot be cleared here' }, 409);
+    return c.json({
+      error: 'credentials are set via environment variables and cannot be cleared here',
+    }, 409);
   }
 
   await db.update(settings)

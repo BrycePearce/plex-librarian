@@ -8,10 +8,11 @@ import { eq } from 'drizzle-orm';
 import { db } from './db/index.ts';
 import { syncLog } from './db/schema.ts';
 import { createPlexClient, PlexConfigError } from './lib/plex.ts';
-import { startupSyncIfStale, startScheduler } from './services/scheduler.ts';
+import { startScheduler, startupSyncIfStale } from './services/scheduler.ts';
 import auth from './routes/auth.ts';
 import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
+import settings from './routes/settings.ts';
 import sync from './routes/sync.ts';
 import webhook from './routes/webhook.ts';
 
@@ -68,6 +69,7 @@ app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));
 app.route('/api/auth', auth);
 app.route('/api/libraries', libraries);
 app.route('/api/proxy', proxy);
+app.route('/api/settings', settings);
 app.route('/api/sync', sync);
 app.route('/api/webhook', webhook);
 

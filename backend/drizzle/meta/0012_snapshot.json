@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "05b4ac66-2d8c-4add-a2e8-c63bfe6fcdd6",
-  "prevId": "9ec5ad8a-c7f5-42ac-a6d6-d518f6507574",
+  "id": "c5b918de-3e4f-4b16-b26d-6b0dbc5c787a",
+  "prevId": "05b4ac66-2d8c-4add-a2e8-c63bfe6fcdd6",
   "tables": {
     "items": {
       "name": "items",
@@ -167,10 +167,140 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "stale_min_age_days": {
+          "name": "stale_min_age_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {},
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "seasons": {
+      "name": "seasons",
+      "columns": {
+        "rating_key": {
+          "name": "rating_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "show_rating_key": {
+          "name": "show_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "season_index": {
+          "name": "season_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "duration": {
+          "name": "duration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaf_count": {
+          "name": "leaf_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "view_count": {
+          "name": "view_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "seasons_show_idx": {
+          "name": "seasons_show_idx",
+          "columns": [
+            "show_rating_key"
+          ],
+          "isUnique": false
+        },
+        "seasons_library_idx": {
+          "name": "seasons_library_idx",
+          "columns": [
+            "library_key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "seasons_show_rating_key_items_rating_key_fk": {
+          "name": "seasons_show_rating_key_items_rating_key_fk",
+          "tableFrom": "seasons",
+          "tableTo": "items",
+          "columnsFrom": [
+            "show_rating_key"
+          ],
+          "columnsTo": [
+            "rating_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "seasons_library_key_libraries_key_fk": {
+          "name": "seasons_library_key_libraries_key_fk",
+          "tableFrom": "seasons",
+          "tableTo": "libraries",
+          "columnsFrom": [
+            "library_key"
+          ],
+          "columnsTo": [
+            "key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -226,6 +356,30 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "auto_sync_enabled": {
+          "name": "auto_sync_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": true
+        },
+        "auto_sync_hour": {
+          "name": "auto_sync_hour",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 3
+        },
+        "stale_min_age_days": {
+          "name": "stale_min_age_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 90
         }
       },
       "indexes": {},
@@ -243,6 +397,13 @@
           "primaryKey": true,
           "notNull": true,
           "autoincrement": true
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "started_at": {
           "name": "started_at",
@@ -281,16 +442,7 @@
           "autoincrement": false
         }
       },
-      "indexes": {
-        "sync_log_one_pending_idx": {
-          "name": "sync_log_one_pending_idx",
-          "columns": [
-            "status"
-          ],
-          "isUnique": true,
-          "where": "\"sync_log\".\"status\" = 'pending'"
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

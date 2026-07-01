@@ -32,6 +32,12 @@ export type PinPollResult =
   | { status: 'pending' }
   | { status: 'complete'; servers: PlexServer[] }
 
+// --- Settings ---
+
+export interface Settings {
+  staleMinAgeDays: number
+}
+
 // --- Libraries ---
 
 export interface Library {
@@ -39,6 +45,7 @@ export interface Library {
   title: string
   type: string
   syncedAt: number
+  staleMinAgeDays: number | null
 }
 
 export interface LibrariesResponse {
@@ -69,6 +76,7 @@ export interface StaleResponse {
   days: number
   maxDays: number | null
   minAgeDays: number
+  libraryStaleMinAgeDays: number | null
   filter: string
   sort: string
   order: string

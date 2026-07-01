@@ -1,6 +1,6 @@
 {
   "name": "@plex-librarian/shared",
   "exports": {
-    "./*": "./*"
+    "./types.ts": "./types.ts"
   }
 }

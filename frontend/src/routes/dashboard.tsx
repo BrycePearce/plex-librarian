@@ -2,6 +2,7 @@ import {
   createFileRoute,
   redirect,
   useNavigate,
+  Link,
 } from "@tanstack/react-router";
 import {
   useQuery,
@@ -18,6 +19,8 @@ import {
   CheckCircle,
   LogOut,
   ChevronDown,
+  Settings,
+  Info,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
@@ -85,12 +88,18 @@ function DashboardInner() {
 
   const isSyncing = activeGlobalSyncId !== null || triggerSync.isPending;
   const anyLibrarySyncing = useAnyLibrarySyncing();
-  const isAnySyncing = isSyncing || anyLibrarySyncing;
 
   const { data: history } = useQuery({
     queryKey: ["sync", "history"],
     queryFn: () => api.sync.history(10),
   });
+
+  // `anyLibrarySyncing` only tracks syncs started while this page is mounted — a sync
+  // kicked off from a library's stale page is lost from that count once you navigate
+  // back here. `history` is always freshly fetched on mount, so fall back to it to
+  // catch syncs still pending from elsewhere (avoids a 409 + flicker on "Sync all").
+  const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
+  const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -120,6 +129,10 @@ function DashboardInner() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Link to="/settings" className="btn btn-ghost gap-2" title="Settings">
+            <Settings className="w-4 h-4" />
+            Settings
+          </Link>
           {authStatus?.source !== "env" && (
             <button
               className="btn btn-ghost gap-2"
@@ -394,18 +407,23 @@ function SyncRow({
     <tr>
       <td>
         {sync.status === "pending" && (
-          <span className="badge badge-info gap-1 min-w-22 justify-center">
+          <span className="badge badge-info gap-1 min-w-22 justify-center leading-none">
             <span className="loading loading-spinner loading-xs" /> pending
           </span>
         )}
         {sync.status === "success" && (
-          <span className="badge badge-success gap-1 min-w-22 justify-center">
+          <span className="badge badge-success gap-1 min-w-22 justify-center leading-none">
             <CheckCircle className="w-3 h-3" /> success
           </span>
         )}
         {sync.status === "error" && (
-          <span className="badge badge-error gap-1 min-w-22 justify-center" title={sync.error ?? ""}>
-            <AlertCircle className="w-3 h-3" /> error
+          <span className="inline-flex items-center gap-1.5">
+            <span className="badge badge-error gap-1 min-w-22 justify-center leading-none">
+              <AlertCircle className="w-3 h-3" /> error
+            </span>
+            <span title={sync.error ?? ""}>
+              <Info className="w-4 h-4 text-error cursor-help" />
+            </span>
           </span>
         )}
       </td>

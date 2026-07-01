@@ -50,9 +50,9 @@ interface PlexRawMetadata {
   duration?: number;
   year?: number;
   // Episode-level parent references — only present on type=4 responses.
-  parentRatingKey?: string;  // season ratingKey
-  parentIndex?: number;      // season number
-  parentTitle?: string;      // season title
+  parentRatingKey?: string; // season ratingKey
+  parentIndex?: number; // season number
+  parentTitle?: string; // season title
   grandparentRatingKey?: string; // show ratingKey
   Media?: Array<{ Part?: Array<{ size?: number }> }>;
 }
@@ -86,12 +86,19 @@ interface PlexHistoryEntry {
   viewedAt?: number;
 }
 
-
 const ITEMS_PAGE_SIZE = 300;
 const FETCH_CONCURRENCY = 8;
 
 // Plex media type IDs used in ?type= filters on /library/sections/:key/all
-export const PLEX_TYPE = { MOVIE: 1, SHOW: 2, SEASON: 3, EPISODE: 4, ARTIST: 8, ALBUM: 9, TRACK: 10 } as const;
+export const PLEX_TYPE = {
+  MOVIE: 1,
+  SHOW: 2,
+  SEASON: 3,
+  EPISODE: 4,
+  ARTIST: 8,
+  ALBUM: 9,
+  TRACK: 10,
+} as const;
 
 export const PLEX_CLIENT_PRODUCT = 'Plex Librarian';
 const PLEX_CLIENT_VERSION = '1.0.0';
@@ -224,7 +231,12 @@ export class PlexClient {
   }
 
   resizedAssetUrl(path: string, opts: { width?: string; height?: string }): string {
-    const params = new URLSearchParams({ url: this.assetUrl(path), 'X-Plex-Token': this.token, minSize: '1', upscale: '0' });
+    const params = new URLSearchParams({
+      url: this.assetUrl(path),
+      'X-Plex-Token': this.token,
+      minSize: '1',
+      upscale: '0',
+    });
     if (opts.width) params.set('width', opts.width);
     if (opts.height) params.set('height', opts.height);
     return `${this.url}/photo/:/transcode?${params}`;
@@ -341,7 +353,8 @@ export async function createPlexClient(): Promise<PlexClient> {
   const envToken = Deno.env.get('PLEX_TOKEN');
   if (envUrl && envToken) {
     // Ensure the settings row exists so clientId is always sent with requests.
-    await db.insert(settings).values({ id: 1, clientId: crypto.randomUUID() }).onConflictDoNothing();
+    await db.insert(settings).values({ id: 1, clientId: crypto.randomUUID() })
+      .onConflictDoNothing();
     const [envRow] = await db.select({ clientId: settings.clientId })
       .from(settings).where(eq(settings.id, 1)).limit(1);
     _cachedClient = new PlexClient(envUrl, envToken, envRow!.clientId);

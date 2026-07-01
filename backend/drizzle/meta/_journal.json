@@ -85,6 +85,13 @@
       "when": 1750291200007,
       "tag": "0011_add_auto_sync_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1782848097884,
+      "tag": "0012_spotty_maddog",
+      "breakpoints": true
     }
   ]
 }
