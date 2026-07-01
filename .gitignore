@@ -7,3 +7,4 @@ frontend/.vite/
 .DS_Store
 Thumbs.db
 .tanstack/
+CLAUDE.md
