@@ -135,6 +135,7 @@ function DashboardInner() {
           </Link>
           {authStatus?.source !== "env" && (
             <button
+              type="button"
               className="btn btn-ghost gap-2"
               onClick={() => disconnect.mutate()}
               disabled={disconnect.isPending}
@@ -145,6 +146,7 @@ function DashboardInner() {
             </button>
           )}
           <button
+            type="button"
             className="btn btn-primary gap-2"
             onClick={() => triggerSync.mutate()}
             disabled={isAnySyncing}
@@ -315,6 +317,7 @@ function SyncProgressPanel({ progress }: { progress?: LibrarySyncProgress[] }) {
     <div className="card bg-base-200">
       <div className="card-body gap-0 py-3">
         <button
+          type="button"
           className="flex items-center gap-3 text-sm w-full text-left"
           onClick={() => setExpanded((e) => !e)}
         >
@@ -369,6 +372,7 @@ function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: bool
             </div>
           </div>
           <button
+            type="button"
             className="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/40 hover:text-base-content"
             onClick={(e) => { e.stopPropagation(); trigger(); }}
             disabled={isSyncing || globalSyncing}

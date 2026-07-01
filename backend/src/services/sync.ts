@@ -333,7 +333,7 @@ export async function finalizeSyncLog(
 }
 
 // Pure sync logic — throws on error, returns total items processed.
-// The caller (Worker) is responsible for try/catch and finalizeSyncLog.
+// The caller (syncManager's runSyncTask) is responsible for try/catch and finalizeSyncLog.
 export async function runSync(reporter?: SyncReporter): Promise<number> {
   const plex = await createPlexClient();
   const plexLibraries = await plex.libraries();
@@ -367,7 +367,7 @@ export async function runSync(reporter?: SyncReporter): Promise<number> {
 }
 
 // Pure sync logic for a single library — throws on error, returns items processed.
-// The caller (Worker) is responsible for try/catch and finalizeSyncLog.
+// The caller (syncManager's runSyncTask) is responsible for try/catch and finalizeSyncLog.
 export async function runLibrarySync(libraryKey: string, reporter?: SyncReporter): Promise<number> {
   const plex = await createPlexClient();
   const [lib] = await db

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { createPlexClient, PlexClient } from '../lib/plex.ts';
+import { createPlexClient, type PlexClient } from '../lib/plex.ts';
 
 const router = new Hono();
 

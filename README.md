@@ -78,18 +78,23 @@ If you set `PLEX_WEBHOOK_SECRET`, append `?token=<secret>` to the URL. Requests 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| GET | `/api/settings` | Returns `{ configured }` — false redirects the UI to setup |
+| GET | `/api/settings` | Global defaults, e.g. `{ staleMinAgeDays }` |
+| PATCH | `/api/settings` | Update global defaults |
 | POST | `/api/auth/plex/pin` | Start OAuth PIN flow, returns `{ pinId, authUrl }` |
 | GET | `/api/auth/plex/pin/:id` | Poll PIN status, returns `{ status, servers? }` |
 | POST | `/api/auth/plex/server` | Save chosen server after OAuth |
-| GET | `/api/auth/status` | Check token validity |
+| GET | `/api/auth/status` | Returns `{ configured, source, reachable? }` — `configured: false` redirects the UI to setup |
 | DELETE | `/api/auth/plex` | Disconnect / switch servers |
 | GET | `/api/libraries` | All synced libraries |
 | GET | `/api/libraries/:key/stale` | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.) |
+| PATCH | `/api/libraries/:key` | Set a per-library `staleMinAgeDays` override (`null` to use the global default) |
+| GET | `/api/libraries/:key/shows/:ratingKey` | Show detail with per-season rollups |
 | GET | `/api/proxy/thumb` | Server-side Plex thumbnail proxy |
 | POST | `/api/sync` | Trigger a full sync from Plex |
+| POST | `/api/sync/libraries/:key` | Trigger a sync for a single library |
 | GET | `/api/sync/history` | Last 20 sync runs |
 | GET | `/api/sync/:id` | Status of a specific sync run |
+| GET | `/api/sync/:id/events` | SSE stream of live sync progress |
 | POST | `/api/webhook/plex` | Plex webhook receiver (Plex Pass only) |
 
 ## Development

@@ -39,7 +39,7 @@ function SetupPage() {
       setPinId(data.pinId);
       setAuthUrl(data.authUrl);
       setPinExpired(false);
-      authPopup.current = window.open(data.authUrl, "plex-auth", "width=800,height=700");
+      authPopup.current = globalThis.open(data.authUrl, "plex-auth", "width=800,height=700");
       setStep("polling");
     },
   });
@@ -86,6 +86,7 @@ function SetupPage() {
               Sign in with Plex to get started.
             </p>
             <button
+              type="button"
               className="btn w-full bg-plex hover:bg-plex/90 border-plex hover:border-plex/90 text-white px-7.5 py-3.25 font-plex text-[16px] font-bold"
               onClick={() => createPin.mutate()}
               disabled={createPin.isPending}
@@ -135,6 +136,7 @@ function SetupPage() {
               </>
             )}
             <button
+              type="button"
               className="btn btn-ghost btn-sm text-base-content/50"
               onClick={() => {
                 setStep("initial");
@@ -161,6 +163,7 @@ function SetupPage() {
                 if (!bestConn) return null;
                 return (
                   <button
+                    type="button"
                     key={`${server.name}:${bestConn.uri}`}
                     className="btn btn-outline justify-start gap-3 h-auto py-3"
                     onClick={() =>

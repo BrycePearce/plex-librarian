@@ -80,6 +80,6 @@ if (staticDir) {
 }
 
 const port = parseInt(Deno.env.get('PORT') ?? '', 10) || 8080;
-console.log(`plex-purger listening on http://localhost:${port}`);
+console.log(`plex-librarian listening on http://localhost:${port}`);
 
 Deno.serve({ port }, app.fetch);

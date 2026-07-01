@@ -87,6 +87,7 @@ function StalePage() {
         </div>
         <div className="flex flex-col items-end gap-1">
           <button
+            type="button"
             className="btn btn-sm gap-2"
             onClick={trigger}
             disabled={isSyncing}
@@ -142,7 +143,11 @@ function StalePage() {
             value={gracePeriodValue}
             onChange={(e) => setGracePeriod(e.target.value)}
           >
-            <option value="default">Use global default</option>
+            <option value="default">
+              {gracePeriodValue === 'default' && data
+                ? `Default (${data.minAgeDays} days)`
+                : 'Default'}
+            </option>
             <option value={0}>No grace period</option>
             <option value={30}>30 days</option>
             <option value={60}>60 days</option>
@@ -189,6 +194,7 @@ function StalePage() {
       {totalPages > 1 && (
         <div className="flex justify-center gap-2">
           <button
+            type="button"
             className="btn btn-sm"
             disabled={page === 0}
             onClick={() => setParams((p) => ({ ...p, offset: (page - 1) * PAGE_SIZE }))}
@@ -199,6 +205,7 @@ function StalePage() {
             {page + 1} / {totalPages}
           </span>
           <button
+            type="button"
             className="btn btn-sm"
             disabled={page >= totalPages - 1}
             onClick={() => setParams((p) => ({ ...p, offset: (page + 1) * PAGE_SIZE }))}
@@ -226,6 +233,7 @@ function SortTh({
   return (
     <th>
       <button
+        type="button"
         className="flex items-center gap-1 hover:text-primary transition-colors"
         onClick={() => onSort(field)}
       >
