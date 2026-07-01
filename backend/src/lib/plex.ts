@@ -87,7 +87,8 @@ interface PlexHistoryEntry {
 }
 
 const ITEMS_PAGE_SIZE = 300;
-const FETCH_CONCURRENCY = 8;
+// Max concurrent page-fetch requests per library. Override via FETCH_CONCURRENCY env var.
+const FETCH_CONCURRENCY = Math.max(1, parseInt(Deno.env.get('FETCH_CONCURRENCY') ?? '', 10) || 8);
 
 // Plex media type IDs used in ?type= filters on /library/sections/:key/all
 export const PLEX_TYPE = {

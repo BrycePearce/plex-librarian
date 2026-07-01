@@ -88,4 +88,26 @@
     Required="false"
     Mask="false">/data/librarian.db</Config>
 
+  <Config
+    Name="Library Sync Concurrency"
+    Target="LIBRARY_SYNC_CONCURRENCY"
+    Default="3"
+    Mode=""
+    Description="Max number of libraries synced in parallel. Kept low by default to avoid competing with Plex for resources on the same host — only raise this on dedicated hardware."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">3</Config>
+
+  <Config
+    Name="Fetch Concurrency"
+    Target="FETCH_CONCURRENCY"
+    Default="8"
+    Mode=""
+    Description="Max concurrent Plex page requests per library. Kept low by default to avoid competing with Plex for resources on the same host — only raise this on dedicated hardware."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">8</Config>
+
 </Container>

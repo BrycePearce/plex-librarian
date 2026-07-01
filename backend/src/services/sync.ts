@@ -9,9 +9,13 @@ import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
 // a rename in schema.ts + migration automatically updates the upsert set clause.
 const excl = (c: { name: string }) => sql.raw(`excluded.${c.name}`);
 
-// Max libraries synced concurrently. Each library already uses FETCH_CONCURRENCY=8
+// Max libraries synced concurrently. Each library already uses FETCH_CONCURRENCY
 // parallel Plex requests internally, so this keeps total concurrent requests bounded.
-const LIBRARY_SYNC_CONCURRENCY = 3;
+// Override via LIBRARY_SYNC_CONCURRENCY env var.
+const LIBRARY_SYNC_CONCURRENCY = Math.max(
+  1,
+  parseInt(Deno.env.get('LIBRARY_SYNC_CONCURRENCY') ?? '', 10) || 3,
+);
 
 export type SyncReporter = {
   onLibraries?: (libs: { key: string; title: string }[]) => void;
@@ -339,21 +343,25 @@ export async function runSync(reporter?: SyncReporter): Promise<number> {
 
   let totalItems = 0;
 
-  for (let i = 0; i < plexLibraries.length; i += LIBRARY_SYNC_CONCURRENCY) {
-    const batch = plexLibraries.slice(i, i + LIBRARY_SYNC_CONCURRENCY);
-    await Promise.all(
-      batch.map((lib) =>
-        syncLibrary(
-          plex,
-          lib,
-          now,
-          buildCallbacks(reporter, lib.key, (d) => {
-            totalItems += d;
-          }),
-        )
-      ),
-    );
+  // Worker pool: each worker pulls the next library off the shared queue as soon as
+  // it finishes its current one, instead of waiting for a whole fixed-size batch to drain.
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < plexLibraries.length) {
+      const lib = plexLibraries[nextIndex++];
+      await syncLibrary(
+        plex,
+        lib,
+        now,
+        buildCallbacks(reporter, lib.key, (d) => {
+          totalItems += d;
+        }),
+      );
+    }
   }
+
+  const workerCount = Math.min(LIBRARY_SYNC_CONCURRENCY, plexLibraries.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
 
   return totalItems;
 }

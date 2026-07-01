@@ -41,8 +41,12 @@ services:
 | `PLEX_URL` | No | Skip OAuth — direct URL to your Plex server |
 | `PLEX_TOKEN` | No | Skip OAuth — your Plex auth token |
 | `PLEX_WEBHOOK_SECRET` | No | Validates incoming Plex webhook requests |
+| `LIBRARY_SYNC_CONCURRENCY` | No | Max libraries synced in parallel (default: `3`) |
+| `FETCH_CONCURRENCY` | No | Max concurrent Plex page requests per library (default: `8`) |
 
 Migrations run automatically on startup. No manual database setup required.
+
+Sync concurrency defaults are deliberately conservative to keep the container's footprint small, especially since Plex itself often runs on the same host. Only raise these if you're running on dedicated hardware with room to spare.
 
 ### Manual Plex setup (skip OAuth)
 
