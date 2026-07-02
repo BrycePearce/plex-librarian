@@ -110,4 +110,15 @@
     Required="false"
     Mask="false">8</Config>
 
+  <Config
+    Name="Sync Stall Timeout (minutes)"
+    Target="SYNC_STALL_TIMEOUT_MINUTES"
+    Default="15"
+    Mode=""
+    Description="Abort a sync if it reports no progress for this many minutes — e.g. the Plex server going offline mid-sync. Only raise this if you have a very slow or high-latency Plex connection triggering false positives."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">15</Config>
+
 </Container>

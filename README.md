@@ -43,6 +43,7 @@ services:
 | `PLEX_WEBHOOK_SECRET` | No | Validates incoming Plex webhook requests |
 | `LIBRARY_SYNC_CONCURRENCY` | No | Max libraries synced in parallel (default: `3`) |
 | `FETCH_CONCURRENCY` | No | Max concurrent Plex page requests per library (default: `8`) |
+| `SYNC_STALL_TIMEOUT_MINUTES` | No | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
 
 Migrations run automatically on startup. No manual database setup required.
 

@@ -23,6 +23,46 @@ const syncStreams = new Map<number, Map<SSEWriter, () => void>>();
 // automatically eligible for GC once the progress map is cleared.
 const itemStartTimes = new WeakMap<LibrarySyncProgress, number>();
 
+// If a sync produces no progress (no phase transition, no item count increment) for
+// this long, it's treated as stalled and failed outright. Every individual Plex request
+// already has its own 30s timeout with limited retries (see PlexClient.get in
+// lib/plex.ts), so a normal dead connection fails fast — this is a backstop for
+// whatever lets a request evade that (observed once: a Plex host powered off mid-sync,
+// which can leave a connection silently hanging rather than erroring, for 13+ hours).
+// The orphaned task, if it ever does settle on its own after this fires, is a no-op:
+// finalizeSyncLog's `status = 'pending'` guard discards a late result once the row has
+// already been marked 'error'.
+const SYNC_STALL_TIMEOUT_MS = Math.max(
+  60_000,
+  (parseInt(Deno.env.get('SYNC_STALL_TIMEOUT_MINUTES') ?? '', 10) || 15) * 60_000,
+);
+
+// Last time any progress was reported for a syncId. Populated at trigger time so a
+// hang on the very first request (before onLibraries even fires) is still caught.
+const lastProgressAt = new Map<number, number>();
+
+function touchProgress(syncId: number): void {
+  if (lastProgressAt.has(syncId)) lastProgressAt.set(syncId, Date.now());
+}
+
+// Races against the actual sync task in runSyncTask. Self-reschedules rather than
+// firing once at a fixed delay, since progress events keep pushing the deadline out.
+function watchdog(syncId: number): { promise: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout>;
+  const promise = new Promise<never>((_, reject) => {
+    const check = () => {
+      const idleMs = Date.now() - (lastProgressAt.get(syncId) ?? Date.now());
+      if (idleMs >= SYNC_STALL_TIMEOUT_MS) {
+        reject(new Error(`Sync stalled — no progress for ${Math.round(idleMs / 60_000)}m`));
+        return;
+      }
+      timer = setTimeout(check, SYNC_STALL_TIMEOUT_MS - idleMs);
+    };
+    timer = setTimeout(check, SYNC_STALL_TIMEOUT_MS);
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+}
+
 export function getSyncProgress(syncId: number): LibrarySyncProgress[] | undefined {
   const entries = syncProgress.get(syncId);
   return entries ? [...entries.values()] : undefined;
@@ -65,6 +105,7 @@ async function pushEvent(syncId: number, event: string, data: object): Promise<v
 function makeReporter(syncId: number): SyncReporter {
   return {
     onLibraries: (libs) => {
+      touchProgress(syncId);
       syncProgress.set(
         syncId,
         new Map(
@@ -76,6 +117,7 @@ function makeReporter(syncId: number): SyncReporter {
       void pushEvent(syncId, 'libraries', { libraries: libs });
     },
     onPhase: (libraryKey, phase) => {
+      touchProgress(syncId);
       const entry = getEntry(syncId, libraryKey);
       if (!entry) return;
       entry.phase = phase;
@@ -94,6 +136,7 @@ function makeReporter(syncId: number): SyncReporter {
       });
     },
     onCount: (libraryKey, delta) => {
+      touchProgress(syncId);
       const entry = getEntry(syncId, libraryKey);
       if (entry) entry.count += delta;
       void pushEvent(syncId, 'count', { libraryKey, delta });
@@ -107,6 +150,7 @@ async function cleanupSync(
 ): Promise<void> {
   activeSyncs.delete(syncId);
   syncProgress.delete(syncId);
+  lastProgressAt.delete(syncId);
 
   const streams = syncStreams.get(syncId);
   syncStreams.delete(syncId);
@@ -126,8 +170,9 @@ async function runSyncTask(
   task: () => Promise<number>,
 ): Promise<void> {
   let result: { ok: true; itemsProcessed: number } | { ok: false; error: string } | null = null;
+  const dog = watchdog(syncId);
   try {
-    const itemsProcessed = await task();
+    const itemsProcessed = await Promise.race([task(), dog.promise]);
     await finalizeSyncLog(syncId, { ok: true, itemsProcessed });
     result = { ok: true, itemsProcessed };
   } catch (err) {
@@ -136,6 +181,7 @@ async function runSyncTask(
     await finalizeSyncLog(syncId, { ok: false, error });
     result = { ok: false, error };
   } finally {
+    dog.cancel();
     await cleanupSync(syncId, result);
   }
 }
@@ -169,6 +215,7 @@ export function triggerFullSync(
   if ('conflict' in result) return { conflict: result.conflict };
   const { id: syncId } = result;
   activeSyncs.add(syncId);
+  lastProgressAt.set(syncId, Date.now());
   void runSyncTask(syncId, () => runSync(plex, serverId, makeReporter(syncId)));
   return { syncId };
 }
@@ -197,6 +244,7 @@ export function triggerLibrarySync(
   if ('conflict' in result) return { conflict: result.conflict };
   const { id: syncId } = result;
   activeSyncs.add(syncId);
+  lastProgressAt.set(syncId, Date.now());
   void runSyncTask(syncId, () => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId)));
   return { syncId };
 }
