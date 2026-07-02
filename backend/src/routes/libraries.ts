@@ -2,9 +2,12 @@ import { Hono } from 'hono';
 import { and, asc, count, desc, eq, gte, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries, seasons, settings } from '../db/schema.ts';
+import { itemByRatingKey, itemsByLibrary, libraryByKey, seasonsByShow } from '../db/scope.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
 import type { LibrariesResponse, ShowDetail, StaleResponse } from '@plex-librarian/shared/types.ts';
 
-const router = new Hono();
+const router = new Hono<{ Variables: ActiveServerVariables }>();
+router.use('*', withActiveServerId);
 
 const SORT_COLUMNS = {
   fileSize: items.fileSize,
@@ -23,9 +26,16 @@ router.get('/', async (c) => {
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
+  const serverId = c.get('activeServerId');
+  if (serverId === null) {
+    return c.json({ limit, offset, total: 0, libraries: [] } satisfies LibrariesResponse);
+  }
+
   const [[{ total }], rows] = await Promise.all([
-    db.select({ total: count() }).from(libraries),
-    db.select().from(libraries).orderBy(asc(libraries.title)).limit(limit).offset(offset),
+    db.select({ total: count() }).from(libraries).where(eq(libraries.serverId, serverId)),
+    db.select().from(libraries).where(eq(libraries.serverId, serverId)).orderBy(
+      asc(libraries.title),
+    ).limit(limit).offset(offset),
   ]);
 
   return c.json({ limit, offset, total, libraries: rows } satisfies LibrariesResponse);
@@ -34,12 +44,15 @@ router.get('/', async (c) => {
 router.get('/:key/stale', async (c) => {
   const key = c.req.param('key');
 
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'library not found' }, 404);
+
   const [library] = await db.select({
     key: libraries.key,
     staleMinAgeDays: libraries.staleMinAgeDays,
   })
     .from(libraries)
-    .where(eq(libraries.key, key))
+    .where(libraryByKey(serverId, key))
     .limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
@@ -126,7 +139,7 @@ router.get('/:key/stale', async (c) => {
     ? watchedStaleCond
     : or(unwatchedCond, watchedStaleCond);
 
-  const staleWhere = and(eq(items.libraryKey, key), staleCond);
+  const staleWhere = and(itemsByLibrary(serverId, key), staleCond);
 
   const [[{ total }], staleItems] = await Promise.all([
     db.select({ total: count() }).from(items).where(staleWhere),
@@ -163,12 +176,17 @@ router.patch('/:key', async (c) => {
     return c.json({ error: 'staleMinAgeDays must be null or a non-negative integer' }, 400);
   }
 
-  const [library] = await db.select().from(libraries).where(eq(libraries.key, key)).limit(1);
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'library not found' }, 404);
+
+  const [library] = await db.select().from(libraries)
+    .where(libraryByKey(serverId, key))
+    .limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
   await db.update(libraries)
     .set({ staleMinAgeDays: body.staleMinAgeDays })
-    .where(eq(libraries.key, key));
+    .where(libraryByKey(serverId, key));
 
   return c.json({ ...library, staleMinAgeDays: body.staleMinAgeDays });
 });
@@ -177,17 +195,20 @@ router.get('/:key/shows/:ratingKey', async (c) => {
   const key = c.req.param('key');
   const ratingKey = c.req.param('ratingKey');
 
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'show not found' }, 404);
+
   const [show] = await db
     .select()
     .from(items)
-    .where(and(eq(items.ratingKey, ratingKey), eq(items.libraryKey, key)))
+    .where(and(itemByRatingKey(serverId, ratingKey), eq(items.libraryKey, key)))
     .limit(1);
   if (!show) return c.json({ error: 'show not found' }, 404);
 
   const showSeasons = await db
     .select()
     .from(seasons)
-    .where(and(eq(seasons.showRatingKey, ratingKey), eq(seasons.libraryKey, key)))
+    .where(and(seasonsByShow(serverId, ratingKey), eq(seasons.libraryKey, key)))
     .orderBy(asc(seasons.seasonIndex));
 
   return c.json({ show, seasons: showSeasons } satisfies ShowDetail);

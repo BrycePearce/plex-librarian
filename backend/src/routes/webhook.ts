@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { timingSafeEqual } from '@std/crypto';
-import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items } from '../db/schema.ts';
+import { itemByRatingKey } from '../db/scope.ts';
+import { getActiveServer } from '../lib/plex.ts';
 import type { PlexWebhookPayload } from '../lib/plex.ts';
 
 // media.play  — fires immediately on playback start; stamps lastViewedAt = now for real-time feel
@@ -40,6 +41,26 @@ router.post('/plex', async (c) => {
   const { Metadata } = payload;
   if (!HANDLED_EVENTS.has(payload.event) || !Metadata?.ratingKey) return c.json({ ok: true });
 
+  // Webhooks carry no auth of their own beyond the optional shared secret above, and fire
+  // per-server — only apply updates that belong to the currently active server, identified
+  // by Plex's stable per-install uuid (payload.Server.uuid === servers.machineIdentifier).
+  // A webhook from a server you've since disconnected/switched away from is ignored.
+  const active = await getActiveServer();
+
+  if (!active) {
+    console.warn(
+      `webhook ${payload.event}: no active server resolved yet — dropping update (server=${payload.Server?.uuid})`,
+    );
+    return c.json({ ok: true });
+  }
+  if (active.machineIdentifier !== payload.Server?.uuid) {
+    console.warn(
+      `webhook ${payload.event}: from server ${payload.Server?.uuid}, but active server is ${active.machineIdentifier} — dropping update`,
+    );
+    return c.json({ ok: true });
+  }
+  const serverId = active.serverId;
+
   const now = Math.floor(Date.now() / 1000);
   const isScrobble = payload.event === 'media.scrobble';
   const isEpisode = Metadata.type === 'episode';
@@ -64,7 +85,7 @@ router.post('/plex', async (c) => {
         ? { viewCount: Metadata.viewCount }
         : {}),
     })
-    .where(eq(items.ratingKey, itemKey))
+    .where(itemByRatingKey(serverId, itemKey))
     .returning({ ratingKey: items.ratingKey });
 
   if (updated.length === 0) {

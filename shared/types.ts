@@ -25,6 +25,7 @@ export interface PlexConnection {
 export interface PlexServer {
   name: string
   accessToken: string
+  machineIdentifier: string
   connections: PlexConnection[]
 }
 

@@ -3,6 +3,9 @@ import { streamSSE } from 'hono/streaming';
 import { desc, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { libraries, syncLog } from '../db/schema.ts';
+import { libraryByKey, syncLogById } from '../db/scope.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
+import { resolveActiveServer } from '../lib/plex.ts';
 import {
   getSyncProgress,
   isSyncActive,
@@ -13,11 +16,13 @@ import {
 } from '../services/syncManager.ts';
 import type { SyncLog, SyncTriggerResponse } from '@plex-librarian/shared/types.ts';
 
-const router = new Hono();
+const router = new Hono<{ Variables: ActiveServerVariables }>();
+router.use('*', withActiveServerId);
 
-router.post('/', (c) => {
+router.post('/', async (c) => {
   try {
-    const result = triggerFullSync();
+    const active = await resolveActiveServer();
+    const result = await triggerFullSync(active);
     if ('conflict' in result) {
       return c.json({ error: 'sync already in progress', syncId: result.conflict }, 409);
     }
@@ -31,15 +36,25 @@ router.post('/', (c) => {
 router.post('/libraries/:key', async (c) => {
   const key = c.req.param('key');
 
+  // Resolved once here (rather than reading the middleware's cached activeServerId and
+  // letting triggerLibrarySync re-resolve independently) so a server switch racing with
+  // this request can't validate the key against one server and sync a different one.
+  let active: Awaited<ReturnType<typeof resolveActiveServer>>;
+  try {
+    active = await resolveActiveServer();
+  } catch {
+    return c.json({ error: 'library not found' }, 404);
+  }
+
   const [library] = await db
     .select({ key: libraries.key })
     .from(libraries)
-    .where(eq(libraries.key, key))
+    .where(libraryByKey(active.serverId, key))
     .limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
   try {
-    const result = triggerLibrarySync(key);
+    const result = await triggerLibrarySync(active, key);
     if ('conflict' in result) {
       return c.json({ error: 'sync already in progress', syncId: result.conflict }, 409);
     }
@@ -53,7 +68,18 @@ router.post('/libraries/:key', async (c) => {
 router.get('/history', async (c) => {
   const rawLimit = parseInt(c.req.query('limit') ?? '20', 10);
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 20 : Math.min(rawLimit, 100);
-  const rows = await db.select().from(syncLog).orderBy(desc(syncLog.startedAt)).limit(limit);
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json([] satisfies SyncLog[]);
+
+  // Tiebreak on id (strictly increasing with insertion order) in addition to startedAt
+  // (only second-resolution) — otherwise two syncs triggered within the same wall-clock
+  // second sort in whatever order SQLite happens to return ties in, which can put an
+  // older sync above a newer pending one.
+  const rows = await db.select().from(syncLog).where(eq(syncLog.serverId, serverId)).orderBy(
+    desc(syncLog.startedAt),
+    desc(syncLog.id),
+  ).limit(limit);
   return c.json(rows satisfies SyncLog[]);
 });
 
@@ -61,12 +87,47 @@ router.get('/:id/events', async (c) => {
   const id = parseInt(c.req.param('id'), 10);
   if (Number.isNaN(id)) return c.json({ error: 'invalid id' }, 400);
 
+  // A sync's server_id is fixed at creation and never changes, so one ownership
+  // check up front covers the rest of this request — including the in-memory
+  // isSyncActive()/getSyncProgress() lookups below, which are keyed by syncId alone
+  // and would otherwise happily stream another server's in-flight progress to
+  // whichever server is currently active. 404 (not 403) so a stale/foreign id can't
+  // be distinguished from one that never existed.
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'not found' }, 404);
+  const [ownedRow] = await db.select({
+    status: syncLog.status,
+    itemsProcessed: syncLog.itemsProcessed,
+    error: syncLog.error,
+  }).from(syncLog)
+    .where(syncLogById(serverId, id))
+    .limit(1);
+  if (!ownedRow) return c.json({ error: 'not found' }, 404);
+
   if (!isSyncActive(id)) {
-    const [row] = await db.select().from(syncLog).where(eq(syncLog.id, id)).limit(1);
-    if (!row) return c.json({ error: 'not found' }, 404);
-    if (row.status !== 'pending') return c.json({ error: 'sync complete' }, 410);
-    // Pending in DB but not yet registered — sync started but onLibraries hasn't fired
-    return c.json({ error: 'sync not yet active' }, 503);
+    if (ownedRow.status === 'pending') {
+      // Pending in DB but not yet registered — sync started but onLibraries hasn't fired
+      return c.json({ error: 'sync not yet active' }, 503);
+    }
+    // The sync already finished by the time the client subscribed — common for small/fast
+    // syncs, since triggering the sync and opening this stream are two separate round trips.
+    // Stream the terminal event instead of erroring (mirrors the same race handled below,
+    // after registerStream) so EventSource's normal complete/sync-error handling applies —
+    // a non-2xx response here is fatal to EventSource (no auto-retry), which the frontend
+    // was surfacing as a spurious "lost connection" for what is actually a successful sync.
+    return streamSSE(c, async (stream) => {
+      if (ownedRow.status === 'success') {
+        await stream.writeSSE({
+          event: 'complete',
+          data: JSON.stringify({ itemsProcessed: ownedRow.itemsProcessed ?? 0 }),
+        });
+      } else {
+        await stream.writeSSE({
+          event: 'sync-error',
+          data: JSON.stringify({ error: ownedRow.error ?? 'unknown' }),
+        });
+      }
+    });
   }
 
   return streamSSE(c, async (stream) => {
@@ -119,7 +180,12 @@ router.get('/:id/events', async (c) => {
 router.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'), 10);
   if (Number.isNaN(id)) return c.json({ error: 'invalid id' }, 400);
-  const [row] = await db.select().from(syncLog).where(eq(syncLog.id, id)).limit(1);
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'not found' }, 404);
+  const [row] = await db.select().from(syncLog)
+    .where(syncLogById(serverId, id))
+    .limit(1);
   if (!row) return c.json({ error: 'not found' }, 404);
   const progress = getSyncProgress(id);
   if (progress) {

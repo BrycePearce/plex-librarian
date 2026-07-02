@@ -22,7 +22,7 @@ import {
   Settings,
   Info,
 } from "lucide-react";
-import { api } from "../lib/api";
+import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
 import { formatRelativeTime, formatDuration } from "../lib/format";
 import { useLibrarySync, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
@@ -65,6 +65,7 @@ function DashboardInner() {
     mutationFn: api.auth.disconnect,
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["auth", "status"] });
+      await invalidateServerScopedQueries(qc);
       void navigate({ to: "/setup" });
     },
   });
@@ -86,20 +87,12 @@ function DashboardInner() {
     },
   });
 
-  const isSyncing = activeGlobalSyncId !== null || triggerSync.isPending;
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
   const { data: history } = useQuery({
     queryKey: ["sync", "history"],
     queryFn: () => api.sync.history(10),
   });
-
-  // `anyLibrarySyncing` only tracks syncs started while this page is mounted — a sync
-  // kicked off from a library's stale page is lost from that count once you navigate
-  // back here. `history` is always freshly fetched on mount, so fall back to it to
-  // catch syncs still pending from elsewhere (avoids a 409 + flicker on "Sync all").
-  const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
-  const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -111,12 +104,32 @@ function DashboardInner() {
   const { progress: globalSyncProgress, isDone: globalSyncDone, error: globalSyncError } =
     useSyncStream(activeGlobalSyncId);
 
+  // Re-enables "Sync all" the moment the sync finishes, even though the progress panel
+  // below stays mounted a bit longer to show a completed state (see the effect below).
+  const isSyncing =
+    (activeGlobalSyncId !== null && !globalSyncDone) || triggerSync.isPending;
+
+  // `anyLibrarySyncing` only tracks syncs started while this page is mounted — a sync
+  // kicked off from a library's stale page is lost from that count once you navigate
+  // back here. `history` is always freshly fetched on mount, so fall back to it to
+  // catch syncs still pending from elsewhere (avoids a 409 + flicker on "Sync all").
+  const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
+  const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
+
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
     if (!globalSyncDone && globalSyncError === null) return;
     void qc.invalidateQueries({ queryKey: ["libraries"] });
     void qc.invalidateQueries({ queryKey: ["sync", "history"] });
-    setActiveGlobalSyncId(null);
+    if (globalSyncError !== null) {
+      setActiveGlobalSyncId(null);
+      return;
+    }
+    // Success: keep the panel mounted a bit longer showing a "synced" state instead of
+    // clearing it immediately — otherwise a fast sync on a small library flashes the
+    // panel for a fraction of a second and vanishes before it's readable.
+    const timer = setTimeout(() => setActiveGlobalSyncId(null), 2500);
+    return () => clearTimeout(timer);
   }, [globalSyncDone, globalSyncError, activeGlobalSyncId, qc]);
 
   return (
@@ -159,8 +172,8 @@ function DashboardInner() {
         </div>
       </div>
 
-      {activeGlobalSyncId !== null && (
-        <SyncProgressPanel progress={globalSyncProgress ?? undefined} />
+      {(activeGlobalSyncId !== null || triggerSync.isPending) && (
+        <SyncProgressPanel progress={globalSyncProgress ?? undefined} done={globalSyncDone} />
       )}
       {globalSyncError !== null && (
         <div className="alert alert-error">
@@ -231,11 +244,20 @@ function DashboardInner() {
   );
 }
 
-function useCountUp(target: number, duration = 800) {
+// `skipAnimation` snaps straight to `target` instead of easing towards it — used once a
+// library/sync has already reached its "done" state, so the displayed count doesn't keep
+// visibly climbing after the checkmark/"done" label has already appeared.
+function useCountUp(target: number, duration = 800, skipAnimation = false) {
   const [display, setDisplay] = useState(target);
   const prevRef = useRef(target);
 
   useEffect(() => {
+    if (skipAnimation) {
+      setDisplay(target);
+      prevRef.current = target;
+      return;
+    }
+
     const start = prevRef.current;
     const diff = target - start;
     if (diff <= 0) { setDisplay(target); prevRef.current = target; return; }
@@ -251,7 +273,7 @@ function useCountUp(target: number, duration = 800) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [target, duration]);
+  }, [target, duration, skipAnimation]);
 
   return display;
 }
@@ -266,8 +288,8 @@ const PHASE_LABEL: Record<LibraryPhase, string> = {
 };
 
 function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
-  const count = useCountUp(lib.count);
   const done = lib.phase === 'done';
+  const count = useCountUp(lib.count, 800, done);
   const pending = lib.phase === 'pending';
   return (
     <div className="flex items-center gap-3 text-sm">
@@ -296,10 +318,12 @@ function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
   );
 }
 
-function SyncProgressPanel({ progress }: { progress?: LibrarySyncProgress[] }) {
+function SyncProgressPanel(
+  { progress, done }: { progress?: LibrarySyncProgress[]; done?: boolean },
+) {
   const [expanded, setExpanded] = useState(false);
   const totalItems = progress?.reduce((sum, l) => sum + l.count, 0) ?? 0;
-  const animatedTotal = useCountUp(totalItems);
+  const animatedTotal = useCountUp(totalItems, 800, done);
 
   if (!progress?.length) {
     return (
@@ -321,13 +345,19 @@ function SyncProgressPanel({ progress }: { progress?: LibrarySyncProgress[] }) {
           className="flex items-center gap-3 text-sm w-full text-left"
           onClick={() => setExpanded((e) => !e)}
         >
-          <span className="loading loading-spinner loading-xs shrink-0" />
+          {done
+            ? <CheckCircle className="w-4 h-4 text-success shrink-0" />
+            : <span className="loading loading-spinner loading-xs shrink-0" />}
           <span className="font-medium flex-1">
-            {isSingle
+            {done
+              ? isSingle
+                ? `${progress[0].title} synced`
+                : `Synced ${progress.length} libraries`
+              : isSingle
               ? `${progress[0].title} — ${PHASE_LABEL[progress[0].phase]}`
               : `Syncing ${progress.length} libraries`}
           </span>
-          {!isSingle && (
+          {!isSingle && !done && (
             <span className="text-base-content/40 text-xs">
               {doneCount} of {progress.length} done
             </span>

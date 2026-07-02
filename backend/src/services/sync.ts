@@ -1,7 +1,8 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
 import { items, libraries, seasons, syncLog } from '../db/schema.ts';
-import { createPlexClient, PLEX_TYPE } from '../lib/plex.ts';
+import { itemsByLibrary, libraryByKey, seasonsByLibrary } from '../db/scope.ts';
+import { PLEX_TYPE } from '../lib/plex.ts';
 import type { PlexClient, PlexLibrary } from '../lib/plex.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
 
@@ -52,6 +53,7 @@ async function syncShowSizes(
   plex: PlexClient,
   lib: PlexLibrary,
   now: number,
+  serverId: number,
 ): Promise<void> {
   type SeasonAgg = {
     showRatingKey: string;
@@ -103,6 +105,7 @@ async function syncShowSizes(
       .insert(seasons)
       .values(
         batch.map(([ratingKey, agg]) => ({
+          serverId,
           ratingKey,
           showRatingKey: agg.showRatingKey,
           libraryKey: lib.key,
@@ -116,7 +119,7 @@ async function syncShowSizes(
         })),
       )
       .onConflictDoUpdate({
-        target: seasons.ratingKey,
+        target: [seasons.serverId, seasons.ratingKey],
         set: {
           showRatingKey: excl(seasons.showRatingKey),
           libraryKey: excl(seasons.libraryKey),
@@ -134,19 +137,19 @@ async function syncShowSizes(
   // Prune season rows for shows deleted from this library since the last sync.
   await db
     .delete(seasons)
-    .where(and(eq(seasons.libraryKey, lib.key), lt(seasons.updatedAt, now)));
+    .where(and(seasonsByLibrary(serverId, lib.key), lt(seasons.updatedAt, now)));
 
   // Roll season sizes up to the show row so the stale list can display total size.
   // COALESCE preserves the existing value when SUM returns NULL (all season sizes unknown).
-  // The library_key filter on the subquery prevents cross-library inflation when the same
-  // show ratingKey appears in more than one library.
+  // The server_id + library_key filter on the subquery prevents cross-library/cross-server
+  // inflation when the same show ratingKey appears elsewhere.
   await db.run(sql`
     UPDATE items
     SET file_size = COALESCE(
-      (SELECT SUM(file_size) FROM seasons WHERE show_rating_key = items.rating_key AND library_key = ${lib.key}),
+      (SELECT SUM(file_size) FROM seasons WHERE server_id = ${serverId} AND show_rating_key = items.rating_key AND library_key = ${lib.key}),
       file_size
     )
-    WHERE library_key = ${lib.key} AND type = 'show'
+    WHERE server_id = ${serverId} AND library_key = ${lib.key} AND type = 'show'
   `);
 }
 
@@ -156,6 +159,7 @@ async function syncShowSizes(
 async function syncArtistSizes(
   plex: PlexClient,
   lib: PlexLibrary,
+  serverId: number,
 ): Promise<void> {
   const artistTotals = new Map<string, number>();
 
@@ -173,10 +177,10 @@ async function syncArtistSizes(
 
   withTransaction((client) => {
     const stmt = client.prepare(
-      `UPDATE items SET file_size = ? WHERE rating_key = ? AND library_key = ? AND type = 'artist'`,
+      `UPDATE items SET file_size = ? WHERE server_id = ? AND rating_key = ? AND library_key = ? AND type = 'artist'`,
     );
     for (const [ratingKey, fileSize] of artistTotals) {
-      stmt.run(fileSize, ratingKey, lib.key);
+      stmt.run(fileSize, serverId, ratingKey, lib.key);
     }
   });
 }
@@ -185,7 +189,11 @@ async function syncArtistSizes(
 // for the entire library in one paginated stream instead of one request per item.
 // For episodes the play is attributed to the show (grandparentRatingKey); for movies the
 // movie ratingKey is used directly. Artist libraries have no useful play history here.
-async function syncLibraryHistory(plex: PlexClient, lib: PlexLibrary): Promise<void> {
+async function syncLibraryHistory(
+  plex: PlexClient,
+  lib: PlexLibrary,
+  serverId: number,
+): Promise<void> {
   if (lib.type === 'artist') return;
 
   // Build ratingKey → max(viewedAt) across all users and all pages before writing.
@@ -213,11 +221,11 @@ async function syncLibraryHistory(plex: PlexClient, lib: PlexLibrary): Promise<v
   withTransaction((client) => {
     const stmt = client.prepare(
       `UPDATE items SET last_viewed_at = ?
-       WHERE rating_key = ? AND library_key = ?
+       WHERE server_id = ? AND rating_key = ? AND library_key = ?
          AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
     );
     for (const [ratingKey, viewedAt] of maxViewedAt) {
-      stmt.run(viewedAt, ratingKey, lib.key, viewedAt);
+      stmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
     }
   });
 }
@@ -226,15 +234,16 @@ async function syncLibrary(
   plex: PlexClient,
   lib: PlexLibrary,
   now: number,
+  serverId: number,
   callbacks?: LibraryCallbacks,
 ): Promise<number> {
   callbacks?.onPhase('items');
 
   await db
     .insert(libraries)
-    .values({ key: lib.key, title: lib.title, type: lib.type, syncedAt: now })
+    .values({ serverId, key: lib.key, title: lib.title, type: lib.type, syncedAt: now })
     .onConflictDoUpdate({
-      target: libraries.key,
+      target: [libraries.serverId, libraries.key],
       set: { title: lib.title, type: lib.type, syncedAt: now },
     });
 
@@ -252,6 +261,7 @@ async function syncLibrary(
       .insert(items)
       .values(
         page.map((item) => ({
+          serverId,
           ratingKey: item.ratingKey,
           libraryKey: lib.key,
           title: item.title,
@@ -267,7 +277,7 @@ async function syncLibrary(
         })),
       )
       .onConflictDoUpdate({
-        target: items.ratingKey,
+        target: [items.serverId, items.ratingKey],
         set: {
           libraryKey: excl(items.libraryKey),
           title: excl(items.title),
@@ -287,8 +297,8 @@ async function syncLibrary(
   }
 
   // Both size-rollup functions run before the prune, for different reasons.
-  // syncShowSizes: the seasons table has FK(show_rating_key) → items.rating_key
-  // ON DELETE CASCADE. If shows were pruned first and Plex's episode endpoint
+  // syncShowSizes: the seasons table has FK(server_id, show_rating_key) → items(server_id,
+  // rating_key) ON DELETE CASCADE. If shows were pruned first and Plex's episode endpoint
   // still returns episodes for a recently-deleted show (cache lag), the subsequent
   // season INSERT would hit a FK constraint violation. Running before the prune
   // means orphaned season rows are cascade-deleted by the prune step instead.
@@ -296,18 +306,18 @@ async function syncLibrary(
   // after the prune, deleted artists are gone and the UPDATEs would silently no-op.
   if (lib.type === 'show') {
     callbacks?.onPhase('episodes');
-    await syncShowSizes(plex, lib, now);
+    await syncShowSizes(plex, lib, now, serverId);
   } else if (lib.type === 'artist') {
     callbacks?.onPhase('tracks');
-    await syncArtistSizes(plex, lib);
+    await syncArtistSizes(plex, lib, serverId);
   }
 
   if (itemCount > 0) {
-    await db.delete(items).where(and(eq(items.libraryKey, lib.key), lt(items.updatedAt, now)));
+    await db.delete(items).where(and(itemsByLibrary(serverId, lib.key), lt(items.updatedAt, now)));
   }
 
   callbacks?.onPhase('history');
-  await syncLibraryHistory(plex, lib);
+  await syncLibraryHistory(plex, lib, serverId);
 
   callbacks?.onPhase('done');
 
@@ -333,9 +343,15 @@ export async function finalizeSyncLog(
 }
 
 // Pure sync logic — throws on error, returns total items processed.
+// plex/serverId are resolved once by the caller (syncManager's triggerFullSync) and
+// threaded through here rather than re-resolved, so this always operates on the exact
+// server the sync_log row was created for even if the active server changes mid-run.
 // The caller (syncManager's runSyncTask) is responsible for try/catch and finalizeSyncLog.
-export async function runSync(reporter?: SyncReporter): Promise<number> {
-  const plex = await createPlexClient();
+export async function runSync(
+  plex: PlexClient,
+  serverId: number,
+  reporter?: SyncReporter,
+): Promise<number> {
   const plexLibraries = await plex.libraries();
   const now = Math.floor(Date.now() / 1000);
 
@@ -353,6 +369,7 @@ export async function runSync(reporter?: SyncReporter): Promise<number> {
         plex,
         lib,
         now,
+        serverId,
         buildCallbacks(reporter, lib.key, (d) => {
           totalItems += d;
         }),
@@ -367,13 +384,19 @@ export async function runSync(reporter?: SyncReporter): Promise<number> {
 }
 
 // Pure sync logic for a single library — throws on error, returns items processed.
+// plex/serverId are resolved once by the caller (syncManager's triggerLibrarySync) and
+// threaded through here — see runSync() above for why.
 // The caller (syncManager's runSyncTask) is responsible for try/catch and finalizeSyncLog.
-export async function runLibrarySync(libraryKey: string, reporter?: SyncReporter): Promise<number> {
-  const plex = await createPlexClient();
+export async function runLibrarySync(
+  plex: PlexClient,
+  serverId: number,
+  libraryKey: string,
+  reporter?: SyncReporter,
+): Promise<number> {
   const [lib] = await db
     .select({ key: libraries.key, title: libraries.title, type: libraries.type })
     .from(libraries)
-    .where(eq(libraries.key, libraryKey))
+    .where(libraryByKey(serverId, libraryKey))
     .limit(1);
   if (!lib) throw new Error(`Library ${libraryKey} not found`);
 
@@ -385,6 +408,7 @@ export async function runLibrarySync(libraryKey: string, reporter?: SyncReporter
     plex,
     lib,
     now,
+    serverId,
     buildCallbacks(reporter, libraryKey, (d) => {
       itemCount += d;
     }),

@@ -1,7 +1,10 @@
 import { withTransaction } from '../db/index.ts';
+import type { PlexClient } from '../lib/plex.ts';
 import { finalizeSyncLog, runLibrarySync, runSync } from './sync.ts';
 import type { SyncReporter } from './sync.ts';
 import type { LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
+
+type ActiveServer = { client: PlexClient; serverId: number };
 
 interface SSEWriter {
   writeSSE(message: { event: string; data: string }): Promise<void>;
@@ -137,48 +140,63 @@ async function runSyncTask(
   }
 }
 
-export function triggerFullSync(): { syncId: number } | { conflict: number } {
+// Takes the already-resolved active server (see resolveActiveServer() in lib/plex.ts)
+// from the caller and threads the same {client, serverId} pair through to both the
+// sync_log insert and the task that actually executes the sync — so a server switch
+// racing with the caller's resolution can't log the row under one server while syncing
+// another. Callers must resolve once (rather than re-resolving here) so the serverId a
+// route validated against (e.g. a library lookup) can never diverge from the one a sync
+// actually runs against. The pending-sync conflict check is scoped to this serverId: an
+// in-flight sync for a different (e.g. previously active) server must never block this one.
+export function triggerFullSync(
+  active: ActiveServer,
+): { syncId: number } | { conflict: number } {
+  const { client: plex, serverId } = active;
   const startedAt = Math.floor(Date.now() / 1000);
   const result = withTransaction((client): { conflict: number } | { id: number } => {
     const existing = client
-      .prepare("SELECT id FROM sync_log WHERE status = 'pending' LIMIT 1")
-      .value<[number]>();
+      .prepare("SELECT id FROM sync_log WHERE status = 'pending' AND server_id = ? LIMIT 1")
+      .value<[number]>(serverId);
     if (existing) return { conflict: existing[0] };
     const row = client
       .prepare(
-        "INSERT INTO sync_log (started_at, status, items_processed) VALUES (?, 'pending', 0) RETURNING id",
+        "INSERT INTO sync_log (server_id, started_at, status, items_processed) VALUES (?, ?, 'pending', 0) RETURNING id",
       )
-      .value<[number]>(startedAt);
+      .value<[number]>(serverId, startedAt);
     if (!row) throw new Error('sync_log insert returned no id');
     return { id: row[0] };
   });
   if ('conflict' in result) return { conflict: result.conflict };
   const { id: syncId } = result;
   activeSyncs.add(syncId);
-  void runSyncTask(syncId, () => runSync(makeReporter(syncId)));
+  void runSyncTask(syncId, () => runSync(plex, serverId, makeReporter(syncId)));
   return { syncId };
 }
 
-export function triggerLibrarySync(libraryKey: string): { syncId: number } | { conflict: number } {
+export function triggerLibrarySync(
+  active: ActiveServer,
+  libraryKey: string,
+): { syncId: number } | { conflict: number } {
+  const { client: plex, serverId } = active;
   const startedAt = Math.floor(Date.now() / 1000);
   const result = withTransaction((client): { conflict: number } | { id: number } => {
     const existing = client
       .prepare(
-        "SELECT id FROM sync_log WHERE status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1",
+        "SELECT id FROM sync_log WHERE status = 'pending' AND server_id = ? AND (library_key IS NULL OR library_key = ?) LIMIT 1",
       )
-      .value<[number]>(libraryKey);
+      .value<[number]>(serverId, libraryKey);
     if (existing) return { conflict: existing[0] };
     const row = client
       .prepare(
-        "INSERT INTO sync_log (library_key, started_at, status, items_processed) VALUES (?, ?, 'pending', 0) RETURNING id",
+        "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (?, ?, ?, 'pending', 0) RETURNING id",
       )
-      .value<[number]>(libraryKey, startedAt);
+      .value<[number]>(serverId, libraryKey, startedAt);
     if (!row) throw new Error('sync_log insert returned no id');
     return { id: row[0] };
   });
   if ('conflict' in result) return { conflict: result.conflict };
   const { id: syncId } = result;
   activeSyncs.add(syncId);
-  void runSyncTask(syncId, () => runLibrarySync(libraryKey, makeReporter(syncId)));
+  void runSyncTask(syncId, () => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId)));
   return { syncId };
 }

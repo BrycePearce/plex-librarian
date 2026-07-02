@@ -7,7 +7,7 @@ import {
   skipToken,
 } from "@tanstack/react-query";
 import { Server, ExternalLink } from "lucide-react";
-import { api } from "../lib/api";
+import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { PlexServer } from "../lib/api";
 
 export const Route = createFileRoute("/setup")({
@@ -69,9 +69,10 @@ function SetupPage() {
 
   const chooseServer = useMutation({
     mutationFn: ({ server, uri }: { server: PlexServer; uri: string }) =>
-      api.auth.chooseServer(uri, server.accessToken),
+      api.auth.chooseServer(uri, server.accessToken, server.machineIdentifier, server.name),
     onSuccess: async () => {
       await qc.refetchQueries({ queryKey: ["auth", "status"] });
+      await invalidateServerScopedQueries(qc);
       void navigate({ to: "/dashboard" });
     },
   });

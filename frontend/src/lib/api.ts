@@ -1,3 +1,4 @@
+import type { QueryClient } from '@tanstack/react-query'
 import type {
   AuthStatus,
   PlexPin,
@@ -69,10 +70,15 @@ export const api = {
       apiFetch<PlexPin>('/auth/plex/pin', { method: 'POST' }),
     pollPin: (id: number) =>
       apiFetch<PinPollResult>(`/auth/plex/pin/${id}`),
-    chooseServer: (serverUrl: string, accessToken: string) =>
+    chooseServer: (
+      serverUrl: string,
+      accessToken: string,
+      machineIdentifier: string,
+      name: string,
+    ) =>
       apiFetch<{ ok: true }>('/auth/plex/server', {
         method: 'POST',
-        body: JSON.stringify({ serverUrl, accessToken }),
+        body: JSON.stringify({ serverUrl, accessToken, machineIdentifier, name }),
       }),
     disconnect: () =>
       apiFetch<{ ok: true }>('/auth/plex', { method: 'DELETE' }),
@@ -114,4 +120,12 @@ export const api = {
     history: (limit = 20) =>
       apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
   },
+}
+
+// Connecting, switching, or disconnecting the active server points every server-scoped
+// query — libraries, sync history, stale lists, show detail — at a different dataset.
+// Without a full invalidation, react-query's default staleTime keeps serving whatever
+// the previously-active server's data was cached as until it happens to expire.
+export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
+  return qc.invalidateQueries()
 }

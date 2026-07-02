@@ -2,7 +2,15 @@ import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { settings } from '../db/schema.ts';
-import { buildPlexHeaders, clearPlexClientCache, PLEX_CLIENT_PRODUCT } from '../lib/plex.ts';
+import {
+  buildPlexHeaders,
+  clearPlexClientCache,
+  disconnectActiveServer,
+  findOrCreateServer,
+  getActiveServer,
+  PLEX_CLIENT_PRODUCT,
+  resolveActiveServer,
+} from '../lib/plex.ts';
 import { triggerFullSync } from '../services/syncManager.ts';
 
 const router = new Hono();
@@ -90,24 +98,29 @@ router.get('/plex/pin/:id', async (c) => {
     provides: string;
     owned: boolean;
     accessToken: string;
+    clientIdentifier: string;
     connections: Array<{ uri: string; local: boolean; relay: boolean }>;
   }>;
 
   const connScore = (conn: { local: boolean; relay: boolean }) =>
     conn.local ? 0 : conn.relay ? 2 : 1;
-  const servers = resources
+  const serverList = resources
     .filter((r) => r.owned && r.provides.split(',').map((s) => s.trim()).includes('server'))
     .map((r) => ({
       name: r.name,
       accessToken: r.accessToken,
+      machineIdentifier: r.clientIdentifier,
       connections: r.connections.sort((a, b) => connScore(a) - connScore(b)),
     }));
 
-  return c.json({ status: 'complete', servers });
+  return c.json({ status: 'complete', servers: serverList });
 });
 
 // POST /api/auth/plex/server
-// Saves the user's chosen server URL and token to settings.
+// Points the active server at the user's chosen Plex Media Server. Servers are
+// identified by their stable machineIdentifier, not by URL/token — reconnecting to
+// a previously-used server reuses its row (and all data scoped to it) instead of
+// creating a duplicate or colliding with another server's rows. Nothing is ever wiped.
 router.post('/plex/server', async (c) => {
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
     return c.json({
@@ -115,10 +128,15 @@ router.post('/plex/server', async (c) => {
     }, 409);
   }
 
-  const body = await c.req.json() as { serverUrl?: string; accessToken?: string };
+  const body = await c.req.json() as {
+    serverUrl?: string;
+    accessToken?: string;
+    machineIdentifier?: string;
+    name?: string;
+  };
 
-  if (!body.serverUrl || !body.accessToken) {
-    return c.json({ error: 'serverUrl and accessToken are required' }, 400);
+  if (!body.serverUrl || !body.accessToken || !body.machineIdentifier) {
+    return c.json({ error: 'serverUrl, accessToken and machineIdentifier are required' }, 400);
   }
 
   try {
@@ -129,23 +147,39 @@ router.post('/plex/server', async (c) => {
   }
 
   await getOrCreateClientId();
+  const serverId = await findOrCreateServer({
+    machineIdentifier: body.machineIdentifier,
+    name: body.name ?? 'Plex Server',
+    url: body.serverUrl,
+    accessToken: body.accessToken,
+  });
   await db.update(settings)
-    .set({ plexUrl: body.serverUrl, plexToken: body.accessToken })
+    .set({ activeServerId: serverId })
     .where(eq(settings.id, 1));
 
   clearPlexClientCache();
-  const syncResult = triggerFullSync();
-  if ('conflict' in syncResult) {
-    console.log(
-      `Auto-sync: sync ${syncResult.conflict} already running after server config — will pick up new credentials on next run`,
-    );
+  // The server connection itself is already committed above — a failure to kick off the
+  // initial sync shouldn't report the whole request as failed. The scheduled/startup
+  // auto-sync (or a manual retry) will pick it up.
+  try {
+    const active = await resolveActiveServer();
+    const syncResult = await triggerFullSync(active);
+    if ('conflict' in syncResult) {
+      console.log(
+        `Auto-sync: sync ${syncResult.conflict} already running — will run for the new server once it finishes`,
+      );
+    }
+  } catch (err) {
+    console.error('Failed to trigger sync after connecting server:', err);
   }
 
   return c.json({ ok: true });
 });
 
 // DELETE /api/auth/plex
-// Clears stored Plex credentials so the user can reconnect or switch servers.
+// Disconnects the active server so the user can reconnect or switch. The server's
+// row (and everything synced under it) is left untouched — reconnecting to the same
+// server later, even after connecting to others in between, restores it as-is.
 // No-op when credentials come from env vars (can't clear those at runtime).
 router.delete('/plex', async (c) => {
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
@@ -154,11 +188,7 @@ router.delete('/plex', async (c) => {
     }, 409);
   }
 
-  await db.update(settings)
-    .set({ plexUrl: null, plexToken: null })
-    .where(eq(settings.id, 1));
-
-  clearPlexClientCache();
+  await disconnectActiveServer();
 
   return c.json({ ok: true });
 });
@@ -175,28 +205,23 @@ router.get('/status', async (c) => {
     return c.json({ configured, source: 'env' });
   }
 
-  const [row] = await db.select({
-    clientId: settings.clientId,
-    plexUrl: settings.plexUrl,
-    plexToken: settings.plexToken,
-  }).from(settings).where(eq(settings.id, 1)).limit(1);
-
-  if (!row?.plexUrl || !row?.plexToken) {
+  const active = await getActiveServer();
+  if (!active) {
     return c.json({ configured: false, source: null });
   }
 
   // Validate the token is still accepted by Plex.
   try {
     const res = await fetch(`${PLEX_TV}/api/v2/user`, {
-      headers: buildPlexHeaders(row.clientId, row.plexToken),
+      headers: buildPlexHeaders(active.clientId, active.accessToken),
       signal: AbortSignal.timeout(5_000),
     });
 
     if (res.status === 401) {
       res.body?.cancel();
-      // Token revoked — clear it so the client redirects to setup.
-      await db.update(settings).set({ plexToken: null }).where(eq(settings.id, 1));
-      clearPlexClientCache();
+      // Token revoked — disconnect so the client redirects to setup. The server row
+      // itself is left alone; reconnecting later refreshes its token.
+      await disconnectActiveServer();
       return c.json({ configured: false, source: null, reason: 'token_revoked' });
     }
     if (!res.ok) {

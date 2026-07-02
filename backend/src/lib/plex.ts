@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { settings } from '../db/schema.ts';
+import { servers, settings } from '../db/schema.ts';
 
 export interface PlexLibrary {
   key: string;
@@ -225,6 +225,13 @@ export class PlexClient {
     return !!data.MediaContainer.myPlexSubscription;
   }
 
+  // Stable per-install identifier for the PMS itself — used to detect when
+  // PLEX_URL/PLEX_TOKEN now point at a different server than before.
+  async identity(): Promise<string> {
+    const data = await this.get<{ MediaContainer: { machineIdentifier: string } }>('/identity');
+    return data.MediaContainer.machineIdentifier;
+  }
+
   assetUrl(path: string): string {
     const url = new URL(`${this.url}${path}`);
     url.searchParams.set('X-Plex-Token', this.token);
@@ -340,41 +347,190 @@ export class PlexConfigError extends Error {
 }
 
 let _cachedClient: PlexClient | null = null;
+let _cachedServerId: number | null = null;
 
-// Call after any credential change so the next request re-resolves from DB.
+// Call after any credential/active-server change so the next request re-resolves from DB.
 export function clearPlexClientCache(): void {
   _cachedClient = null;
+  _cachedServerId = null;
 }
 
-export async function createPlexClient(): Promise<PlexClient> {
-  if (_cachedClient) return _cachedClient;
+// Clears settings.activeServerId (leaving the `servers` row and everything scoped to it
+// untouched — reconnecting later restores it as-is) and drops the cached client so the
+// next request re-resolves. Shared by every place that disconnects the active server —
+// explicit DELETE /api/auth/plex and GET /api/auth/status's revoked-token handling — so
+// a future third step in "disconnect" only needs to be added once.
+export async function disconnectActiveServer(): Promise<void> {
+  await db.update(settings).set({ activeServerId: null }).where(eq(settings.id, 1));
+  clearPlexClientCache();
+}
+
+// Upserts a server row by its stable machineIdentifier so reconnecting to a
+// previously-known server reuses its id — and everything scoped to that id
+// (libraries/items/seasons/sync history) — instead of colliding with or losing
+// another server's data. Refreshes name/url/token/lastConnectedAt on every call
+// since those can legitimately change (server renamed, local IP changed, etc).
+export async function findOrCreateServer(
+  opts: { machineIdentifier: string; name: string; url: string; accessToken: string },
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const [row] = await db.insert(servers)
+    .values({ ...opts, lastConnectedAt: now })
+    .onConflictDoUpdate({
+      target: servers.machineIdentifier,
+      set: { name: opts.name, url: opts.url, accessToken: opts.accessToken, lastConnectedAt: now },
+    })
+    .returning({ id: servers.id });
+  return row!.id;
+}
+
+type SettingsIdentity = { clientId: string; activeServerId: number | null };
+
+async function resolveEnvServer(
+  settingsRow: SettingsIdentity,
+): Promise<{ client: PlexClient; serverId: number }> {
+  const envUrl = Deno.env.get('PLEX_URL')!;
+  const envToken = Deno.env.get('PLEX_TOKEN')!;
+  const client = new PlexClient(envUrl, envToken, settingsRow.clientId);
+
+  let machineIdentifier: string;
+  try {
+    // No OAuth resource list to pull a machine identifier from here — ask the PMS directly.
+    machineIdentifier = await client.identity();
+  } catch (err) {
+    // Plex is briefly unreachable and we can't verify identity right now. If we've resolved
+    // a server before, assume it's still the same one rather than failing outright — per
+    // this app's own model, url/token can legitimately change without it being a different
+    // server (dynamic IP, token rotation), so requiring an exact match here would be
+    // stricter than the rest of the app treats "same server" (see machineIdentifier in
+    // CLAUDE.md's Plex auth section). This self-corrects the moment Plex becomes reachable
+    // again and identity() succeeds. Only the very first resolution ever (no activeServerId
+    // yet) has nothing to fall back to and must fail.
+    if (settingsRow.activeServerId !== null) {
+      return { client, serverId: settingsRow.activeServerId };
+    }
+    throw err;
+  }
+
+  const serverId = await findOrCreateServer({
+    machineIdentifier,
+    name: 'Plex Server',
+    url: envUrl,
+    accessToken: envToken,
+  });
+  if (settingsRow.activeServerId !== serverId) {
+    await db.update(settings).set({ activeServerId: serverId }).where(eq(settings.id, 1));
+  }
+  return { client, serverId };
+}
+
+async function resolveDbServer(
+  settingsRow: SettingsIdentity,
+): Promise<{ client: PlexClient; serverId: number }> {
+  if (!settingsRow.activeServerId) {
+    throw new PlexConfigError('Plex is not configured — complete setup at /setup');
+  }
+
+  const [serverRow] = await db.select({ url: servers.url, accessToken: servers.accessToken })
+    .from(servers).where(eq(servers.id, settingsRow.activeServerId)).limit(1);
+  if (!serverRow) {
+    throw new PlexConfigError('Plex is not configured — complete setup at /setup');
+  }
+
+  const client = new PlexClient(serverRow.url, serverRow.accessToken, settingsRow.clientId);
+  return { client, serverId: settingsRow.activeServerId };
+}
+
+// Single source of truth for "which server, and what client, are we talking to right
+// now" — returns both atomically so callers never pair a client from one resolution
+// with a serverId from another. Callers that need both (sync execution) should call
+// this once and thread the result through, rather than calling createPlexClient() and
+// getActiveServerId() separately, which could observe different servers if the cache
+// is cleared in between.
+export async function resolveActiveServer(): Promise<{ client: PlexClient; serverId: number }> {
+  if (_cachedClient && _cachedServerId !== null) {
+    return { client: _cachedClient, serverId: _cachedServerId };
+  }
+
+  // Ensure the settings row exists so clientId is always sent with requests.
+  await db.insert(settings).values({ id: 1, clientId: crypto.randomUUID() })
+    .onConflictDoNothing();
+  const [settingsRow] = await db.select({
+    clientId: settings.clientId,
+    activeServerId: settings.activeServerId,
+  }).from(settings).where(eq(settings.id, 1)).limit(1);
 
   // Env vars take precedence — power users and Docker setups can skip OAuth.
   const envUrl = Deno.env.get('PLEX_URL');
   const envToken = Deno.env.get('PLEX_TOKEN');
+  let resolved: { client: PlexClient; serverId: number };
   if (envUrl && envToken) {
-    // Ensure the settings row exists so clientId is always sent with requests.
-    await db.insert(settings).values({ id: 1, clientId: crypto.randomUUID() })
-      .onConflictDoNothing();
-    const [envRow] = await db.select({ clientId: settings.clientId })
-      .from(settings).where(eq(settings.id, 1)).limit(1);
-    _cachedClient = new PlexClient(envUrl, envToken, envRow!.clientId);
-    return _cachedClient;
-  }
-  if (envUrl || envToken) {
+    resolved = await resolveEnvServer(settingsRow!);
+  } else if (envUrl || envToken) {
     throw new PlexConfigError('Both PLEX_URL and PLEX_TOKEN must be set when using env var auth');
+  } else {
+    resolved = await resolveDbServer(settingsRow!);
   }
 
+  _cachedClient = resolved.client;
+  _cachedServerId = resolved.serverId;
+  return resolved;
+}
+
+export async function createPlexClient(): Promise<PlexClient> {
+  return (await resolveActiveServer()).client;
+}
+
+// The server currently synced/displayed. Throws PlexConfigError if unconfigured,
+// mirroring createPlexClient().
+export async function getActiveServerId(): Promise<number> {
+  return (await resolveActiveServer()).serverId;
+}
+
+// Same as getActiveServerId(), but returns null instead of throwing — whether that's
+// because Plex isn't configured, or because resolution failed for any other reason
+// (e.g. Plex briefly unreachable while resolving an env-var server) — and never lets a
+// resolution error surface as a 500 on these read-only routes. Routes through the same
+// resolveActiveServer() cache as createPlexClient(), so an env-var install's server
+// gets resolved on the first request that needs it rather than only reading whatever
+// startupSyncIfStale() has (or hasn't yet, since it runs unawaited) written to
+// settings.activeServerId in the background.
+export async function getActiveServerIdOrNull(): Promise<number | null> {
+  try {
+    return await getActiveServerId();
+  } catch {
+    return null;
+  }
+}
+
+export interface ActiveServerInfo {
+  serverId: number;
+  clientId: string;
+  url: string;
+  accessToken: string;
+  machineIdentifier: string;
+}
+
+// Full connection/identity info for the active server, read fresh from the DB with
+// no caching and without building a PlexClient. Shared by routes that need to
+// validate or identify the active server (GET /auth/status, POST /webhook/plex)
+// rather than actually talk to Plex.
+export async function getActiveServer(): Promise<ActiveServerInfo | null> {
   const [row] = await db.select({
-    plexUrl: settings.plexUrl,
-    plexToken: settings.plexToken,
+    serverId: settings.activeServerId,
     clientId: settings.clientId,
-  }).from(settings).where(eq(settings.id, 1)).limit(1);
-
-  if (!row?.plexUrl || !row?.plexToken) {
-    throw new PlexConfigError('Plex is not configured — complete setup at /setup');
-  }
-
-  _cachedClient = new PlexClient(row.plexUrl, row.plexToken, row.clientId);
-  return _cachedClient;
+    url: servers.url,
+    accessToken: servers.accessToken,
+    machineIdentifier: servers.machineIdentifier,
+  }).from(settings)
+    .leftJoin(servers, eq(settings.activeServerId, servers.id))
+    .where(eq(settings.id, 1)).limit(1);
+  if (!row?.serverId || !row.url || !row.accessToken || !row.machineIdentifier) return null;
+  return {
+    serverId: row.serverId,
+    clientId: row.clientId,
+    url: row.url,
+    accessToken: row.accessToken,
+    machineIdentifier: row.machineIdentifier,
+  };
 }

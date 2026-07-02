@@ -1,20 +1,39 @@
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { foreignKey, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
-export const libraries = sqliteTable('libraries', {
-  key: text('key').primaryKey(),
-  title: text('title').notNull(),
-  type: text('type').notNull(),
-  syncedAt: integer('synced_at').notNull(),
-  staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
+// One row per distinct Plex Media Server ever connected, keyed by Plex's stable
+// per-install machineIdentifier. All synced data is scoped to a server row via
+// serverId so switching servers can never merge or overwrite another server's data —
+// see settings.activeServerId.
+export const servers = sqliteTable('servers', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  machineIdentifier: text('machine_identifier').notNull().unique(),
+  name: text('name').notNull(),
+  url: text('url').notNull(),
+  accessToken: text('access_token').notNull(),
+  lastConnectedAt: integer('last_connected_at').notNull(),
 });
+
+export const libraries = sqliteTable(
+  'libraries',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    title: text('title').notNull(),
+    type: text('type').notNull(),
+    syncedAt: integer('synced_at').notNull(),
+    staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.key] }),
+  }),
+);
 
 export const items = sqliteTable(
   'items',
   {
-    ratingKey: text('rating_key').primaryKey(),
-    libraryKey: text('library_key').notNull().references(() => libraries.key, {
-      onDelete: 'cascade',
-    }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    ratingKey: text('rating_key').notNull(),
+    libraryKey: text('library_key').notNull(),
     title: text('title').notNull(),
     type: text('type').notNull(),
     thumb: text('thumb'),
@@ -27,22 +46,35 @@ export const items = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    lastViewedAtIdx: index('items_last_viewed_at_idx').on(table.lastViewedAt),
-    libraryStaleIdx: index('items_library_stale_idx').on(table.libraryKey, table.lastViewedAt),
-    libraryFileSizeIdx: index('items_library_file_size_idx').on(table.libraryKey, table.fileSize),
+    pk: primaryKey({ columns: [table.serverId, table.ratingKey] }),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    lastViewedAtIdx: index('items_last_viewed_at_idx').on(table.serverId, table.lastViewedAt),
+    libraryStaleIdx: index('items_library_stale_idx').on(
+      table.serverId,
+      table.libraryKey,
+      table.lastViewedAt,
+    ),
+    libraryFileSizeIdx: index('items_library_file_size_idx').on(
+      table.serverId,
+      table.libraryKey,
+      table.fileSize,
+    ),
   }),
 );
 
-// Singleton row (id = 1) — stores installation identity and Plex credentials.
-// Env vars PLEX_URL + PLEX_TOKEN take precedence over this table at runtime.
+// Singleton row (id = 1) — app-wide behavior settings and installation identity.
+// Per-server Plex credentials live on `servers`; activeServerId points at the one
+// currently synced/displayed. Env vars PLEX_URL + PLEX_TOKEN take precedence over
+// the active server's stored credentials at runtime.
 export const settings = sqliteTable('settings', {
   id: integer('id').primaryKey(),
   clientId: text('client_id').notNull(),
   publicJwk: text('public_jwk'),
   privateJwk: text('private_jwk'),
-  plexToken: text('plex_token'),
-  plexTokenExpiresAt: integer('plex_token_expires_at'), // reserved for future JWT expiry — PIN tokens don't expire
-  plexUrl: text('plex_url'),
+  activeServerId: integer('active_server_id').references(() => servers.id),
   autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).default(true),
   autoSyncHour: integer('auto_sync_hour').default(3), // 0–23 local server time; default 3am
   staleMinAgeDays: integer('stale_min_age_days').notNull().default(90),
@@ -51,13 +83,10 @@ export const settings = sqliteTable('settings', {
 export const seasons = sqliteTable(
   'seasons',
   {
-    ratingKey: text('rating_key').primaryKey(),
-    showRatingKey: text('show_rating_key').notNull().references(() => items.ratingKey, {
-      onDelete: 'cascade',
-    }),
-    libraryKey: text('library_key').notNull().references(() => libraries.key, {
-      onDelete: 'cascade',
-    }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    ratingKey: text('rating_key').notNull(),
+    showRatingKey: text('show_rating_key').notNull(),
+    libraryKey: text('library_key').notNull(),
     seasonIndex: integer('season_index').notNull(),
     title: text('title').notNull(),
     fileSize: integer('file_size'),
@@ -67,13 +96,23 @@ export const seasons = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    showIdx: index('seasons_show_idx').on(table.showRatingKey),
-    libraryIdx: index('seasons_library_idx').on(table.libraryKey),
+    pk: primaryKey({ columns: [table.serverId, table.ratingKey] }),
+    showFk: foreignKey({
+      columns: [table.serverId, table.showRatingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    showIdx: index('seasons_show_idx').on(table.serverId, table.showRatingKey),
+    libraryIdx: index('seasons_library_idx').on(table.serverId, table.libraryKey),
   }),
 );
 
 export const syncLog = sqliteTable('sync_log', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  serverId: integer('server_id').references(() => servers.id),
   libraryKey: text('library_key'),
   startedAt: integer('started_at').notNull(),
   finishedAt: integer('finished_at'),

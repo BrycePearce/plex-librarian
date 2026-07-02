@@ -31,6 +31,7 @@
     "npm:react-dom@^19.2.7": "19.2.7_react@19.2.7",
     "npm:react@^19.2.7": "19.2.7",
     "npm:tailwindcss@^4.3.1": "4.3.1",
+    "npm:typescript@*": "6.0.3",
     "npm:typescript@^6.0.3": "6.0.3",
     "npm:vite@*": "8.1.0_esbuild@0.28.1",
     "npm:vite@^8.1.0": "8.1.0_esbuild@0.28.1"
