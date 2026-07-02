@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatKilobytes, formatDate, formatDuration } from '../lib/format'
 import type { Season } from '../lib/api'
+import { ShowDetailSkeleton } from '../components/Skeletons'
 
 export const Route = createFileRoute('/libraries/$key/shows/$ratingKey')({
   beforeLoad: async ({ context }) => {
@@ -39,11 +40,7 @@ function ShowDetailPage() {
         </div>
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-20">
-          <span className="loading loading-spinner loading-lg" />
-        </div>
-      )}
+      {isLoading && <ShowDetailSkeleton />}
 
       {data && (
         <>

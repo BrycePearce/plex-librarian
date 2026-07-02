@@ -25,8 +25,9 @@ import {
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
 import { formatRelativeTime, formatDuration } from "../lib/format";
-import { useLibrarySync, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
+import { useLibrarySync, useSyncHistory, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
+import { LibraryCardSkeleton } from "../components/Skeletons";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: async ({ context }) => {
@@ -89,10 +90,7 @@ function DashboardInner() {
 
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
-  const { data: history } = useQuery({
-    queryKey: ["sync", "history"],
-    queryFn: () => api.sync.history(10),
-  });
+  const { data: history } = useSyncHistory();
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -189,8 +187,10 @@ function DashboardInner() {
       )}
 
       {libsLoading && (
-        <div className="flex justify-center py-20">
-          <span className="loading loading-spinner loading-lg" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <LibraryCardSkeleton key={i} />
+          ))}
         </div>
       )}
       {libsError && (
@@ -403,7 +403,9 @@ function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: bool
           </div>
           <button
             type="button"
-            className="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/40 hover:text-base-content"
+            className={`btn btn-ghost btn-xs btn-square shrink-0 ${
+              isSyncing ? "text-primary" : "text-base-content/40 hover:text-base-content"
+            }`}
             onClick={(e) => { e.stopPropagation(); trigger(); }}
             disabled={isSyncing || globalSyncing}
             title="Sync this library"

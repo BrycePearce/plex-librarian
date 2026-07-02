@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import type { StaleParams, StaleItem, SortKey } from '../lib/api'
 import { formatKilobytes, formatDate } from '../lib/format'
 import { useLibrarySync } from '../lib/useLibrarySync'
+import { StaleTableSkeleton } from '../components/Skeletons'
 
 export const Route = createFileRoute('/libraries/$key/stale')({
   beforeLoad: async ({ context }) => {
@@ -159,9 +160,7 @@ function StalePage() {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-20">
-          <span className="loading loading-spinner loading-lg" />
-        </div>
+        <StaleTableSkeleton />
       ) : (
         <div className={`overflow-x-auto transition-opacity ${isPlaceholderData ? 'opacity-50' : ''}`}>
           <table className="table table-sm table-fixed">

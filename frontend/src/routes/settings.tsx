@@ -17,40 +17,7 @@ export const Route = createFileRoute('/settings')({
 })
 
 function SettingsPage() {
-  const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
-  const [staleMinAgeDays, setStaleMinAgeDays] = useState('')
-
-  useEffect(() => {
-    if (data) setStaleMinAgeDays(String(data.staleMinAgeDays))
-  }, [data])
-
-  const [justSaved, setJustSaved] = useState(false)
-  const savedTimeoutRef = useRef<number | undefined>(undefined)
-
-  const update = useMutation({
-    mutationFn: (value: number) => api.settings.update(value),
-    onSuccess: (updated) => {
-      qc.setQueryData(['settings'], updated)
-      setJustSaved(true)
-      clearTimeout(savedTimeoutRef.current)
-      savedTimeoutRef.current = setTimeout(() => setJustSaved(false), 2000)
-    },
-  })
-
-  useEffect(() => () => clearTimeout(savedTimeoutRef.current), [])
-
-  const parsed = Number(staleMinAgeDays)
-  const valid = staleMinAgeDays !== '' && Number.isInteger(parsed) && parsed >= 0
-  // Only flag invalid once the real value has loaded — avoids a red flash while staleMinAgeDays is still ''.
-  const showInvalid = data !== undefined && !valid
-
-  // Debounced auto-save: waits for typing to settle so we don't PATCH on every keystroke.
-  useEffect(() => {
-    if (!valid || parsed === data?.staleMinAgeDays) return
-    const timer = setTimeout(() => update.mutate(parsed), 500)
-    return () => clearTimeout(timer)
-  }, [staleMinAgeDays, valid, parsed, data?.staleMinAgeDays])
 
   return (
     <div className="space-y-6 max-w-md">
@@ -71,33 +38,81 @@ function SettingsPage() {
                 Libraries without their own override use this default.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            {data ? (
+              <GracePeriodInput initialDays={data.staleMinAgeDays} />
+            ) : (
               <input
                 type="number"
-                min={0}
-                step={1}
-                className={`input input-bordered input-sm w-24 ${showInvalid ? 'input-error' : ''}`}
-                value={staleMinAgeDays}
-                onChange={(e) => setStaleMinAgeDays(e.target.value)}
+                className="input input-bordered input-sm w-24"
+                disabled
+                aria-label="Loading default grace period"
               />
-              <span className="text-sm text-base-content/40">days</span>
-              {update.isPending && <span className="loading loading-spinner loading-xs text-base-content/40" />}
-              <span
-                className={`flex items-center gap-1 text-xs text-success transition-opacity duration-300 ${
-                  justSaved && !update.isPending ? 'opacity-100' : 'opacity-0'
-                }`}
-              >
-                <Check className="w-3.5 h-3.5" /> Saved
-              </span>
-              {update.isError && (
-                <span className="text-xs text-error">
-                  {update.error instanceof Error ? update.error.message : 'Failed to save'}
-                </span>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Only rendered once `data` has loaded (see SettingsPage above), so local editing state
+// can be initialized directly from the server value on mount — no Effect syncing data
+// into state, and so no frame where "not loaded yet" could be misread as "invalid".
+function GracePeriodInput({ initialDays }: { initialDays: number }) {
+  const qc = useQueryClient()
+  const [staleMinAgeDays, setStaleMinAgeDays] = useState(String(initialDays))
+  const lastSavedRef = useRef(initialDays)
+
+  const [justSaved, setJustSaved] = useState(false)
+  const savedTimeoutRef = useRef<number | undefined>(undefined)
+
+  const update = useMutation({
+    mutationFn: (value: number) => api.settings.update(value),
+    onSuccess: (updated) => {
+      qc.setQueryData(['settings'], updated)
+      lastSavedRef.current = updated.staleMinAgeDays
+      setJustSaved(true)
+      clearTimeout(savedTimeoutRef.current)
+      savedTimeoutRef.current = setTimeout(() => setJustSaved(false), 2000)
+    },
+  })
+
+  useEffect(() => () => clearTimeout(savedTimeoutRef.current), [])
+
+  const parsed = Number(staleMinAgeDays)
+  const valid = staleMinAgeDays !== '' && Number.isInteger(parsed) && parsed >= 0
+
+  // Debounced auto-save: waits for typing to settle so we don't PATCH on every keystroke.
+  useEffect(() => {
+    if (!valid || parsed === lastSavedRef.current) return
+    const timer = setTimeout(() => update.mutate(parsed), 500)
+    return () => clearTimeout(timer)
+  }, [staleMinAgeDays, valid, parsed])
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        min={0}
+        step={1}
+        className={`input input-bordered input-sm w-24 ${!valid ? 'input-error' : ''}`}
+        value={staleMinAgeDays}
+        onChange={(e) => setStaleMinAgeDays(e.target.value)}
+      />
+      <span className="text-sm text-base-content/40">days</span>
+      {update.isPending && <span className="loading loading-spinner loading-xs text-base-content/40" />}
+      <span
+        className={`flex items-center gap-1 text-xs text-success transition-opacity duration-300 ${
+          justSaved && !update.isPending ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <Check className="w-3.5 h-3.5" /> Saved
+      </span>
+      {update.isError && (
+        <span className="text-xs text-error">
+          {update.error instanceof Error ? update.error.message : 'Failed to save'}
+        </span>
+      )}
     </div>
   )
 }
