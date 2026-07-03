@@ -239,12 +239,22 @@ async function syncLibrary(
 ): Promise<number> {
   callbacks?.onPhase('items');
 
+  // historySyncedAt is reset to null here — it's only set back once syncLibraryHistory
+  // completes below, so a run that crashes anywhere in between leaves it null rather
+  // than carrying over a stale "confirmed" timestamp from a previous, unrelated run.
   await db
     .insert(libraries)
-    .values({ serverId, key: lib.key, title: lib.title, type: lib.type, syncedAt: now })
+    .values({
+      serverId,
+      key: lib.key,
+      title: lib.title,
+      type: lib.type,
+      syncedAt: now,
+      historySyncedAt: null,
+    })
     .onConflictDoUpdate({
       target: [libraries.serverId, libraries.key],
-      set: { title: lib.title, type: lib.type, syncedAt: now },
+      set: { title: lib.title, type: lib.type, syncedAt: now, historySyncedAt: null },
     });
 
   const typeFilter = lib.type === 'show'
@@ -318,6 +328,9 @@ async function syncLibrary(
 
   callbacks?.onPhase('history');
   await syncLibraryHistory(plex, lib, serverId);
+  // Only reached if syncLibraryHistory didn't throw — marks this library's lastViewedAt
+  // data as trustworthy for the current sync attempt (see historySyncedAt in schema.ts).
+  await db.update(libraries).set({ historySyncedAt: now }).where(libraryByKey(serverId, lib.key));
 
   callbacks?.onPhase('done');
 

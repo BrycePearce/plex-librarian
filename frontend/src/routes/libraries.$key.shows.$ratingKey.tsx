@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { AlertTriangle, ArrowLeft } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatKilobytes, formatDate, formatDuration } from '../lib/format'
 import type { Season } from '../lib/api'
@@ -44,6 +44,17 @@ function ShowDetailPage() {
 
       {data && (
         <>
+          {data.historySyncedAt === null && (
+            <div className="alert alert-warning">
+              <AlertTriangle className="w-4 h-4" />
+              <span>
+                Watch-history sync hasn't completed for this library yet — "Last viewed" below
+                may show Unknown even if this show has been watched. Avoid deleting based on
+                watch status until this clears.
+              </span>
+            </div>
+          )}
+
           <div className="flex gap-6 items-start">
             {show?.thumb ? (
               <img
@@ -57,7 +68,14 @@ function ShowDetailPage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
               <Stat label="Total size" value={show?.fileSize != null ? formatKilobytes(show.fileSize) : '—'} />
               <Stat label="Seasons" value={String(data.seasons.length)} />
-              <Stat label="Last viewed" value={show?.lastViewedAt ? formatDate(show.lastViewedAt) : 'Never'} />
+              <Stat
+                label="Last viewed"
+                value={show?.lastViewedAt
+                  ? formatDate(show.lastViewedAt)
+                  : data.historySyncedAt === null
+                  ? 'Unknown'
+                  : 'Never'}
+              />
               <Stat label="Plays" value={String(show?.viewCount ?? 0)} />
             </div>
           </div>

@@ -1,10 +1,16 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, gte, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries, seasons, settings } from '../db/schema.ts';
 import { itemByRatingKey, itemsByLibrary, libraryByKey, seasonsByShow } from '../db/scope.ts';
+import { createPlexClient, PlexDeleteError } from '../lib/plex.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
-import type { LibrariesResponse, ShowDetail, StaleResponse } from '@plex-librarian/shared/types.ts';
+import type {
+  DeleteItemsResponse,
+  LibrariesResponse,
+  ShowDetail,
+  StaleResponse,
+} from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -50,6 +56,7 @@ router.get('/:key/stale', async (c) => {
   const [library] = await db.select({
     key: libraries.key,
     staleMinAgeDays: libraries.staleMinAgeDays,
+    historySyncedAt: libraries.historySyncedAt,
   })
     .from(libraries)
     .where(libraryByKey(serverId, key))
@@ -153,6 +160,7 @@ router.get('/:key/stale', async (c) => {
       maxDays,
       minAgeDays,
       libraryStaleMinAgeDays: library.staleMinAgeDays,
+      historySyncedAt: library.historySyncedAt,
       filter,
       sort,
       order: orderStr,
@@ -191,6 +199,77 @@ router.patch('/:key', async (c) => {
   return c.json({ ...library, staleMinAgeDays: body.staleMinAgeDays });
 });
 
+// Deletes items' media from Plex (metadata + underlying file(s) on disk — permanent,
+// not a soft delete) and prunes the corresponding local rows. For TV libraries, items
+// are synced at show granularity (see CLAUDE.md), so deleting a show's ratingKey
+// cascades to all of its episodes on Plex's side; the local `seasons` rows follow via
+// the items -> seasons ON DELETE CASCADE FK.
+router.delete('/:key/items', async (c) => {
+  const key = c.req.param('key');
+  const body = await c.req.json().catch(() => null) as { ratingKeys?: unknown } | null;
+
+  if (!body || !Array.isArray(body.ratingKeys) || body.ratingKeys.length === 0) {
+    return c.json({ error: 'ratingKeys must be a non-empty array' }, 400);
+  }
+  if (body.ratingKeys.length > 200) {
+    return c.json({ error: 'cannot delete more than 200 items at once' }, 400);
+  }
+  if (!body.ratingKeys.every((k): k is string => typeof k === 'string')) {
+    return c.json({ error: 'ratingKeys must be strings' }, 400);
+  }
+  const ratingKeys = body.ratingKeys as string[];
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'library not found' }, 404);
+
+  const [library] = await db.select({ key: libraries.key }).from(libraries)
+    .where(libraryByKey(serverId, key)).limit(1);
+  if (!library) return c.json({ error: 'library not found' }, 404);
+
+  // Only ever act on items that actually belong to this library/server — guards
+  // against a client passing ratingKeys scraped from a different library or server.
+  const owned = await db.select({ ratingKey: items.ratingKey }).from(items)
+    .where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
+  const ownedKeys = new Set(owned.map((r) => r.ratingKey));
+
+  let client;
+  try {
+    client = await createPlexClient();
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
+  }
+
+  // Sequential, not concurrent: deletion is destructive and irreversible, and the
+  // per-item result needs to be attributable — worth the extra latency for a
+  // user-triggered, page-sized (<=200) action.
+  const deleted: string[] = [];
+  const failed: { ratingKey: string; error: string }[] = [];
+  for (const ratingKey of ratingKeys) {
+    if (!ownedKeys.has(ratingKey)) {
+      failed.push({ ratingKey, error: 'not found in this library' });
+      continue;
+    }
+    try {
+      await client.deleteItem(ratingKey);
+      await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+      deleted.push(ratingKey);
+    } catch (err) {
+      // A 404 means Plex already has no record of this item — most likely it was
+      // deleted directly in Plex outside this app. Treat that as success and drop the
+      // now-orphaned local row, rather than leaving it permanently stuck failing every
+      // future delete attempt.
+      if (err instanceof PlexDeleteError && err.status === 404) {
+        await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+        deleted.push(ratingKey);
+        continue;
+      }
+      failed.push({ ratingKey, error: err instanceof Error ? err.message : 'delete failed' });
+    }
+  }
+
+  return c.json({ deleted, failed } satisfies DeleteItemsResponse);
+});
+
 router.get('/:key/shows/:ratingKey', async (c) => {
   const key = c.req.param('key');
   const ratingKey = c.req.param('ratingKey');
@@ -205,13 +284,25 @@ router.get('/:key/shows/:ratingKey', async (c) => {
     .limit(1);
   if (!show) return c.json({ error: 'show not found' }, 404);
 
-  const showSeasons = await db
-    .select()
-    .from(seasons)
-    .where(and(seasonsByShow(serverId, ratingKey), eq(seasons.libraryKey, key)))
-    .orderBy(asc(seasons.seasonIndex));
+  const [showSeasons, [library]] = await Promise.all([
+    db
+      .select()
+      .from(seasons)
+      .where(and(seasonsByShow(serverId, ratingKey), eq(seasons.libraryKey, key)))
+      .orderBy(asc(seasons.seasonIndex)),
+    db.select({ historySyncedAt: libraries.historySyncedAt })
+      .from(libraries)
+      .where(libraryByKey(serverId, key))
+      .limit(1),
+  ]);
 
-  return c.json({ show, seasons: showSeasons } satisfies ShowDetail);
+  return c.json(
+    {
+      show,
+      seasons: showSeasons,
+      historySyncedAt: library?.historySyncedAt ?? null,
+    } satisfies ShowDetail,
+  );
 });
 
 export default router;

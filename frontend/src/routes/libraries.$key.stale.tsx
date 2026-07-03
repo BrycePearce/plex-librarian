@@ -1,9 +1,10 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { ArrowLeft, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
+import { AlertTriangle, ArrowLeft, ArrowDown, ArrowUp, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../lib/api'
-import type { StaleParams, StaleItem, SortKey } from '../lib/api'
+import type { DeleteItemsResponse, StaleParams, StaleItem, SortKey } from '../lib/api'
 import { formatKilobytes, formatDate } from '../lib/format'
 import { useLibrarySync } from '../lib/useLibrarySync'
 import { StaleTableSkeleton } from '../components/Skeletons'
@@ -35,7 +36,7 @@ function StalePage() {
     offset: 0,
   })
 
-  const { data, isLoading, isPlaceholderData } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['stale', key, params],
     queryFn: () => api.libraries.stale(key, params),
     placeholderData: (prev) => prev,
@@ -47,6 +48,64 @@ function StalePage() {
       void qc.invalidateQueries({ queryKey: ['libraries'] })
     },
   })
+
+  const [selected, setSelected] = useState<Map<string, StaleItem>>(new Map())
+  const [deleteResult, setDeleteResult] = useState<DeleteItemsResponse | null>(null)
+  const [confirmItems, setConfirmItems] = useState<StaleItem[]>([])
+  const dialogRef = useRef<HTMLDialogElement>(null)
+
+  const deleteMutation = useMutation({
+    mutationFn: (ratingKeys: string[]) => api.libraries.deleteItems(key, ratingKeys),
+    onSuccess: (res) => {
+      setSelected((prev) => {
+        const next = new Map(prev)
+        for (const ratingKey of res.deleted) next.delete(ratingKey)
+        return next
+      })
+      setDeleteResult(res)
+      dialogRef.current?.close()
+      void qc.invalidateQueries({ queryKey: ['stale', key] })
+    },
+  })
+
+  function toggleOne(item: StaleItem) {
+    setSelected((prev) => {
+      const next = new Map(prev)
+      if (next.has(item.ratingKey)) next.delete(item.ratingKey)
+      else next.set(item.ratingKey, item)
+      return next
+    })
+  }
+
+  const pageItems = data?.items ?? []
+  const allOnPageSelected = pageItems.length > 0 && pageItems.every((i) => selected.has(i.ratingKey))
+  const someOnPageSelected = pageItems.some((i) => selected.has(i.ratingKey))
+
+  function toggleAllOnPage() {
+    setSelected((prev) => {
+      const next = new Map(prev)
+      if (allOnPageSelected) {
+        for (const item of pageItems) next.delete(item.ratingKey)
+      } else {
+        for (const item of pageItems) next.set(item.ratingKey, item)
+      }
+      return next
+    })
+  }
+
+  function openConfirm(items: StaleItem[]) {
+    setDeleteResult(null)
+    setConfirmItems(items)
+    dialogRef.current?.showModal()
+  }
+
+  function closeConfirm() {
+    dialogRef.current?.close()
+  }
+
+  const selectedItems = Array.from(selected.values())
+  const selectedTotalSize = selectedItems.reduce((sum, i) => sum + (i.fileSize ?? 0), 0)
+  const confirmTotalSize = confirmItems.reduce((sum, i) => sum + (i.fileSize ?? 0), 0)
 
   function setGracePeriod(value: string) {
     const staleMinAgeDays = value === 'default' ? null : Number(value)
@@ -73,7 +132,7 @@ function StalePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${selected.size > 0 ? 'pb-20' : ''}`}>
       <div className="flex items-center gap-4">
         <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
           <ArrowLeft className="w-4 h-4" /> Back
@@ -103,6 +162,18 @@ function StalePage() {
           )}
         </div>
       </div>
+
+      {data && data.historySyncedAt === null && (
+        <div className="alert alert-warning">
+          <AlertTriangle className="w-4 h-4" />
+          <span>
+            Watch-history sync hasn't completed for this library yet, so items showing{' '}
+            <span className="badge badge-outline badge-sm align-middle">unknown</span>{' '}
+            below may actually have been watched — the "never watched" data isn't reliable
+            until a sync finishes. Avoid deleting based on watch status until this clears.
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-3">
         <label className="form-control gap-1">
@@ -159,29 +230,100 @@ function StalePage() {
         </label>
       </div>
 
+      {deleteResult && (
+        <div className={`alert ${deleteResult.failed.length > 0 ? 'alert-warning' : 'alert-success'}`}>
+          <span>
+            Deleted {deleteResult.deleted.length} item{deleteResult.deleted.length === 1 ? '' : 's'}.
+            {deleteResult.failed.length > 0 && (
+              <>
+                {' '}{deleteResult.failed.length} failed: {deleteResult.failed.map((f) => f.error).join('; ')}
+              </>
+            )}
+          </span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setDeleteResult(null)}>
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {selected.size > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 40 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+            className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
+          >
+            <span>
+              {selected.size} item{selected.size === 1 ? '' : 's'} selected · {formatKilobytes(selectedTotalSize)}
+            </span>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSelected(new Map())}>
+                Clear
+              </button>
+              <button type="button" className="btn btn-sm btn-error gap-2" onClick={() => openConfirm(selectedItems)}>
+                <Trash2 className="w-4 h-4" /> Delete selected
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {isLoading ? (
         <StaleTableSkeleton />
       ) : (
-        <div className={`overflow-x-auto transition-opacity ${isPlaceholderData ? 'opacity-50' : ''}`}>
+        <div className="overflow-x-auto">
+          <progress
+            className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
+              isFetching ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
           <table className="table table-sm table-fixed">
             <colgroup>
+              <col className="w-8" />
               <col />
               <col className="w-24" />
               <col className="w-32" />
               <col className="w-32" />
               <col className="w-16" />
+              <col className="w-10" />
             </colgroup>
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-sm"
+                    checked={allOnPageSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = !allOnPageSelected && someOnPageSelected
+                    }}
+                    onChange={toggleAllOnPage}
+                    aria-label="Select all on this page"
+                  />
+                </th>
                 <SortTh label="Title" field="title" params={params} onSort={setSort} />
                 <SortTh label="Size" field="fileSize" params={params} onSort={setSort} />
                 <SortTh label="Last viewed" field="lastViewedAt" params={params} onSort={setSort} />
                 <SortTh label="Added" field="addedAt" params={params} onSort={setSort} />
                 <SortTh label="Plays" field="viewCount" params={params} onSort={setSort} />
+                <th />
               </tr>
             </thead>
             <tbody>
-              {data?.items.map((item) => <ItemRow key={item.ratingKey} item={item} />)}
+              <AnimatePresence>
+                {data?.items.map((item) => (
+                  <ItemRow
+                    key={item.ratingKey}
+                    item={item}
+                    selected={selected.has(item.ratingKey)}
+                    onToggle={() => toggleOne(item)}
+                    onDelete={() => openConfirm([item])}
+                    historyUnknown={data.historySyncedAt === null}
+                  />
+                ))}
+              </AnimatePresence>
             </tbody>
           </table>
           {data?.items.length === 0 && (
@@ -213,6 +355,54 @@ function StalePage() {
           </button>
         </div>
       )}
+
+      <dialog ref={dialogRef} className="modal" onClose={closeConfirm}>
+        <div className="modal-box">
+          <h3 className="font-bold text-lg flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-error" /> Delete {confirmItems.length} item
+            {confirmItems.length === 1 ? '' : 's'}?
+          </h3>
+          <p className="py-2 text-sm text-base-content/70">
+            This permanently deletes the underlying media file{confirmItems.length === 1 ? '' : 's'} from
+            your Plex server (<span className="font-semibold text-base-content">{formatKilobytes(confirmTotalSize)}</span> total).
+            This cannot be undone.
+          </p>
+          <ul className="mt-3 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
+            {confirmItems.map((item) => (
+              <li key={item.ratingKey} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                <span className="truncate min-w-0 flex-1">{item.title}</span>
+                <span className="text-base-content/50 font-mono text-xs shrink-0">
+                  {item.fileSize != null ? formatKilobytes(item.fileSize) : '—'}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {deleteMutation.isError && (
+            <p className="text-error text-sm">
+              {deleteMutation.error instanceof Error ? deleteMutation.error.message : 'Delete failed'}
+            </p>
+          )}
+          <div className="modal-action mt-3">
+            <button type="button" className="btn btn-sm" onClick={closeConfirm} disabled={deleteMutation.isPending}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-error gap-2"
+              onClick={() => deleteMutation.mutate(confirmItems.map((i) => i.ratingKey))}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending
+                ? <span className="loading loading-spinner loading-xs" />
+                : <Trash2 className="w-4 h-4" />}
+              Delete permanently
+            </button>
+          </div>
+        </div>
+        <form method="dialog" className="modal-backdrop">
+          <button type="submit" disabled={deleteMutation.isPending}>close</button>
+        </form>
+      </dialog>
     </div>
   )
 }
@@ -248,7 +438,21 @@ function SortTh({
   )
 }
 
-function ItemRow({ item }: { item: StaleItem }) {
+const rowVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.12, ease: 'easeOut' as const } },
+  exit: { opacity: 0, transition: { duration: 0.15, ease: 'easeIn' as const } },
+}
+
+function ItemRow(
+  { item, selected, onToggle, onDelete, historyUnknown }: {
+    item: StaleItem
+    selected: boolean
+    onToggle: () => void
+    onDelete: () => void
+    historyUnknown: boolean
+  },
+) {
   const thumbUrl = item.thumb
     ? `/api/proxy/thumb?path=${encodeURIComponent(item.thumb)}&width=60&height=90`
     : null
@@ -261,7 +465,22 @@ function ItemRow({ item }: { item: StaleItem }) {
   )
 
   return (
-    <tr className="hover">
+    <motion.tr
+      variants={rowVariants}
+      initial={false}
+      animate="visible"
+      exit="exit"
+      className="hover"
+    >
+      <td>
+        <input
+          type="checkbox"
+          className="checkbox checkbox-sm"
+          checked={selected}
+          onChange={onToggle}
+          aria-label={`Select ${item.title}`}
+        />
+      </td>
       <td>
         <div className="flex items-center gap-3">
           {thumbUrl ? (
@@ -291,6 +510,15 @@ function ItemRow({ item }: { item: StaleItem }) {
       <td className="text-sm text-base-content/70 truncate">
         {item.lastViewedAt
           ? formatDate(item.lastViewedAt)
+          : historyUnknown
+          ? (
+            <span
+              className="badge badge-warning badge-outline badge-sm"
+              title="Watch-history sync hasn't completed for this library — this item may actually have been watched"
+            >
+              unknown
+            </span>
+          )
           : <span className="badge badge-outline badge-sm">never</span>
         }
       </td>
@@ -298,7 +526,22 @@ function ItemRow({ item }: { item: StaleItem }) {
         {item.addedAt ? formatDate(item.addedAt) : '—'}
       </td>
       <td className="text-sm font-mono truncate">{item.viewCount ?? 0}</td>
-    </tr>
+      <td className="overflow-hidden">
+        <motion.button
+          type="button"
+          className={`btn btn-ghost btn-xs btn-square text-error ${selected ? '' : 'pointer-events-none'}`}
+          onClick={onDelete}
+          aria-label={`Delete ${item.title}`}
+          title="Delete this item"
+          tabIndex={selected ? 0 : -1}
+          initial={false}
+          animate={{ opacity: selected ? 1 : 0, x: selected ? 0 : -36 }}
+          transition={{ type: 'spring', stiffness: 180, damping: 16, mass: 0.6 }}
+        >
+          <Trash2 className="w-4 h-4" />
+        </motion.button>
+      </td>
+    </motion.tr>
   )
 }
 

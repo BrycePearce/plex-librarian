@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type {
   AuthStatus,
+  DeleteItemsResponse,
   PlexPin,
   PinPollResult,
   Library,
@@ -14,6 +15,7 @@ import type {
 
 export type {
   AuthStatus,
+  DeleteItemsResponse,
   PlexPin,
   PinPollResult,
   PlexConnection,
@@ -99,6 +101,11 @@ export const api = {
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
         method: 'PATCH',
         body: JSON.stringify({ staleMinAgeDays }),
+      }),
+    deleteItems: (key: string, ratingKeys: string[]) =>
+      apiFetch<DeleteItemsResponse>(`/libraries/${encodeURIComponent(key)}/items`, {
+        method: 'DELETE',
+        body: JSON.stringify({ ratingKeys }),
       }),
   },
   settings: {

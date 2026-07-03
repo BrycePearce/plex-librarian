@@ -90,6 +90,7 @@ If you set `PLEX_WEBHOOK_SECRET`, append `?token=<secret>` to the URL. Requests 
 | GET | `/api/libraries/:key/stale` | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.) |
 | PATCH | `/api/libraries/:key` | Set a per-library `staleMinAgeDays` override (`null` to use the global default) |
 | GET | `/api/libraries/:key/shows/:ratingKey` | Show detail with per-season rollups |
+| DELETE | `/api/libraries/:key/items` | Delete items' media from Plex (permanent) |
 | GET | `/api/proxy/thumb` | Server-side Plex thumbnail proxy |
 | POST | `/api/sync` | Trigger a full sync from Plex |
 | POST | `/api/sync/libraries/:key` | Trigger a sync for a single library |

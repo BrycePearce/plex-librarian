@@ -46,6 +46,10 @@ export interface Library {
   title: string
   type: string
   syncedAt: number
+  // Null until this library's cross-user play-history backfill has completed at least
+  // once for the current sync attempt. While null, any item's lastViewedAt === null in
+  // this library cannot be trusted to mean "never watched" — it may just be unsynced.
+  historySyncedAt: number | null
   staleMinAgeDays: number | null
 }
 
@@ -78,6 +82,7 @@ export interface StaleResponse {
   maxDays: number | null
   minAgeDays: number
   libraryStaleMinAgeDays: number | null
+  historySyncedAt: number | null
   filter: string
   sort: string
   order: string
@@ -105,6 +110,18 @@ export interface Season {
 export interface ShowDetail {
   show: StaleItem
   seasons: Season[]
+  historySyncedAt: number | null
+}
+
+// --- Item deletion ---
+
+export interface DeleteItemsRequest {
+  ratingKeys: string[]
+}
+
+export interface DeleteItemsResponse {
+  deleted: string[]
+  failed: { ratingKey: string; error: string }[]
 }
 
 // --- Sync ---

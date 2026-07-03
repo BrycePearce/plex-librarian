@@ -27,6 +27,7 @@
     "@tailwindcss/vite": "npm:@tailwindcss/vite@^4.3.1",
     "daisyui": "npm:daisyui@^5.5.23",
     "lucide-react": "npm:lucide-react@^1.21.0",
+    "motion/react": "npm:motion@^12.42.2/react",
     "tailwindcss": "npm:tailwindcss@^4.3.1",
     "typescript": "npm:typescript@^6.0.3",
     "vite": "npm:vite@^8.1.0"

@@ -25,26 +25,32 @@ export function LibraryCardSkeleton() {
 export function StaleTableSkeleton({ rows = 8 }: { rows?: number }) {
   return (
     <div className="overflow-x-auto">
+      <progress className="progress progress-primary w-full h-0.5 mb-1 opacity-0" />
       <table className="table table-sm table-fixed">
         <colgroup>
+          <col className="w-8" />
           <col />
           <col className="w-24" />
           <col className="w-32" />
           <col className="w-32" />
           <col className="w-16" />
+          <col className="w-10" />
         </colgroup>
         <thead>
           <tr>
+            <th />
             <th>Title</th>
             <th>Size</th>
             <th>Last viewed</th>
             <th>Added</th>
             <th>Plays</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {Array.from({ length: rows }).map((_, i) => (
             <tr key={i}>
+              <td />
               <td>
                 <div className="flex items-center gap-3">
                   <div className="skeleton w-10 h-14 rounded shrink-0" />
@@ -58,6 +64,7 @@ export function StaleTableSkeleton({ rows = 8 }: { rows?: number }) {
               <td><div className="skeleton h-3 w-20" /></td>
               <td><div className="skeleton h-3 w-20" /></td>
               <td><div className="skeleton h-3 w-6" /></td>
+              <td />
             </tr>
           ))}
         </tbody>

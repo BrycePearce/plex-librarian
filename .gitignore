@@ -8,3 +8,4 @@ frontend/.vite/
 Thumbs.db
 .tanstack/
 CLAUDE.md
+.claude/settings.json

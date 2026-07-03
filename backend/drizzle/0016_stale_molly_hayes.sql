@@ -1,0 +1,1 @@
+ALTER TABLE `libraries` ADD `history_synced_at` integer;

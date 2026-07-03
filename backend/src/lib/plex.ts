@@ -232,6 +232,33 @@ export class PlexClient {
     return data.MediaContainer.machineIdentifier;
   }
 
+  // Deletes an item's media from Plex (metadata + underlying file(s) on disk).
+  // Requires "Allow media deletion" enabled on the server, or Plex rejects with a 5xx —
+  // surfaced as-is so the UI can show Plex's own reason rather than a generic failure.
+  // Not retried: unlike get(), a failed delete is far more likely to be a real
+  // rejection (deletion disabled, permissions) than a transient blip worth retrying.
+  async deleteItem(ratingKey: string): Promise<void> {
+    const url = `${this.url}/library/metadata/${ratingKey}`;
+    const headers = buildPlexHeaders(this.clientId, this.token);
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      // Some failures (e.g. 404 for an item Plex doesn't recognize) come back as a
+      // generic web-server HTML error page rather than a useful API error body — only
+      // surface response text when it's not HTML, so callers never have to render markup.
+      const contentType = res.headers.get('content-type') ?? '';
+      const rawText = await res.text().catch(() => '');
+      const text = contentType.includes('html') ? '' : rawText.slice(0, 500);
+      throw new PlexDeleteError(
+        res.status,
+        `Plex ${res.status} deleting ${ratingKey}${text ? `: ${text}` : ''}`,
+      );
+    }
+  }
+
   assetUrl(path: string): string {
     const url = new URL(`${this.url}${path}`);
     url.searchParams.set('X-Plex-Token', this.token);
@@ -343,6 +370,16 @@ export class PlexConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PlexConfigError';
+  }
+}
+
+// Thrown by deleteItem() on a non-ok response. Carries the HTTP status so callers can
+// distinguish "Plex already doesn't have this item" (404 — likely deleted outside this
+// app) from a real rejection (permissions, deletion disabled, etc.).
+export class PlexDeleteError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'PlexDeleteError';
   }
 }
 

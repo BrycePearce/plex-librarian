@@ -21,6 +21,12 @@ export const libraries = sqliteTable(
     title: text('title').notNull(),
     type: text('type').notNull(),
     syncedAt: integer('synced_at').notNull(),
+    // Set only when this library's cross-user play-history backfill (syncLibraryHistory)
+    // has completed for the CURRENT sync attempt — reset to null the moment a new attempt
+    // starts, so an interrupted sync can never be mistaken for complete data. Null means
+    // lastViewedAt for this library's items cannot yet be trusted to mean "never watched";
+    // it may just mean "history hasn't finished syncing." See CLAUDE.md.
+    historySyncedAt: integer('history_synced_at'),
     staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
   },
   (table) => ({
