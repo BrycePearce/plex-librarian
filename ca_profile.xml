@@ -1,0 +1,11 @@
+<CommunityApplications>
+  <Profile>
+Unraid app templates.
+
+Currently includes **Plex Librarian** — library health insights for a Plex server: find stale content, track viewing patterns, and reclaim disk space.
+
+Support and bug reports: https://github.com/BrycePearce/plex-librarian/issues
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
+  <WebPage>https://github.com/BrycePearce/plex-librarian</WebPage>
+</CommunityApplications>
