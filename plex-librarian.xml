@@ -12,7 +12,7 @@
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL/>
-  <Icon/>
+  <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
   <!-- --init ensures proper signal handling (graceful shutdown) -->
   <ExtraParams>--init</ExtraParams>
   <PostArgs/>
