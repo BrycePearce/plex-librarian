@@ -86,12 +86,18 @@ function DashboardPage() {
   );
 }
 
+// Matches the skeleton's hardcoded card count below — capping the real grid to the
+// same number means a library list longer than this can never cause a skeleton→real
+// layout shift once data loads (see LibraryCardSkeleton usage further down).
+const LIBRARY_PREVIEW_COUNT = 6;
+
 function DashboardInner() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
+  const [showAllLibraries, setShowAllLibraries] = useState(false);
 
   const { data: authStatus } = useQuery<AuthStatus>({
     queryKey: ["auth", "status"],
@@ -248,7 +254,7 @@ function DashboardInner() {
 
       {libsLoading && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
+          {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
             <LibraryCardSkeleton key={i} />
           ))}
         </div>
@@ -260,16 +266,37 @@ function DashboardInner() {
         </div>
       )}
       {librariesData && (
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-        >
-          {librariesData.libraries.map((lib) => (
-            <LibraryCard key={lib.key} lib={lib} globalSyncing={isSyncing} />
-          ))}
-        </motion.div>
+        <>
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+          >
+            {(showAllLibraries
+              ? librariesData.libraries
+              : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT)
+            ).map((lib) => (
+              <LibraryCard key={lib.key} lib={lib} globalSyncing={isSyncing} />
+            ))}
+          </motion.div>
+          {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm gap-1"
+                onClick={() => setShowAllLibraries((v) => !v)}
+              >
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform ${showAllLibraries ? "rotate-180" : ""}`}
+                />
+                {showAllLibraries
+                  ? "Show fewer"
+                  : `Show ${librariesData.libraries.length - LIBRARY_PREVIEW_COUNT} more`}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {history && history.length > 0 && (

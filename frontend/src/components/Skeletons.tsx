@@ -11,7 +11,9 @@ export function StatsStripSkeleton() {
             <div className="skeleton w-10 h-10 rounded-lg shrink-0" />
             <div className="min-w-0 flex-1 space-y-2">
               <div className="skeleton h-3 w-16" />
-              <div className="skeleton h-5 w-20" />
+              {/* h-6, not h-5 — the real value line is text-xl (28px line-height); with
+                  the 8px gap above, 24+8+12=44 matches the real stack's total height. */}
+              <div className="skeleton h-6 w-20" />
             </div>
           </div>
         </div>
@@ -28,13 +30,17 @@ export function LibraryCardSkeleton() {
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div className="skeleton w-8 h-8 rounded-lg shrink-0" />
             <div className="min-w-0 flex-1 space-y-2">
-              <div className="skeleton h-4 w-3/4" />
+              {/* h-5, not h-4 — the real title line inherits a 24px line-height; with
+                  the 8px gap and the 12px type line below, 20+8+12=40 matches the real
+                  title+type stack's total height. */}
+              <div className="skeleton h-5 w-3/4" />
               <div className="skeleton h-3 w-1/3" />
             </div>
           </div>
           <div className="skeleton w-6 h-6 rounded shrink-0" />
         </div>
-        <div className="skeleton h-3 w-1/2" />
+        {/* h-4, not h-3 — the real line below is text-xs (16px line-height). */}
+        <div className="skeleton h-4 w-1/2" />
       </div>
     </div>
   );
