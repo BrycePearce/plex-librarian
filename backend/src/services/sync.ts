@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
 import { items, libraries, seasons, syncLog } from '../db/schema.ts';
 import { itemsByLibrary, libraryByKey, seasonsByLibrary } from '../db/scope.ts';
@@ -260,8 +260,8 @@ async function syncLibrary(
   const typeFilter = lib.type === 'show'
     ? PLEX_TYPE.SHOW
     : lib.type === 'artist'
-    ? PLEX_TYPE.ARTIST
-    : undefined;
+      ? PLEX_TYPE.ARTIST
+      : undefined;
 
   let itemCount = 0;
 
@@ -369,6 +369,20 @@ export async function runSync(
   const now = Math.floor(Date.now() / 1000);
 
   reporter?.onLibraries?.(plexLibraries.map((l) => ({ key: l.key, title: l.title })));
+
+  // Plex has no deletion events for whole sections, so a full sync is the
+  // only place a library removed from Plex is ever detected — prune it here, which cascades
+  // to its items/seasons via their FK onDelete('cascade'). Guarded on a non-empty response:
+  // if Plex reports zero libraries, that's far more likely a transient glitch than every
+  // library having been deleted, and wiping everything on a blip would be catastrophic.
+  if (plexLibraries.length > 0) {
+    await db.delete(libraries).where(
+      and(
+        eq(libraries.serverId, serverId),
+        notInArray(libraries.key, plexLibraries.map((l) => l.key)),
+      ),
+    );
+  }
 
   let totalItems = 0;
 
