@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { LogOut, Settings, User } from "lucide-react";
+import { ExternalLink, LogOut, Settings, User } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { AuthStatus } from "../lib/api";
 import { useClickOutside } from "../lib/useClickOutside";
@@ -78,6 +78,20 @@ export function UserMenu() {
                 <span>{user.username}</span>
               </li>
             )}
+            <li>
+              <a
+                href="https://app.plex.tv/desktop/#!/"
+                target="_blank"
+                rel="noopener noreferrer"
+                role="menuitem"
+                className="flex items-center gap-2 leading-none"
+                onClick={() => setOpen(false)}
+              >
+                <ExternalLink className="w-4 h-4" />
+                Open Plex
+              </a>
+            </li>
+            <li></li>
             <li>
               <Link
                 to="/settings"
