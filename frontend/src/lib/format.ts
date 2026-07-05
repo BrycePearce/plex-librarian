@@ -8,12 +8,18 @@ export function formatKilobytes(kb: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`
 }
 
+// toLocaleDateString(locale, options) builds a fresh Intl.DateTimeFormat internally on
+// every call — expensive enough that constructing it once and reusing .format() is a
+// meaningful win when called per-row across a table (this is called twice per stale-item
+// row, up to 100x per page render).
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+})
+
 export function formatDate(unixSec: number): string {
-  return new Date(unixSec * 1000).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
+  return dateFormatter.format(unixSec * 1000)
 }
 
 export function formatRelativeTime(unixSec: number): string {
