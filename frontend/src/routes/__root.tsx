@@ -14,7 +14,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootLayout() {
   return (
-    <div data-theme="dark" className="min-h-screen bg-base-100 text-base-content">
+    <div data-theme="dark" className="min-h-screen flex flex-col bg-base-100 text-base-content">
       <nav className="navbar bg-base-200 border-b border-base-300 px-4">
         <div className="flex-1">
           <Link to="/dashboard" className="flex items-center gap-2 text-lg font-semibold">
@@ -23,7 +23,7 @@ function RootLayout() {
           </Link>
         </div>
       </nav>
-      <main className="container mx-auto px-4 py-8 max-w-6xl">
+      <main className="flex-1 flex flex-col container mx-auto px-4 py-8 max-w-6xl">
         <Outlet />
       </main>
       {import.meta.env.DEV && (

@@ -51,6 +51,9 @@ export interface Library {
   // this library cannot be trusted to mean "never watched" — it may just be unsynced.
   historySyncedAt: number | null
   staleMinAgeDays: number | null
+  itemCount: number
+  // Decimal KB, matching StaleItem.fileSize — see formatKilobytes in frontend/src/lib/format.ts.
+  totalFileSize: number
 }
 
 export interface LibrariesResponse {

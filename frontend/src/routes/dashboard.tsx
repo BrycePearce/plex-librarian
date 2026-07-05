@@ -1,33 +1,70 @@
 import {
   createFileRoute,
+  Link,
   redirect,
   useNavigate,
-  Link,
 } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import type { Variants } from "motion/react";
 import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { useState, useEffect, useRef } from "react";
-import {
-  RefreshCw,
-  Film,
-  Tv,
-  Music,
   AlertCircle,
   CheckCircle,
-  LogOut,
   ChevronDown,
-  Settings,
+  Clock,
+  Database,
+  Film,
+  HardDrive,
   Info,
+  LogOut,
+  Music,
+  RefreshCw,
+  Settings,
+  Tv,
 } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
-import type { SyncLog, AuthStatus, Library, LibrarySyncProgress, LibraryPhase } from "../lib/api";
-import { formatRelativeTime, formatDuration } from "../lib/format";
-import { useLibrarySync, useSyncHistory, LibrarySyncProvider, useAnyLibrarySyncing } from "../lib/useLibrarySync";
+import type {
+  AuthStatus,
+  Library,
+  LibraryPhase,
+  LibrarySyncProgress,
+  SyncLog,
+} from "../lib/api";
+import {
+  formatDuration,
+  formatKilobytes,
+  formatRelativeTime,
+} from "../lib/format";
+import {
+  LibrarySyncProvider,
+  useAnyLibrarySyncing,
+  useLibrarySync,
+  useSyncHistory,
+} from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
-import { LibraryCardSkeleton } from "../components/Skeletons";
+import {
+  LibraryCardSkeleton,
+  StatsStripSkeleton,
+} from "../components/Skeletons";
+
+// Shared orchestration for the stats strip and library grid: the container just declares
+// the stagger timing, each child only needs `variants={cardVariants}` to inherit the
+// hidden → show transition from whichever container it's mounted under.
+const containerVariants: Variants = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.06 } },
+};
+
+const cardVariants: Variants = {
+  hidden: { opacity: 0, y: 12 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { type: "spring", stiffness: 300, damping: 26 },
+  },
+};
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: async ({ context }) => {
@@ -95,17 +132,22 @@ function DashboardInner() {
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
     if (activeGlobalSyncId !== null) return;
-    const pending = history?.find((h) => h.status === 'pending' && h.libraryKey === null);
+    const pending = history?.find((h) =>
+      h.status === "pending" && h.libraryKey === null
+    );
     if (pending) setActiveGlobalSyncId(pending.id);
   }, [history, activeGlobalSyncId]);
 
-  const { progress: globalSyncProgress, isDone: globalSyncDone, error: globalSyncError } =
-    useSyncStream(activeGlobalSyncId);
+  const {
+    progress: globalSyncProgress,
+    isDone: globalSyncDone,
+    error: globalSyncError,
+  } = useSyncStream(activeGlobalSyncId);
 
   // Re-enables "Sync all" the moment the sync finishes, even though the progress panel
   // below stays mounted a bit longer to show a completed state (see the effect below).
-  const isSyncing =
-    (activeGlobalSyncId !== null && !globalSyncDone) || triggerSync.isPending;
+  const isSyncing = (activeGlobalSyncId !== null && !globalSyncDone) ||
+    triggerSync.isPending;
 
   // `anyLibrarySyncing` only tracks syncs started while this page is mounted — a sync
   // kicked off from a library's stale page is lost from that count once you navigate
@@ -170,9 +212,27 @@ function DashboardInner() {
         </div>
       </div>
 
-      {(activeGlobalSyncId !== null || triggerSync.isPending) && (
-        <SyncProgressPanel progress={globalSyncProgress ?? undefined} done={globalSyncDone} />
+      {libsLoading && <StatsStripSkeleton />}
+      {librariesData && librariesData.libraries.length > 0 && (
+        <StatsStrip libraries={librariesData.libraries} />
       )}
+
+      <AnimatePresence>
+        {(activeGlobalSyncId !== null || triggerSync.isPending) && (
+          <motion.div
+            key="sync-progress"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ type: "spring", stiffness: 300, damping: 28 }}
+          >
+            <SyncProgressPanel
+              progress={globalSyncProgress ?? undefined}
+              done={globalSyncDone}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
       {globalSyncError !== null && (
         <div className="alert alert-error">
           <AlertCircle className="w-4 h-4" />
@@ -200,11 +260,16 @@ function DashboardInner() {
         </div>
       )}
       {librariesData && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="show"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+        >
           {librariesData.libraries.map((lib) => (
             <LibraryCard key={lib.key} lib={lib} globalSyncing={isSyncing} />
           ))}
-        </div>
+        </motion.div>
       )}
 
       {history && history.length > 0 && (
@@ -226,13 +291,11 @@ function DashboardInner() {
                   <SyncRow
                     key={s.id}
                     sync={s}
-                    libraryTitle={
-                      s.libraryKey
-                        ? (librariesData?.libraries.find(
-                            (l) => l.key === s.libraryKey,
-                          )?.title ?? s.libraryKey)
-                        : null
-                    }
+                    libraryTitle={s.libraryKey
+                      ? (librariesData?.libraries.find(
+                        (l) => l.key === s.libraryKey,
+                      )?.title ?? s.libraryKey)
+                      : null}
                   />
                 ))}
               </tbody>
@@ -260,7 +323,11 @@ function useCountUp(target: number, duration = 800, skipAnimation = false) {
 
     const start = prevRef.current;
     const diff = target - start;
-    if (diff <= 0) { setDisplay(target); prevRef.current = target; return; }
+    if (diff <= 0) {
+      setDisplay(target);
+      prevRef.current = target;
+      return;
+    }
 
     const startTime = performance.now();
     let raf: number;
@@ -278,19 +345,85 @@ function useCountUp(target: number, duration = 800, skipAnimation = false) {
   return display;
 }
 
+function StatsStrip({ libraries }: { libraries: Library[] }) {
+  const totals = libraries.reduce(
+    (acc, lib) => {
+      acc.items += lib.itemCount;
+      acc.size += lib.totalFileSize;
+      acc.lastSync = Math.max(acc.lastSync, lib.syncedAt);
+      return acc;
+    },
+    { items: 0, size: 0, lastSync: 0 },
+  );
+
+  const animatedItems = useCountUp(totals.items, 900);
+  const animatedSize = useCountUp(totals.size, 900);
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <StatTile
+        icon={<Database className="w-5 h-5" />}
+        iconClass="bg-primary/20 text-primary"
+        label="Total items"
+        value={animatedItems.toLocaleString()}
+      />
+      <StatTile
+        icon={<HardDrive className="w-5 h-5" />}
+        iconClass="bg-secondary/20 text-secondary"
+        label="Library size"
+        value={formatKilobytes(animatedSize)}
+      />
+      <StatTile
+        icon={<Clock className="w-5 h-5" />}
+        iconClass="bg-accent/20 text-accent"
+        label="Last synced"
+        value={totals.lastSync ? formatRelativeTime(totals.lastSync) : "—"}
+      />
+    </div>
+  );
+}
+
+function StatTile({
+  icon,
+  iconClass,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  iconClass: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="card bg-base-200">
+      <div className="card-body flex-row items-center gap-4 py-4">
+        <div
+          className={`w-10 h-10 rounded-lg shrink-0 flex items-center justify-center ${iconClass}`}
+        >
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs text-base-content/40">{label}</p>
+          <p className="text-xl font-semibold font-mono truncate">{value}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const PHASE_LABEL: Record<LibraryPhase, string> = {
-  pending: 'Waiting',
-  items: 'Syncing items',
-  episodes: 'Indexing episodes',
-  tracks: 'Indexing tracks',
-  history: 'Syncing history',
-  done: 'Done',
+  pending: "Waiting",
+  items: "Syncing items",
+  episodes: "Indexing episodes",
+  tracks: "Indexing tracks",
+  history: "Syncing history",
+  done: "Done",
 };
 
 function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
-  const done = lib.phase === 'done';
+  const done = lib.phase === "done";
   const count = useCountUp(lib.count, 800, done);
-  const pending = lib.phase === 'pending';
+  const pending = lib.phase === "pending";
   return (
     <div className="flex items-center gap-3 text-sm">
       <div className="w-4 shrink-0 flex items-center justify-center">
@@ -300,12 +433,16 @@ function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
           ? null
           : <span className="loading loading-spinner loading-xs" />}
       </div>
-      <span className={`w-36 truncate font-medium ${pending ? 'text-base-content/30' : ''}`}>
+      <span
+        className={`w-36 truncate font-medium ${
+          pending ? "text-base-content/30" : ""
+        }`}
+      >
         {lib.title}
       </span>
       <span className="text-base-content/40 w-36">
         {PHASE_LABEL[lib.phase]}
-        {lib.phase === 'done' && lib.elapsedSeconds != null && (
+        {lib.phase === "done" && lib.elapsedSeconds != null && (
           <span className="ml-1">· {formatDuration(lib.elapsedSeconds)}</span>
         )}
       </span>
@@ -334,7 +471,7 @@ function SyncProgressPanel(
     );
   }
 
-  const doneCount = progress.filter((l) => l.phase === 'done').length;
+  const doneCount = progress.filter((l) => l.phase === "done").length;
   const isSingle = progress.length === 1;
 
   return (
@@ -366,7 +503,9 @@ function SyncProgressPanel(
             {animatedTotal.toLocaleString()} items
           </span>
           <ChevronDown
-            className={`w-4 h-4 text-base-content/40 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+            className={`w-4 h-4 text-base-content/40 transition-transform duration-200 ${
+              expanded ? "rotate-180" : ""
+            }`}
           />
         </button>
 
@@ -382,13 +521,23 @@ function SyncProgressPanel(
   );
 }
 
-function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: boolean }) {
+function LibraryCard(
+  { lib, globalSyncing }: { lib: Library; globalSyncing: boolean },
+) {
   const { isSyncing, trigger } = useLibrarySync(lib.key);
   const navigate = useNavigate();
   return (
-    <div
-      className="card bg-base-200 hover:bg-base-300 transition-colors cursor-pointer"
-      onClick={() => void navigate({ to: "/libraries/$key/stale", params: { key: lib.key } })}
+    <motion.div
+      variants={cardVariants}
+      whileHover={{ y: -4 }}
+      whileTap={{ scale: 0.98 }}
+      transition={{ type: "spring", stiffness: 400, damping: 25 }}
+      className="card bg-base-200 hover:bg-base-300 hover:shadow-lg transition-[background-color,box-shadow] cursor-pointer"
+      onClick={() =>
+        void navigate({
+          to: "/libraries/$key/stale",
+          params: { key: lib.key },
+        })}
     >
       <div className="card-body gap-3">
         <div className="flex items-center gap-3">
@@ -404,31 +553,45 @@ function LibraryCard({ lib, globalSyncing }: { lib: Library; globalSyncing: bool
           <button
             type="button"
             className={`btn btn-ghost btn-xs btn-square shrink-0 ${
-              isSyncing ? "text-primary" : "text-base-content/40 hover:text-base-content"
+              isSyncing
+                ? "text-primary"
+                : "text-base-content/40 hover:text-base-content"
             }`}
-            onClick={(e) => { e.stopPropagation(); trigger(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              trigger();
+            }}
             disabled={isSyncing || globalSyncing}
             title="Sync this library"
           >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+            />
           </button>
         </div>
-        <div className="text-xs text-base-content/40">
-          Synced {formatRelativeTime(lib.syncedAt)}
+        <div className="text-xs text-base-content/40 flex items-center gap-1.5">
+          <span>{lib.itemCount.toLocaleString()} items</span>
+          <span>·</span>
+          <span>{formatKilobytes(lib.totalFileSize)}</span>
+          <span>·</span>
+          <span>Synced {formatRelativeTime(lib.syncedAt)}</span>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
 function LibraryIcon({ type }: { type: string }) {
   const cls = "w-8 h-8 p-1.5 rounded-lg shrink-0";
-  if (type === "movie")
+  if (type === "movie") {
     return <Film className={`${cls} bg-primary/20 text-primary`} />;
-  if (type === "show")
+  }
+  if (type === "show") {
     return <Tv className={`${cls} bg-secondary/20 text-secondary`} />;
-  if (type === "artist")
+  }
+  if (type === "artist") {
     return <Music className={`${cls} bg-accent/20 text-accent`} />;
+  }
   return <Film className={`${cls} bg-base-300 text-base-content/40`} />;
 }
 

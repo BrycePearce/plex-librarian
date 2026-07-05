@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @plugin "daisyui";
 
+html {
+  scrollbar-gutter: stable;
+}
+
 @theme {
   --color-plex: #e5a00d;
   --font-plex: -apple-system, Helvetica, sans-serif;

@@ -1,5 +1,18 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { items, libraries, seasons, settings } from '../db/schema.ts';
 import { itemByRatingKey, itemsByLibrary, libraryByKey, seasonsByShow } from '../db/scope.ts';
@@ -37,14 +50,38 @@ router.get('/', async (c) => {
     return c.json({ limit, offset, total: 0, libraries: [] } satisfies LibrariesResponse);
   }
 
-  const [[{ total }], rows] = await Promise.all([
+  const [[{ total }], rows, statsRows] = await Promise.all([
     db.select({ total: count() }).from(libraries).where(eq(libraries.serverId, serverId)),
     db.select().from(libraries).where(eq(libraries.serverId, serverId)).orderBy(
       asc(libraries.title),
     ).limit(limit).offset(offset),
+    // Single grouped aggregate rather than one query per library — cheap even at millions
+    // of rows since it's backed by the existing (serverId, libraryKey) index, and avoids
+    // ever pulling item rows into app memory (see Scale assumptions in CLAUDE.md).
+    // SUM(file_size) is cast to text in SQL: @db/sqlite's integer read path truncates
+    // SUM's result to 32 bits, silently wrapping (and going negative) for any library
+    // whose total size exceeds ~2^31 KB (~2TB) — verified against a manual JS-side sum.
+    // The text cast returns SQLite's full-precision result as a string instead.
+    db.select({
+      libraryKey: items.libraryKey,
+      itemCount: count(),
+      totalFileSize: sql<string | null>`cast(sum(${items.fileSize}) as text)`,
+    }).from(items).where(eq(items.serverId, serverId)).groupBy(items.libraryKey),
   ]);
 
-  return c.json({ limit, offset, total, libraries: rows } satisfies LibrariesResponse);
+  const statsByKey = new Map(statsRows.map((r) => [r.libraryKey, r]));
+  const librariesWithStats = rows.map((lib) => {
+    const stats = statsByKey.get(lib.key);
+    return {
+      ...lib,
+      itemCount: stats?.itemCount ?? 0,
+      totalFileSize: stats ? Number(stats.totalFileSize ?? '0') : 0,
+    };
+  });
+
+  return c.json(
+    { limit, offset, total, libraries: librariesWithStats } satisfies LibrariesResponse,
+  );
 });
 
 router.get('/:key/stale', async (c) => {

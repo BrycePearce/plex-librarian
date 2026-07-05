@@ -2,6 +2,24 @@
 // counterpart's markup (grid/table shape, column widths) so nothing jumps when real
 // content replaces it.
 
+export function StatsStripSkeleton() {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="card bg-base-200">
+          <div className="card-body flex-row items-center gap-4 py-4">
+            <div className="skeleton w-10 h-10 rounded-lg shrink-0" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="skeleton h-3 w-16" />
+              <div className="skeleton h-5 w-20" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function LibraryCardSkeleton() {
   return (
     <div className="card bg-base-200">
@@ -19,7 +37,7 @@ export function LibraryCardSkeleton() {
         <div className="skeleton h-3 w-1/2" />
       </div>
     </div>
-  )
+  );
 }
 
 export function StaleTableSkeleton({ rows = 8 }: { rows?: number }) {
@@ -60,17 +78,25 @@ export function StaleTableSkeleton({ rows = 8 }: { rows?: number }) {
                   </div>
                 </div>
               </td>
-              <td><div className="skeleton h-3 w-12" /></td>
-              <td><div className="skeleton h-3 w-20" /></td>
-              <td><div className="skeleton h-3 w-20" /></td>
-              <td><div className="skeleton h-3 w-6" /></td>
+              <td>
+                <div className="skeleton h-3 w-12" />
+              </td>
+              <td>
+                <div className="skeleton h-3 w-20" />
+              </td>
+              <td>
+                <div className="skeleton h-3 w-20" />
+              </td>
+              <td>
+                <div className="skeleton h-3 w-6" />
+              </td>
               <td />
             </tr>
           ))}
         </tbody>
       </table>
     </div>
-  )
+  );
 }
 
 export function ShowDetailSkeleton() {
@@ -103,17 +129,29 @@ export function ShowDetailSkeleton() {
           <tbody>
             {Array.from({ length: 4 }).map((_, i) => (
               <tr key={i}>
-                <td><div className="skeleton h-3 w-4" /></td>
-                <td><div className="skeleton h-4 w-24" /></td>
-                <td><div className="skeleton h-3 w-12" /></td>
-                <td><div className="skeleton h-3 w-12" /></td>
-                <td><div className="skeleton h-3 w-6" /></td>
-                <td><div className="skeleton h-3 w-6" /></td>
+                <td>
+                  <div className="skeleton h-3 w-4" />
+                </td>
+                <td>
+                  <div className="skeleton h-4 w-24" />
+                </td>
+                <td>
+                  <div className="skeleton h-3 w-12" />
+                </td>
+                <td>
+                  <div className="skeleton h-3 w-12" />
+                </td>
+                <td>
+                  <div className="skeleton h-3 w-6" />
+                </td>
+                <td>
+                  <div className="skeleton h-3 w-6" />
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     </>
-  )
+  );
 }
