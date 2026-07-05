@@ -18,15 +18,13 @@ import {
   Film,
   HardDrive,
   Info,
-  LogOut,
   Music,
   RefreshCw,
   Settings,
   Tv,
 } from "lucide-react";
-import { api, invalidateServerScopedQueries } from "../lib/api";
+import { api } from "../lib/api";
 import type {
-  AuthStatus,
   Library,
   LibraryPhase,
   LibrarySyncProgress,
@@ -93,26 +91,10 @@ const LIBRARY_PREVIEW_COUNT = 6;
 
 function DashboardInner() {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
   const [showAllLibraries, setShowAllLibraries] = useState(false);
-
-  const { data: authStatus } = useQuery<AuthStatus>({
-    queryKey: ["auth", "status"],
-    queryFn: api.auth.status,
-    staleTime: 60_000,
-  });
-
-  const disconnect = useMutation({
-    mutationFn: api.auth.disconnect,
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["auth", "status"] });
-      await invalidateServerScopedQueries(qc);
-      void navigate({ to: "/setup" });
-    },
-  });
 
   const {
     data: librariesData,
@@ -192,18 +174,6 @@ function DashboardInner() {
             <Settings className="w-4 h-4" />
             Settings
           </Link>
-          {authStatus?.source !== "env" && (
-            <button
-              type="button"
-              className="btn btn-ghost gap-2"
-              onClick={() => disconnect.mutate()}
-              disabled={disconnect.isPending}
-              title="Disconnect from Plex"
-            >
-              <LogOut className="w-4 h-4" />
-              Disconnect
-            </button>
-          )}
           <button
             type="button"
             className="btn btn-primary gap-2"
@@ -275,10 +245,15 @@ function DashboardInner() {
           >
             {(showAllLibraries
               ? librariesData.libraries
-              : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT)
-            ).map((lib) => (
-              <LibraryCard key={lib.key} lib={lib} globalSyncing={isSyncing} />
-            ))}
+              : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT)).map((
+                lib,
+              ) => (
+                <LibraryCard
+                  key={lib.key}
+                  lib={lib}
+                  globalSyncing={isSyncing}
+                />
+              ))}
           </motion.div>
           {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
             <div className="flex justify-center">
@@ -288,11 +263,15 @@ function DashboardInner() {
                 onClick={() => setShowAllLibraries((v) => !v)}
               >
                 <ChevronDown
-                  className={`w-4 h-4 transition-transform ${showAllLibraries ? "rotate-180" : ""}`}
+                  className={`w-4 h-4 transition-transform ${
+                    showAllLibraries ? "rotate-180" : ""
+                  }`}
                 />
                 {showAllLibraries
                   ? "Show fewer"
-                  : `Show ${librariesData.libraries.length - LIBRARY_PREVIEW_COUNT} more`}
+                  : `Show ${
+                    librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
+                  } more`}
               </button>
             </div>
           )}

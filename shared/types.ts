@@ -8,6 +8,8 @@ export interface AuthStatus {
   source: 'env' | 'db' | null
   reachable?: boolean
   reason?: 'token_revoked'
+  // Best-effort — omitted if the plex.tv account lookup failed or hasn't been configured.
+  user?: { username: string; thumb: string | null }
 }
 
 export interface PlexPin {

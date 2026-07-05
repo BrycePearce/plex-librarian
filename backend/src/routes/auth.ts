@@ -17,6 +17,29 @@ const router = new Hono();
 
 const PLEX_TV = 'https://plex.tv';
 
+// Fetches the plex.tv account profile (username + avatar) for display in the navbar.
+// Best-effort only — a failure here shouldn't affect the configured/reachable status,
+// so callers get `null` instead of a thrown error.
+async function fetchPlexAccount(
+  clientId: string,
+  token: string,
+): Promise<{ username: string; thumb: string | null } | null> {
+  try {
+    const res = await fetch(`${PLEX_TV}/api/v2/user`, {
+      headers: buildPlexHeaders(clientId, token),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) {
+      res.body?.cancel();
+      return null;
+    }
+    const data = await res.json() as { username?: string; title?: string; thumb?: string };
+    return { username: data.username || data.title || 'Plex user', thumb: data.thumb ?? null };
+  } catch {
+    return null;
+  }
+}
+
 // Cached after first read — clientId is a stable UUID for the lifetime of the installation.
 let cachedClientId: string | null = null;
 
@@ -202,7 +225,10 @@ router.get('/status', async (c) => {
   // rather than falling through to DB credentials that createPlexClient() would ignore.
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
     const configured = !!(Deno.env.get('PLEX_URL') && Deno.env.get('PLEX_TOKEN'));
-    return c.json({ configured, source: 'env' });
+    if (!configured) return c.json({ configured, source: 'env' });
+    const clientId = await getOrCreateClientId();
+    const user = await fetchPlexAccount(clientId, Deno.env.get('PLEX_TOKEN')!);
+    return c.json({ configured, source: 'env', user: user ?? undefined });
   }
 
   const active = await getActiveServer();
@@ -228,13 +254,19 @@ router.get('/status', async (c) => {
       res.body?.cancel();
       return c.json({ configured: true, source: 'db', reachable: false });
     }
-    res.body?.cancel();
+
+    // Reuse this response for the profile display instead of firing a second request.
+    const data = await res.json().catch(() => null) as
+      | { username?: string; title?: string; thumb?: string }
+      | null;
+    const user = data
+      ? { username: data.username || data.title || 'Plex user', thumb: data.thumb ?? null }
+      : undefined;
+    return c.json({ configured: true, source: 'db', reachable: true, user });
   } catch {
     // Plex unreachable — treat as configured but warn so the client can surface it.
     return c.json({ configured: true, source: 'db', reachable: false });
   }
-
-  return c.json({ configured: true, source: 'db', reachable: true });
 });
 
 export default router;

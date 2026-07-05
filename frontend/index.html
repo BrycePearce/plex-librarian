@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Plex Librarian</title>
+    <script>
+      // Applied before React mounts so the page never flashes the default daisyUI theme.
+      document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark';
+    </script>
   </head>
   <body>
     <div id="root"></div>

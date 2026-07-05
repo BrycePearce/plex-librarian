@@ -1,5 +1,7 @@
 @import "tailwindcss";
-@plugin "daisyui";
+@plugin "daisyui" {
+  themes: dark --default, night, dracula, light;
+}
 
 html {
   scrollbar-gutter: stable;
@@ -8,4 +10,28 @@ html {
 @theme {
   --color-plex: #e5a00d;
   --font-plex: -apple-system, Helvetica, sans-serif;
+}
+
+/* Theme switch reveal: expands a circle from the clicked swatch outward to cover the
+   viewport. Coordinates/radius are set as inline custom properties by useTheme() right
+   before it calls startViewTransition(), from the click event that triggered the change. */
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0% at var(--theme-reveal-x, 50%) var(--theme-reveal-y,
+      50%));
+  }
+  to {
+    clip-path: circle(
+      var(--theme-reveal-radius, 150%) at var(--theme-reveal-x, 50%)
+      var(--theme-reveal-y, 50%)
+    );
+  }
+}
+
+::view-transition-old(root) {
+  animation: none;
+}
+
+::view-transition-new(root) {
+  animation: theme-reveal 0.5s ease-in;
 }
