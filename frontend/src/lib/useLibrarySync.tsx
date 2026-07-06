@@ -4,7 +4,6 @@ import {
   useRef,
   createContext,
   useContext,
-  useCallback,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
@@ -66,8 +65,8 @@ export function LibrarySyncProvider({
   children: ReactNode;
 }) {
   const [count, setCount] = useState(0);
-  const increment = useCallback(() => setCount((c) => c + 1), []);
-  const decrement = useCallback(() => setCount((c) => Math.max(0, c - 1)), []);
+  const increment = () => setCount((c) => c + 1);
+  const decrement = () => setCount((c) => Math.max(0, c - 1));
   return (
     <ActiveSyncContext.Provider value={{ increment, decrement, count }}>
       {children}
@@ -112,21 +111,29 @@ export function useLibrarySync(libraryKey: string) {
   // (e.g. navigating away mid-sync and back, or opening this library while a "Sync all"
   // triggered from the dashboard is still running) — otherwise `attached` stays null
   // and this hook has no way to know a sync affecting this library is in progress.
-  const { data: history } = useSyncHistory();
+  const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
+  // Computed directly during render (rather than only inside the effect below) so
+  // `isSyncing` already reflects a pending sync the instant `history` loads, instead of
+  // waiting one extra render for the effect to run and call `setAttached`. Consumers
+  // (e.g. the stale-items page) key a warning-vs-info banner off `isSyncing`; without
+  // this, a page refresh could paint the "not syncing" banner for one frame before
+  // flipping to "syncing" once the effect catches up.
+  const pendingFromHistory =
+    attached === null
+      ? history?.find(
+          (h) =>
+            h.status === "pending" &&
+            h.id !== handledSyncId.current &&
+            (h.libraryKey === libraryKey || h.libraryKey === null),
+        )
+      : undefined;
   useEffect(() => {
-    if (attached !== null) return;
-    const pending = history?.find(
-      (h) =>
-        h.status === "pending" &&
-        h.id !== handledSyncId.current &&
-        (h.libraryKey === libraryKey || h.libraryKey === null),
-    );
-    if (pending)
+    if (pendingFromHistory)
       setAttached({
-        id: pending.id,
-        scope: pending.libraryKey === null ? "global" : "library",
+        id: pendingFromHistory.id,
+        scope: pendingFromHistory.libraryKey === null ? "global" : "library",
       });
-  }, [history, attached, libraryKey]);
+  }, [pendingFromHistory]);
 
   // For a global run, this library's SSE progress entry reaching the 'done' phase means
   // *this* library's data is ready — no need to wait for every other library in the run.
@@ -164,7 +171,9 @@ export function useLibrarySync(libraryKey: string) {
   });
 
   const isSyncing =
-    (attached !== null && !isThisLibraryDone) || mutation.isPending;
+    (attached !== null && !isThisLibraryDone) ||
+    mutation.isPending ||
+    pendingFromHistory !== undefined;
 
   // Register with context so DashboardPage can gate the "Sync all" button.
   const prevSyncing = useRef(false);
@@ -188,6 +197,9 @@ export function useLibrarySync(libraryKey: string) {
 
   return {
     isSyncing,
+    // True only until we've fetched sync history at least once — lets callers hold off
+    // rendering a "definitely not syncing" state before that's actually known.
+    isSyncStatusLoading: isHistoryLoading,
     trigger: () => mutation.mutate(),
     isError: mutation.isError,
     error: mutation.error,

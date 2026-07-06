@@ -40,7 +40,8 @@ const PAGE_SIZE = 50;
 function StalePage() {
   const { key } = Route.useParams();
   const qc = useQueryClient();
-  const { isSyncing, trigger, isError, error } = useLibrarySync(key);
+  const { isSyncing, isSyncStatusLoading, trigger, isError, error } =
+    useLibrarySync(key);
   const [params, setParams] = useState<StaleParams>({
     days: 365,
     filter: "all",
@@ -222,13 +223,13 @@ function StalePage() {
               it finishes.
             </span>
           </div>
-        ) : (
+        ) : isSyncStatusLoading ? null : (
           <div className="alert alert-warning">
             <AlertTriangle className="w-4 h-4" />
             <span>
               Watch-history sync hasn't completed for this library yet, so
               items showing{" "}
-              <span className="badge badge-warning badge-outline badge-sm align-middle">
+              <span className="badge badge-outline badge-sm align-middle">
                 unknown
               </span>{" "}
               below may actually have been watched — the "never watched" data

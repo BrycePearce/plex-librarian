@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 import { api } from './api'
 import type { LibraryPhase, LibrarySyncProgress } from './api'
 
@@ -196,18 +196,13 @@ function subscribe(syncId: number, onStoreChange: () => void): () => void {
 }
 
 export function useSyncStream(syncId: number | null): SyncStreamResult {
-  // Memoized per syncId so identity is stable across renders — a fresh closure every
-  // render would make useSyncExternalStore tear down and recreate the subscription
-  // (and, if this were the last listener, needlessly close and reopen the connection).
-  const subscribeFn = useCallback((onStoreChange: () => void) => {
+  const subscribeFn = (onStoreChange: () => void) => {
     if (syncId === null) return () => {}
     return subscribe(syncId, onStoreChange)
-  }, [syncId])
+  }
 
-  const getSnapshotFn = useCallback(
-    () => (syncId === null ? EMPTY_STATE : getSnapshot(syncId)),
-    [syncId],
-  )
+  const getSnapshotFn = () =>
+    syncId === null ? EMPTY_STATE : getSnapshot(syncId)
 
   return useSyncExternalStore(subscribeFn, getSnapshotFn)
 }
