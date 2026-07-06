@@ -22,7 +22,7 @@ services:
     image: ghcr.io/BrycePearce/plex-librarian:latest
     container_name: plex-librarian
     ports:
-      - "8080:8080"
+      - "8288:8080"
     volumes:
       - /path/to/appdata:/data
     environment:
@@ -44,6 +44,7 @@ services:
 | `LIBRARY_SYNC_CONCURRENCY` | No | Max libraries synced in parallel (default: `3`) |
 | `FETCH_CONCURRENCY` | No | Max concurrent Plex page requests per library (default: `8`) |
 | `SYNC_STALL_TIMEOUT_MINUTES` | No | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
+| `LOG_RETENTION_DAYS` | No | Days to keep sync history and activity feed entries before they're automatically deleted (default: `180`) |
 
 Migrations run automatically on startup. No manual database setup required.
 
@@ -64,7 +65,7 @@ Webhooks enable real-time `lastViewedAt` updates when someone plays or finishes 
 In Plex Web, go to **Settings → Webhooks → Add Webhook** and enter:
 
 ```
-http://<your-host>:8080/api/webhook/plex
+http://<your-host>:8288/api/webhook/plex
 ```
 
 If you set `PLEX_WEBHOOK_SECRET`, append `?token=<secret>` to the URL. Requests without a matching token are rejected with 401.

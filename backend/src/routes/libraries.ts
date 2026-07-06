@@ -17,6 +17,7 @@ import { db } from '../db/index.ts';
 import { items, libraries, seasons, settings } from '../db/schema.ts';
 import { itemByRatingKey, itemsByLibrary, libraryByKey, seasonsByShow } from '../db/scope.ts';
 import { createPlexClient, PlexDeleteError } from '../lib/plex.ts';
+import { logEvents } from '../services/events.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
@@ -254,7 +255,9 @@ router.delete('/:key/items', async (c) => {
   if (!body.ratingKeys.every((k): k is string => typeof k === 'string')) {
     return c.json({ error: 'ratingKeys must be strings' }, 400);
   }
-  const ratingKeys = body.ratingKeys as string[];
+  // Deduped so a client sending the same ratingKey twice can't double-count it in the
+  // response or the persisted items.deleted event's deletedCount/fileSizeFreed.
+  const ratingKeys = [...new Set(body.ratingKeys as string[])];
 
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'library not found' }, 404);
@@ -265,9 +268,13 @@ router.delete('/:key/items', async (c) => {
 
   // Only ever act on items that actually belong to this library/server — guards
   // against a client passing ratingKeys scraped from a different library or server.
-  const owned = await db.select({ ratingKey: items.ratingKey }).from(items)
+  // fileSize (decimal KB — see extractFileSize in lib/plex.ts) is captured here
+  // (before the rows are deleted below) so the activity event can report space
+  // freed without a second query.
+  const owned = await db.select({ ratingKey: items.ratingKey, fileSize: items.fileSize })
+    .from(items)
     .where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
-  const ownedKeys = new Set(owned.map((r) => r.ratingKey));
+  const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
 
   let client;
   try {
@@ -282,7 +289,7 @@ router.delete('/:key/items', async (c) => {
   const deleted: string[] = [];
   const failed: { ratingKey: string; error: string }[] = [];
   for (const ratingKey of ratingKeys) {
-    if (!ownedKeys.has(ratingKey)) {
+    if (!fileSizeByKey.has(ratingKey)) {
       failed.push({ ratingKey, error: 'not found in this library' });
       continue;
     }
@@ -303,6 +310,20 @@ router.delete('/:key/items', async (c) => {
       failed.push({ ratingKey, error: err instanceof Error ? err.message : 'delete failed' });
     }
   }
+
+  // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
+  // in frontend/src/lib/format.ts.
+  const fileSizeFreed = deleted.reduce((sum, rk) => sum + (fileSizeByKey.get(rk) ?? 0), 0);
+  await logEvents([{
+    serverId,
+    type: 'items.deleted',
+    payload: {
+      libraryKey: key,
+      deletedCount: deleted.length,
+      failedCount: failed.length,
+      fileSizeFreed,
+    },
+  }]);
 
   return c.json({ deleted, failed } satisfies DeleteItemsResponse);
 });

@@ -1,9 +1,28 @@
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { db } from '../db/index.ts';
+import { LOG_RETENTION_DAYS, pruneOlderThan } from '../db/prune.ts';
 import { settings, syncLog } from '../db/schema.ts';
 import { PlexConfigError, resolveActiveServer } from '../lib/plex.ts';
 import type { PlexClient } from '../lib/plex.ts';
-import { triggerFullSync } from './syncManager.ts';
+import { sweepStalePendingSyncs, triggerFullSync } from './syncManager.ts';
+import { pruneOldEvents } from './events.ts';
+
+// Prunes by finishedAt (not startedAt) so a sync's row survives for the full retention
+// window counted from when it actually finished, not from when it started — otherwise a
+// long-running sync on a low LOG_RETENTION_DAYS install could have its row deleted on the
+// very next hourly tick after it completes. The explicit `ne(status,'pending')` guard is a
+// backstop on top of that: a still-'pending' row has no finishedAt to compare against and
+// is already excluded by `lt(finishedAt, cutoff)`, but a pending row must never be silently
+// deleted out from under a sync that's still writing to it, so this stays explicit rather
+// than relying on the NULL comparison alone.
+async function pruneOldSyncLogs(): Promise<void> {
+  await pruneOlderThan(
+    syncLog,
+    syncLog.finishedAt,
+    LOG_RETENTION_DAYS,
+    ne(syncLog.status, 'pending'),
+  );
+}
 
 const STALE_THRESHOLD_SECONDS = 24 * 60 * 60;
 
@@ -52,24 +71,40 @@ async function getAutoSyncSettings(): Promise<{ enabled: boolean; hour: number }
   };
 }
 
-// Marks any 'pending' sync_log rows older than 1 hour as 'error'. Covers rows left
+// Marks any 'pending' sync_log rows older than 1 hour as 'error' (and records a
+// sync.failed activity event for each — see failStalePendingSyncs). Covers rows left
 // behind by a process crash or a double-failure (worker start + DB error) where
 // finalizeSyncLog never ran. Without this, the pending conflict check blocks all
 // future syncs until the row is manually cleared.
+//
+// Excludes syncIds this same process still considers active: those are protected by
+// syncManager's own in-process watchdog (which fails a sync the moment it actually
+// stalls, regardless of total elapsed time), so a large library sync that's still
+// making real progress past the 1-hour mark must not be second-guessed and marked
+// 'error' by this wall-clock-only sweep — doing so would silently discard the sync's
+// real outcome once it does finish (see finalizeSyncLog's status='pending' guard).
 async function sweepStalePendingRows(): Promise<void> {
-  const cutoff = Math.floor(Date.now() / 1000) - 60 * 60;
-  const finishedAt = Math.floor(Date.now() / 1000);
-  await db
-    .update(syncLog)
-    .set({ status: 'error', error: 'interrupted — server restarted', finishedAt })
-    .where(and(eq(syncLog.status, 'pending'), lt(syncLog.startedAt, cutoff)));
+  await sweepStalePendingSyncs(60 * 60);
 }
 
 // Called at server startup. Triggers a full sync if Plex is configured and no
 // successful sync has run in the last 24 hours (covers first boot and stale restarts).
+//
+// Deliberately doesn't call sweepStalePendingRows() here — main.ts already runs
+// failAllPendingSyncs() unconditionally before this function is invoked, and a fresh
+// boot means nothing can legitimately still be 'pending', so a second sweep this early
+// would always find zero rows. sweepStalePendingRows only earns its keep on the hourly
+// interval below, where a sync can legitimately still be mid-flight.
+//
+// The prune step gets its own try/catch (matching startScheduler's pattern below) so a
+// pruning failure can't silently skip the sync-trigger check that follows it.
 export async function startupSyncIfStale(): Promise<void> {
   try {
-    await sweepStalePendingRows();
+    await Promise.all([pruneOldEvents(), pruneOldSyncLogs()]);
+  } catch (err) {
+    console.error('Activity/sync log pruning failed:', err);
+  }
+  try {
     const active = await resolveActiveServerOrNull();
     if (active === null) return;
     const last = await lastSuccessfulSyncAt(active.serverId);
@@ -97,6 +132,16 @@ export async function startupSyncIfStale(): Promise<void> {
 // to UTC, so set the TZ env var if you need a different timezone.
 export function startScheduler(): void {
   const id = setInterval(async () => {
+    try {
+      await sweepStalePendingRows();
+    } catch (err) {
+      console.error('Stale-pending sync sweep failed:', err);
+    }
+    try {
+      await Promise.all([pruneOldEvents(), pruneOldSyncLogs()]);
+    } catch (err) {
+      console.error('Activity/sync log pruning failed:', err);
+    }
     try {
       const { enabled, hour } = await getAutoSyncSettings();
       if (!enabled) return;

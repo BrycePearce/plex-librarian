@@ -10,6 +10,7 @@
   <Project>https://github.com/BrycePearce/plex-librarian</Project>
   <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and reclaim disk space. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely.</Overview>
   <Category>MediaApp:Other</Category>
+  <Beta>true</Beta>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
@@ -25,13 +26,13 @@
   <Config
     Name="Web UI Port"
     Target="8080"
-    Default="8080"
+    Default="8288"
     Mode="tcp"
     Description="Port for the Plex Librarian web UI."
     Type="Port"
     Display="always"
     Required="true"
-    Mask="false">8080</Config>
+    Mask="false">8288</Config>
 
   <Config
     Name="Config Path"
@@ -120,6 +121,17 @@
     Display="advanced"
     Required="false"
     Mask="false">15</Config>
+
+  <Config
+    Name="Log Retention (days)"
+    Target="LOG_RETENTION_DAYS"
+    Default="180"
+    Mode=""
+    Description="Days to keep sync history and activity feed entries before they're automatically deleted. Raise this to retain history longer, or set to 0 to keep them forever."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false">180</Config>
 
 
 </Container>

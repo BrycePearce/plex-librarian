@@ -149,6 +149,7 @@ function DashboardInner() {
     if (!globalSyncDone && globalSyncError === null) return;
     void qc.invalidateQueries({ queryKey: ["libraries"] });
     void qc.invalidateQueries({ queryKey: ["sync", "history"] });
+    void qc.invalidateQueries({ queryKey: ["events"] });
     if (globalSyncError !== null) {
       setActiveGlobalSyncId(null);
       return;

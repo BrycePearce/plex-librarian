@@ -156,3 +156,40 @@ export interface SyncTriggerResponse {
   syncId: number
   status: 'pending'
 }
+
+// --- Activity log ---
+
+export type EventType = 'sync.completed' | 'sync.failed' | 'items.deleted'
+
+export interface SyncCompletedPayload {
+  syncId: number
+  libraryKey: string | null
+  itemsProcessed: number
+}
+
+export interface SyncFailedPayload {
+  syncId: number
+  libraryKey: string | null
+  error: string
+}
+
+export interface ItemsDeletedPayload {
+  libraryKey: string
+  deletedCount: number
+  failedCount: number
+  // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
+  // in frontend/src/lib/format.ts.
+  fileSizeFreed: number
+}
+
+export type ActivityEvent =
+  | { id: number; type: 'sync.completed'; payload: SyncCompletedPayload | null; createdAt: number }
+  | { id: number; type: 'sync.failed'; payload: SyncFailedPayload | null; createdAt: number }
+  | { id: number; type: 'items.deleted'; payload: ItemsDeletedPayload | null; createdAt: number }
+
+export interface ActivityEventsResponse {
+  limit: number
+  events: ActivityEvent[]
+  // Pass as `before` on the next request to page further back; null once there's no more history.
+  nextCursor: number | null
+}

@@ -1,9 +1,11 @@
-import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
+import { and, eq, lt, notInArray, type SQL, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
 import { items, libraries, seasons, syncLog } from '../db/schema.ts';
 import { itemsByLibrary, libraryByKey, seasonsByLibrary } from '../db/scope.ts';
 import { PLEX_TYPE } from '../lib/plex.ts';
 import type { PlexClient, PlexLibrary } from '../lib/plex.ts';
+import { logEvents } from './events.ts';
+import type { LogEventInput } from './events.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
@@ -260,8 +262,8 @@ async function syncLibrary(
   const typeFilter = lib.type === 'show'
     ? PLEX_TYPE.SHOW
     : lib.type === 'artist'
-      ? PLEX_TYPE.ARTIST
-      : undefined;
+    ? PLEX_TYPE.ARTIST
+    : undefined;
 
   let itemCount = 0;
 
@@ -337,22 +339,109 @@ async function syncLibrary(
   return itemCount;
 }
 
+// Finalizes the sync_log row and, if this call actually won the race to do so, logs the
+// matching activity event itself — mirroring failPendingSyncsMatching below, which emits
+// events from the rows it actually updated rather than trusting a caller to remember a
+// guard. If something else (e.g. the stale-pending sweep) already finalized this row
+// first, `.returning()` comes back empty and no contradictory event is logged.
 export async function finalizeSyncLog(
   syncId: number,
+  serverId: number,
+  libraryKey: string | null,
   result: { ok: true; itemsProcessed: number } | { ok: false; error: string },
 ): Promise<void> {
   const finishedAt = Math.floor(Date.now() / 1000);
+  const setPayload = result.ok
+    ? { status: 'success' as const, finishedAt, itemsProcessed: result.itemsProcessed }
+    : { status: 'error' as const, finishedAt, error: result.error };
   // AND status='pending' guard prevents a late onerror or retry from overwriting an already-finalized row.
   const where = and(eq(syncLog.id, syncId), eq(syncLog.status, 'pending'));
-  if (!result.ok) {
-    await db.update(syncLog).set({ status: 'error', finishedAt, error: result.error }).where(where);
-  } else {
-    await db.update(syncLog).set({
-      status: 'success',
-      finishedAt,
-      itemsProcessed: result.itemsProcessed,
-    }).where(where);
+  const rows = await db.update(syncLog).set(setPayload).where(where).returning({ id: syncLog.id });
+
+  if (rows.length === 0) return;
+
+  await logEvents([
+    result.ok
+      ? {
+        serverId,
+        type: 'sync.completed',
+        payload: { syncId, libraryKey, itemsProcessed: result.itemsProcessed },
+      }
+      : {
+        serverId,
+        type: 'sync.failed',
+        payload: { syncId, libraryKey, error: result.error },
+      },
+  ]);
+}
+
+// Formats a duration for the crash-recovery reason text below — kept in sync with the
+// actual cutoff passed in, rather than a hardcoded string, so the message can't drift
+// from reality if a caller ever passes something other than the current 1-hour default.
+function formatRoughDuration(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
   }
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+// Shared by the two crash-recovery sweeps (main.ts's unconditional startup sweep and
+// scheduler.ts's hourly stale-pending sweep) — marks matching pending rows as 'error'
+// and emits a sync.failed activity event for each, so a process crash or a hung sync
+// shows up in the activity log the same way a normal in-process sync failure does.
+// Without this, the only place a crash was ever recorded was the sync_log row itself.
+// `reason` is caller-supplied since the two callers cover genuinely different situations
+// (an actual crash+restart vs. a sync that merely stopped making progress without the
+// process dying); it's folded into the persisted `error` text, and the frontend renders
+// the rest of the sentence (which library, if any) from `payload.libraryKey` at display
+// time rather than this function resolving and baking in a library title.
+async function failPendingSyncsMatching(extraWhere: SQL, reason: string): Promise<void> {
+  const finishedAt = Math.floor(Date.now() / 1000);
+  const error = `interrupted — ${reason}`;
+  const rows = await db.update(syncLog)
+    .set({ status: 'error', finishedAt, error })
+    .where(and(eq(syncLog.status, 'pending'), extraWhere))
+    .returning({ id: syncLog.id, serverId: syncLog.serverId, libraryKey: syncLog.libraryKey });
+
+  if (rows.length === 0) return;
+
+  const eventInputs: LogEventInput[] = [];
+  for (const row of rows) {
+    if (row.serverId === null) continue;
+    eventInputs.push({
+      serverId: row.serverId,
+      type: 'sync.failed',
+      payload: { syncId: row.id, libraryKey: row.libraryKey, error },
+    });
+  }
+  await logEvents(eventInputs);
+}
+
+// Called once at startup (main.ts) — a fresh boot means nothing can legitimately still
+// be 'pending', so any such row was orphaned by a crash of the previous process.
+export async function failAllPendingSyncs(): Promise<void> {
+  await failPendingSyncsMatching(eq(syncLog.status, 'pending'), 'server restarted');
+}
+
+// Called hourly (and once at startup) — catches syncs that hung without crashing the
+// process, so the pending conflict check doesn't block all future syncs forever.
+// `excludeSyncIds` lets the caller protect syncIds it knows are still genuinely active
+// in this process (see scheduler.ts's sweepStalePendingRows) from being marked 'error'
+// purely for having run a long time.
+export async function failStalePendingSyncs(
+  olderThanSeconds: number,
+  excludeSyncIds: number[] = [],
+): Promise<void> {
+  const cutoff = Math.floor(Date.now() / 1000) - olderThanSeconds;
+  const where = excludeSyncIds.length > 0
+    ? and(lt(syncLog.startedAt, cutoff), notInArray(syncLog.id, excludeSyncIds))!
+    : lt(syncLog.startedAt, cutoff);
+  await failPendingSyncsMatching(
+    where,
+    `no progress for over ${formatRoughDuration(olderThanSeconds)}`,
+  );
 }
 
 // Pure sync logic — throws on error, returns total items processed.

@@ -37,6 +37,7 @@ const debouncedInvalidateSyncHistory = makeDebouncedInvalidator([
   "sync",
   "history",
 ]);
+const debouncedInvalidateEvents = makeDebouncedInvalidator(["events"]);
 
 // Shared across every caller (dashboard's "Recent syncs" list, per-library reattach
 // below) so they all read the same cached list instead of each issuing their own fetch.
@@ -144,8 +145,11 @@ export function useLibrarySync(libraryKey: string) {
     void qc.invalidateQueries({ queryKey: ["stale", libraryKey] });
     // A global run's own history-list entry doesn't flip to 'success' until every
     // library finishes, so only invalidate it once the whole thing is actually over.
+    // The backend logs its sync.completed/sync.failed activity event on that same
+    // whole-run boundary, so the events feed is invalidated on the same condition.
     if (attached.scope !== "global" || isDone || syncError !== null) {
       debouncedInvalidateSyncHistory(qc);
+      debouncedInvalidateEvents(qc);
     }
     handledSyncId.current = attached.id;
     setAttached(null);

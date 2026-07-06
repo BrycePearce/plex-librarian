@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { ExternalLink, LogOut, Settings, User } from "lucide-react";
+import { Activity, ExternalLink, LogOut, Settings, User } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { AuthStatus } from "../lib/api";
 import { useClickOutside } from "../lib/useClickOutside";
@@ -92,6 +92,17 @@ export function UserMenu() {
               </a>
             </li>
             <li></li>
+            <li>
+              <Link
+                to="/activity"
+                role="menuitem"
+                className="flex items-center gap-2 leading-none"
+                onClick={() => setOpen(false)}
+              >
+                <Activity className="w-4 h-4" />
+                Activity
+              </Link>
+            </li>
             <li>
               <Link
                 to="/settings"

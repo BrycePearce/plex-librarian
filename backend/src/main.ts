@@ -4,12 +4,11 @@ import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/deno';
 import { join, resolve } from '@std/path';
 import { runMigrations } from './db/migrate.ts';
-import { eq } from 'drizzle-orm';
-import { db } from './db/index.ts';
-import { syncLog } from './db/schema.ts';
 import { createPlexClient, PlexConfigError } from './lib/plex.ts';
+import { failAllPendingSyncs } from './services/sync.ts';
 import { startScheduler, startupSyncIfStale } from './services/scheduler.ts';
 import auth from './routes/auth.ts';
+import events from './routes/events.ts';
 import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
 import settings from './routes/settings.ts';
@@ -22,14 +21,7 @@ await runMigrations(
 );
 
 // Any sync that was 'pending' at startup was orphaned by a previous crash.
-await db
-  .update(syncLog)
-  .set({
-    status: 'error',
-    finishedAt: Math.floor(Date.now() / 1000),
-    error: 'interrupted by server restart',
-  })
-  .where(eq(syncLog.status, 'pending'));
+await failAllPendingSyncs();
 
 void startupSyncIfStale();
 startScheduler();
@@ -67,6 +59,7 @@ app.onError((err, c) => {
 app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));
 
 app.route('/api/auth', auth);
+app.route('/api/events', events);
 app.route('/api/libraries', libraries);
 app.route('/api/proxy', proxy);
 app.route('/api/settings', settings);

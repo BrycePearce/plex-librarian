@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type {
+  ActivityEventsResponse,
   AuthStatus,
   DeleteItemsResponse,
   PlexPin,
@@ -14,8 +15,11 @@ import type {
 } from '@shared/types'
 
 export type {
+  ActivityEvent,
+  ActivityEventsResponse,
   AuthStatus,
   DeleteItemsResponse,
+  EventType,
   PlexPin,
   PinPollResult,
   PlexConnection,
@@ -126,6 +130,14 @@ export const api = {
       apiFetch<SyncLog>(`/sync/${id}`),
     history: (limit = 20) =>
       apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
+  },
+  events: {
+    list: (params: { limit?: number; before?: number } = {}) => {
+      const q = new URLSearchParams()
+      if (params.limit !== undefined) q.set('limit', String(params.limit))
+      if (params.before !== undefined) q.set('before', String(params.before))
+      return apiFetch<ActivityEventsResponse>(`/events?${q}`)
+    },
   },
 }
 

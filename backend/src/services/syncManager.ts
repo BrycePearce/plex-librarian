@@ -1,6 +1,6 @@
 import { withTransaction } from '../db/index.ts';
 import type { PlexClient } from '../lib/plex.ts';
-import { finalizeSyncLog, runLibrarySync, runSync } from './sync.ts';
+import { failStalePendingSyncs, finalizeSyncLog, runLibrarySync, runSync } from './sync.ts';
 import type { SyncReporter } from './sync.ts';
 import type { LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
 
@@ -70,6 +70,17 @@ export function getSyncProgress(syncId: number): LibrarySyncProgress[] | undefin
 
 export function isSyncActive(syncId: number): boolean {
   return activeSyncs.has(syncId);
+}
+
+// Marks stale (still-'pending') sync_log rows older than `olderThanSeconds` as 'error' —
+// see failStalePendingSyncs in sync.ts. Excludes syncIds this process still considers
+// active so a sync that's still genuinely in progress isn't second-guessed and marked
+// 'error' just because it's been running a long time — that's the in-process watchdog's
+// job, which keys off actual progress rather than total elapsed time. Called by
+// scheduler.ts; kept here (rather than exporting activeSyncs) so callers never need to
+// know its internal shape.
+export async function sweepStalePendingSyncs(olderThanSeconds: number): Promise<void> {
+  await failStalePendingSyncs(olderThanSeconds, [...activeSyncs]);
 }
 
 export function registerStream(syncId: number, stream: SSEWriter): Promise<void> {
@@ -167,18 +178,20 @@ async function cleanupSync(
 
 async function runSyncTask(
   syncId: number,
+  serverId: number,
+  libraryKey: string | null,
   task: () => Promise<number>,
 ): Promise<void> {
   let result: { ok: true; itemsProcessed: number } | { ok: false; error: string } | null = null;
   const dog = watchdog(syncId);
   try {
     const itemsProcessed = await Promise.race([task(), dog.promise]);
-    await finalizeSyncLog(syncId, { ok: true, itemsProcessed });
+    await finalizeSyncLog(syncId, serverId, libraryKey, { ok: true, itemsProcessed });
     result = { ok: true, itemsProcessed };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     console.error(`Sync ${syncId} failed:`, err);
-    await finalizeSyncLog(syncId, { ok: false, error });
+    await finalizeSyncLog(syncId, serverId, libraryKey, { ok: false, error });
     result = { ok: false, error };
   } finally {
     dog.cancel();
@@ -216,7 +229,12 @@ export function triggerFullSync(
   const { id: syncId } = result;
   activeSyncs.add(syncId);
   lastProgressAt.set(syncId, Date.now());
-  void runSyncTask(syncId, () => runSync(plex, serverId, makeReporter(syncId)));
+  void runSyncTask(
+    syncId,
+    serverId,
+    null,
+    () => runSync(plex, serverId, makeReporter(syncId)),
+  );
   return { syncId };
 }
 
@@ -245,6 +263,11 @@ export function triggerLibrarySync(
   const { id: syncId } = result;
   activeSyncs.add(syncId);
   lastProgressAt.set(syncId, Date.now());
-  void runSyncTask(syncId, () => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId)));
+  void runSyncTask(
+    syncId,
+    serverId,
+    libraryKey,
+    () => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId)),
+  );
   return { syncId };
 }

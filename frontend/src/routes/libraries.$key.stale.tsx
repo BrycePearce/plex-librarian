@@ -93,6 +93,7 @@ function StalePage() {
       setDeleteResult(res);
       dialogRef.current?.close();
       void qc.invalidateQueries({ queryKey: ["stale", key] });
+      void qc.invalidateQueries({ queryKey: ["events"] });
     },
   });
 

@@ -116,13 +116,47 @@ export const seasons = sqliteTable(
   }),
 );
 
-export const syncLog = sqliteTable('sync_log', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  serverId: integer('server_id').references(() => servers.id),
-  libraryKey: text('library_key'),
-  startedAt: integer('started_at').notNull(),
-  finishedAt: integer('finished_at'),
-  status: text('status', { enum: ['pending', 'success', 'error'] }).notNull(),
-  itemsProcessed: integer('items_processed').default(0),
-  error: text('error'),
-});
+export const syncLog = sqliteTable(
+  'sync_log',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').references(() => servers.id),
+    libraryKey: text('library_key'),
+    startedAt: integer('started_at').notNull(),
+    finishedAt: integer('finished_at'),
+    status: text('status', { enum: ['pending', 'success', 'error'] }).notNull(),
+    itemsProcessed: integer('items_processed').default(0),
+    error: text('error'),
+  },
+  (table) => ({
+    // Backs pruneOldSyncLogs' `WHERE finished_at < cutoff` — without this, that query
+    // (run hourly, and at startup) is a full table scan for the life of the container.
+    finishedAtIdx: index('sync_log_finished_at_idx').on(table.finishedAt),
+  }),
+);
+
+// General admin activity log — one row per meaningful action (a completed sync, a
+// batch deletion, etc.), not per underlying DB write. Deliberately separate from
+// sync_log: sync_log has typed columns and in-flight progress plumbing for the
+// sync-only view, while this table is a generic, append-only feed for everything
+// else. A sync still gets a row here too (referencing its sync_log id via payload)
+// so it shows up in the unified feed without this table needing to know sync_log's
+// schema. No `summary` column: the human-readable line is rendered from `type` +
+// `payload` at display time (frontend), not persisted, so wording can still be
+// changed/localized for events that already happened.
+export const events = sqliteTable(
+  'events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').references(() => servers.id),
+    type: text('type', { enum: ['sync.completed', 'sync.failed', 'items.deleted'] }).notNull(),
+    payload: text('payload'), // JSON: event-specific detail, see EventType in shared/types.ts
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    // Matches the activity feed's actual query shape (WHERE server_id = ? ORDER BY id DESC).
+    serverIdIdx: index('events_server_id_idx').on(table.serverId, table.id),
+    // Backs pruneOldEvents' `WHERE created_at < cutoff`, filtered independently of id/serverId.
+    createdAtIdx: index('events_created_at_idx').on(table.createdAt),
+  }),
+);
