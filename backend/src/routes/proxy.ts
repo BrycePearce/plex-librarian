@@ -55,7 +55,7 @@ router.get('/thumb', async (c) => {
   return new Response(res.body, {
     headers: {
       'content-type': contentType,
-      'cache-control': 'public, max-age=86400',
+      'cache-control': 'public, max-age=31536000, immutable',
       'x-content-type-options': 'nosniff',
     },
   });
