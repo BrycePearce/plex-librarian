@@ -175,17 +175,25 @@ export function useLibrarySync(libraryKey: string) {
     mutation.isPending ||
     pendingFromHistory !== undefined;
 
-  // Register with context so DashboardPage can gate the "Sync all" button.
+  // Register with context so DashboardPage can gate the "Sync all" button. Also the mirror
+  // image of the completion effect above: that one invalidates ['stale', libraryKey] once
+  // `historySyncedAt` is set back to a real timestamp, but nothing previously invalidated it
+  // going the other way when a sync starts and the backend resets `historySyncedAt` to null
+  // (see syncLibrary in sync.ts) — so a page that already had this library's stale data
+  // cached from before the sync kept showing the pre-sync `historySyncedAt`, and the
+  // "watch-history sync running" banner (which keys off `historySyncedAt === null`) silently
+  // failed to appear until something else happened to refetch it (e.g. a hard reload).
   const prevSyncing = useRef(false);
   useEffect(() => {
     if (isSyncing && !prevSyncing.current) {
       prevSyncing.current = true;
       increment();
+      void qc.invalidateQueries({ queryKey: ["stale", libraryKey] });
     } else if (!isSyncing && prevSyncing.current) {
       prevSyncing.current = false;
       decrement();
     }
-  }, [isSyncing, increment, decrement]);
+  }, [isSyncing, increment, decrement, qc, libraryKey]);
 
   // Decrement on unmount if still registered as active.
   useEffect(

@@ -9,4 +9,13 @@
    scoped to the pane that actually owns the scrollbar instead of the whole document. */
 .scroll-area {
   scrollbar-gutter: stable;
+  /* Pagination (see libraries.$key.stale.tsx's `goToOffset`) does a JS `scrollTo({top: 0,
+     behavior: "smooth"})` right as the table's rows are swapped for the new page. Browsers'
+     default scroll anchoring tries to compensate scroll position for content reflow above
+     the viewport, which fights that in-flight smooth-scroll animation whenever the row swap
+     lands mid-animation (most noticeable going back to an already-cached page, where the
+     swap is near-instant instead of trailing a network fetch) — it shows up as the scroll
+     stalling short of the top or never visibly moving. Disabling anchoring here leaves our
+     explicit scrollTo as the only thing driving this pane's scroll position. */
+  overflow-anchor: none;
 }

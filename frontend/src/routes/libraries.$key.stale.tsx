@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
@@ -55,7 +55,7 @@ function StalePage() {
   });
   const thisLibraryItemCount =
     librariesData?.libraries.find((l) => l.key === key)?.itemCount ?? 0;
-  const [params, setParams] = useState<StaleParams>({
+  const [params, setParamsRaw] = useState<StaleParams>({
     days: 365,
     filter: "all",
     sort: "fileSize",
@@ -63,6 +63,30 @@ function StalePage() {
     limit: PAGE_SIZE,
     offset: 0,
   });
+
+  // A page/sort/filter/grace-period change replaces the whole visible set with rows that
+  // weren't shown before, while deleting an item just removes it from the same set — only
+  // the latter should play the row exit fade. Defaults to `false` (plain keyed array, no
+  // AnimatePresence wrapper) because that's the common case — pagination/sort/filter — and
+  // it lets React swap old rows for new ones in a single synchronous commit with no exit
+  // animation lifecycle to race against the incoming rows. Without that, AnimatePresence
+  // kept the outgoing page's rows mounted until their exit animation's completion callback
+  // fired (which resolves a tick later, not synchronously) while the incoming page's rows
+  // mounted immediately, so both pages briefly coexisted in the tbody before the old ones
+  // were removed.
+  //
+  // Flipped to `true` only right before a same-page deletion (see deleteMutation below), and
+  // back to `false` by the *next* navigation rather than immediately once the delete settles
+  // — resetting it right away would force an unwanted extra remount of the very rows that
+  // just finished settling (every row's file-size bar replays its grow-in animation on
+  // mount, so a wrapper toggle with no actual key change is very visible). Since `setParams`
+  // is the single choke point for every navigation, resetting there means the flip is a
+  // total no-op (bails out, no re-render) on every navigation that doesn't follow a delete.
+  const [animateRowRemoval, setAnimateRowRemoval] = useState(false);
+  function setParams(updater: React.SetStateAction<StaleParams>) {
+    setAnimateRowRemoval(false);
+    setParamsRaw(updater);
+  }
 
   const {
     data,
@@ -81,6 +105,29 @@ function StalePage() {
     // library's own sync completes, so there's nothing to gain by hammering it.
     retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 2,
   });
+
+  // Warms the cache for the adjacent pages as soon as the current one settles, so that by
+  // the time someone actually clicks Previous/Next the data is already there — `goToOffset`
+  // then swaps rows synchronously instead of racing a live fetch against the smooth-scroll
+  // animation, which is what caused the row swap to visibly stutter mid-scroll.
+  useEffect(() => {
+    if (!data) return;
+    const offset = params.offset ?? 0;
+    const nextOffset = offset + PAGE_SIZE;
+    if (nextOffset < data.total) {
+      void qc.prefetchQuery({
+        queryKey: ["stale", key, { ...params, offset: nextOffset }],
+        queryFn: () => api.libraries.stale(key, { ...params, offset: nextOffset }),
+      });
+    }
+    const prevOffset = offset - PAGE_SIZE;
+    if (prevOffset >= 0) {
+      void qc.prefetchQuery({
+        queryKey: ["stale", key, { ...params, offset: prevOffset }],
+        queryFn: () => api.libraries.stale(key, { ...params, offset: prevOffset }),
+      });
+    }
+  }, [data, params, key, qc]);
 
   // Distinguishes "hasn't synced yet" (legitimate, resolves itself once sync reaches
   // this library) from a real failure, so the page can show the right one instead of
@@ -129,10 +176,37 @@ function StalePage() {
       });
       setDeleteResult(res);
       dialogRef.current?.close();
+      setAnimateRowRemoval(true);
       void qc.invalidateQueries({ queryKey: ["stale", key] });
       void qc.invalidateQueries({ queryKey: ["events"] });
     },
   });
+
+  // `<main>` (not the window) is the app's sole scroll container (see __root.tsx) — Previous
+  // and Next both jump to its top rather than one of them preserving scroll position, since
+  // the page below is entirely different content either direction; leaving Previous scrolled
+  // to the bottom would land the user mid-list on a page they haven't looked at yet.
+  //
+  // Fires the scroll and the param change together rather than sequencing one after the
+  // other (an earlier version waited for the scroll to visibly finish before swapping the
+  // page, to stop the row swap's reflow from cutting the in-flight smooth scroll short) —
+  // that relied on the `scrollend` event, which turned out not to fire reliably here, so it
+  // fell through to a fixed fallback delay every time, and swapping the page is expensive
+  // enough (~150-200ms to remount 50 rows) that doing it as a plain synchronous update still
+  // blocked the main thread and stalled the scroll animation right as it landed. `startTransition`
+  // marks the param/page update as low-priority so React can yield to the browser (and its
+  // in-progress scroll) between chunks of that work instead of blocking on it in one go.
+  function goToOffset(offset: number) {
+    const reducedMotion = globalThis.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    document
+      .querySelector(".scroll-area")
+      ?.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+    startTransition(() => {
+      setParams((p) => ({ ...p, offset }));
+    });
+  }
 
   function toggleOne(item: StaleItem) {
     setSelected((prev) => {
@@ -508,8 +582,33 @@ function StalePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <AnimatePresence>
-                    {data?.items.map((item, index) => (
+                  {animateRowRemoval ? (
+                    <AnimatePresence>
+                      {data?.items.map((item, index) => (
+                        <ItemRow
+                          key={item.ratingKey}
+                          item={item}
+                          index={index}
+                          animateIn={!hasAnimatedIn}
+                          maxFileSize={maxPageFileSize}
+                          selected={selected.has(item.ratingKey)}
+                          onToggle={() => toggleOne(item)}
+                          onDelete={() => openConfirm([item])}
+                          historyUnknown={data.historySyncedAt === null}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  ) : (
+                    // Plain keyed array, deliberately NOT wrapped in AnimatePresence: even
+                    // with a zero-duration exit variant, AnimatePresence keeps an outgoing
+                    // element mounted until its exit animation's completion callback fires
+                    // (which resolves a tick later, not synchronously), while incoming
+                    // elements mount immediately — so old and new rows still briefly coexist
+                    // in the tbody. A plain array lets React swap keys in one synchronous
+                    // commit with no exit lifecycle to wait on, which is what a page/sort/
+                    // filter navigation needs. See `animateRowRemoval` above for why this is
+                    // the default branch, only swapped out right before a deletion.
+                    data?.items.map((item, index) => (
                       <ItemRow
                         key={item.ratingKey}
                         item={item}
@@ -521,8 +620,8 @@ function StalePage() {
                         onDelete={() => openConfirm([item])}
                         historyUnknown={data.historySyncedAt === null}
                       />
-                    ))}
-                  </AnimatePresence>
+                    ))
+                  )}
                 </tbody>
               </table>
               {data?.items.length === 0 && (
@@ -561,9 +660,7 @@ function StalePage() {
                 type="button"
                 className="btn btn-sm"
                 disabled={page === 0}
-                onClick={() =>
-                  setParams((p) => ({ ...p, offset: (page - 1) * PAGE_SIZE }))
-                }
+                onClick={() => goToOffset((page - 1) * PAGE_SIZE)}
               >
                 Previous
               </button>
@@ -574,9 +671,7 @@ function StalePage() {
                 type="button"
                 className="btn btn-sm"
                 disabled={page >= totalPages - 1}
-                onClick={() =>
-                  setParams((p) => ({ ...p, offset: (page + 1) * PAGE_SIZE }))
-                }
+                onClick={() => goToOffset((page + 1) * PAGE_SIZE)}
               >
                 Next
               </button>
@@ -692,7 +787,9 @@ function SortTh({
   );
 }
 
-// `hidden`/`exit` play on delete (always) and, when `animateIn` is set, on first mount too.
+// `hidden`/`exit` play on delete (rows are only ever wrapped in AnimatePresence for a
+// same-page deletion — see `animateRowRemoval` above) and, when `animateIn` is set, on first
+// mount too.
 // Opacity-only, deliberately no `y` offset: a translateY here once caused the table's
 // `overflow-x-auto` wrapper to briefly grow its own vertical scrollbar mid-animation (it
 // implicitly computes `overflow-y: auto` from having `overflow-x: auto` set at all), which

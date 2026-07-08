@@ -38,7 +38,7 @@ function RootLayout() {
         </div>
       </nav>
       <main className="scroll-area flex-1 overflow-y-auto">
-        <div className="flex flex-col container mx-auto px-4 py-8 max-w-6xl">
+        <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
           <Outlet />
         </div>
       </main>
