@@ -1,10 +1,10 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: dark --default, night, dracula, light;
-}
-
-html {
-  scrollbar-gutter: stable;
+  themes:
+    dark --default,
+    night,
+    dracula,
+    light;
 }
 
 @theme {
@@ -17,13 +17,14 @@ html {
    before it calls startViewTransition(), from the click event that triggered the change. */
 @keyframes theme-reveal {
   from {
-    clip-path: circle(0% at var(--theme-reveal-x, 50%) var(--theme-reveal-y,
-      50%));
+    clip-path: circle(
+      0% at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%)
+    );
   }
   to {
     clip-path: circle(
       var(--theme-reveal-radius, 150%) at var(--theme-reveal-x, 50%)
-      var(--theme-reveal-y, 50%)
+        var(--theme-reveal-y, 50%)
     );
   }
 }

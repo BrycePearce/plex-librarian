@@ -1,0 +1,12 @@
+/* daisyUI's "scrollbar" base style already sets a theme-adaptive `scrollbar-color` on
+   :root (currentColor thumb, transparent track) — no override needed here.
+
+   The document itself no longer scrolls (see __root.tsx: <main> is the sole scroll
+   container) so the navbar, which lives outside <main>, always spans the full viewport
+   width. daisyUI's own `rootscrollgutter` base style only reserves a gutter on :root
+   while a modal/drawer backdrop is open, which doesn't cover this case — switching
+   between a short page and a long one under <main> — so `.scroll-area` fills that gap,
+   scoped to the pane that actually owns the scrollbar instead of the whole document. */
+.scroll-area {
+  scrollbar-gutter: stable;
+}

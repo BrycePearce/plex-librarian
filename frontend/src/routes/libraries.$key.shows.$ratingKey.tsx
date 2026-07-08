@@ -1,10 +1,11 @@
 import { createFileRoute, redirect, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ArrowLeft } from 'lucide-react'
-import { api } from '../lib/api'
+import { AlertCircle, AlertTriangle, ArrowLeft, RefreshCw } from 'lucide-react'
+import { api, isNotFoundError } from '../lib/api'
 import { formatKilobytes, formatDate, formatDuration } from '../lib/format'
 import type { Season } from '../lib/api'
 import { ShowDetailSkeleton } from '../components/Skeletons'
+import { useSyncHistory } from '../lib/useLibrarySync'
 
 export const Route = createFileRoute('/libraries/$key/shows/$ratingKey')({
   beforeLoad: async ({ context }) => {
@@ -21,10 +22,25 @@ export const Route = createFileRoute('/libraries/$key/shows/$ratingKey')({
 function ShowDetailPage() {
   const { key, ratingKey } = Route.useParams()
 
-  const { data, isLoading } = useQuery({
+  // A 404 for this show is only worth treating as "not synced yet" while a sync is
+  // plausibly still running or hasn't been checked yet — otherwise a genuinely deleted
+  // show or a stale/invalid link would poll forever on the same 404 a real "not found"
+  // would produce (the backend can't tell the two apart). No `useLibrarySync` on this
+  // page to invalidate us once a sync lands, so this falls back to the lightweight
+  // shared history query already used elsewhere just to know whether anything's running.
+  const { data: history, isLoading: isHistoryLoading } = useSyncHistory()
+  const anySyncPending = history?.some((h) => h.status === 'pending') ?? false
+  const syncMightResolveThis = anySyncPending || isHistoryLoading
+
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['show', key, ratingKey],
     queryFn: () => api.libraries.showDetail(key, ratingKey),
+    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 2,
+    refetchInterval: (query) =>
+      isNotFoundError(query.state.error) && syncMightResolveThis ? 4000 : false,
   })
+
+  const isNotFoundYet = isError && isNotFoundError(error) && syncMightResolveThis
 
   const show = data?.show
 
@@ -42,7 +58,37 @@ function ShowDetailPage() {
 
       {isLoading && <ShowDetailSkeleton />}
 
-      {data && (
+      {isNotFoundYet ? (
+        <div className="card bg-base-200 shadow-xl">
+          <div className="card-body items-center text-center gap-4 py-14">
+            <span className="loading loading-ring w-12 text-primary" />
+            <div>
+              <h2 className="card-title text-xl justify-center">
+                Not synced yet
+              </h2>
+              <p className="text-base-content/60 max-w-md">
+                This show hasn't shown up in a sync yet — it may still be
+                importing, or the link may be out of date. This page will
+                update automatically once it's available.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : isError ? (
+        <div className="alert alert-error">
+          <AlertCircle className="w-4 h-4" />
+          <span>
+            {error instanceof Error ? error.message : 'Failed to load show'}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs gap-1"
+            onClick={() => void refetch()}
+          >
+            <RefreshCw className="w-3 h-3" /> Try again
+          </button>
+        </div>
+      ) : data && (
         <>
           {data.historySyncedAt === null && (
             <div className="alert alert-warning">

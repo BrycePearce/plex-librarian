@@ -18,6 +18,7 @@ import {
   Film,
   HardDrive,
   Info,
+  Library as LibraryGlyph,
   Music,
   RefreshCw,
   Settings,
@@ -115,7 +116,7 @@ function DashboardInner() {
 
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
-  const { data: history } = useSyncHistory();
+  const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -144,6 +145,40 @@ function DashboardInner() {
   const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
   const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
 
+  // Whether this is a first sync is ambiguous until `history` has loaded (both signals
+  // below depend on it). Only holds up rendering while there's nothing real to show yet
+  // (no libraries, or none with items) — a returning user whose libraries already loaded
+  // shouldn't wait on history just to render their populated grid.
+  const hasAnyImportedItems = librariesData?.libraries.some((lib) =>
+    lib.itemCount > 0
+  ) ?? false;
+  const isCheckingFirstRun = librariesData !== undefined &&
+    !hasAnyImportedItems &&
+    isHistoryLoading;
+
+  // Whether *this server* has ever completed a successful sync before — the only signal
+  // that's stable regardless of how fast an individual library's own sync happens to
+  // finish. Checking current item counts instead (an earlier attempt at this) races
+  // against the very sync being checked: syncLibrary upserts a library's row before it
+  // starts fetching that library's items, and small/fast libraries (e.g. Music) can
+  // already have real synced items within the first second while much larger ones are
+  // still empty — so "does anything have items yet" can flip false→true well before the
+  // overall sync is anywhere close to done, prematurely leaving first-run mode. A
+  // server's `history` only gains a 'success' row once a *whole* sync run completes, so
+  // this stays accurate for the entire duration regardless of per-library speed.
+  const hasEverSyncedSuccessfully =
+    history?.some((h) => h.status === "success") ?? false;
+  // `history` is capped to the 10 most-recent sync_log rows, so a server that succeeded
+  // long ago but has had 10+ consecutive recent failures would otherwise read as
+  // "never synced" here. `hasAnyImportedItems` is cap-proof — real items in the DB are
+  // definitive proof this server has synced before, regardless of what recent history
+  // shows — so it's checked alongside `hasEverSyncedSuccessfully` rather than relying on
+  // the (bounded) history query alone.
+  const isFirstRun = librariesData !== undefined &&
+    !hasAnyImportedItems &&
+    !hasEverSyncedSuccessfully &&
+    isAnySyncing;
+
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
     if (!globalSyncDone && globalSyncError === null) return;
@@ -167,7 +202,11 @@ function DashboardInner() {
         <div>
           <h1 className="text-2xl font-bold">Libraries</h1>
           <p className="text-base-content/50 text-sm mt-1">
-            {librariesData ? `${librariesData.total} libraries` : "—"}
+            {!libsLoading && !isCheckingFirstRun && librariesData
+              ? isFirstRun
+                ? "First sync in progress…"
+                : `${librariesData.total} libraries`
+              : "—"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -190,26 +229,10 @@ function DashboardInner() {
       </div>
 
       {libsLoading && <StatsStripSkeleton />}
-      {librariesData && librariesData.libraries.length > 0 && (
+      {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
         <StatsStrip libraries={librariesData.libraries} />
       )}
 
-      <AnimatePresence>
-        {(activeGlobalSyncId !== null || triggerSync.isPending) && (
-          <motion.div
-            key="sync-progress"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ type: "spring", stiffness: 300, damping: 28 }}
-          >
-            <SyncProgressPanel
-              progress={globalSyncProgress ?? undefined}
-              done={globalSyncDone}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
       {globalSyncError !== null && (
         <div className="alert alert-error">
           <AlertCircle className="w-4 h-4" />
@@ -223,92 +246,130 @@ function DashboardInner() {
         </div>
       )}
 
-      {libsLoading && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
-            <LibraryCardSkeleton key={i} />
-          ))}
-        </div>
-      )}
       {libsError && (
         <div className="alert alert-error">
           <AlertCircle className="w-4 h-4" />
           <span>Failed to load libraries</span>
         </div>
       )}
-      {librariesData && (
+
+      {/* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
+          progress, so showing this panel too would be a duplicate. It stays visible
+          while isCheckingFirstRun, since that state has no progress display of its own. */}
+      {!isFirstRun && (
+        <AnimatePresence>
+          {(activeGlobalSyncId !== null || triggerSync.isPending) && (
+            <motion.div
+              key="sync-progress"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ type: "spring", stiffness: 300, damping: 28 }}
+            >
+              <SyncProgressPanel
+                progress={globalSyncProgress ?? undefined}
+                done={globalSyncDone}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
+
+      {libsLoading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
+            <LibraryCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : isCheckingFirstRun ? (
+        // Neutral spinner rather than a content-shaped skeleton: we already know
+        // there's nothing with items yet, just not yet whether that means "first sync
+        // in progress" or "genuinely empty" — a grid of card skeletons would wrongly
+        // imply libraries are about to appear right before it flips to the first-run
+        // hero instead.
+        <div className="flex justify-center py-16">
+          <span className="loading loading-ring w-10 text-primary" />
+        </div>
+      ) : isFirstRun ? (
+        <FirstRunHero progress={globalSyncProgress ?? undefined} />
+      ) : (
         <>
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="show"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-          >
-            {(showAllLibraries
-              ? librariesData.libraries
-              : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT)).map((
-                lib,
-              ) => (
-                <LibraryCard
-                  key={lib.key}
-                  lib={lib}
-                  globalSyncing={isSyncing}
-                />
-              ))}
-          </motion.div>
-          {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm gap-1"
-                onClick={() => setShowAllLibraries((v) => !v)}
+          {librariesData && (
+            <>
+              <motion.div
+                variants={containerVariants}
+                initial="hidden"
+                animate="show"
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
               >
-                <ChevronDown
-                  className={`w-4 h-4 transition-transform ${
-                    showAllLibraries ? "rotate-180" : ""
-                  }`}
-                />
-                {showAllLibraries
-                  ? "Show fewer"
-                  : `Show ${
-                    librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
-                  } more`}
-              </button>
+                {(showAllLibraries
+                  ? librariesData.libraries
+                  : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT))
+                  .map((
+                    lib,
+                  ) => (
+                    <LibraryCard
+                      key={lib.key}
+                      lib={lib}
+                      globalSyncing={isSyncing}
+                    />
+                  ))}
+              </motion.div>
+              {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm gap-1"
+                    onClick={() => setShowAllLibraries((v) => !v)}
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 transition-transform ${
+                        showAllLibraries ? "rotate-180" : ""
+                      }`}
+                    />
+                    {showAllLibraries
+                      ? "Show fewer"
+                      : `Show ${
+                        librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
+                      } more`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {history && history.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-lg font-semibold">Recent syncs</h2>
+              <div className="overflow-x-auto">
+                <table className="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Library</th>
+                      <th>Started</th>
+                      <th>Duration</th>
+                      <th>Items</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((s) => (
+                      <SyncRow
+                        key={s.id}
+                        sync={s}
+                        libraryTitle={s.libraryKey
+                          ? (librariesData?.libraries.find(
+                            (l) => l.key === s.libraryKey,
+                          )?.title ?? s.libraryKey)
+                          : null}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
-      )}
-
-      {history && history.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Recent syncs</h2>
-          <div className="overflow-x-auto">
-            <table className="table table-sm">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Library</th>
-                  <th>Started</th>
-                  <th>Duration</th>
-                  <th>Items</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((s) => (
-                  <SyncRow
-                    key={s.id}
-                    sync={s}
-                    libraryTitle={s.libraryKey
-                      ? (librariesData?.libraries.find(
-                        (l) => l.key === s.libraryKey,
-                      )?.title ?? s.libraryKey)
-                      : null}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -459,6 +520,48 @@ function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
         </span>
       )}
     </div>
+  );
+}
+
+function FirstRunHero({ progress }: { progress?: LibrarySyncProgress[] }) {
+  const totalItems = progress?.reduce((sum, l) => sum + l.count, 0) ?? 0;
+  const animatedTotal = useCountUp(totalItems, 800);
+  const doneCount = progress?.filter((l) => l.phase === "done").length ?? 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 260, damping: 26 }}
+      className="card bg-base-200 shadow-xl"
+    >
+      <div className="card-body items-center text-center gap-6 py-14">
+        <div className="w-14 h-14 rounded-2xl bg-primary/15 text-primary flex items-center justify-center">
+          <LibraryGlyph className="w-7 h-7" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <h2 className="card-title text-2xl justify-center">
+            Importing your libraries
+          </h2>
+          <p className="text-base-content/60 max-w-md">
+            This first sync pulls everything from Plex, so it can take a few
+            minutes on large libraries.
+          </p>
+        </div>
+
+        {progress?.length ? (
+          <div className="w-full max-w-sm flex flex-col gap-2.5 text-left">
+            {progress.map((lib) => <LibraryProgressRow key={lib.key} lib={lib} />)}
+            <div className="text-xs text-base-content/40 text-center pt-1">
+              {doneCount} of {progress.length} libraries done ·{" "}
+              {animatedTotal.toLocaleString()} items so far
+            </div>
+          </div>
+        ) : (
+          <span className="loading loading-ring w-12 text-primary" />
+        )}
+      </div>
+    </motion.div>
   );
 }
 

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   ArrowDown,
@@ -12,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api } from "../lib/api";
+import { api, isNotFoundError } from "../lib/api";
 import type {
   DeleteItemsResponse,
   StaleParams,
@@ -22,6 +23,7 @@ import type {
 import { formatKilobytes, formatDate } from "../lib/format";
 import { useLibrarySync } from "../lib/useLibrarySync";
 import { StaleTableSkeleton } from "../components/Skeletons";
+import "./libraries.$key.stale.css";
 
 export const Route = createFileRoute("/libraries/$key/stale")({
   beforeLoad: async ({ context }) => {
@@ -42,6 +44,17 @@ function StalePage() {
   const qc = useQueryClient();
   const { isSyncing, isSyncStatusLoading, trigger, isError, error } =
     useLibrarySync(key);
+  // Reuses the dashboard's shared `['libraries']` cache (no extra request if it's already
+  // populated) to get this library's real total item count — `data.total` below is the
+  // *filtered* stale count, and `historySyncedAt` resets to null on every sync attempt,
+  // not just the first, so neither can distinguish "never synced" from "just resyncing
+  // an already-populated library with nothing currently stale."
+  const { data: librariesData } = useQuery({
+    queryKey: ["libraries"],
+    queryFn: () => api.libraries.list(),
+  });
+  const thisLibraryItemCount =
+    librariesData?.libraries.find((l) => l.key === key)?.itemCount ?? 0;
   const [params, setParams] = useState<StaleParams>({
     days: 365,
     filter: "all",
@@ -51,11 +64,34 @@ function StalePage() {
     offset: 0,
   });
 
-  const { data, isLoading, isFetching } = useQuery({
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isError: isStaleError,
+    error: staleError,
+    refetch: refetchStale,
+  } = useQuery({
     queryKey: ["stale", key, params],
     queryFn: () => api.libraries.stale(key, params),
     placeholderData: (prev) => prev,
+    // A 404 here means this library hasn't been synced even once yet (still queued
+    // behind others in the current sync) — retrying won't make the row appear any
+    // faster, and `useLibrarySync` below already invalidates this query once the
+    // library's own sync completes, so there's nothing to gain by hammering it.
+    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 2,
   });
+
+  // Distinguishes "hasn't synced yet" (legitimate, resolves itself once sync reaches
+  // this library) from a real failure, so the page can show the right one instead of
+  // crashing on `data?.items.map` with `data` undefined or spinning a skeleton forever.
+  // Also requires a sync to plausibly still be running: the backend returns the same 404
+  // for "not synced yet" and "library was deleted from Plex" / "no active server", so
+  // without this a permanently-gone library would show "will resolve automatically"
+  // forever instead of the real error.
+  const isNotSyncedYet = isStaleError &&
+    isNotFoundError(staleError) &&
+    (isSyncing || isSyncStatusLoading);
 
   // Rows stagger in on the very first successful load only — re-enabling this on every
   // sort/filter/page change (rather than a plain `initial={false}`) would restagger the
@@ -174,312 +210,379 @@ function StalePage() {
     }));
   }
 
+  const showFilters = !isNotSyncedYet && !isStaleError;
+
   return (
     <div className={`space-y-6 ${selected.size > 0 ? "pb-20" : ""}`}>
-      <div className="flex items-center gap-4">
-        <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold">Stale Items</h1>
-          <p className="text-base-content/50 text-sm">
-            {data ? (
-              <>
-                {data.total.toLocaleString()} items ·{" "}
-                {formatKilobytes(pageFileSize(data.items))} on this page
-              </>
-            ) : (
-              <span className="skeleton inline-block h-3 w-40 align-middle" />
-            )}
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <button
-            type="button"
-            className="btn btn-sm gap-2"
-            onClick={trigger}
-            disabled={isSyncing}
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
-            />
-            {isSyncing ? "Syncing…" : "Sync"}
-          </button>
-          {isError && (
-            <span className="text-xs text-error">
-              {error instanceof Error ? error.message : "Sync failed"}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {data &&
-        data.historySyncedAt === null &&
-        (isSyncing ? (
-          <div className="alert alert-info alert-soft py-2 text-sm">
-            <RefreshCw className="w-4 h-4 animate-spin" />
-            <span>
-              Watch-history sync is running — "unknown" items may update once
-              it finishes.
-            </span>
+      {/* Sticky (not the table) per explicit preference: the back/title/sync row and the
+          filter controls pin to the top of <main>'s scroll as you scroll past them, while
+          the table scrolls away normally underneath — no bounded/independently-scrolling
+          table box. */}
+      <div className="sticky top-0 z-20 bg-base-100 -mx-4 px-4 pt-2 pb-4 space-y-4 border-b border-base-300">
+        <div className="flex items-center gap-4">
+          <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
+            <ArrowLeft className="w-4 h-4" /> Back
+          </Link>
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold">Stale Items</h1>
+            <p className="text-base-content/50 text-sm">
+              {data ? (
+                <>
+                  {data.total.toLocaleString()} items ·{" "}
+                  {formatKilobytes(pageFileSize(data.items))} on this page
+                </>
+              ) : isNotSyncedYet ? (
+                "Not synced yet"
+              ) : (
+                <span className="skeleton inline-block h-3 w-40 align-middle" />
+              )}
+            </p>
           </div>
-        ) : isSyncStatusLoading ? null : (
-          <div className="alert alert-warning">
-            <AlertTriangle className="w-4 h-4" />
-            <span>
-              Watch-history sync hasn't completed for this library yet, so
-              items showing{" "}
-              <span className="badge badge-outline badge-sm align-middle">
-                unknown
-              </span>{" "}
-              below may actually have been watched — the "never watched" data
-              isn't reliable until a sync finishes. Avoid deleting based on
-              watch status until this clears.
-            </span>
-          </div>
-        ))}
-
-      <div className="flex flex-wrap gap-3">
-        <label className="form-control gap-1">
-          <span className="label-text text-xs">Not viewed in</span>
-          <select
-            className="select select-bordered select-sm"
-            value={params.days}
-            onChange={(e) =>
-              setParams((p) => ({
-                ...p,
-                days: Number(e.target.value),
-                offset: 0,
-              }))
-            }
-          >
-            <option value={90}>3 months</option>
-            <option value={180}>6 months</option>
-            <option value={365}>1 year</option>
-            <option value={730}>2 years</option>
-            <option value={1095}>3 years</option>
-          </select>
-        </label>
-        <label className="form-control gap-1">
-          <span className="label-text text-xs">Filter</span>
-          <select
-            className="select select-bordered select-sm"
-            value={params.filter}
-            onChange={(e) =>
-              setParams((p) => ({
-                ...p,
-                filter: e.target.value as StaleParams["filter"],
-                offset: 0,
-              }))
-            }
-          >
-            <option value="all">All</option>
-            <option value="watched">Watched</option>
-            <option value="unwatched">Unwatched</option>
-          </select>
-        </label>
-        <label className="form-control gap-1">
-          <span className="label-text text-xs">New item grace period</span>
-          <select
-            className="select select-bordered select-sm"
-            value={gracePeriodValue}
-            onChange={(e) => setGracePeriod(e.target.value)}
-          >
-            <option value="default">
-              {gracePeriodValue === "default" && data
-                ? `Default (${data.minAgeDays} days)`
-                : "Default"}
-            </option>
-            <option value={0}>No grace period</option>
-            <option value={30}>30 days</option>
-            <option value={60}>60 days</option>
-            <option value={90}>90 days</option>
-            <option value={180}>180 days</option>
-            <option value={365}>1 year</option>
-          </select>
-        </label>
-      </div>
-
-      {deleteResult && (
-        <div
-          className={`alert ${deleteResult.failed.length > 0 ? "alert-warning" : "alert-success"}`}
-        >
-          <span>
-            Deleted {deleteResult.deleted.length} item
-            {deleteResult.deleted.length === 1 ? "" : "s"}.
-            {deleteResult.failed.length > 0 && (
-              <>
-                {" "}
-                {deleteResult.failed.length} failed:{" "}
-                {deleteResult.failed.map((f) => f.error).join("; ")}
-              </>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              className="btn btn-sm gap-2"
+              onClick={trigger}
+              disabled={isSyncing}
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+              />
+              {isSyncing ? "Syncing…" : "Sync"}
+            </button>
+            {isError && (
+              <span className="text-xs text-error">
+                {error instanceof Error ? error.message : "Sync failed"}
+              </span>
             )}
-          </span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            onClick={() => setDeleteResult(null)}
-          >
-            <X className="w-3 h-3" />
-          </button>
+          </div>
         </div>
-      )}
 
-      <AnimatePresence>
-        {selected.size > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 40 }}
-            transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
-          >
-            <span>
-              {selected.size} item{selected.size === 1 ? "" : "s"} selected ·{" "}
-              {formatKilobytes(selectedTotalSize)}
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => setSelected(new Map())}
+        {showFilters && (
+          <div className="flex flex-wrap gap-3">
+            <label className="form-control gap-1">
+              <span className="label-text text-xs">Not viewed in</span>
+              <select
+                className="select select-bordered select-sm"
+                value={params.days}
+                onChange={(e) =>
+                  setParams((p) => ({
+                    ...p,
+                    days: Number(e.target.value),
+                    offset: 0,
+                  }))
+                }
               >
-                Clear
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-error gap-2"
-                onClick={() => openConfirm(selectedItems)}
+                <option value={90}>3 months</option>
+                <option value={180}>6 months</option>
+                <option value={365}>1 year</option>
+                <option value={730}>2 years</option>
+                <option value={1095}>3 years</option>
+              </select>
+            </label>
+            <label className="form-control gap-1">
+              <span className="label-text text-xs">Filter</span>
+              <select
+                className="select select-bordered select-sm"
+                value={params.filter}
+                onChange={(e) =>
+                  setParams((p) => ({
+                    ...p,
+                    filter: e.target.value as StaleParams["filter"],
+                    offset: 0,
+                  }))
+                }
               >
-                <Trash2 className="w-4 h-4" /> Delete selected
-              </button>
-            </div>
-          </motion.div>
+                <option value="all">All</option>
+                <option value="watched">Watched</option>
+                <option value="unwatched">Unwatched</option>
+              </select>
+            </label>
+            <label className="form-control gap-1">
+              <span className="label-text text-xs">New item grace period</span>
+              <select
+                className="select select-bordered select-sm"
+                value={gracePeriodValue}
+                onChange={(e) => setGracePeriod(e.target.value)}
+              >
+                <option value="default">
+                  {gracePeriodValue === "default" && data
+                    ? `Default (${data.minAgeDays} days)`
+                    : "Default"}
+                </option>
+                <option value={0}>No grace period</option>
+                <option value={30}>30 days</option>
+                <option value={60}>60 days</option>
+                <option value={90}>90 days</option>
+                <option value={180}>180 days</option>
+                <option value={365}>1 year</option>
+              </select>
+            </label>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
 
-      {isLoading ? (
-        <StaleTableSkeleton />
-      ) : (
-        <div className="overflow-x-auto">
-          <progress
-            className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
-              isFetching ? "opacity-100" : "opacity-0"
-            }`}
-          />
-          <table className="table table-sm table-fixed overflow-hidden">
-            <colgroup>
-              <col className="w-8" />
-              <col />
-              <col className="w-24" />
-              <col className="w-32" />
-              <col className="w-32" />
-              <col className="w-16" />
-              <col className="w-10" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-sm"
-                    checked={allOnPageSelected}
-                    ref={(el) => {
-                      if (el)
-                        el.indeterminate =
-                          !allOnPageSelected && someOnPageSelected;
-                    }}
-                    onChange={toggleAllOnPage}
-                    aria-label="Select all on this page"
-                  />
-                </th>
-                <SortTh
-                  label="Title"
-                  field="title"
-                  params={params}
-                  onSort={setSort}
-                />
-                <SortTh
-                  label="Size"
-                  field="fileSize"
-                  params={params}
-                  onSort={setSort}
-                />
-                <SortTh
-                  label="Last viewed"
-                  field="lastViewedAt"
-                  params={params}
-                  onSort={setSort}
-                />
-                <SortTh
-                  label="Added"
-                  field="addedAt"
-                  params={params}
-                  onSort={setSort}
-                />
-                <SortTh
-                  label="Plays"
-                  field="viewCount"
-                  params={params}
-                  onSort={setSort}
-                />
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              <AnimatePresence>
-                {data?.items.map((item, index) => (
-                  <ItemRow
-                    key={item.ratingKey}
-                    item={item}
-                    index={index}
-                    animateIn={!hasAnimatedIn}
-                    maxFileSize={maxPageFileSize}
-                    selected={selected.has(item.ratingKey)}
-                    onToggle={() => toggleOne(item)}
-                    onDelete={() => openConfirm([item])}
-                    historyUnknown={data.historySyncedAt === null}
-                  />
-                ))}
-              </AnimatePresence>
-            </tbody>
-          </table>
-          {data?.items.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-20 text-base-content/40">
-              <Sparkles className="w-8 h-8" />
-              <p className="font-medium text-base-content/60">All caught up</p>
-              <p className="text-sm">No stale items match these filters.</p>
+      {isNotSyncedYet ? (
+        <div className="card bg-base-200 shadow-xl">
+          <div className="card-body items-center text-center gap-4 py-14">
+            <span className="loading loading-ring w-12 text-primary" />
+            <div>
+              <h2 className="card-title text-xl justify-center">
+                This library hasn't synced yet
+              </h2>
+              <p className="text-base-content/60 max-w-md">
+                It's still queued behind other libraries in the current sync
+                — this page will pick it up automatically once it's ready.
+              </p>
             </div>
-          )}
+          </div>
         </div>
-      )}
-
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-2">
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={page === 0}
-            onClick={() =>
-              setParams((p) => ({ ...p, offset: (page - 1) * PAGE_SIZE }))
-            }
-          >
-            Previous
-          </button>
-          <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
-            {page + 1} / {totalPages}
+      ) : isStaleError ? (
+        <div className="alert alert-error">
+          <AlertCircle className="w-4 h-4" />
+          <span>
+            {staleError instanceof Error
+              ? staleError.message
+              : "Failed to load stale items"}
           </span>
           <button
             type="button"
-            className="btn btn-sm"
-            disabled={page >= totalPages - 1}
-            onClick={() =>
-              setParams((p) => ({ ...p, offset: (page + 1) * PAGE_SIZE }))
-            }
+            className="btn btn-ghost btn-xs gap-1"
+            onClick={() => void refetchStale()}
           >
-            Next
+            <RefreshCw className="w-3 h-3" /> Try again
           </button>
         </div>
+      ) : (
+        <>
+          {data &&
+            data.historySyncedAt === null &&
+            (isSyncing ? (
+              <div className="alert alert-info alert-soft py-2 text-sm banner-beam banner-beam-info">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>
+                  Watch-history sync is running — "unknown" items may update
+                  once it finishes.
+                </span>
+              </div>
+            ) : isSyncStatusLoading ? null : (
+              <div className="alert alert-warning banner-beam banner-beam-warning">
+                <AlertTriangle className="w-4 h-4" />
+                <span>
+                  Watch-history sync hasn't completed for this library yet, so
+                  items showing{" "}
+                  <span className="badge badge-outline badge-sm align-middle">
+                    unknown
+                  </span>{" "}
+                  below may actually have been watched — the "never watched"
+                  data isn't reliable until a sync finishes. Avoid deleting
+                  based on watch status until this clears.
+                </span>
+              </div>
+            ))}
+
+          {deleteResult && (
+            <div
+              className={`alert ${deleteResult.failed.length > 0 ? "alert-warning" : "alert-success"}`}
+            >
+              <span>
+                Deleted {deleteResult.deleted.length} item
+                {deleteResult.deleted.length === 1 ? "" : "s"}.
+                {deleteResult.failed.length > 0 && (
+                  <>
+                    {" "}
+                    {deleteResult.failed.length} failed:{" "}
+                    {deleteResult.failed.map((f) => f.error).join("; ")}
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => setDeleteResult(null)}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
+          <AnimatePresence>
+            {selected.size > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 40 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 40 }}
+                transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
+              >
+                <span>
+                  {selected.size} item{selected.size === 1 ? "" : "s"}{" "}
+                  selected · {formatKilobytes(selectedTotalSize)}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setSelected(new Map())}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-error gap-2"
+                    onClick={() => openConfirm(selectedItems)}
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete selected
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {isLoading ? (
+            <StaleTableSkeleton />
+          ) : (
+            <div className="overflow-x-auto">
+              <progress
+                className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
+                  isFetching ? "opacity-100" : "opacity-0"
+                }`}
+              />
+              <table className="table table-sm table-fixed overflow-hidden">
+                <colgroup>
+                  <col className="w-8" />
+                  <col />
+                  <col className="w-24" />
+                  <col className="w-32" />
+                  <col className="w-32" />
+                  <col className="w-16" />
+                  <col className="w-10" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={allOnPageSelected}
+                        ref={(el) => {
+                          if (el)
+                            el.indeterminate =
+                              !allOnPageSelected && someOnPageSelected;
+                        }}
+                        onChange={toggleAllOnPage}
+                        aria-label="Select all on this page"
+                      />
+                    </th>
+                    <SortTh
+                      label="Title"
+                      field="title"
+                      params={params}
+                      onSort={setSort}
+                    />
+                    <SortTh
+                      label="Size"
+                      field="fileSize"
+                      params={params}
+                      onSort={setSort}
+                    />
+                    <SortTh
+                      label="Last viewed"
+                      field="lastViewedAt"
+                      params={params}
+                      onSort={setSort}
+                    />
+                    <SortTh
+                      label="Added"
+                      field="addedAt"
+                      params={params}
+                      onSort={setSort}
+                    />
+                    <SortTh
+                      label="Plays"
+                      field="viewCount"
+                      params={params}
+                      onSort={setSort}
+                    />
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  <AnimatePresence>
+                    {data?.items.map((item, index) => (
+                      <ItemRow
+                        key={item.ratingKey}
+                        item={item}
+                        index={index}
+                        animateIn={!hasAnimatedIn}
+                        maxFileSize={maxPageFileSize}
+                        selected={selected.has(item.ratingKey)}
+                        onToggle={() => toggleOne(item)}
+                        onDelete={() => openConfirm([item])}
+                        historyUnknown={data.historySyncedAt === null}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </tbody>
+              </table>
+              {data?.items.length === 0 && (
+                <div className="flex flex-col items-center gap-2 py-20 text-base-content/40">
+                  {isSyncing && thisLibraryItemCount === 0
+                    ? (
+                      <>
+                        <span className="loading loading-spinner loading-md" />
+                        <p className="font-medium text-base-content/60">
+                          Still importing this library
+                        </p>
+                        <p className="text-sm">
+                          Items will show up here once the sync finishes.
+                        </p>
+                      </>
+                    )
+                    : (
+                      <>
+                        <Sparkles className="w-8 h-8" />
+                        <p className="font-medium text-base-content/60">
+                          All caught up
+                        </p>
+                        <p className="text-sm">
+                          No stale items match these filters.
+                        </p>
+                      </>
+                    )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {totalPages > 1 && (
+            <div className="flex justify-center gap-2">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={page === 0}
+                onClick={() =>
+                  setParams((p) => ({ ...p, offset: (page - 1) * PAGE_SIZE }))
+                }
+              >
+                Previous
+              </button>
+              <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
+                {page + 1} / {totalPages}
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={page >= totalPages - 1}
+                onClick={() =>
+                  setParams((p) => ({ ...p, offset: (page + 1) * PAGE_SIZE }))
+                }
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       <dialog ref={dialogRef} className="modal" onClose={closeConfirm}>
@@ -608,6 +711,22 @@ const rowVariants = {
   },
 };
 
+// A relative "how overdue" scale for the whole displayed set, not an absolute judgment —
+// every row here already failed the "not viewed in" filter, so this is about which of the
+// already-stale rows are the most stale, the same way the size bar is relative to the
+// page's own max rather than some fixed byte threshold.
+const DAY_SEC = 86_400;
+function staleDotInfo(lastViewedAt: number): { className: string; title: string } {
+  const daysSince = (Date.now() / 1000 - lastViewedAt) / DAY_SEC;
+  if (daysSince > 730) {
+    return { className: "bg-error", title: "Not viewed in over 2 years" };
+  }
+  if (daysSince > 365) {
+    return { className: "bg-warning", title: "Not viewed in over 1 year" };
+  }
+  return { className: "bg-success", title: "Viewed within the last year" };
+}
+
 function ItemRow({
   item,
   index,
@@ -645,6 +764,8 @@ function ItemRow({
       ? Math.max(4, (item.fileSize / maxFileSize) * 100)
       : 0;
 
+  const dotInfo = item.lastViewedAt ? staleDotInfo(item.lastViewedAt) : null;
+
   return (
     <motion.tr
       variants={rowVariants}
@@ -660,56 +781,83 @@ function ItemRow({
             }
           : undefined
       }
-      className="hover group"
+      className={`row-hover group cursor-pointer ${selected ? "row-selected" : ""}`}
+      onClick={onToggle}
     >
-      <td>
+      <td
+        className={`row-accent ${selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""}`}
+      >
         <input
           type="checkbox"
           className="checkbox checkbox-sm"
           checked={selected}
           onChange={onToggle}
+          onClick={(e) => e.stopPropagation()}
           aria-label={`Select ${item.title}`}
         />
       </td>
-      <td>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300">
-            {thumbUrl && (
-              <img
-                src={thumbUrl}
-                alt=""
-                className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
-                loading="lazy"
-              />
-            )}
+      <td className="row-accent">
+        {item.type === "show" ? (
+          <Link
+            to="/libraries/$key/shows/$ratingKey"
+            params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
+            onClick={(e) => e.stopPropagation()}
+            className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
+          >
+            <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover/poster:shadow-lg group-hover/poster:ring-2 group-hover/poster:ring-primary/40">
+              {thumbUrl && (
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
+                  loading="lazy"
+                />
+              )}
+            </div>
+            {titleEl}
+          </Link>
+        ) : (
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover:shadow-lg group-hover:ring-2 group-hover:ring-primary/40">
+              {thumbUrl && (
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
+                  loading="lazy"
+                />
+              )}
+            </div>
+            {titleEl}
           </div>
-          {item.type === "show" ? (
-            <Link
-              to="/libraries/$key/shows/$ratingKey"
-              params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
-              className="hover:text-primary transition-colors min-w-0"
-            >
-              {titleEl}
-            </Link>
-          ) : (
-            titleEl
-          )}
-        </div>
+        )}
       </td>
-      <td className="text-sm font-mono truncate relative overflow-hidden">
+      <td className="row-accent text-sm font-mono truncate relative overflow-hidden">
         {item.fileSize != null && (
-          <div
+          <motion.div
             className="absolute inset-y-1.5 left-0 bg-primary/15 rounded-sm"
-            style={{ width: `${sizePct}%` }}
+            initial={{ width: 0 }}
+            animate={{ width: `${sizePct}%` }}
+            transition={{
+              duration: 0.5,
+              ease: "easeOut",
+              delay: animateIn ? Math.min(index, 12) * 0.02 : 0,
+            }}
           />
         )}
         <span className="relative">
           {item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
         </span>
       </td>
-      <td className="text-sm text-base-content/70 truncate">
-        {item.lastViewedAt ? (
-          formatDate(item.lastViewedAt)
+      <td className="row-accent text-sm text-base-content/70 truncate">
+        {item.lastViewedAt && dotInfo ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotInfo.className}`}
+              title={dotInfo.title}
+            />
+            {formatDate(item.lastViewedAt)}
+          </span>
         ) : historyUnknown ? (
           <span
             className="badge badge-warning badge-outline badge-sm"
@@ -718,18 +866,25 @@ function ItemRow({
             unknown
           </span>
         ) : (
-          <span className="badge badge-outline badge-sm">never</span>
+          <span className="badge badge-error badge-outline badge-sm">
+            never
+          </span>
         )}
       </td>
-      <td className="text-sm text-base-content/70 truncate">
+      <td className="row-accent text-sm text-base-content/70 truncate">
         {item.addedAt ? formatDate(item.addedAt) : "—"}
       </td>
-      <td className="text-sm font-mono truncate">{item.viewCount ?? 0}</td>
-      <td className="overflow-hidden">
+      <td className="row-accent text-sm font-mono truncate">
+        {item.viewCount ?? 0}
+      </td>
+      <td className="row-accent overflow-hidden">
         <motion.button
           type="button"
           className={`btn btn-ghost btn-xs btn-square text-error ${selected ? "" : "pointer-events-none"}`}
-          onClick={onDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
           aria-label={`Delete ${item.title}`}
           title="Delete this item"
           tabIndex={selected ? 0 : -1}

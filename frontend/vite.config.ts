@@ -4,6 +4,12 @@ import tailwindcss from '@tailwindcss/vite'
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import { resolve } from 'node:path'
 
+// This config runs under `deno run -A npm:vite` (see frontend/deno.json), so the real
+// `Deno` global is always present at runtime — but frontend/ is outside the Deno LSP's
+// `deno.enablePaths` (.vscode/settings.json), so the editor's plain-TS view of this file
+// doesn't know about it without this narrow ambient declaration.
+declare const Deno: { build: { os: string } }
+
 export default defineConfig({
   plugins: [
     TanStackRouterVite({
@@ -29,6 +35,14 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+    },
+    // Deno's Node-compat `fs.watch` shim on Windows can't resolve paths through its
+    // symlinked node_modules (from workspace `nodeModulesDir: "auto"`), which crashes
+    // Vite's native watcher with "Input watch path is neither a file nor a directory".
+    // Polling sidesteps the native watcher entirely at the cost of a bit more CPU — scoped
+    // to Windows since native fs events work fine elsewhere and polling isn't free.
+    watch: {
+      usePolling: Deno.build.os === 'windows',
     },
   },
 })

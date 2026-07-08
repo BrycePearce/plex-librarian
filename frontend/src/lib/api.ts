@@ -55,6 +55,20 @@ export interface StaleParams {
 
 const BASE = '/api'
 
+// Carries the HTTP status alongside the message so callers can distinguish, e.g., a 404
+// for "this row doesn't exist yet" (a legitimate not-yet-synced state) from a real failure.
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+export function isNotFoundError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 404
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
@@ -63,7 +77,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string }
     const message = body.error ?? res.statusText
-    throw new Error(message.charAt(0).toUpperCase() + message.slice(1))
+    throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1))
   }
   return res.json() as Promise<T>
 }
@@ -142,9 +156,23 @@ export const api = {
 }
 
 // Connecting, switching, or disconnecting the active server points every server-scoped
-// query — libraries, sync history, stale lists, show detail — at a different dataset.
-// Without a full invalidation, react-query's default staleTime keeps serving whatever
-// the previously-active server's data was cached as until it happens to expire.
+// query — libraries, sync history, stale lists, show detail, activity events — at a
+// different dataset. `invalidateQueries` alone marks them stale and refetches in the
+// background, but still renders whatever the previously-active server's data was cached
+// as in the meantime — on a client-side nav (no full page reload) straight to /dashboard
+// right after this, that means the *old* server's populated library grid flashes on
+// screen before the new server's fresh (often empty, first-sync) data lands.
+// `resetQueries` clears the cached data back to unfetched instead, so anything reading it
+// renders a genuine loading state rather than stale content — but only for these roots.
+// An unfiltered `resetQueries()` would reset every query in the app (e.g. `['auth',
+// 'status']`, which callers usually just refetched a line earlier), forcing pointless
+// extra fetches and a visible flash back to loading state for data that has nothing to
+// do with the active server.
+const SERVER_SCOPED_QUERY_ROOTS = ['libraries', 'sync', 'stale', 'show', 'events']
+
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
-  return qc.invalidateQueries()
+  return qc.resetQueries({
+    predicate: (query) =>
+      SERVER_SCOPED_QUERY_ROOTS.includes(query.queryKey[0] as string),
+  })
 }

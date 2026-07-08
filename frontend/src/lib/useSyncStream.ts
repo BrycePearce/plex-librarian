@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 import { api } from './api'
 import type { LibraryPhase, LibrarySyncProgress } from './api'
 
@@ -196,13 +196,21 @@ function subscribe(syncId: number, onStoreChange: () => void): () => void {
 }
 
 export function useSyncStream(syncId: number | null): SyncStreamResult {
-  const subscribeFn = (onStoreChange: () => void) => {
+  // useSyncExternalStore re-subscribes (tearing down and recreating the subscription)
+  // whenever `subscribe`'s identity changes between renders — unlike most values, this
+  // isn't covered by the Compiler's usual auto-memoization. Without a stable identity
+  // here, every state update from the stream itself (emit -> re-render -> new closure)
+  // would tear down and reopen the underlying EventSource, which then emits more events
+  // and repeats — a reconnect storm. Confirmed by removing these and watching it happen.
+  const subscribeFn = useCallback((onStoreChange: () => void) => {
     if (syncId === null) return () => {}
     return subscribe(syncId, onStoreChange)
-  }
+  }, [syncId])
 
-  const getSnapshotFn = () =>
-    syncId === null ? EMPTY_STATE : getSnapshot(syncId)
+  const getSnapshotFn = useCallback(
+    () => (syncId === null ? EMPTY_STATE : getSnapshot(syncId)),
+    [syncId],
+  )
 
   return useSyncExternalStore(subscribeFn, getSnapshotFn)
 }

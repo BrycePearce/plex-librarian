@@ -73,6 +73,20 @@ function SetupPage() {
     onSuccess: async () => {
       await qc.refetchQueries({ queryKey: ["auth", "status"] });
       await invalidateServerScopedQueries(qc);
+      // Prefetch the dashboard's own queries against the newly-connected server before
+      // navigating, so they're already resolved by the time it mounts — otherwise the
+      // dashboard can't tell, before its own fetches land, whether this is a returning
+      // user's populated grid or a brand-new server with nothing synced yet.
+      await Promise.all([
+        qc.prefetchQuery({
+          queryKey: ["libraries"],
+          queryFn: () => api.libraries.list(),
+        }),
+        qc.prefetchQuery({
+          queryKey: ["sync", "history"],
+          queryFn: () => api.sync.history(10),
+        }),
+      ]);
       void navigate({ to: "/dashboard" });
     },
   });
@@ -162,6 +176,13 @@ function SetupPage() {
               {servers.map((server) => {
                 const bestConn = server.connections[0];
                 if (!bestConn) return null;
+                // Choosing a server blocks server-side on both connecting to Plex and
+                // kicking off the initial sync before it responds — worth its own
+                // per-button spinner rather than just a disabled state, since on a slow
+                // connection that round trip can take a noticeable moment.
+                const isConnecting = chooseServer.isPending &&
+                  chooseServer.variables?.server.machineIdentifier ===
+                    server.machineIdentifier;
                 return (
                   <button
                     type="button"
@@ -172,19 +193,21 @@ function SetupPage() {
                     }
                     disabled={chooseServer.isPending}
                   >
-                    <Server className="w-5 h-5 shrink-0" />
+                    {isConnecting
+                      ? <span className="loading loading-spinner w-5 h-5 shrink-0" />
+                      : <Server className="w-5 h-5 shrink-0" />}
                     <div className="text-left min-w-0">
                       <div className="font-semibold">{server.name}</div>
                       <div className="text-xs text-base-content/50 truncate">
-                        {bestConn.uri}
+                        {isConnecting ? "Connecting…" : bestConn.uri}
                       </div>
                     </div>
-                    {bestConn.local && (
+                    {!isConnecting && bestConn.local && (
                       <span className="badge badge-success badge-sm ml-auto shrink-0">
                         local
                       </span>
                     )}
-                    {!bestConn.local && bestConn.relay && (
+                    {!isConnecting && !bestConn.local && bestConn.relay && (
                       <span className="badge badge-warning badge-sm ml-auto shrink-0">
                         relay
                       </span>
