@@ -1,6 +1,7 @@
 import { createFileRoute, redirect, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { startTransition, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
@@ -187,24 +188,34 @@ function StalePage() {
   // the page below is entirely different content either direction; leaving Previous scrolled
   // to the bottom would land the user mid-list on a page they haven't looked at yet.
   //
-  // Fires the scroll and the param change together rather than sequencing one after the
-  // other (an earlier version waited for the scroll to visibly finish before swapping the
-  // page, to stop the row swap's reflow from cutting the in-flight smooth scroll short) —
-  // that relied on the `scrollend` event, which turned out not to fire reliably here, so it
-  // fell through to a fixed fallback delay every time, and swapping the page is expensive
-  // enough (~150-200ms to remount 50 rows) that doing it as a plain synchronous update still
-  // blocked the main thread and stalled the scroll animation right as it landed. `startTransition`
-  // marks the param/page update as low-priority so React can yield to the browser (and its
-  // in-progress scroll) between chunks of that work instead of blocking on it in one go.
+  // Commits the row swap (flushSync) *before* starting the scroll animation, rather than
+  // firing both together — a page swap isn't just a possible height change (a partial last
+  // page), it's ~50 rows worth of file-size bars each animating `width` from 0 on mount, which
+  // forces a layout recalculation every frame for ~500ms. Any of that landing mid-flight can
+  // clamp or visibly stutter an in-progress smooth scroll, and prefetching (see the effect
+  // above) means the swap is fast enough now to land inside the scroll's window far more often
+  // than it used to when it trailed a network fetch. Settling the DOM first means the scroll
+  // animation starts on a page that's already done reflowing, so there's nothing left to fight
+  // it. An earlier version tried the opposite ordering (wait for the scroll to finish, *then*
+  // swap) via the `scrollend` event, which didn't fire reliably here — sequencing the other way
+  // with `flushSync` sidesteps that without needing an event at all.
+  //
+  // The scroll itself is deferred one more frame past that (`requestAnimationFrame`) because
+  // `flushSync` only guarantees the DOM commit, not that the browser has painted/rasterized it
+  // yet — starting the scroll in the same tick could composite into rows that don't have
+  // painted tiles ready, which briefly showed as a black flash. Waiting a frame lets that paint
+  // happen first.
   function goToOffset(offset: number) {
     const reducedMotion = globalThis.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-    document
-      .querySelector(".scroll-area")
-      ?.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
-    startTransition(() => {
+    flushSync(() => {
       setParams((p) => ({ ...p, offset }));
+    });
+    requestAnimationFrame(() => {
+      document
+        .querySelector(".scroll-area")
+        ?.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
     });
   }
 
