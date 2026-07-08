@@ -6,12 +6,17 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, AlertTriangle, ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { api, isNotFoundError } from "../lib/api";
 import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
 import type { Season } from "../lib/api";
 import { ShowDetailSkeleton } from "../components/Skeletons";
+import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
+import { ErrorAlert } from "../components/ErrorAlert";
+import { HistorySyncWarning } from "../components/HistorySyncWarning";
+import { PosterThumb } from "../components/PosterThumb";
 import { useSyncHistory } from "../lib/useLibrarySync";
+import { useNotSyncedYet } from "../lib/useNotSyncedYet";
 
 export const Route = createFileRoute("/libraries/$key/shows/$ratingKey")({
   beforeLoad: async ({ context }) => {
@@ -53,8 +58,7 @@ function ShowDetailPage() {
       isNotFoundError(query.state.error) && syncMightResolveThis ? 4000 : false,
   });
 
-  const isNotFoundYet = isError && isNotFoundError(error) &&
-    syncMightResolveThis;
+  const isNotFoundYet = useNotSyncedYet(isError, error, syncMightResolveThis);
 
   const show = data?.show;
 
@@ -92,64 +96,41 @@ function ShowDetailPage() {
 
       {isNotFoundYet
         ? (
-          <div className="card bg-base-200 shadow-xl">
-            <div className="card-body items-center text-center gap-4 py-14">
-              <span className="loading loading-ring w-12 text-primary" />
-              <div>
-                <h2 className="card-title text-xl justify-center">
-                  Not synced yet
-                </h2>
-                <p className="text-base-content/60 max-w-md">
-                  This show hasn't shown up in a sync yet — it may still be
-                  importing, or the link may be out of date. This page will
-                  update automatically once it's available.
-                </p>
-              </div>
-            </div>
-          </div>
+          <NotSyncedYetCard
+            title="Not synced yet"
+            message="This show hasn't shown up in a sync yet — it may still be importing, or the link may be out of date. This page will update automatically once it's available."
+          />
         )
         : isError
         ? (
-          <div className="alert alert-error">
-            <AlertCircle className="w-4 h-4" />
-            <span>
-              {error instanceof Error ? error.message : "Failed to load show"}
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs gap-1"
-              onClick={() => void refetch()}
-            >
-              <RefreshCw className="w-3 h-3" /> Try again
-            </button>
-          </div>
+          <ErrorAlert
+            message={error instanceof Error
+              ? error.message
+              : "Failed to load show"}
+            onRetry={() => void refetch()}
+          />
         )
         : data && (
           <>
-            {data.historySyncedAt === null && (
-              <div className="alert alert-warning">
-                <AlertTriangle className="w-4 h-4" />
-                <span>
+            <HistorySyncWarning
+              historySyncedAt={data.historySyncedAt}
+              warningMessage={
+                <>
                   Watch-history sync hasn't completed for this library yet —
                   "Last viewed" below may show Unknown even if this show has
                   been watched. Avoid deleting based on watch status until this
                   clears.
-                </span>
-              </div>
-            )}
+                </>
+              }
+            />
 
             <div className="flex gap-6 items-start">
-              {show?.thumb
-                ? (
-                  <img
-                    src={`/api/proxy/thumb?path=${
-                      encodeURIComponent(show.thumb)
-                    }&width=120&height=180`}
-                    alt=""
-                    className="w-24 h-36 object-cover rounded bg-base-300 shrink-0"
-                  />
-                )
-                : <div className="w-24 h-36 rounded bg-base-300 shrink-0" />}
+              <PosterThumb
+                thumb={show?.thumb ?? null}
+                width={120}
+                height={180}
+                className="w-24 h-36"
+              />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
                 <Stat
                   label="Total size"

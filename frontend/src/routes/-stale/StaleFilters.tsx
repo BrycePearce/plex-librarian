@@ -1,0 +1,71 @@
+import type { StaleParams } from "../../lib/api";
+
+export function StaleFilters({
+  days,
+  filter,
+  onDaysChange,
+  onFilterChange,
+  gracePeriodValue,
+  defaultGraceDays,
+  onGracePeriodChange,
+}: {
+  days: number;
+  filter: StaleParams["filter"];
+  onDaysChange: (days: number) => void;
+  onFilterChange: (filter: StaleParams["filter"]) => void;
+  gracePeriodValue: string;
+  defaultGraceDays?: number;
+  onGracePeriodChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-3">
+      <label className="form-control gap-1">
+        <span className="label-text text-xs">Not viewed in</span>
+        <select
+          className="select select-bordered select-sm"
+          value={days}
+          onChange={(e) => onDaysChange(Number(e.target.value))}
+        >
+          <option value={90}>3 months</option>
+          <option value={180}>6 months</option>
+          <option value={365}>1 year</option>
+          <option value={730}>2 years</option>
+          <option value={1095}>3 years</option>
+        </select>
+      </label>
+      <label className="form-control gap-1">
+        <span className="label-text text-xs">Filter</span>
+        <select
+          className="select select-bordered select-sm"
+          value={filter}
+          onChange={(e) =>
+            onFilterChange(e.target.value as StaleParams["filter"])}
+        >
+          <option value="all">All</option>
+          <option value="watched">Watched</option>
+          <option value="unwatched">Unwatched</option>
+        </select>
+      </label>
+      <label className="form-control gap-1">
+        <span className="label-text text-xs">New item grace period</span>
+        <select
+          className="select select-bordered select-sm"
+          value={gracePeriodValue}
+          onChange={(e) => onGracePeriodChange(e.target.value)}
+        >
+          <option value="default">
+            {gracePeriodValue === "default" && defaultGraceDays != null
+              ? `Default (${defaultGraceDays} days)`
+              : "Default"}
+          </option>
+          <option value={0}>No grace period</option>
+          <option value={30}>30 days</option>
+          <option value={60}>60 days</option>
+          <option value={90}>90 days</option>
+          <option value={180}>180 days</option>
+          <option value={365}>1 year</option>
+        </select>
+      </label>
+    </div>
+  );
+}
