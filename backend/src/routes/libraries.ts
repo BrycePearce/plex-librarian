@@ -22,6 +22,7 @@ import { type ActiveServerVariables, withActiveServerId } from '../middleware/ac
 import type {
   DeleteItemsResponse,
   LibrariesResponse,
+  MovieDetail,
   ShowDetail,
   StaleResponse,
 } from '@plex-librarian/shared/types.ts';
@@ -360,6 +361,34 @@ router.get('/:key/shows/:ratingKey', async (c) => {
       seasons: showSeasons,
       historySyncedAt: library?.historySyncedAt ?? null,
     } satisfies ShowDetail,
+  );
+});
+
+router.get('/:key/movies/:ratingKey', async (c) => {
+  const key = c.req.param('key');
+  const ratingKey = c.req.param('ratingKey');
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'movie not found' }, 404);
+
+  const [[movie], [library]] = await Promise.all([
+    db
+      .select()
+      .from(items)
+      .where(and(itemByRatingKey(serverId, ratingKey), eq(items.libraryKey, key)))
+      .limit(1),
+    db.select({ historySyncedAt: libraries.historySyncedAt })
+      .from(libraries)
+      .where(libraryByKey(serverId, key))
+      .limit(1),
+  ]);
+  if (!movie) return c.json({ error: 'movie not found' }, 404);
+
+  return c.json(
+    {
+      movie,
+      historySyncedAt: library?.historySyncedAt ?? null,
+    } satisfies MovieDetail,
   );
 });
 

@@ -9,6 +9,7 @@ import type {
   LibrariesResponse,
   StaleResponse,
   ShowDetail,
+  MovieDetail,
   Settings,
   SyncLog,
   SyncTriggerResponse,
@@ -30,6 +31,7 @@ export type {
   StaleResponse,
   Season,
   ShowDetail,
+  MovieDetail,
   Settings,
   SyncLog,
   SyncTriggerResponse,
@@ -115,6 +117,8 @@ export const api = {
     },
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(`/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(ratingKey)}`),
+    movieDetail: (key: string, ratingKey: string) =>
+      apiFetch<MovieDetail>(`/libraries/${encodeURIComponent(key)}/movies/${encodeURIComponent(ratingKey)}`),
     updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
         method: 'PATCH',

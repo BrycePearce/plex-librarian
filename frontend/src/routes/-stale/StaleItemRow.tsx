@@ -111,10 +111,12 @@ export function StaleItemRow({
         />
       </td>
       <td className="row-accent">
-        {item.type === "show"
+        {item.type === "show" || item.type === "movie"
           ? (
             <Link
-              to="/libraries/$key/shows/$ratingKey"
+              to={item.type === "show"
+                ? "/libraries/$key/shows/$ratingKey"
+                : "/libraries/$key/movies/$ratingKey"}
               params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
               onClick={(e) => e.stopPropagation()}
               className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"

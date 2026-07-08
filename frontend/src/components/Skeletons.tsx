@@ -161,3 +161,19 @@ export function ShowDetailSkeleton() {
     </>
   );
 }
+
+export function MovieDetailSkeleton() {
+  return (
+    <div className="flex gap-6 items-start">
+      <div className="skeleton w-24 h-36 rounded shrink-0" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3 flex-1">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="space-y-2">
+            <div className="skeleton h-3 w-16" />
+            <div className="skeleton h-4 w-10" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

@@ -118,6 +118,13 @@ export interface ShowDetail {
   historySyncedAt: number | null
 }
 
+// --- Movie detail ---
+
+export interface MovieDetail {
+  movie: StaleItem
+  historySyncedAt: number | null
+}
+
 // --- Item deletion ---
 
 export interface DeleteItemsRequest {

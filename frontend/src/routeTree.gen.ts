@@ -16,6 +16,7 @@ import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
 import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
+import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey'
 
 const SetupRoute = SetupRouteImport.update({
   id: '/setup',
@@ -53,6 +54,12 @@ const LibrariesKeyShowsRatingKeyRoute =
     path: '/libraries/$key/shows/$ratingKey',
     getParentRoute: () => rootRouteImport,
   } as any)
+const LibrariesKeyMoviesRatingKeyRoute =
+  LibrariesKeyMoviesRatingKeyRouteImport.update({
+    id: '/libraries/$key/movies/$ratingKey',
+    path: '/libraries/$key/movies/$ratingKey',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +68,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRoutesByTo {
@@ -70,6 +78,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRoutesById {
@@ -80,6 +89,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
+  '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
 }
 export interface FileRouteTypes {
@@ -91,6 +101,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
+    | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -100,6 +111,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
+    | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
   id:
     | '__root__'
@@ -109,6 +121,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
+    | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
   fileRoutesById: FileRoutesById
 }
@@ -119,6 +132,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
+  LibrariesKeyMoviesRatingKeyRoute: typeof LibrariesKeyMoviesRatingKeyRoute
   LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
 }
 
@@ -173,6 +187,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibrariesKeyShowsRatingKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/libraries/$key/movies/$ratingKey': {
+      id: '/libraries/$key/movies/$ratingKey'
+      path: '/libraries/$key/movies/$ratingKey'
+      fullPath: '/libraries/$key/movies/$ratingKey'
+      preLoaderRoute: typeof LibrariesKeyMoviesRatingKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +204,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
+  LibrariesKeyMoviesRatingKeyRoute: LibrariesKeyMoviesRatingKeyRoute,
   LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,
 }
 export const routeTree = rootRouteImport
