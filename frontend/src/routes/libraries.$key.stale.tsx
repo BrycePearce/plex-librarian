@@ -1,13 +1,17 @@
-import { createFileRoute, redirect, Link } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  createFileRoute,
+  Link,
+  redirect,
+  stripSearchParams,
+} from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   RefreshCw,
   Sparkles,
@@ -17,16 +21,70 @@ import {
 import { api, isNotFoundError } from "../lib/api";
 import type {
   DeleteItemsResponse,
-  StaleParams,
-  StaleItem,
   SortKey,
+  StaleItem,
+  StaleParams,
 } from "../lib/api";
-import { formatKilobytes, formatDate } from "../lib/format";
+import { formatDate, formatKilobytes } from "../lib/format";
 import { useLibrarySync } from "../lib/useLibrarySync";
 import { StaleTableSkeleton } from "../components/Skeletons";
 import "./libraries.$key.stale.css";
 
+const PAGE_SIZE = 50;
+
+const SORT_KEYS: SortKey[] = [
+  "fileSize",
+  "lastViewedAt",
+  "addedAt",
+  "title",
+  "year",
+  "viewCount",
+];
+const FILTERS = ["all", "watched", "unwatched"] as const;
+
+// Applied both as the useState-style initializer for a fresh visit and as the set of keys
+// `stripSearchParams` omits from the URL when the current value matches — so a default view
+// stays at the bare `/stale` path instead of accumulating `?days=365&filter=all&...` on every
+// load, while any control the user actually changes shows up in the URL (and survives a
+// refresh or the browser Back button).
+const staleSearchDefaults = {
+  days: 365,
+  filter: "all",
+  sort: "fileSize",
+  order: "desc",
+  offset: 0,
+} satisfies Partial<StaleParams>;
+
+// Hand-rolled rather than a zod/valibot schema (no such dependency exists in this frontend) —
+// malformed or garbage search params (bad `?sort=`, negative `?offset=`) fall back to defaults
+// instead of throwing. `limit` is deliberately never read from the URL: pagination math
+// elsewhere (`page`/`totalPages`) assumes it's always exactly `PAGE_SIZE`.
+function validateStaleSearch(search: Record<string, unknown>): StaleParams {
+  const days = Number(search.days);
+  const offset = Number(search.offset);
+  const minAgeDays = Number(search.minAgeDays);
+  return {
+    days: Number.isFinite(days) && days > 0 ? days : staleSearchDefaults.days,
+    filter: (FILTERS as readonly string[]).includes(search.filter as string)
+      ? (search.filter as StaleParams["filter"])
+      : staleSearchDefaults.filter,
+    sort: SORT_KEYS.includes(search.sort as SortKey)
+      ? (search.sort as SortKey)
+      : staleSearchDefaults.sort,
+    order: search.order === "asc" ? "asc" : staleSearchDefaults.order,
+    offset: Number.isFinite(offset) && offset >= 0
+      ? Math.floor(offset)
+      : staleSearchDefaults.offset,
+    limit: PAGE_SIZE,
+    ...(Number.isFinite(minAgeDays) && minAgeDays >= 0 ? { minAgeDays } : {}),
+  };
+}
+
 export const Route = createFileRoute("/libraries/$key/stale")({
+  validateSearch: validateStaleSearch,
+  search: {
+    middlewares: [stripSearchParams(staleSearchDefaults)],
+  },
   beforeLoad: async ({ context }) => {
     const status = await context.queryClient.ensureQueryData({
       queryKey: ["auth", "status"],
@@ -37,8 +95,6 @@ export const Route = createFileRoute("/libraries/$key/stale")({
   },
   component: StalePage,
 });
-
-const PAGE_SIZE = 50;
 
 function StalePage() {
   const { key } = Route.useParams();
@@ -56,14 +112,8 @@ function StalePage() {
   });
   const thisLibraryItemCount =
     librariesData?.libraries.find((l) => l.key === key)?.itemCount ?? 0;
-  const [params, setParamsRaw] = useState<StaleParams>({
-    days: 365,
-    filter: "all",
-    sort: "fileSize",
-    order: "desc",
-    limit: PAGE_SIZE,
-    offset: 0,
-  });
+  const params = Route.useSearch();
+  const navigate = Route.useNavigate();
 
   // A page/sort/filter/grace-period change replaces the whole visible set with rows that
   // weren't shown before, while deleting an item just removes it from the same set — only
@@ -84,9 +134,9 @@ function StalePage() {
   // is the single choke point for every navigation, resetting there means the flip is a
   // total no-op (bails out, no re-render) on every navigation that doesn't follow a delete.
   const [animateRowRemoval, setAnimateRowRemoval] = useState(false);
-  function setParams(updater: React.SetStateAction<StaleParams>) {
+  function setParams(updater: (prev: StaleParams) => StaleParams) {
     setAnimateRowRemoval(false);
-    setParamsRaw(updater);
+    void navigate({ search: updater, replace: true });
   }
 
   const {
@@ -118,14 +168,16 @@ function StalePage() {
     if (nextOffset < data.total) {
       void qc.prefetchQuery({
         queryKey: ["stale", key, { ...params, offset: nextOffset }],
-        queryFn: () => api.libraries.stale(key, { ...params, offset: nextOffset }),
+        queryFn: () =>
+          api.libraries.stale(key, { ...params, offset: nextOffset }),
       });
     }
     const prevOffset = offset - PAGE_SIZE;
     if (prevOffset >= 0) {
       void qc.prefetchQuery({
         queryKey: ["stale", key, { ...params, offset: prevOffset }],
-        queryFn: () => api.libraries.stale(key, { ...params, offset: prevOffset }),
+        queryFn: () =>
+          api.libraries.stale(key, { ...params, offset: prevOffset }),
       });
     }
   }, [data, params, key, qc]);
@@ -188,36 +240,40 @@ function StalePage() {
   // the page below is entirely different content either direction; leaving Previous scrolled
   // to the bottom would land the user mid-list on a page they haven't looked at yet.
   //
-  // Commits the row swap (flushSync) *before* starting the scroll animation, rather than
-  // firing both together — a page swap isn't just a possible height change (a partial last
-  // page), it's ~50 rows worth of file-size bars each animating `width` from 0 on mount, which
-  // forces a layout recalculation every frame for ~500ms. Any of that landing mid-flight can
-  // clamp or visibly stutter an in-progress smooth scroll, and prefetching (see the effect
-  // above) means the swap is fast enough now to land inside the scroll's window far more often
-  // than it used to when it trailed a network fetch. Settling the DOM first means the scroll
-  // animation starts on a page that's already done reflowing, so there's nothing left to fight
-  // it. An earlier version tried the opposite ordering (wait for the scroll to finish, *then*
-  // swap) via the `scrollend` event, which didn't fire reliably here — sequencing the other way
-  // with `flushSync` sidesteps that without needing an event at all.
+  // The scroll only starts once React has actually committed a render reflecting the new
+  // offset — tracked via this ref rather than assuming `setParams` (now a router `navigate`)
+  // applies synchronously, which it doesn't reliably do: navigation is async internally, so a
+  // `flushSync` wrapped around it (the previous approach, back when this was a plain
+  // `setState`) would silently do nothing and let the scroll race a mid-flight DOM change. A
+  // page swap isn't just a possible height change (a partial last page), it's ~50 rows worth of
+  // file-size bars each animating `width` from 0 on mount, which forces a layout recalculation
+  // every frame for ~500ms — any of that landing mid-flight can clamp or visibly stutter an
+  // in-progress smooth scroll. Keying off the committed `params.offset` instead means the
+  // effect can't fire until the DOM has already settled, no matter how the update was
+  // scheduled internally.
   //
-  // The scroll itself is deferred one more frame past that (`requestAnimationFrame`) because
-  // `flushSync` only guarantees the DOM commit, not that the browser has painted/rasterized it
-  // yet — starting the scroll in the same tick could composite into rows that don't have
-  // painted tiles ready, which briefly showed as a black flash. Waiting a frame lets that paint
-  // happen first.
+  // The scroll itself is deferred one more frame (`requestAnimationFrame`) past that commit
+  // because a commit only guarantees the DOM update, not that the browser has painted/
+  // rasterized it yet — starting the scroll in the same tick could composite into rows that
+  // don't have painted tiles ready, which briefly showed as a black flash. Waiting a frame lets
+  // that paint happen first.
+  const scrollTargetRef = useRef<number | null>(null);
   function goToOffset(offset: number) {
+    scrollTargetRef.current = offset;
+    setParams((p) => ({ ...p, offset }));
+  }
+  useEffect(() => {
+    if (scrollTargetRef.current !== params.offset) return;
+    scrollTargetRef.current = null;
     const reducedMotion = globalThis.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-    flushSync(() => {
-      setParams((p) => ({ ...p, offset }));
-    });
     requestAnimationFrame(() => {
       document
         .querySelector(".scroll-area")
         ?.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
     });
-  }
+  }, [params.offset]);
 
   function toggleOne(item: StaleItem) {
     setSelected((prev) => {
@@ -230,8 +286,8 @@ function StalePage() {
 
   const pageItems = data?.items ?? [];
   const maxPageFileSize = Math.max(1, ...pageItems.map((i) => i.fileSize ?? 0));
-  const allOnPageSelected =
-    pageItems.length > 0 && pageItems.every((i) => selected.has(i.ratingKey));
+  const allOnPageSelected = pageItems.length > 0 &&
+    pageItems.every((i) => selected.has(i.ratingKey));
   const someOnPageSelected = pageItems.some((i) => selected.has(i.ratingKey));
 
   function toggleAllOnPage() {
@@ -276,12 +332,11 @@ function StalePage() {
     updateGracePeriod.mutate(staleMinAgeDays);
   }
 
-  const gracePeriodValue =
-    params.minAgeDays !== undefined
-      ? String(params.minAgeDays)
-      : data?.libraryStaleMinAgeDays != null
-        ? String(data.libraryStaleMinAgeDays)
-        : "default";
+  const gracePeriodValue = params.minAgeDays !== undefined
+    ? String(params.minAgeDays)
+    : data?.libraryStaleMinAgeDays != null
+    ? String(data.libraryStaleMinAgeDays)
+    : "default";
 
   const page = Math.floor((params.offset ?? 0) / PAGE_SIZE);
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
@@ -299,10 +354,12 @@ function StalePage() {
 
   return (
     <div className={`space-y-6 ${selected.size > 0 ? "pb-20" : ""}`}>
-      {/* Sticky (not the table) per explicit preference: the back/title/sync row and the
+      {
+        /* Sticky (not the table) per explicit preference: the back/title/sync row and the
           filter controls pin to the top of <main>'s scroll as you scroll past them, while
           the table scrolls away normally underneath — no bounded/independently-scrolling
-          table box. */}
+          table box. */
+      }
       <div className="sticky top-0 z-20 bg-base-100 -mx-4 px-4 pt-2 pb-4 space-y-4 border-b border-base-300">
         <div className="flex items-center gap-4">
           <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
@@ -311,16 +368,20 @@ function StalePage() {
           <div className="flex-1">
             <h1 className="text-2xl font-bold">Stale Items</h1>
             <p className="text-base-content/50 text-sm">
-              {data ? (
-                <>
-                  {data.total.toLocaleString()} items ·{" "}
-                  {formatKilobytes(pageFileSize(data.items))} on this page
-                </>
-              ) : isNotSyncedYet ? (
-                "Not synced yet"
-              ) : (
-                <span className="skeleton inline-block h-3 w-40 align-middle" />
-              )}
+              {data
+                ? (
+                  <>
+                    {data.total.toLocaleString()} items ·{" "}
+                    {formatKilobytes(pageFileSize(data.items))} on this page
+                  </>
+                )
+                : isNotSyncedYet
+                ? (
+                  "Not synced yet"
+                )
+                : (
+                  <span className="skeleton inline-block h-3 w-40 align-middle" />
+                )}
             </p>
           </div>
           <div className="flex flex-col items-end gap-1">
@@ -355,8 +416,7 @@ function StalePage() {
                     ...p,
                     days: Number(e.target.value),
                     offset: 0,
-                  }))
-                }
+                  }))}
               >
                 <option value={90}>3 months</option>
                 <option value={180}>6 months</option>
@@ -375,8 +435,7 @@ function StalePage() {
                     ...p,
                     filter: e.target.value as StaleParams["filter"],
                     offset: 0,
-                  }))
-                }
+                  }))}
               >
                 <option value="all">All</option>
                 <option value="watched">Watched</option>
@@ -407,289 +466,304 @@ function StalePage() {
         )}
       </div>
 
-      {isNotSyncedYet ? (
-        <div className="card bg-base-200 shadow-xl">
-          <div className="card-body items-center text-center gap-4 py-14">
-            <span className="loading loading-ring w-12 text-primary" />
-            <div>
-              <h2 className="card-title text-xl justify-center">
-                This library hasn't synced yet
-              </h2>
-              <p className="text-base-content/60 max-w-md">
-                It's still queued behind other libraries in the current sync
-                — this page will pick it up automatically once it's ready.
-              </p>
+      {isNotSyncedYet
+        ? (
+          <div className="card bg-base-200 shadow-xl">
+            <div className="card-body items-center text-center gap-4 py-14">
+              <span className="loading loading-ring w-12 text-primary" />
+              <div>
+                <h2 className="card-title text-xl justify-center">
+                  This library hasn't synced yet
+                </h2>
+                <p className="text-base-content/60 max-w-md">
+                  It's still queued behind other libraries in the current sync —
+                  this page will pick it up automatically once it's ready.
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      ) : isStaleError ? (
-        <div className="alert alert-error">
-          <AlertCircle className="w-4 h-4" />
-          <span>
-            {staleError instanceof Error
-              ? staleError.message
-              : "Failed to load stale items"}
-          </span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs gap-1"
-            onClick={() => void refetchStale()}
-          >
-            <RefreshCw className="w-3 h-3" /> Try again
-          </button>
-        </div>
-      ) : (
-        <>
-          {data &&
-            data.historySyncedAt === null &&
-            (isSyncing ? (
-              <div className="alert alert-info alert-soft py-2 text-sm banner-beam banner-beam-info">
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>
-                  Watch-history sync is running — "unknown" items may update
-                  once it finishes.
-                </span>
-              </div>
-            ) : isSyncStatusLoading ? null : (
-              <div className="alert alert-warning banner-beam banner-beam-warning">
-                <AlertTriangle className="w-4 h-4" />
-                <span>
-                  Watch-history sync hasn't completed for this library yet, so
-                  items showing{" "}
-                  <span className="badge badge-outline badge-sm align-middle">
-                    unknown
-                  </span>{" "}
-                  below may actually have been watched — the "never watched"
-                  data isn't reliable until a sync finishes. Avoid deleting
-                  based on watch status until this clears.
-                </span>
-              </div>
-            ))}
-
-          {deleteResult && (
-            <div
-              className={`alert ${deleteResult.failed.length > 0 ? "alert-warning" : "alert-success"}`}
+        )
+        : isStaleError
+        ? (
+          <div className="alert alert-error">
+            <AlertCircle className="w-4 h-4" />
+            <span>
+              {staleError instanceof Error
+                ? staleError.message
+                : "Failed to load stale items"}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs gap-1"
+              onClick={() => void refetchStale()}
             >
-              <span>
-                Deleted {deleteResult.deleted.length} item
-                {deleteResult.deleted.length === 1 ? "" : "s"}.
-                {deleteResult.failed.length > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.failed.length} failed:{" "}
-                    {deleteResult.failed.map((f) => f.error).join("; ")}
-                  </>
-                )}
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() => setDeleteResult(null)}
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          )}
+              <RefreshCw className="w-3 h-3" /> Try again
+            </button>
+          </div>
+        )
+        : (
+          <>
+            {data &&
+              data.historySyncedAt === null &&
+              (isSyncing
+                ? (
+                  <div className="alert alert-info alert-soft py-2 text-sm banner-beam banner-beam-info">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>
+                      Watch-history sync is running — "unknown" items may update
+                      once it finishes.
+                    </span>
+                  </div>
+                )
+                : isSyncStatusLoading
+                ? null
+                : (
+                  <div className="alert alert-warning banner-beam banner-beam-warning">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>
+                      Watch-history sync hasn't completed for this library yet,
+                      so items showing{" "}
+                      <span className="badge badge-outline badge-sm align-middle">
+                        unknown
+                      </span>{" "}
+                      below may actually have been watched — the "never watched"
+                      data isn't reliable until a sync finishes. Avoid deleting
+                      based on watch status until this clears.
+                    </span>
+                  </div>
+                ))}
 
-          <AnimatePresence>
-            {selected.size > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 40 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 40 }}
-                transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
+            {deleteResult && (
+              <div
+                className={`alert ${
+                  deleteResult.failed.length > 0
+                    ? "alert-warning"
+                    : "alert-success"
+                }`}
               >
                 <span>
-                  {selected.size} item{selected.size === 1 ? "" : "s"}{" "}
-                  selected · {formatKilobytes(selectedTotalSize)}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-ghost"
-                    onClick={() => setSelected(new Map())}
-                  >
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-error gap-2"
-                    onClick={() => openConfirm(selectedItems)}
-                  >
-                    <Trash2 className="w-4 h-4" /> Delete selected
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {isLoading ? (
-            <StaleTableSkeleton />
-          ) : (
-            <div className="overflow-x-auto">
-              <progress
-                className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
-                  isFetching ? "opacity-100" : "opacity-0"
-                }`}
-              />
-              <table className="table table-sm table-fixed overflow-hidden">
-                <colgroup>
-                  <col className="w-8" />
-                  <col />
-                  <col className="w-24" />
-                  <col className="w-32" />
-                  <col className="w-32" />
-                  <col className="w-16" />
-                  <col className="w-10" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm"
-                        checked={allOnPageSelected}
-                        ref={(el) => {
-                          if (el)
-                            el.indeterminate =
-                              !allOnPageSelected && someOnPageSelected;
-                        }}
-                        onChange={toggleAllOnPage}
-                        aria-label="Select all on this page"
-                      />
-                    </th>
-                    <SortTh
-                      label="Title"
-                      field="title"
-                      params={params}
-                      onSort={setSort}
-                    />
-                    <SortTh
-                      label="Size"
-                      field="fileSize"
-                      params={params}
-                      onSort={setSort}
-                    />
-                    <SortTh
-                      label="Last viewed"
-                      field="lastViewedAt"
-                      params={params}
-                      onSort={setSort}
-                    />
-                    <SortTh
-                      label="Added"
-                      field="addedAt"
-                      params={params}
-                      onSort={setSort}
-                    />
-                    <SortTh
-                      label="Plays"
-                      field="viewCount"
-                      params={params}
-                      onSort={setSort}
-                    />
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {animateRowRemoval ? (
-                    <AnimatePresence>
-                      {data?.items.map((item, index) => (
-                        <ItemRow
-                          key={item.ratingKey}
-                          item={item}
-                          index={index}
-                          animateIn={!hasAnimatedIn}
-                          maxFileSize={maxPageFileSize}
-                          selected={selected.has(item.ratingKey)}
-                          onToggle={() => toggleOne(item)}
-                          onDelete={() => openConfirm([item])}
-                          historyUnknown={data.historySyncedAt === null}
-                        />
-                      ))}
-                    </AnimatePresence>
-                  ) : (
-                    // Plain keyed array, deliberately NOT wrapped in AnimatePresence: even
-                    // with a zero-duration exit variant, AnimatePresence keeps an outgoing
-                    // element mounted until its exit animation's completion callback fires
-                    // (which resolves a tick later, not synchronously), while incoming
-                    // elements mount immediately — so old and new rows still briefly coexist
-                    // in the tbody. A plain array lets React swap keys in one synchronous
-                    // commit with no exit lifecycle to wait on, which is what a page/sort/
-                    // filter navigation needs. See `animateRowRemoval` above for why this is
-                    // the default branch, only swapped out right before a deletion.
-                    data?.items.map((item, index) => (
-                      <ItemRow
-                        key={item.ratingKey}
-                        item={item}
-                        index={index}
-                        animateIn={!hasAnimatedIn}
-                        maxFileSize={maxPageFileSize}
-                        selected={selected.has(item.ratingKey)}
-                        onToggle={() => toggleOne(item)}
-                        onDelete={() => openConfirm([item])}
-                        historyUnknown={data.historySyncedAt === null}
-                      />
-                    ))
+                  Deleted {deleteResult.deleted.length} item
+                  {deleteResult.deleted.length === 1 ? "" : "s"}.
+                  {deleteResult.failed.length > 0 && (
+                    <>
+                      {" "}
+                      {deleteResult.failed.length} failed:{" "}
+                      {deleteResult.failed.map((f) => f.error).join("; ")}
+                    </>
                   )}
-                </tbody>
-              </table>
-              {data?.items.length === 0 && (
-                <div className="flex flex-col items-center gap-2 py-20 text-base-content/40">
-                  {isSyncing && thisLibraryItemCount === 0
-                    ? (
-                      <>
-                        <span className="loading loading-spinner loading-md" />
-                        <p className="font-medium text-base-content/60">
-                          Still importing this library
-                        </p>
-                        <p className="text-sm">
-                          Items will show up here once the sync finishes.
-                        </p>
-                      </>
-                    )
-                    : (
-                      <>
-                        <Sparkles className="w-8 h-8" />
-                        <p className="font-medium text-base-content/60">
-                          All caught up
-                        </p>
-                        <p className="text-sm">
-                          No stale items match these filters.
-                        </p>
-                      </>
-                    )}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => setDeleteResult(null)}
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+
+            <AnimatePresence>
+              {selected.size > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 40 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 40 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                  className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
+                >
+                  <span>
+                    {selected.size} item{selected.size === 1 ? "" : "s"}{" "}
+                    selected · {formatKilobytes(selectedTotalSize)}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setSelected(new Map())}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-error gap-2"
+                      onClick={() => openConfirm(selectedItems)}
+                    >
+                      <Trash2 className="w-4 h-4" /> Delete selected
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {isLoading
+              ? <StaleTableSkeleton />
+              : (
+                <div className="overflow-x-auto">
+                  <progress
+                    className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
+                      isFetching ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                  <table className="table table-sm table-fixed overflow-hidden">
+                    <colgroup>
+                      <col className="w-8" />
+                      <col />
+                      <col className="w-24" />
+                      <col className="w-32" />
+                      <col className="w-32" />
+                      <col className="w-16" />
+                      <col className="w-10" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>
+                          <input
+                            type="checkbox"
+                            className="checkbox checkbox-sm"
+                            checked={allOnPageSelected}
+                            ref={(el) => {
+                              if (el) {
+                                el.indeterminate = !allOnPageSelected &&
+                                  someOnPageSelected;
+                              }
+                            }}
+                            onChange={toggleAllOnPage}
+                            aria-label="Select all on this page"
+                          />
+                        </th>
+                        <SortTh
+                          label="Title"
+                          field="title"
+                          params={params}
+                          onSort={setSort}
+                        />
+                        <SortTh
+                          label="Size"
+                          field="fileSize"
+                          params={params}
+                          onSort={setSort}
+                        />
+                        <SortTh
+                          label="Last viewed"
+                          field="lastViewedAt"
+                          params={params}
+                          onSort={setSort}
+                        />
+                        <SortTh
+                          label="Added"
+                          field="addedAt"
+                          params={params}
+                          onSort={setSort}
+                        />
+                        <SortTh
+                          label="Plays"
+                          field="viewCount"
+                          params={params}
+                          onSort={setSort}
+                        />
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {animateRowRemoval
+                        ? (
+                          <AnimatePresence>
+                            {data?.items.map((item, index) => (
+                              <ItemRow
+                                key={item.ratingKey}
+                                item={item}
+                                index={index}
+                                animateIn={!hasAnimatedIn}
+                                maxFileSize={maxPageFileSize}
+                                selected={selected.has(item.ratingKey)}
+                                onToggle={() => toggleOne(item)}
+                                onDelete={() => openConfirm([item])}
+                                historyUnknown={data.historySyncedAt === null}
+                              />
+                            ))}
+                          </AnimatePresence>
+                        )
+                        : (
+                          // Plain keyed array, deliberately NOT wrapped in AnimatePresence: even
+                          // with a zero-duration exit variant, AnimatePresence keeps an outgoing
+                          // element mounted until its exit animation's completion callback fires
+                          // (which resolves a tick later, not synchronously), while incoming
+                          // elements mount immediately — so old and new rows still briefly coexist
+                          // in the tbody. A plain array lets React swap keys in one synchronous
+                          // commit with no exit lifecycle to wait on, which is what a page/sort/
+                          // filter navigation needs. See `animateRowRemoval` above for why this is
+                          // the default branch, only swapped out right before a deletion.
+                          data?.items.map((item, index) => (
+                            <ItemRow
+                              key={item.ratingKey}
+                              item={item}
+                              index={index}
+                              animateIn={!hasAnimatedIn}
+                              maxFileSize={maxPageFileSize}
+                              selected={selected.has(item.ratingKey)}
+                              onToggle={() => toggleOne(item)}
+                              onDelete={() => openConfirm([item])}
+                              historyUnknown={data.historySyncedAt === null}
+                            />
+                          ))
+                        )}
+                    </tbody>
+                  </table>
+                  {data?.items.length === 0 && (
+                    <div className="flex flex-col items-center gap-2 py-20 text-base-content/40">
+                      {isSyncing && thisLibraryItemCount === 0
+                        ? (
+                          <>
+                            <span className="loading loading-spinner loading-md" />
+                            <p className="font-medium text-base-content/60">
+                              Still importing this library
+                            </p>
+                            <p className="text-sm">
+                              Items will show up here once the sync finishes.
+                            </p>
+                          </>
+                        )
+                        : (
+                          <>
+                            <Sparkles className="w-8 h-8" />
+                            <p className="font-medium text-base-content/60">
+                              All caught up
+                            </p>
+                            <p className="text-sm">
+                              No stale items match these filters.
+                            </p>
+                          </>
+                        )}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
 
-          {totalPages > 1 && (
-            <div className="flex justify-center gap-2">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={page === 0}
-                onClick={() => goToOffset((page - 1) * PAGE_SIZE)}
-              >
-                Previous
-              </button>
-              <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
-                {page + 1} / {totalPages}
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={page >= totalPages - 1}
-                onClick={() => goToOffset((page + 1) * PAGE_SIZE)}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </>
-      )}
+            {totalPages > 1 && (
+              <div className="flex justify-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={page === 0}
+                  onClick={() => goToOffset((page - 1) * PAGE_SIZE)}
+                >
+                  Previous
+                </button>
+                <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
+                  {page + 1} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => goToOffset((page + 1) * PAGE_SIZE)}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
       <dialog ref={dialogRef} className="modal" onClose={closeConfirm}>
         <div className="modal-box">
@@ -739,15 +813,12 @@ function StalePage() {
               type="button"
               className="btn btn-sm btn-error gap-2"
               onClick={() =>
-                deleteMutation.mutate(confirmItems.map((i) => i.ratingKey))
-              }
+                deleteMutation.mutate(confirmItems.map((i) => i.ratingKey))}
               disabled={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                <Trash2 className="w-4 h-4" />
-              )}
+              {deleteMutation.isPending
+                ? <span className="loading loading-spinner loading-xs" />
+                : <Trash2 className="w-4 h-4" />}
               Delete permanently
             </button>
           </div>
@@ -782,17 +853,17 @@ function SortTh({
         onClick={() => onSort(field)}
       >
         {label}
-        {active ? (
-          params.order === "desc" ? (
-            <ArrowDown className="w-3 h-3" />
-          ) : (
-            <ArrowUp className="w-3 h-3" />
+        {active
+          ? (
+            params.order === "desc"
+              ? <ArrowDown className="w-3 h-3" />
+              : <ArrowUp className="w-3 h-3" />
           )
-        ) : (
-          <span className="w-3 h-3 opacity-0">
-            <ArrowDown className="w-3 h-3" />
-          </span>
-        )}
+          : (
+            <span className="w-3 h-3 opacity-0">
+              <ArrowDown className="w-3 h-3" />
+            </span>
+          )}
       </button>
     </th>
   );
@@ -824,7 +895,9 @@ const rowVariants = {
 // already-stale rows are the most stale, the same way the size bar is relative to the
 // page's own max rather than some fixed byte threshold.
 const DAY_SEC = 86_400;
-function staleDotInfo(lastViewedAt: number): { className: string; title: string } {
+function staleDotInfo(
+  lastViewedAt: number,
+): { className: string; title: string } {
   const daysSince = (Date.now() / 1000 - lastViewedAt) / DAY_SEC;
   if (daysSince > 730) {
     return { className: "bg-error", title: "Not viewed in over 2 years" };
@@ -855,7 +928,9 @@ function ItemRow({
   historyUnknown: boolean;
 }) {
   const thumbUrl = item.thumb
-    ? `/api/proxy/thumb?path=${encodeURIComponent(item.thumb)}&width=60&height=90`
+    ? `/api/proxy/thumb?path=${
+      encodeURIComponent(item.thumb)
+    }&width=60&height=90`
     : null;
 
   const titleEl = (
@@ -867,10 +942,9 @@ function ItemRow({
     </div>
   );
 
-  const sizePct =
-    item.fileSize != null
-      ? Math.max(4, (item.fileSize / maxFileSize) * 100)
-      : 0;
+  const sizePct = item.fileSize != null
+    ? Math.max(4, (item.fileSize / maxFileSize) * 100)
+    : 0;
 
   const dotInfo = item.lastViewedAt ? staleDotInfo(item.lastViewedAt) : null;
 
@@ -880,20 +954,22 @@ function ItemRow({
       initial={animateIn ? "hidden" : false}
       animate="visible"
       exit="exit"
-      transition={
-        animateIn
-          ? {
-              duration: 0.16,
-              ease: "easeOut",
-              delay: Math.min(index, 12) * 0.02,
-            }
-          : undefined
-      }
-      className={`row-hover group cursor-pointer ${selected ? "row-selected" : ""}`}
+      transition={animateIn
+        ? {
+          duration: 0.16,
+          ease: "easeOut",
+          delay: Math.min(index, 12) * 0.02,
+        }
+        : undefined}
+      className={`row-hover group cursor-pointer ${
+        selected ? "row-selected" : ""
+      }`}
       onClick={onToggle}
     >
       <td
-        className={`row-accent ${selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""}`}
+        className={`row-accent ${
+          selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""
+        }`}
       >
         <input
           type="checkbox"
@@ -905,40 +981,42 @@ function ItemRow({
         />
       </td>
       <td className="row-accent">
-        {item.type === "show" ? (
-          <Link
-            to="/libraries/$key/shows/$ratingKey"
-            params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
-            onClick={(e) => e.stopPropagation()}
-            className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
-          >
-            <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover/poster:shadow-lg group-hover/poster:ring-2 group-hover/poster:ring-primary/40">
-              {thumbUrl && (
-                <img
-                  src={thumbUrl}
-                  alt=""
-                  className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
-                  loading="lazy"
-                />
-              )}
+        {item.type === "show"
+          ? (
+            <Link
+              to="/libraries/$key/shows/$ratingKey"
+              params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
+              onClick={(e) => e.stopPropagation()}
+              className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
+            >
+              <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover/poster:shadow-lg group-hover/poster:ring-2 group-hover/poster:ring-primary/40">
+                {thumbUrl && (
+                  <img
+                    src={thumbUrl}
+                    alt=""
+                    className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
+                    loading="lazy"
+                  />
+                )}
+              </div>
+              {titleEl}
+            </Link>
+          )
+          : (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover:shadow-lg group-hover:ring-2 group-hover:ring-primary/40">
+                {thumbUrl && (
+                  <img
+                    src={thumbUrl}
+                    alt=""
+                    className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
+                    loading="lazy"
+                  />
+                )}
+              </div>
+              {titleEl}
             </div>
-            {titleEl}
-          </Link>
-        ) : (
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-14 rounded overflow-hidden shrink-0 bg-base-300 transition-shadow duration-200 group-hover:shadow-lg group-hover:ring-2 group-hover:ring-primary/40">
-              {thumbUrl && (
-                <img
-                  src={thumbUrl}
-                  alt=""
-                  className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
-                  loading="lazy"
-                />
-              )}
-            </div>
-            {titleEl}
-          </div>
-        )}
+          )}
       </td>
       <td className="row-accent text-sm font-mono truncate relative overflow-hidden">
         {item.fileSize != null && (
@@ -958,26 +1036,30 @@ function ItemRow({
         </span>
       </td>
       <td className="row-accent text-sm text-base-content/70 truncate">
-        {item.lastViewedAt && dotInfo ? (
-          <span className="inline-flex items-center gap-1.5">
+        {item.lastViewedAt && dotInfo
+          ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotInfo.className}`}
+                title={dotInfo.title}
+              />
+              {formatDate(item.lastViewedAt)}
+            </span>
+          )
+          : historyUnknown
+          ? (
             <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotInfo.className}`}
-              title={dotInfo.title}
-            />
-            {formatDate(item.lastViewedAt)}
-          </span>
-        ) : historyUnknown ? (
-          <span
-            className="badge badge-warning badge-outline badge-sm"
-            title="Watch-history sync hasn't completed for this library — this item may actually have been watched"
-          >
-            unknown
-          </span>
-        ) : (
-          <span className="badge badge-error badge-outline badge-sm">
-            never
-          </span>
-        )}
+              className="badge badge-warning badge-outline badge-sm"
+              title="Watch-history sync hasn't completed for this library — this item may actually have been watched"
+            >
+              unknown
+            </span>
+          )
+          : (
+            <span className="badge badge-error badge-outline badge-sm">
+              never
+            </span>
+          )}
       </td>
       <td className="row-accent text-sm text-base-content/70 truncate">
         {item.addedAt ? formatDate(item.addedAt) : "—"}
@@ -988,7 +1070,9 @@ function ItemRow({
       <td className="row-accent overflow-hidden">
         <motion.button
           type="button"
-          className={`btn btn-ghost btn-xs btn-square text-error ${selected ? "" : "pointer-events-none"}`}
+          className={`btn btn-ghost btn-xs btn-square text-error ${
+            selected ? "" : "pointer-events-none"
+          }`}
           onClick={(e) => {
             e.stopPropagation();
             onDelete();
