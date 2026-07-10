@@ -120,6 +120,20 @@
       "when": 1783365950168,
       "tag": "0017_sour_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1783553661790,
+      "tag": "0018_little_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1783569631742,
+      "tag": "0019_fantastic_naoko",
+      "breakpoints": true
     }
   ]
 }

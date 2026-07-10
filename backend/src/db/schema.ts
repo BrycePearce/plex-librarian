@@ -116,6 +116,98 @@ export const seasons = sqliteTable(
   }),
 );
 
+// One row per Plex `Media` entry on a movie item — captures the individual file
+// versions Plex groups under one ratingKey (e.g. a 1080p rip and a 4K remux of the
+// same movie) so they can be surfaced as a "duplicate" group and deleted individually.
+// Keyed by Plex's own per-Media `id`, which — like ratingKey — is already unique per
+// server, so this mirrors `seasons`' PK shape (own Plex id, not a compound key through
+// the parent). TV/artist libraries never populate this table: TV syncs at show
+// granularity (see CLAUDE.md) and per-episode multi-version detection is out of scope.
+export const itemMediaVersions = sqliteTable(
+  'item_media_versions',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    mediaId: integer('media_id').notNull(),
+    itemRatingKey: text('item_rating_key').notNull(),
+    libraryKey: text('library_key').notNull(),
+    videoResolution: text('video_resolution'),
+    bitrate: integer('bitrate'),
+    videoCodec: text('video_codec'),
+    container: text('container'),
+    fileSize: integer('file_size'), // decimal KB, same convention as items.fileSize
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.mediaId] }),
+    itemFk: foreignKey({
+      columns: [table.serverId, table.itemRatingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    itemIdx: index('item_media_versions_item_idx').on(table.serverId, table.itemRatingKey),
+    libraryIdx: index('item_media_versions_library_idx').on(table.serverId, table.libraryKey),
+  }),
+);
+
+// One row per Plex `Media` entry on an episode — but ONLY for episodes that already
+// have 2+ valid (id != null) Media entries. Deliberately asymmetric with
+// itemMediaVersions, which stores one row per movie unconditionally: movies already
+// get exactly 1 row per movie in `items` regardless of duplicate status, so 1 row per
+// movie there is proportional to what's already stored. Episodes have no such
+// baseline — they are never stored as individual rows anywhere (see CLAUDE.md's Scale
+// assumptions) — so storing one row per episode unconditionally would scale with total
+// episode count across every TV library on the server, which is exactly what this app
+// avoids elsewhere. Filtering to genuine duplicates only at WRITE time
+// (mapEpisodeMediaVersions in lib/plex.ts) keeps this table's size bounded by actual
+// duplicate-episode count, not library size. episodeRatingKey is NOT FK'd (no episodes
+// table exists to reference); seasonRatingKey and showRatingKey are FK'd since those
+// parent rows do exist. episodeTitle/episodeIndex/seasonIndex are denormalized here
+// since there's nowhere else per-episode metadata is ever stored for TV libraries.
+export const episodeMediaVersions = sqliteTable(
+  'episode_media_versions',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    mediaId: integer('media_id').notNull(),
+    episodeRatingKey: text('episode_rating_key').notNull(),
+    seasonRatingKey: text('season_rating_key').notNull(),
+    showRatingKey: text('show_rating_key').notNull(),
+    libraryKey: text('library_key').notNull(),
+    episodeTitle: text('episode_title').notNull(),
+    episodeIndex: integer('episode_index').notNull(),
+    seasonIndex: integer('season_index').notNull(),
+    videoResolution: text('video_resolution'),
+    bitrate: integer('bitrate'),
+    videoCodec: text('video_codec'),
+    container: text('container'),
+    fileSize: integer('file_size'), // decimal KB, same convention as itemMediaVersions
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.mediaId] }),
+    seasonFk: foreignKey({
+      columns: [table.serverId, table.seasonRatingKey],
+      foreignColumns: [seasons.serverId, seasons.ratingKey],
+    }).onDelete('cascade'),
+    showFk: foreignKey({
+      columns: [table.serverId, table.showRatingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    episodeIdx: index('episode_media_versions_episode_idx').on(
+      table.serverId,
+      table.episodeRatingKey,
+    ),
+    libraryIdx: index('episode_media_versions_library_idx').on(table.serverId, table.libraryKey),
+    showIdx: index('episode_media_versions_show_idx').on(table.serverId, table.showRatingKey),
+  }),
+);
+
 export const syncLog = sqliteTable(
   'sync_log',
   {
@@ -149,7 +241,10 @@ export const events = sqliteTable(
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     serverId: integer('server_id').references(() => servers.id),
-    type: text('type', { enum: ['sync.completed', 'sync.failed', 'items.deleted'] }).notNull(),
+    type: text('type', {
+      enum: ['sync.completed', 'sync.failed', 'items.deleted', 'media.deleted'],
+    })
+      .notNull(),
     payload: text('payload'), // JSON: event-specific detail, see EventType in shared/types.ts
     createdAt: integer('created_at').notNull(),
   },

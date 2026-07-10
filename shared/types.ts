@@ -80,6 +80,16 @@ export interface StaleItem {
   duration: number | null
   year: number | null
   updatedAt: number
+  // Only populated by GET /:key/stale, and only when length >= 2 — this item's
+  // fileSize is then a combined total across multiple synced Plex Media versions (see
+  // Duplicate detection in CLAUDE.md). Undefined on StaleItem-shaped fields elsewhere
+  // (show/movie detail) and on single-version items. Movies only.
+  versions?: MediaVersion[]
+  // Only populated by GET /:key/stale for show items, and only when true — at least
+  // one of this show's episodes has multiple synced Plex Media versions. No per-episode
+  // detail is carried here (unlike `versions`); see the global /api/duplicates
+  // endpoint's episode groups for that.
+  hasDuplicateEpisodes?: boolean
 }
 
 export interface StaleResponse {
@@ -91,6 +101,7 @@ export interface StaleResponse {
   filter: string
   sort: string
   order: string
+  duplicatesOnly: boolean
   limit: number
   offset: number
   total: number
@@ -123,6 +134,59 @@ export interface ShowDetail {
 export interface MovieDetail {
   movie: StaleItem
   historySyncedAt: number | null
+}
+
+// --- Duplicate / multi-version detection ---
+// Plex groups multiple video files for the same movie under one item as separate
+// Media entries (e.g. a 1080p rip and a 4K remux) — these types surface that grouping
+// independent of watch/stale status, since Plex only tracks lastViewedAt/viewCount per
+// item, never per Media version, so which version was watched is never knowable.
+
+export interface MediaVersion {
+  mediaId: number
+  videoResolution: string | null
+  bitrate: number | null
+  videoCodec: string | null
+  container: string | null
+  fileSize: number | null
+}
+
+export interface DuplicateMovieGroup {
+  mediaType: 'movie'
+  libraryKey: string
+  ratingKey: string
+  title: string
+  year: number | null
+  thumb: string | null
+  combinedFileSize: number | null
+  versions: MediaVersion[]
+}
+
+export interface DuplicateEpisodeGroup {
+  mediaType: 'episode'
+  libraryKey: string
+  episodeRatingKey: string
+  showRatingKey: string
+  showTitle: string
+  showThumb: string | null
+  seasonIndex: number
+  episodeIndex: number
+  episodeTitle: string
+  combinedFileSize: number | null
+  versions: MediaVersion[]
+}
+
+export type DuplicateGroup = DuplicateMovieGroup | DuplicateEpisodeGroup
+
+export interface DuplicatesResponse {
+  limit: number
+  offset: number
+  total: number
+  groups: DuplicateGroup[]
+}
+
+export interface DeleteMediaVersionResponse {
+  fileSizeFreed: number
 }
 
 // --- Item deletion ---
@@ -166,7 +230,7 @@ export interface SyncTriggerResponse {
 
 // --- Activity log ---
 
-export type EventType = 'sync.completed' | 'sync.failed' | 'items.deleted'
+export type EventType = 'sync.completed' | 'sync.failed' | 'items.deleted' | 'media.deleted'
 
 export interface SyncCompletedPayload {
   syncId: number
@@ -189,10 +253,23 @@ export interface ItemsDeletedPayload {
   fileSizeFreed: number
 }
 
+// A single duplicate-version delete's payload — deliberately self-contained (carries
+// `title`, not just `ratingKey`) like ItemsDeletedPayload, so the activity feed never
+// needs a lookup to render a readable line for an event that already happened.
+export interface MediaDeletedPayload {
+  libraryKey: string
+  ratingKey: string
+  title: string
+  mediaId: number
+  // Decimal KB, matching ItemsDeletedPayload.fileSizeFreed.
+  fileSizeFreed: number
+}
+
 export type ActivityEvent =
   | { id: number; type: 'sync.completed'; payload: SyncCompletedPayload | null; createdAt: number }
   | { id: number; type: 'sync.failed'; payload: SyncFailedPayload | null; createdAt: number }
   | { id: number; type: 'items.deleted'; payload: ItemsDeletedPayload | null; createdAt: number }
+  | { id: number; type: 'media.deleted'; payload: MediaDeletedPayload | null; createdAt: number }
 
 export interface ActivityEventsResponse {
   limit: number

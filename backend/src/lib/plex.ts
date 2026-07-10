@@ -54,7 +54,15 @@ interface PlexRawMetadata {
   parentIndex?: number; // season number
   parentTitle?: string; // season title
   grandparentRatingKey?: string; // show ratingKey
-  Media?: Array<{ Part?: Array<{ size?: number }> }>;
+  index?: number; // episode number within season — only present on type=4 responses, like parentIndex
+  Media?: Array<{
+    id?: number;
+    videoResolution?: string;
+    bitrate?: number;
+    videoCodec?: string;
+    container?: string;
+    Part?: Array<{ size?: number }>;
+  }>;
 }
 
 // Minimal episode shape used by syncShowSizes to aggregate season file sizes.
@@ -75,6 +83,41 @@ export interface PlexEpisode {
 export interface PlexTrack {
   ratingKey: string;
   artistRatingKey: string;
+  fileSize: number | null;
+}
+
+// One row per Plex `Media` entry on a movie — the individual file versions Plex groups
+// under one ratingKey (e.g. a 1080p rip and a 4K remux of the same movie). Used to
+// populate itemMediaVersions so duplicate/multi-version groups can be surfaced and
+// resolved one version at a time. Not populated for shows/tracks. Episode-level
+// multi-version detection is handled separately by PlexEpisodeMediaVersion below —
+// see CLAUDE.md's Duplicate detection section for why the two are asymmetric.
+export interface PlexMediaVersion {
+  mediaId: number;
+  itemRatingKey: string;
+  videoResolution: string | null;
+  bitrate: number | null;
+  videoCodec: string | null;
+  container: string | null;
+  fileSize: number | null;
+}
+
+// One row per Plex `Media` entry on an episode — but only ever produced by
+// mapEpisodeMediaVersions for episodes that already have 2+ valid Media entries (see
+// episodeMediaVersions in db/schema.ts for why this is filtered at write time, unlike
+// PlexMediaVersion above which is emitted unconditionally for every movie).
+export interface PlexEpisodeMediaVersion {
+  mediaId: number;
+  episodeRatingKey: string;
+  seasonRatingKey: string;
+  showRatingKey: string;
+  episodeTitle: string;
+  episodeIndex: number;
+  seasonIndex: number;
+  videoResolution: string | null;
+  bitrate: number | null;
+  videoCodec: string | null;
+  container: string | null;
   fileSize: number | null;
 }
 
@@ -123,6 +166,15 @@ export function buildPlexHeaders(clientId?: string, token?: string): Record<stri
 // Result is stored in kilobytes to keep values well within 32-bit range for @db/sqlite.
 const normalizeSize = (s: number) => s < 0 ? s + 2 ** 32 : s;
 
+// Sums a single Media entry's own Part sizes — the per-version counterpart to
+// extractFileSize's sum across every Media entry on the item.
+function sumPartSizes(parts: Array<{ size?: number }> | undefined): number | null {
+  const sized = (parts ?? []).filter((p) => p.size != null);
+  if (sized.length === 0) return null;
+  const bytes = sized.reduce((acc, p) => acc + normalizeSize(p.size!), 0);
+  return Math.round(bytes / 1000);
+}
+
 function extractFileSize(item: PlexRawMetadata): number | null {
   const parts = item.Media?.flatMap((m) => m.Part ?? []).filter((p) => p.size != null) ?? [];
   if (parts.length === 0) return null;
@@ -143,6 +195,24 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
     duration: item.duration ?? null,
     year: item.year ?? null,
   }));
+}
+
+function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
+  return raw
+    .filter((item) => item.type === 'movie')
+    .flatMap((item) =>
+      (item.Media ?? [])
+        .filter((m): m is typeof m & { id: number } => m.id != null)
+        .map((m) => ({
+          mediaId: m.id,
+          itemRatingKey: item.ratingKey,
+          videoResolution: m.videoResolution ?? null,
+          bitrate: m.bitrate ?? null,
+          videoCodec: m.videoCodec ?? null,
+          container: m.container ?? null,
+          fileSize: sumPartSizes(m.Part),
+        }))
+    );
 }
 
 function mapTracks(raw: PlexRawMetadata[]): PlexTrack[] {
@@ -168,6 +238,42 @@ function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
       duration: item.duration ?? null,
       viewCount: item.viewCount ?? 0,
     }));
+}
+
+// Write-time duplicate filter: only episodes whose valid (id != null) Media count is
+// already >= 2 ever produce rows here — see episodeMediaVersions in db/schema.ts for
+// why. Filtering on the *valid* count (not raw Media.length) matters: an episode with
+// one addressable version and one malformed entry (no id) must not end up with a
+// single-row "duplicate" that the delete route's last-version guard can never resolve.
+// Same parent/grandparent/parentIndex requirement as mapEpisodes, deliberately — an
+// episode that syncs normally there must not silently fail to surface here too.
+// episodeIndex falls back to 0 (display-only miscount, same style as viewCount ?? 0
+// below) rather than excluding the episode outright: `index` missing while
+// `parentIndex` is present is an edge case with no confirmed real-world trigger, but
+// requiring it would mean a genuine duplicate-episode's versions never appear on the
+// Duplicates page or stale-table badge with no error indicating why.
+function mapEpisodeMediaVersions(raw: PlexRawMetadata[]): PlexEpisodeMediaVersion[] {
+  return raw
+    .filter((item) => item.parentRatingKey && item.grandparentRatingKey && item.parentIndex != null)
+    .flatMap((item) => {
+      const validMedia = (item.Media ?? [])
+        .filter((m): m is typeof m & { id: number } => m.id != null);
+      if (validMedia.length < 2) return [];
+      return validMedia.map((m) => ({
+        mediaId: m.id,
+        episodeRatingKey: item.ratingKey,
+        seasonRatingKey: item.parentRatingKey!,
+        showRatingKey: item.grandparentRatingKey!,
+        episodeTitle: item.title,
+        episodeIndex: item.index ?? 0,
+        seasonIndex: item.parentIndex!,
+        videoResolution: m.videoResolution ?? null,
+        bitrate: m.bitrate ?? null,
+        videoCodec: m.videoCodec ?? null,
+        container: m.container ?? null,
+        fileSize: sumPartSizes(m.Part),
+      }));
+    });
 }
 
 export class PlexClient {
@@ -259,6 +365,29 @@ export class PlexClient {
     }
   }
 
+  // Deletes a single Media version (one file) from an item without touching its other
+  // versions or the item itself — distinct from deleteItem, which removes the whole
+  // item and everything under it. Same auth/error/retry behavior as deleteItem; see
+  // its comment above for the reasoning.
+  async deleteMedia(ratingKey: string, mediaId: number): Promise<void> {
+    const url = `${this.url}/library/metadata/${ratingKey}/media/${mediaId}`;
+    const headers = buildPlexHeaders(this.clientId, this.token);
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      const contentType = res.headers.get('content-type') ?? '';
+      const rawText = await res.text().catch(() => '');
+      const text = contentType.includes('html') ? '' : rawText.slice(0, 500);
+      throw new PlexDeleteError(
+        res.status,
+        `Plex ${res.status} deleting media ${mediaId} of ${ratingKey}${text ? `: ${text}` : ''}`,
+      );
+    }
+  }
+
   assetUrl(path: string): string {
     const url = new URL(`${this.url}${path}`);
     url.searchParams.set('X-Plex-Token', this.token);
@@ -314,15 +443,24 @@ export class PlexClient {
     }
   }
 
-  async *libraryItems(libraryKey: string, typeFilter?: number): AsyncGenerator<PlexItem[]> {
+  // mediaVersions is only ever non-empty for movie libraries — mapMediaVersions filters
+  // to type === 'movie' internally, and TV/artist libraries' raw pages never contain
+  // movie-typed entries in the first place (their typeFilter excludes them), so no
+  // separate lib.type check is needed at the call site.
+  async *libraryItems(
+    libraryKey: string,
+    typeFilter?: number,
+  ): AsyncGenerator<{ items: PlexItem[]; mediaVersions: PlexMediaVersion[] }> {
     for await (const page of this.paginatedMetadata(libraryKey, typeFilter)) {
-      yield mapItems(page);
+      yield { items: mapItems(page), mediaVersions: mapMediaVersions(page) };
     }
   }
 
-  async *libraryEpisodes(libraryKey: string): AsyncGenerator<PlexEpisode[]> {
+  async *libraryEpisodes(
+    libraryKey: string,
+  ): AsyncGenerator<{ episodes: PlexEpisode[]; episodeMediaVersions: PlexEpisodeMediaVersion[] }> {
     for await (const page of this.paginatedMetadata(libraryKey, PLEX_TYPE.EPISODE)) {
-      yield mapEpisodes(page);
+      yield { episodes: mapEpisodes(page), episodeMediaVersions: mapEpisodeMediaVersions(page) };
     }
   }
 

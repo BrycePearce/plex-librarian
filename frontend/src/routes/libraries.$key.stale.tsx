@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Copy, RefreshCw } from "lucide-react";
 import { api, isNotFoundError } from "../lib/api";
 import type {
   DeleteItemsResponse,
@@ -17,10 +17,12 @@ import type {
 import { formatKilobytes } from "../lib/format";
 import { useLibrarySync } from "../lib/useLibrarySync";
 import { useNotSyncedYet } from "../lib/useNotSyncedYet";
+import { useDeleteItems } from "../lib/useDeleteItems";
 import { StaleTableSkeleton } from "../components/Skeletons";
 import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
+import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { useItemSelection } from "./-stale/useItemSelection";
 import { useScrollToOffset } from "./-stale/useScrollToOffset";
 import { StaleFilters } from "./-stale/StaleFilters";
@@ -49,6 +51,7 @@ const FILTERS = ["all", "watched", "unwatched"] as const;
 const staleSearchDefaults = {
   days: 365,
   filter: "all",
+  duplicatesOnly: false,
   sort: "fileSize",
   order: "desc",
   offset: 0,
@@ -71,6 +74,10 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
       ? (search.sort as SortKey)
       : staleSearchDefaults.sort,
     order: search.order === "asc" ? "asc" : staleSearchDefaults.order,
+    // Accepts both a real boolean (set programmatically via navigate({ search })) and
+    // the string "true" (a manually-typed or bookmarked URL) — TanStack Router's search
+    // serialization doesn't guarantee which shape survives a round trip.
+    duplicatesOnly: search.duplicatesOnly === true || search.duplicatesOnly === "true",
     offset: Number.isFinite(offset) && offset >= 0
       ? Math.floor(offset)
       : staleSearchDefaults.offset,
@@ -113,8 +120,8 @@ function StalePage() {
     queryKey: ["libraries"],
     queryFn: () => api.libraries.list(),
   });
-  const thisLibraryItemCount =
-    librariesData?.libraries.find((l) => l.key === key)?.itemCount ?? 0;
+  const thisLibrary = librariesData?.libraries.find((l) => l.key === key);
+  const thisLibraryItemCount = thisLibrary?.itemCount ?? 0;
   const params = Route.useSearch();
   const navigate = Route.useNavigate();
 
@@ -219,18 +226,7 @@ function StalePage() {
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  const deleteMutation = useMutation({
-    mutationFn: (ratingKeys: string[]) =>
-      api.libraries.deleteItems(key, ratingKeys),
-    onSuccess: (res) => {
-      selection.remove(res.deleted);
-      setDeleteResult(res);
-      dialogRef.current?.close();
-      setAnimateRowRemoval(true);
-      void qc.invalidateQueries({ queryKey: ["stale", key] });
-      void qc.invalidateQueries({ queryKey: ["events"] });
-    },
-  });
+  const deleteMutation = useDeleteItems([["stale", key], ["events"]]);
 
   const goToOffset = useScrollToOffset(
     params.offset ?? 0,
@@ -310,17 +306,30 @@ function StalePage() {
             </p>
           </div>
           <div className="flex flex-col items-end gap-1">
-            <button
-              type="button"
-              className="btn btn-sm gap-2"
-              onClick={trigger}
-              disabled={isSyncing}
-            >
-              <RefreshCw
-                className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
-              />
-              {isSyncing ? "Syncing…" : "Sync"}
-            </button>
+            <div className="flex gap-2">
+              {(thisLibrary?.type === "movie" || thisLibrary?.type === "show") && (
+                <Link
+                  to="/duplicates"
+                  search={{ type: thisLibrary.type === "show" ? "tv" : "movie" }}
+                  className="btn btn-ghost btn-sm gap-2"
+                  title="Find items with multiple synced versions"
+                >
+                  <Copy className="w-4 h-4" />
+                  Duplicates
+                </Link>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm gap-2"
+                onClick={trigger}
+                disabled={isSyncing}
+              >
+                <RefreshCw
+                  className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+                />
+                {isSyncing ? "Syncing…" : "Sync"}
+              </button>
+            </div>
             {isError && (
               <span className="text-xs text-error">
                 {error instanceof Error ? error.message : "Sync failed"}
@@ -340,6 +349,10 @@ function StalePage() {
             gracePeriodValue={gracePeriodValue}
             defaultGraceDays={data?.minAgeDays}
             onGracePeriodChange={setGracePeriod}
+            libraryType={thisLibrary?.type ?? ""}
+            duplicatesOnly={params.duplicatesOnly ?? staleSearchDefaults.duplicatesOnly}
+            onDuplicatesOnlyChange={(duplicatesOnly) =>
+              setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))}
           />
         )}
       </div>
@@ -389,32 +402,20 @@ function StalePage() {
             )}
 
             {deleteResult && (
-              <div
-                className={`alert ${
-                  deleteResult.failed.length > 0
-                    ? "alert-warning"
-                    : "alert-success"
-                }`}
+              <DeleteResultAlert
+                variant={deleteResult.failed.length > 0 ? "warning" : "success"}
+                onDismiss={() => setDeleteResult(null)}
               >
-                <span>
-                  Deleted {deleteResult.deleted.length} item
-                  {deleteResult.deleted.length === 1 ? "" : "s"}.
-                  {deleteResult.failed.length > 0 && (
-                    <>
-                      {" "}
-                      {deleteResult.failed.length} failed:{" "}
-                      {deleteResult.failed.map((f) => f.error).join("; ")}
-                    </>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  onClick={() => setDeleteResult(null)}
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
+                Deleted {deleteResult.deleted.length} item
+                {deleteResult.deleted.length === 1 ? "" : "s"}.
+                {deleteResult.failed.length > 0 && (
+                  <>
+                    {" "}
+                    {deleteResult.failed.length} failed:{" "}
+                    {deleteResult.failed.map((f) => f.error).join("; ")}
+                  </>
+                )}
+              </DeleteResultAlert>
             )}
 
             <SelectionActionBar
@@ -476,7 +477,17 @@ function StalePage() {
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
         onConfirm={() =>
-          deleteMutation.mutate(confirmItems.map((i) => i.ratingKey))}
+          deleteMutation.mutate(
+            { libraryKey: key, ratingKeys: confirmItems.map((i) => i.ratingKey) },
+            {
+              onSuccess: (res) => {
+                selection.remove(res.deleted);
+                setDeleteResult(res);
+                dialogRef.current?.close();
+                setAnimateRowRemoval(true);
+              },
+            },
+          )}
         onCancel={closeConfirm}
       />
     </div>

@@ -8,6 +8,9 @@ export function StaleFilters({
   gracePeriodValue,
   defaultGraceDays,
   onGracePeriodChange,
+  libraryType,
+  duplicatesOnly,
+  onDuplicatesOnlyChange,
 }: {
   days: number;
   filter: StaleParams["filter"];
@@ -16,6 +19,9 @@ export function StaleFilters({
   gracePeriodValue: string;
   defaultGraceDays?: number;
   onGracePeriodChange: (value: string) => void;
+  libraryType: string;
+  duplicatesOnly: boolean;
+  onDuplicatesOnlyChange: (value: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-3">
@@ -66,6 +72,25 @@ export function StaleFilters({
           <option value={365}>1 year</option>
         </select>
       </label>
+      {(libraryType === "movie" || libraryType === "show") && (
+        <div className="form-control gap-1">
+          <span className="label-text text-xs">Duplicates</span>
+          <div className="flex items-center gap-2 h-8">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={duplicatesOnly}
+              onChange={(e) => onDuplicatesOnlyChange(e.target.checked)}
+              id="duplicates-only"
+            />
+            <label htmlFor="duplicates-only" className="text-sm cursor-pointer">
+              {libraryType === "movie"
+                ? "Multiple versions only"
+                : "Shows with duplicate episodes only"}
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

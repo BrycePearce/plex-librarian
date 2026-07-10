@@ -8,6 +8,7 @@ import { createPlexClient, PlexConfigError } from './lib/plex.ts';
 import { failAllPendingSyncs } from './services/sync.ts';
 import { startScheduler, startupSyncIfStale } from './services/scheduler.ts';
 import auth from './routes/auth.ts';
+import duplicates from './routes/duplicates.ts';
 import events from './routes/events.ts';
 import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
@@ -59,6 +60,7 @@ app.onError((err, c) => {
 app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));
 
 app.route('/api/auth', auth);
+app.route('/api/duplicates', duplicates);
 app.route('/api/events', events);
 app.route('/api/libraries', libraries);
 app.route('/api/proxy', proxy);

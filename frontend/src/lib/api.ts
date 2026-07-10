@@ -3,6 +3,8 @@ import type {
   ActivityEventsResponse,
   AuthStatus,
   DeleteItemsResponse,
+  DeleteMediaVersionResponse,
+  DuplicatesResponse,
   PlexPin,
   PinPollResult,
   Library,
@@ -20,7 +22,13 @@ export type {
   ActivityEventsResponse,
   AuthStatus,
   DeleteItemsResponse,
+  DeleteMediaVersionResponse,
+  DuplicateEpisodeGroup,
+  DuplicateGroup,
+  DuplicateMovieGroup,
+  DuplicatesResponse,
   EventType,
+  MediaVersion,
   PlexPin,
   PinPollResult,
   PlexConnection,
@@ -47,6 +55,7 @@ export interface StaleParams {
   maxDays?: number
   minAgeDays?: number
   filter?: 'all' | 'watched' | 'unwatched'
+  duplicatesOnly?: boolean
   sort?: SortKey
   order?: 'asc' | 'desc'
   limit?: number
@@ -130,6 +139,25 @@ export const api = {
         body: JSON.stringify({ ratingKeys }),
       }),
   },
+  duplicates: {
+    list: (params: { type?: 'movie' | 'tv' | 'all'; limit?: number; offset?: number } = {}) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) q.set(k, String(v))
+      }
+      return apiFetch<DuplicatesResponse>(`/duplicates?${q}`)
+    },
+    deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
+      apiFetch<DeleteMediaVersionResponse>(
+        `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,
+        { method: 'DELETE' },
+      ),
+    deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
+      apiFetch<DeleteMediaVersionResponse>(
+        `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media/${mediaId}`,
+        { method: 'DELETE' },
+      ),
+  },
   settings: {
     get: () =>
       apiFetch<Settings>('/settings'),
@@ -172,7 +200,7 @@ export const api = {
 // 'status']`, which callers usually just refetched a line earlier), forcing pointless
 // extra fetches and a visible flash back to loading state for data that has nothing to
 // do with the active server.
-const SERVER_SCOPED_QUERY_ROOTS = ['libraries', 'sync', 'stale', 'show', 'events']
+const SERVER_SCOPED_QUERY_ROOTS = ['libraries', 'sync', 'stale', 'show', 'duplicates', 'events']
 
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
   return qc.resetQueries({

@@ -6,7 +6,9 @@ import { openSqliteDb } from './util.ts';
 const dbPath = Deno.env.get('DB_PATH') ?? './data/librarian.db';
 const sqlite = openSqliteDb(dbPath);
 
-export function withTransaction<T>(fn: (client: typeof sqlite) => T): T {
+export type SqliteClient = typeof sqlite;
+
+export function withTransaction<T>(fn: (client: SqliteClient) => T): T {
   return sqlite.transaction(() => fn(sqlite))();
 }
 

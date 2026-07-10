@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { motion } from "motion/react";
-import { Trash2 } from "lucide-react";
+import { Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
@@ -63,9 +63,25 @@ export function StaleItemRow({
   onDelete: () => void;
   historyUnknown: boolean;
 }) {
+  const versionCount = item.versions?.length ?? 0;
+  const hasDuplicates = versionCount >= 2 || item.hasDuplicateEpisodes === true;
+
   const titleEl = (
     <div className="min-w-0">
-      <div className="font-medium truncate max-w-xs">{item.title}</div>
+      <div className="font-medium max-w-xs flex items-center gap-1.5">
+        <span className="truncate min-w-0">{item.title}</span>
+        {hasDuplicates && (
+          <span
+            className="badge badge-outline badge-sm gap-1 shrink-0"
+            title={versionCount >= 2
+              ? `${versionCount} versions synced from Plex`
+              : "One or more episodes have multiple synced versions"}
+          >
+            <Copy className="w-3 h-3" />
+            {versionCount >= 2 ? versionCount : "Duplicates"}
+          </span>
+        )}
+      </div>
       {item.year && (
         <div className="text-xs text-base-content/40">{item.year}</div>
       )}

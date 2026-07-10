@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as DuplicatesRouteImport } from './routes/duplicates'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
@@ -26,6 +27,11 @@ const SetupRoute = SetupRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DuplicatesRoute = DuplicatesRouteImport.update({
+  id: '/duplicates',
+  path: '/duplicates',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -65,6 +71,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
+  '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
@@ -75,6 +82,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
+  '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
@@ -86,6 +94,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
+  '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
@@ -98,6 +107,7 @@ export interface FileRouteTypes {
     | '/'
     | '/activity'
     | '/dashboard'
+    | '/duplicates'
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
@@ -108,6 +118,7 @@ export interface FileRouteTypes {
     | '/'
     | '/activity'
     | '/dashboard'
+    | '/duplicates'
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
@@ -118,6 +129,7 @@ export interface FileRouteTypes {
     | '/'
     | '/activity'
     | '/dashboard'
+    | '/duplicates'
     | '/settings'
     | '/setup'
     | '/libraries/$key/stale'
@@ -129,6 +141,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   DashboardRoute: typeof DashboardRoute
+  DuplicatesRoute: typeof DuplicatesRoute
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
@@ -150,6 +163,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/duplicates': {
+      id: '/duplicates'
+      path: '/duplicates'
+      fullPath: '/duplicates'
+      preLoaderRoute: typeof DuplicatesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -201,6 +221,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   DashboardRoute: DashboardRoute,
+  DuplicatesRoute: DuplicatesRoute,
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,

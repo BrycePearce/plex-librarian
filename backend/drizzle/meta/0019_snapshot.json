@@ -1,0 +1,1085 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "113d8c09-eb91-424d-bfc3-f0073088a54c",
+  "prevId": "8aca1136-9c2e-4b8e-a834-471fb62670ec",
+  "tables": {
+    "episode_media_versions": {
+      "name": "episode_media_versions",
+      "columns": {
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_id": {
+          "name": "media_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "episode_rating_key": {
+          "name": "episode_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "season_rating_key": {
+          "name": "season_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "show_rating_key": {
+          "name": "show_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "episode_title": {
+          "name": "episode_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "episode_index": {
+          "name": "episode_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "season_index": {
+          "name": "season_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "video_resolution": {
+          "name": "video_resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "bitrate": {
+          "name": "bitrate",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "video_codec": {
+          "name": "video_codec",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "container": {
+          "name": "container",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "episode_media_versions_episode_idx": {
+          "name": "episode_media_versions_episode_idx",
+          "columns": [
+            "server_id",
+            "episode_rating_key"
+          ],
+          "isUnique": false
+        },
+        "episode_media_versions_library_idx": {
+          "name": "episode_media_versions_library_idx",
+          "columns": [
+            "server_id",
+            "library_key"
+          ],
+          "isUnique": false
+        },
+        "episode_media_versions_show_idx": {
+          "name": "episode_media_versions_show_idx",
+          "columns": [
+            "server_id",
+            "show_rating_key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "episode_media_versions_server_id_servers_id_fk": {
+          "name": "episode_media_versions_server_id_servers_id_fk",
+          "tableFrom": "episode_media_versions",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "episode_media_versions_server_id_season_rating_key_seasons_server_id_rating_key_fk": {
+          "name": "episode_media_versions_server_id_season_rating_key_seasons_server_id_rating_key_fk",
+          "tableFrom": "episode_media_versions",
+          "tableTo": "seasons",
+          "columnsFrom": [
+            "server_id",
+            "season_rating_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "rating_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "episode_media_versions_server_id_show_rating_key_items_server_id_rating_key_fk": {
+          "name": "episode_media_versions_server_id_show_rating_key_items_server_id_rating_key_fk",
+          "tableFrom": "episode_media_versions",
+          "tableTo": "items",
+          "columnsFrom": [
+            "server_id",
+            "show_rating_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "rating_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "episode_media_versions_server_id_library_key_libraries_server_id_key_fk": {
+          "name": "episode_media_versions_server_id_library_key_libraries_server_id_key_fk",
+          "tableFrom": "episode_media_versions",
+          "tableTo": "libraries",
+          "columnsFrom": [
+            "server_id",
+            "library_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "episode_media_versions_server_id_media_id_pk": {
+          "columns": [
+            "server_id",
+            "media_id"
+          ],
+          "name": "episode_media_versions_server_id_media_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "events": {
+      "name": "events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "events_server_id_idx": {
+          "name": "events_server_id_idx",
+          "columns": [
+            "server_id",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "events_created_at_idx": {
+          "name": "events_created_at_idx",
+          "columns": [
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "events_server_id_servers_id_fk": {
+          "name": "events_server_id_servers_id_fk",
+          "tableFrom": "events",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "item_media_versions": {
+      "name": "item_media_versions",
+      "columns": {
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "media_id": {
+          "name": "media_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "item_rating_key": {
+          "name": "item_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "video_resolution": {
+          "name": "video_resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "bitrate": {
+          "name": "bitrate",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "video_codec": {
+          "name": "video_codec",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "container": {
+          "name": "container",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "item_media_versions_item_idx": {
+          "name": "item_media_versions_item_idx",
+          "columns": [
+            "server_id",
+            "item_rating_key"
+          ],
+          "isUnique": false
+        },
+        "item_media_versions_library_idx": {
+          "name": "item_media_versions_library_idx",
+          "columns": [
+            "server_id",
+            "library_key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "item_media_versions_server_id_servers_id_fk": {
+          "name": "item_media_versions_server_id_servers_id_fk",
+          "tableFrom": "item_media_versions",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "item_media_versions_server_id_item_rating_key_items_server_id_rating_key_fk": {
+          "name": "item_media_versions_server_id_item_rating_key_items_server_id_rating_key_fk",
+          "tableFrom": "item_media_versions",
+          "tableTo": "items",
+          "columnsFrom": [
+            "server_id",
+            "item_rating_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "rating_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "item_media_versions_server_id_library_key_libraries_server_id_key_fk": {
+          "name": "item_media_versions_server_id_library_key_libraries_server_id_key_fk",
+          "tableFrom": "item_media_versions",
+          "tableTo": "libraries",
+          "columnsFrom": [
+            "server_id",
+            "library_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "item_media_versions_server_id_media_id_pk": {
+          "columns": [
+            "server_id",
+            "media_id"
+          ],
+          "name": "item_media_versions_server_id_media_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "items": {
+      "name": "items",
+      "columns": {
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rating_key": {
+          "name": "rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "thumb": {
+          "name": "thumb",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "added_at": {
+          "name": "added_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_viewed_at": {
+          "name": "last_viewed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "view_count": {
+          "name": "view_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "duration": {
+          "name": "duration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "year": {
+          "name": "year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "items_last_viewed_at_idx": {
+          "name": "items_last_viewed_at_idx",
+          "columns": [
+            "server_id",
+            "last_viewed_at"
+          ],
+          "isUnique": false
+        },
+        "items_library_stale_idx": {
+          "name": "items_library_stale_idx",
+          "columns": [
+            "server_id",
+            "library_key",
+            "last_viewed_at"
+          ],
+          "isUnique": false
+        },
+        "items_library_file_size_idx": {
+          "name": "items_library_file_size_idx",
+          "columns": [
+            "server_id",
+            "library_key",
+            "file_size"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "items_server_id_servers_id_fk": {
+          "name": "items_server_id_servers_id_fk",
+          "tableFrom": "items",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "items_server_id_library_key_libraries_server_id_key_fk": {
+          "name": "items_server_id_library_key_libraries_server_id_key_fk",
+          "tableFrom": "items",
+          "tableTo": "libraries",
+          "columnsFrom": [
+            "server_id",
+            "library_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "items_server_id_rating_key_pk": {
+          "columns": [
+            "server_id",
+            "rating_key"
+          ],
+          "name": "items_server_id_rating_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "libraries": {
+      "name": "libraries",
+      "columns": {
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "synced_at": {
+          "name": "synced_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "history_synced_at": {
+          "name": "history_synced_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "stale_min_age_days": {
+          "name": "stale_min_age_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "libraries_server_id_servers_id_fk": {
+          "name": "libraries_server_id_servers_id_fk",
+          "tableFrom": "libraries",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "libraries_server_id_key_pk": {
+          "columns": [
+            "server_id",
+            "key"
+          ],
+          "name": "libraries_server_id_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "seasons": {
+      "name": "seasons",
+      "columns": {
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rating_key": {
+          "name": "rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "show_rating_key": {
+          "name": "show_rating_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "season_index": {
+          "name": "season_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "duration": {
+          "name": "duration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leaf_count": {
+          "name": "leaf_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "view_count": {
+          "name": "view_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "seasons_show_idx": {
+          "name": "seasons_show_idx",
+          "columns": [
+            "server_id",
+            "show_rating_key"
+          ],
+          "isUnique": false
+        },
+        "seasons_library_idx": {
+          "name": "seasons_library_idx",
+          "columns": [
+            "server_id",
+            "library_key"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "seasons_server_id_servers_id_fk": {
+          "name": "seasons_server_id_servers_id_fk",
+          "tableFrom": "seasons",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "seasons_server_id_show_rating_key_items_server_id_rating_key_fk": {
+          "name": "seasons_server_id_show_rating_key_items_server_id_rating_key_fk",
+          "tableFrom": "seasons",
+          "tableTo": "items",
+          "columnsFrom": [
+            "server_id",
+            "show_rating_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "rating_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "seasons_server_id_library_key_libraries_server_id_key_fk": {
+          "name": "seasons_server_id_library_key_libraries_server_id_key_fk",
+          "tableFrom": "seasons",
+          "tableTo": "libraries",
+          "columnsFrom": [
+            "server_id",
+            "library_key"
+          ],
+          "columnsTo": [
+            "server_id",
+            "key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "seasons_server_id_rating_key_pk": {
+          "columns": [
+            "server_id",
+            "rating_key"
+          ],
+          "name": "seasons_server_id_rating_key_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "servers": {
+      "name": "servers",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "machine_identifier": {
+          "name": "machine_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "access_token": {
+          "name": "access_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_connected_at": {
+          "name": "last_connected_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "servers_machine_identifier_unique": {
+          "name": "servers_machine_identifier_unique",
+          "columns": [
+            "machine_identifier"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "settings": {
+      "name": "settings",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "public_jwk": {
+          "name": "public_jwk",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "private_jwk": {
+          "name": "private_jwk",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "active_server_id": {
+          "name": "active_server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "auto_sync_enabled": {
+          "name": "auto_sync_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": true
+        },
+        "auto_sync_hour": {
+          "name": "auto_sync_hour",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 3
+        },
+        "stale_min_age_days": {
+          "name": "stale_min_age_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 90
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "settings_active_server_id_servers_id_fk": {
+          "name": "settings_active_server_id_servers_id_fk",
+          "tableFrom": "settings",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "active_server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "sync_log": {
+      "name": "sync_log",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "server_id": {
+          "name": "server_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "library_key": {
+          "name": "library_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "items_processed": {
+          "name": "items_processed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": 0
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "sync_log_finished_at_idx": {
+          "name": "sync_log_finished_at_idx",
+          "columns": [
+            "finished_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "sync_log_server_id_servers_id_fk": {
+          "name": "sync_log_server_id_servers_id_fk",
+          "tableFrom": "sync_log",
+          "tableTo": "servers",
+          "columnsFrom": [
+            "server_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

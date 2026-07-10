@@ -1,9 +1,22 @@
 import { and, eq, lt, notInArray, type SQL, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
-import { items, libraries, seasons, syncLog } from '../db/schema.ts';
-import { itemsByLibrary, libraryByKey, seasonsByLibrary } from '../db/scope.ts';
+import {
+  episodeMediaVersions,
+  itemMediaVersions,
+  items,
+  libraries,
+  seasons,
+  syncLog,
+} from '../db/schema.ts';
+import {
+  episodeVersionsByLibrary,
+  itemsByLibrary,
+  libraryByKey,
+  mediaVersionsByLibrary,
+  seasonsByLibrary,
+} from '../db/scope.ts';
 import { PLEX_TYPE } from '../lib/plex.ts';
-import type { PlexClient, PlexLibrary } from '../lib/plex.ts';
+import type { PlexClient, PlexEpisodeMediaVersion, PlexLibrary } from '../lib/plex.ts';
 import { logEvents } from './events.ts';
 import type { LogEventInput } from './events.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
@@ -72,9 +85,17 @@ async function syncShowSizes(
   // is bounded by shows × avg-seasons (not episode count) — for a 10k-show library with
   // ~5 seasons each that's ~50k entries, well within acceptable memory.
   const seasonMap = new Map<string, SeasonAgg>();
+  // Already filtered to genuine duplicates (2+ valid Media entries) by
+  // mapEpisodeMediaVersions — stays small (bounded by duplicate-episode count, not
+  // total episode count) so accumulating the whole thing in memory is cheap, unlike
+  // episode counts themselves. Can't upsert per-page like itemMediaVersions does for
+  // movies: episodeMediaVersions.seasonRatingKey FKs to `seasons`, whose rows don't
+  // exist until the season upsert below runs, which itself can't happen until the
+  // entire episode stream is drained (see seasonMap's own comment above).
+  const episodeVersions: PlexEpisodeMediaVersion[] = [];
 
   for await (const page of plex.libraryEpisodes(lib.key)) {
-    for (const ep of page) {
+    for (const ep of page.episodes) {
       const agg = seasonMap.get(ep.seasonRatingKey);
       if (agg) {
         agg.fileSize += ep.fileSize ?? 0;
@@ -93,6 +114,7 @@ async function syncShowSizes(
         });
       }
     }
+    episodeVersions.push(...page.episodeMediaVersions);
   }
 
   // No episodes fetched — transient empty response or all filtered. Skip prune and
@@ -136,10 +158,66 @@ async function syncShowSizes(
       });
   }
 
+  // Only reached once the parent season rows above are guaranteed to exist (this
+  // sync's episode stream is fully drained and every season upserted), satisfying
+  // episodeMediaVersions.seasonRatingKey's FK — see episodeVersions' own comment above.
+  for (let i = 0; i < episodeVersions.length; i += SEASON_UPSERT_BATCH) {
+    const batch = episodeVersions.slice(i, i + SEASON_UPSERT_BATCH);
+    await db
+      .insert(episodeMediaVersions)
+      .values(
+        batch.map((v) => ({
+          serverId,
+          mediaId: v.mediaId,
+          episodeRatingKey: v.episodeRatingKey,
+          seasonRatingKey: v.seasonRatingKey,
+          showRatingKey: v.showRatingKey,
+          libraryKey: lib.key,
+          episodeTitle: v.episodeTitle,
+          episodeIndex: v.episodeIndex,
+          seasonIndex: v.seasonIndex,
+          videoResolution: v.videoResolution,
+          bitrate: v.bitrate,
+          videoCodec: v.videoCodec,
+          container: v.container,
+          fileSize: v.fileSize,
+          updatedAt: now,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [episodeMediaVersions.serverId, episodeMediaVersions.mediaId],
+        set: {
+          episodeRatingKey: excl(episodeMediaVersions.episodeRatingKey),
+          seasonRatingKey: excl(episodeMediaVersions.seasonRatingKey),
+          showRatingKey: excl(episodeMediaVersions.showRatingKey),
+          libraryKey: excl(episodeMediaVersions.libraryKey),
+          episodeTitle: excl(episodeMediaVersions.episodeTitle),
+          episodeIndex: excl(episodeMediaVersions.episodeIndex),
+          seasonIndex: excl(episodeMediaVersions.seasonIndex),
+          videoResolution: excl(episodeMediaVersions.videoResolution),
+          bitrate: excl(episodeMediaVersions.bitrate),
+          videoCodec: excl(episodeMediaVersions.videoCodec),
+          container: excl(episodeMediaVersions.container),
+          fileSize: excl(episodeMediaVersions.fileSize),
+          updatedAt: excl(episodeMediaVersions.updatedAt),
+        },
+      });
+  }
+
   // Prune season rows for shows deleted from this library since the last sync.
   await db
     .delete(seasons)
     .where(and(seasonsByLibrary(serverId, lib.key), lt(seasons.updatedAt, now)));
+
+  // Runs after the seasons prune (not before) purely to avoid redundant work: any
+  // episode-version row belonging to a show/season pruned above is already
+  // cascade-deleted by that prune (both showRatingKey->items and
+  // seasonRatingKey->seasons cascade). This explicit prune only catches the remaining
+  // case — the show/season still exists, but a specific episode version disappeared
+  // from Plex between syncs.
+  await db.delete(episodeMediaVersions).where(
+    and(episodeVersionsByLibrary(serverId, lib.key), lt(episodeMediaVersions.updatedAt, now)),
+  );
 
   // Roll season sizes up to the show row so the stale list can display total size.
   // COALESCE preserves the existing value when SUM returns NULL (all season sizes unknown).
@@ -268,11 +346,11 @@ async function syncLibrary(
   let itemCount = 0;
 
   for await (const page of plex.libraryItems(lib.key, typeFilter)) {
-    if (page.length === 0) continue;
+    if (page.items.length === 0) continue;
     await db
       .insert(items)
       .values(
-        page.map((item) => ({
+        page.items.map((item) => ({
           serverId,
           ratingKey: item.ratingKey,
           libraryKey: lib.key,
@@ -304,8 +382,43 @@ async function syncLibrary(
           updatedAt: excl(items.updatedAt),
         },
       });
-    itemCount += page.length;
-    callbacks?.onCount(page.length);
+    itemCount += page.items.length;
+    callbacks?.onCount(page.items.length);
+
+    // Items must be upserted before their media versions within this same page — the
+    // FK(server_id, item_rating_key) → items(server_id, rating_key) needs the parent
+    // row to already exist. Only ever non-empty for movie libraries (see libraryItems).
+    if (page.mediaVersions.length > 0) {
+      await db
+        .insert(itemMediaVersions)
+        .values(
+          page.mediaVersions.map((v) => ({
+            serverId,
+            mediaId: v.mediaId,
+            itemRatingKey: v.itemRatingKey,
+            libraryKey: lib.key,
+            videoResolution: v.videoResolution,
+            bitrate: v.bitrate,
+            videoCodec: v.videoCodec,
+            container: v.container,
+            fileSize: v.fileSize,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [itemMediaVersions.serverId, itemMediaVersions.mediaId],
+          set: {
+            itemRatingKey: excl(itemMediaVersions.itemRatingKey),
+            libraryKey: excl(itemMediaVersions.libraryKey),
+            videoResolution: excl(itemMediaVersions.videoResolution),
+            bitrate: excl(itemMediaVersions.bitrate),
+            videoCodec: excl(itemMediaVersions.videoCodec),
+            container: excl(itemMediaVersions.container),
+            fileSize: excl(itemMediaVersions.fileSize),
+            updatedAt: excl(itemMediaVersions.updatedAt),
+          },
+        });
+    }
   }
 
   // Both size-rollup functions run before the prune, for different reasons.
@@ -326,6 +439,12 @@ async function syncLibrary(
 
   if (itemCount > 0) {
     await db.delete(items).where(and(itemsByLibrary(serverId, lib.key), lt(items.updatedAt, now)));
+    // Cascade-deletes media-version rows for any item pruned above. This explicit prune
+    // additionally catches the case where the parent item still exists but one specific
+    // version disappeared from Plex between syncs (e.g. deleted directly in Plex).
+    await db.delete(itemMediaVersions).where(
+      and(mediaVersionsByLibrary(serverId, lib.key), lt(itemMediaVersions.updatedAt, now)),
+    );
   }
 
   callbacks?.onPhase('history');

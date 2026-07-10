@@ -2,7 +2,14 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, ExternalLink, LogOut, Settings, User } from "lucide-react";
+import {
+  Activity,
+  Copy,
+  ExternalLink,
+  LogOut,
+  Settings,
+  User,
+} from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { AuthStatus } from "../lib/api";
 import { useClickOutside } from "../lib/useClickOutside";
@@ -101,6 +108,18 @@ export function UserMenu() {
               >
                 <Activity className="w-4 h-4" />
                 Activity
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/duplicates"
+                search={{ type: "all" }}
+                role="menuitem"
+                className="flex items-center gap-2 leading-none"
+                onClick={() => setOpen(false)}
+              >
+                <Copy className="w-4 h-4" />
+                Duplicates
               </Link>
             </li>
             <li>

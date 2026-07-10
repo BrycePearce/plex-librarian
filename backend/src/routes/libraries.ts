@@ -11,17 +11,34 @@ import {
   isNull,
   lt,
   or,
+  type SQL,
   sql,
 } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { items, libraries, seasons, settings } from '../db/schema.ts';
-import { itemByRatingKey, itemsByLibrary, libraryByKey, seasonsByShow } from '../db/scope.ts';
+import {
+  episodeMediaVersions,
+  itemMediaVersions,
+  items,
+  libraries,
+  seasons,
+  settings,
+} from '../db/schema.ts';
+import {
+  episodeVersionsByLibrary,
+  HAS_DUPLICATE_VERSIONS,
+  itemByRatingKey,
+  itemsByLibrary,
+  libraryByKey,
+  mediaVersionsByLibrary,
+  seasonsByShow,
+} from '../db/scope.ts';
 import { createPlexClient, PlexDeleteError } from '../lib/plex.ts';
 import { logEvents } from '../services/events.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
   LibrariesResponse,
+  MediaVersion,
   MovieDetail,
   ShowDetail,
   StaleResponse,
@@ -94,6 +111,7 @@ router.get('/:key/stale', async (c) => {
 
   const [library] = await db.select({
     key: libraries.key,
+    type: libraries.type,
     staleMinAgeDays: libraries.staleMinAgeDays,
     historySyncedAt: libraries.historySyncedAt,
   })
@@ -185,13 +203,86 @@ router.get('/:key/stale', async (c) => {
     ? watchedStaleCond
     : or(unwatchedCond, watchedStaleCond);
 
-  const staleWhere = and(itemsByLibrary(serverId, key), staleCond);
+  // Semantics deliberately differ by library type — see Duplicate detection in
+  // CLAUDE.md. Movie: this item itself has 2+ synced versions (same grouping as the
+  // global duplicates endpoint). Show: at least one of this show's episodes has 2+
+  // synced versions (existence only — episode_media_versions only ever holds genuine
+  // duplicates, see its write-time filtering). Artist/other: no-op, ignored.
+  const requestedDuplicatesOnly = c.req.query('duplicatesOnly') === 'true';
+  let duplicatesCond: SQL | undefined;
+  if (requestedDuplicatesOnly && library.type === 'movie') {
+    duplicatesCond = sql`${items.ratingKey} in (
+      select ${itemMediaVersions.itemRatingKey} from ${itemMediaVersions}
+      where ${itemMediaVersions.serverId} = ${serverId} and ${itemMediaVersions.libraryKey} = ${key}
+      group by ${itemMediaVersions.itemRatingKey} having ${HAS_DUPLICATE_VERSIONS}
+    )`;
+  } else if (requestedDuplicatesOnly && library.type === 'show') {
+    duplicatesCond = sql`exists (
+      select 1 from ${episodeMediaVersions}
+      where ${episodeMediaVersions.serverId} = ${serverId}
+        and ${episodeMediaVersions.libraryKey} = ${key}
+        and ${episodeMediaVersions.showRatingKey} = ${items.ratingKey}
+    )`;
+  }
+  // Reflects whether filtering was actually applied, not just what was requested —
+  // library types other than movie/show (e.g. artist) have no duplicate-detection
+  // support, so a request for them is silently a no-op and must not claim otherwise.
+  const duplicatesOnly = duplicatesCond !== undefined;
+
+  const staleWhere = duplicatesCond
+    ? and(itemsByLibrary(serverId, key), staleCond, duplicatesCond)
+    : and(itemsByLibrary(serverId, key), staleCond);
 
   const [[{ total }], staleItems] = await Promise.all([
     db.select({ total: count() }).from(items).where(staleWhere),
     db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit)
       .offset(offset),
   ]);
+
+  // Attaches the full per-version breakdown to items whose fileSize is a combined
+  // total across multiple synced Plex Media versions (see Duplicate detection in
+  // CLAUDE.md) — deleting such an item from this page's bulk-delete flow removes every
+  // version, not just a redundant one, so the frontend renders the breakdown rather
+  // than letting that be a silent surprise. Scoped to just this page's rows (≤ limit,
+  // capped at 1000), backed by the existing (serverId, itemRatingKey) index — cheap
+  // regardless of library size, and duplicate-having movies are a small subset besides.
+  const pageRatingKeys = staleItems.map((i) => i.ratingKey);
+  const pageVersionRows = pageRatingKeys.length === 0 ? [] : await db
+    .select()
+    .from(itemMediaVersions)
+    .where(
+      and(
+        mediaVersionsByLibrary(serverId, key),
+        inArray(itemMediaVersions.itemRatingKey, pageRatingKeys),
+      ),
+    );
+  const versionsByKey = new Map<string, MediaVersion[]>();
+  for (const v of pageVersionRows) {
+    const list = versionsByKey.get(v.itemRatingKey) ?? [];
+    list.push({
+      mediaId: v.mediaId,
+      videoResolution: v.videoResolution,
+      bitrate: v.bitrate,
+      videoCodec: v.videoCodec,
+      container: v.container,
+      fileSize: v.fileSize,
+    });
+    versionsByKey.set(v.itemRatingKey, list);
+  }
+
+  // Existence-only badge for shows with a duplicate episode somewhere underneath —
+  // runs unconditionally the same way pageVersionRows does above (naturally empty for
+  // non-show libraries, one less branch to maintain), not gated behind duplicatesOnly.
+  const pageEpisodeVersionRows = pageRatingKeys.length === 0 ? [] : await db
+    .selectDistinct({ showRatingKey: episodeMediaVersions.showRatingKey })
+    .from(episodeMediaVersions)
+    .where(
+      and(
+        episodeVersionsByLibrary(serverId, key),
+        inArray(episodeMediaVersions.showRatingKey, pageRatingKeys),
+      ),
+    );
+  const showsWithDuplicateEpisodes = new Set(pageEpisodeVersionRows.map((r) => r.showRatingKey));
 
   return c.json(
     {
@@ -203,10 +294,20 @@ router.get('/:key/stale', async (c) => {
       filter,
       sort,
       order: orderStr,
+      duplicatesOnly,
       limit,
       offset,
       total,
-      items: staleItems,
+      items: staleItems.map((item) => {
+        const versions = versionsByKey.get(item.ratingKey);
+        return {
+          ...item,
+          ...(versions && versions.length >= 2 ? { versions } : {}),
+          ...(showsWithDuplicateEpisodes.has(item.ratingKey)
+            ? { hasDuplicateEpisodes: true as const }
+            : {}),
+        };
+      }),
     } satisfies StaleResponse,
   );
 });
