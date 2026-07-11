@@ -11,6 +11,7 @@ import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
+import { DuplicatesTableSkeleton } from "../components/Skeletons";
 
 const PAGE_SIZE = 50;
 
@@ -238,11 +239,7 @@ function DuplicatesPage() {
             )}
 
             {isLoading
-              ? (
-                <div className="flex justify-center py-16">
-                  <span className="loading loading-ring w-10 text-primary" />
-                </div>
-              )
+              ? <DuplicatesTableSkeleton />
               : data && data.groups.length === 0
               ? (
                 <div className="card bg-base-200">

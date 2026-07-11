@@ -11,6 +11,7 @@ import {
 import { api } from "../lib/api";
 import type { ActivityEvent, EventType } from "../lib/api";
 import { formatKilobytes, formatRelativeTime } from "../lib/format";
+import { ActivityListSkeleton } from "../components/Skeletons";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: async ({ context }) => {
@@ -67,9 +68,7 @@ function ActivityPage() {
       </div>
 
       {isLoading && (
-        <div className="flex justify-center py-12">
-          <span className="loading loading-spinner loading-md" />
-        </div>
+        <ActivityListSkeleton />
       )}
 
       {error && (

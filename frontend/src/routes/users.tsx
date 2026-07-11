@@ -10,6 +10,7 @@ import { HistorySyncWarning } from "../components/HistorySyncWarning";
 import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
+import { UsersTableSkeleton } from "../components/Skeletons";
 
 const PAGE_SIZE = 100;
 
@@ -139,11 +140,7 @@ function UsersPage() {
             )}
 
             {isLoading
-              ? (
-                <div className="flex justify-center py-16">
-                  <span className="loading loading-ring w-10 text-primary" />
-                </div>
-              )
+              ? <UsersTableSkeleton />
               : data && data.users.length === 0
               ? (
                 <div className="card bg-base-200">

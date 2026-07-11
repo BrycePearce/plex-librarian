@@ -177,3 +177,91 @@ export function MovieDetailSkeleton() {
     </div>
   );
 }
+
+export function UsersTableSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="overflow-x-auto" aria-label="Loading users">
+      <table className="table table-sm">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Last watched</th>
+            <th>Sharing risk</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: rows }).map((_, i) => (
+            <tr key={i}>
+              <td>
+                <div className="flex items-center gap-3">
+                  <div className="skeleton w-8 h-8 rounded-full shrink-0" />
+                  <div className="space-y-2 min-w-0 flex-1">
+                    <div className="skeleton h-4 w-28" />
+                    <div className="skeleton h-3 w-40" />
+                  </div>
+                </div>
+              </td>
+              <td><div className="skeleton h-3 w-20" /></td>
+              <td>
+                <div className="space-y-2">
+                  <div className="skeleton h-5 w-24 rounded-full" />
+                  <div className="skeleton h-3 w-20" />
+                </div>
+              </td>
+              <td />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function DuplicatesTableSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="overflow-x-auto" aria-label="Loading duplicate versions">
+      <table className="table table-sm">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Versions</th>
+            <th>Combined size</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: rows }).map((_, i) => (
+            <tr key={i}>
+              <td>
+                <div className="space-y-2">
+                  <div className="skeleton h-4 w-48" />
+                  <div className="skeleton h-3 w-24" />
+                </div>
+              </td>
+              <td><div className="skeleton h-5 w-20 rounded-full" /></td>
+              <td><div className="skeleton h-3 w-20" /></td>
+              <td />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function ActivityListSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-label="Loading activity">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="card bg-base-200">
+          <div className="card-body flex-row items-center gap-3 py-3">
+            <div className="skeleton w-4 h-4 rounded-full shrink-0" />
+            <div className="skeleton h-4 flex-1 max-w-md" />
+            <div className="skeleton h-3 w-16 shrink-0" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

@@ -5,9 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Plex Librarian</title>
+    <style>
+      /* Available in the first HTML paint, before the generated theme CSS arrives. */
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+        background-color: var(--boot-background, oklch(25.33% 0.016 252.42));
+      }
+    </style>
     <script>
-      // Applied before React mounts so the page never flashes the default daisyUI theme.
-      document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark';
+      // Applied before React or the generated daisyUI CSS loads so refreshes paint the
+      // saved theme's canvas immediately instead of briefly showing browser white.
+      const themeBackgrounds = {
+        dark: "oklch(25.33% 0.016 252.42)",
+        night: "oklch(20.768% 0.039 265.754)",
+        dracula: "oklch(28.822% 0.022 277.508)",
+        light: "oklch(100% 0 0)",
+      };
+      let theme = "dark";
+      try {
+        const savedTheme = localStorage.getItem("theme");
+        if (savedTheme && themeBackgrounds[savedTheme]) theme = savedTheme;
+      } catch {
+        // Storage can be unavailable under strict browser privacy settings; dark is
+        // the app default and remains the safest no-flash fallback.
+      }
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.style.setProperty(
+        "--boot-background",
+        themeBackgrounds[theme],
+      );
+      document.documentElement.style.colorScheme = theme === "light"
+        ? "light"
+        : "dark";
     </script>
   </head>
   <body>

@@ -28,8 +28,11 @@ const router = createRouter({
       <span className="loading loading-spinner loading-lg text-primary" />
     </div>
   ),
-  defaultPendingMs: 0,
-  defaultPendingMinMs: 0,
+  // Fast auth checks should feel instant, not flash a loader between two fully-rendered
+  // pages. If navigation really does block, keep the fallback visible long enough that
+  // it reads as intentional rather than a flicker.
+  defaultPendingMs: 200,
+  defaultPendingMinMs: 300,
 })
 
 declare module '@tanstack/react-router' {
