@@ -4,6 +4,7 @@ import { items, users } from '../db/schema.ts';
 import { itemByRatingKey, userByLocalAccountId, userByUsername } from '../db/scope.ts';
 import { getActiveServer } from '../lib/plex.ts';
 import type { PlexWebhookPayload } from '../lib/plex.ts';
+import { networkKeyForIp } from '../lib/network.ts';
 import { UNKNOWN_USERNAME_PLACEHOLDER } from '../lib/plexUsers.ts';
 
 // media.play  — fires immediately on playback start; stamps lastViewedAt = now for real-time feel
@@ -169,6 +170,23 @@ router.post('/plex', async (c) => {
           countScrobble ? scrobbleAt : null,
           serverId,
           accountId,
+        );
+
+        client.prepare(
+          `INSERT INTO user_play_observations
+             (server_id, account_id, observed_at, event, ip, network_key, player_uuid,
+              player_title, is_local)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          serverId,
+          accountId,
+          now,
+          payload.event,
+          ip,
+          networkKeyForIp(ip),
+          payload.Player?.uuid ?? null,
+          payload.Player?.title ?? null,
+          payload.Player?.local == null ? null : Number(payload.Player.local),
         );
 
         if (ip !== null) {

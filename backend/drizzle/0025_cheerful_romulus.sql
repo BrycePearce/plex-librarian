@@ -1,0 +1,1 @@
+ALTER TABLE `user_play_observations` ADD `network_key` text;

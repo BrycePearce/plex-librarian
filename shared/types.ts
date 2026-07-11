@@ -191,7 +191,7 @@ export interface DeleteMediaVersionResponse {
   fileSizeFreed: number;
 }
 
-// --- Users (inactive user detection) ---
+// --- Users (inactive-user and account-sharing review) ---
 // Surfaces who has access to the server and how active they are — including revoking
 // a user's access via DELETE /api/users/:accountId (see RemoveUserResponse below).
 // lastViewedAt is null both for a genuine never-watched user and for one not yet
@@ -204,6 +204,32 @@ export interface PlexUser {
   thumb: string | null;
   isOwner: boolean;
   lastViewedAt: number | null;
+  sharingRisk: SharingRiskAssessment;
+}
+
+export type SharingDataConfidence = 'none' | 'low' | 'medium' | 'high';
+export type SharingRiskLevel = 'insufficient_data' | 'low' | 'watch' | 'review';
+export type SharingRiskSignalType =
+  | 'remote_network_diversity'
+  | 'remote_device_diversity'
+  | 'rapid_network_switching';
+
+export interface SharingRiskSignal {
+  type: SharingRiskSignalType;
+  weight: number;
+  summary: string;
+}
+
+export interface SharingRiskAssessment {
+  // Deterministic review score, not a probability that sharing occurred.
+  riskScore: number;
+  riskLevel: SharingRiskLevel;
+  dataConfidence: SharingDataConfidence;
+  observationCount: number;
+  activeDays: number;
+  observationSpanDays: number;
+  observedSince: number | null;
+  signals: SharingRiskSignal[];
 }
 
 export interface UsersResponse {

@@ -162,6 +162,20 @@
       "when": 1783717450570,
       "tag": "0023_handy_kitty_pryde",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1783751171992,
+      "tag": "0024_sturdy_vance_astro",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1783751938216,
+      "tag": "0025_cheerful_romulus",
+      "breakpoints": true
     }
   ]
 }

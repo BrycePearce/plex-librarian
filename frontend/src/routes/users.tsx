@@ -163,6 +163,7 @@ function UsersPage() {
                       <tr>
                         <th>User</th>
                         <th>Last watched</th>
+                        <th>Sharing risk</th>
                         <th />
                       </tr>
                     </thead>
@@ -211,6 +212,9 @@ function UsersPage() {
                                 </span>
                               )}
                           </td>
+                          <td>
+                            <SharingRiskCell assessment={u.sharingRisk} />
+                          </td>
                           <td className="text-right">
                             {!u.isOwner && (
                               <button
@@ -248,6 +252,46 @@ function UsersPage() {
           reviewUser && removeMutation.mutate(reviewUser.accountId)}
         onCancel={closeReview}
       />
+    </div>
+  );
+}
+
+function SharingRiskCell({
+  assessment,
+}: {
+  assessment: PlexUser["sharingRisk"];
+}) {
+  const label = assessment.riskLevel === "insufficient_data"
+    ? "Insufficient data"
+    : assessment.riskLevel === "review"
+    ? "Review"
+    : assessment.riskLevel === "watch"
+    ? "Watch"
+    : "Low";
+  const badgeClass = assessment.riskLevel === "review"
+    ? "badge-error"
+    : assessment.riskLevel === "watch"
+    ? "badge-warning"
+    : assessment.riskLevel === "low"
+    ? "badge-success"
+    : "badge-ghost";
+  const signalSummary = assessment.signals.length > 0
+    ? assessment.signals.map((signal) => signal.summary).join("; ")
+    : "No sharing signals observed";
+  const title = assessment.dataConfidence === "none"
+    ? "No playback observations have been collected for this user yet."
+    : `${assessment.observationCount} observations across ${assessment.activeDays} active days. ${signalSummary}.`;
+
+  return (
+    <div className="flex flex-col items-start gap-1" title={title}>
+      <span className={`badge badge-sm badge-outline ${badgeClass}`}>
+        {label}
+        {assessment.riskLevel !== "insufficient_data" &&
+          ` · ${assessment.riskScore}`}
+      </span>
+      <span className="text-[11px] text-base-content/40 capitalize">
+        {assessment.dataConfidence} confidence
+      </span>
     </div>
   );
 }

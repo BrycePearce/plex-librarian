@@ -1,7 +1,12 @@
 import { and, desc, eq, lt, ne } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { LOG_RETENTION_DAYS, pruneOlderThan } from '../db/prune.ts';
-import { settings, syncLog, userIpHistory } from '../db/schema.ts';
+import {
+  settings,
+  syncLog,
+  userIpHistory,
+  userPlayObservations,
+} from '../db/schema.ts';
 import { PlexConfigError, resolveActiveServer } from '../lib/plex.ts';
 import type { PlexClient } from '../lib/plex.ts';
 import { sweepStalePendingSyncs, triggerFullSync } from './syncManager.ts';
@@ -24,7 +29,7 @@ async function pruneOldSyncLogs(): Promise<void> {
   );
 }
 
-async function pruneOldUserIpHistory(): Promise<void> {
+async function pruneOldUserActivityHistory(): Promise<void> {
   const [row] = await db.select({ days: settings.ipHistoryRetentionDays })
     .from(settings)
     .where(eq(settings.id, 1))
@@ -33,6 +38,7 @@ async function pruneOldUserIpHistory(): Promise<void> {
   if (days === 0) return;
   const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
   await db.delete(userIpHistory).where(lt(userIpHistory.lastSeenAt, cutoff));
+  await db.delete(userPlayObservations).where(lt(userPlayObservations.observedAt, cutoff));
 }
 
 const STALE_THRESHOLD_SECONDS = 24 * 60 * 60;
@@ -111,7 +117,7 @@ async function sweepStalePendingRows(): Promise<void> {
 // pruning failure can't silently skip the sync-trigger check that follows it.
 export async function startupSyncIfStale(): Promise<void> {
   try {
-    await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserIpHistory()]);
+    await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserActivityHistory()]);
   } catch (err) {
     console.error('Scheduled data pruning failed:', err);
   }
@@ -149,7 +155,7 @@ export function startScheduler(): void {
       console.error('Stale-pending sync sweep failed:', err);
     }
     try {
-      await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserIpHistory()]);
+      await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserActivityHistory()]);
     } catch (err) {
       console.error('Scheduled data pruning failed:', err);
     }

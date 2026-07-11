@@ -101,10 +101,10 @@ function SettingsPage() {
         <div className="card-body gap-4">
           <div className="space-y-3">
             <div>
-              <h2 className="font-medium">IP history retention</h2>
+              <h2 className="font-medium">User activity retention</h2>
               <p className="text-sm text-base-content/40 mt-0.5">
-                Keep user IP transitions for this many days. Set to 0 to keep
-                them forever.
+                Keep user IP, device, and playback observations for this many
+                days. Set to 0 to keep them forever.
               </p>
             </div>
             {data
@@ -121,7 +121,7 @@ function SettingsPage() {
                   type="number"
                   className="input input-bordered input-sm w-24"
                   disabled
-                  aria-label="Loading IP history retention"
+                  aria-label="Loading user activity retention"
                 />
               )}
           </div>

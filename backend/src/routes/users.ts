@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { servers, settings, users } from '../db/schema.ts';
 import { userByAccountId, usersByServer } from '../db/scope.ts';
@@ -7,6 +7,7 @@ import { type ActiveServerVariables, withActiveServerId } from '../middleware/ac
 import { getActiveServer } from '../lib/plex.ts';
 import { PlexRemoveUserError, removeUserAccess } from '../lib/plexUsers.ts';
 import { logEvents } from '../services/events.ts';
+import { assessUserSharingRisk } from '../services/userSharingRisk.ts';
 import type { PlexUser, RemoveUserResponse, UsersResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -81,6 +82,7 @@ router.get('/', async (c) => {
 
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - inactiveDays * 86400;
+  const riskWindowCutoff = now - 30 * 86400;
   const inactiveCond = or(isNull(users.lastViewedAt), lt(users.lastViewedAt, cutoff));
 
   const where = filter === 'inactive'
@@ -89,9 +91,62 @@ router.get('/', async (c) => {
 
   const [[{ total }], rows] = await Promise.all([
     db.select({ total: count() }).from(users).where(where),
-    db.select().from(users).where(where).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(
-      offset,
-    ),
+    db.select({
+      accountId: users.accountId,
+      username: users.username,
+      email: users.email,
+      thumb: users.thumb,
+      isOwner: users.isOwner,
+      lastViewedAt: users.lastViewedAt,
+      observationCount: sql<number>`(
+        SELECT count(*) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play'
+      )`,
+      firstObservedAt: sql<number | null>`(
+        SELECT min(o.observed_at) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play'
+      )`,
+      lastObservedAt: sql<number | null>`(
+        SELECT max(o.observed_at) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play'
+      )`,
+      activeDays: sql<number>`(
+        SELECT count(DISTINCT date(o.observed_at, 'unixepoch'))
+        FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play'
+      )`,
+      completeObservationCount: sql<number>`(
+        SELECT count(*) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play' AND o.ip IS NOT NULL AND o.player_uuid IS NOT NULL
+      )`,
+      remoteNetworks30d: sql<number>`(
+        SELECT count(DISTINCT coalesce(o.network_key, o.ip)) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
+          AND o.is_local = 0 AND o.ip IS NOT NULL
+      )`,
+      remotePlayers30d: sql<number>`(
+        SELECT count(DISTINCT o.player_uuid) FROM user_play_observations o
+        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+          AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
+          AND o.is_local = 0 AND o.player_uuid IS NOT NULL
+      )`,
+      maxRemoteNetworksPerDay30d: sql<number>`coalesce((
+        SELECT max(network_count) FROM (
+          SELECT count(DISTINCT coalesce(o.network_key, o.ip)) AS network_count
+          FROM user_play_observations o
+          WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
+            AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
+            AND o.is_local = 0 AND o.ip IS NOT NULL
+          GROUP BY date(o.observed_at, 'unixepoch')
+        )
+      ), 0)`,
+    }).from(users).where(where).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(offset),
   ]);
 
   return c.json(
@@ -108,6 +163,16 @@ router.get('/', async (c) => {
         thumb: u.thumb,
         isOwner: u.isOwner,
         lastViewedAt: u.lastViewedAt,
+        sharingRisk: assessUserSharingRisk({
+          observationCount: u.observationCount,
+          firstObservedAt: u.firstObservedAt,
+          lastObservedAt: u.lastObservedAt,
+          activeDays: u.activeDays,
+          completeObservationCount: u.completeObservationCount,
+          remoteNetworks30d: u.remoteNetworks30d,
+          remotePlayers30d: u.remotePlayers30d,
+          maxRemoteNetworksPerDay30d: u.maxRemoteNetworksPerDay30d,
+        }),
       })),
     } satisfies UsersResponse,
   );

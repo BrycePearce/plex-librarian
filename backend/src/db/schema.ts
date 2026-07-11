@@ -93,7 +93,8 @@ export const settings = sqliteTable('settings', {
   // staleness and user inactivity are different concepts that happen to share a "days"
   // shape. Used by GET /api/users' default `filter=inactive` threshold.
   inactiveUserDays: integer('inactive_user_days').notNull().default(30),
-  // Global retention for per-user IP transitions. Zero disables automatic pruning.
+  // Global retention for per-user IP transitions and playback observations. Zero
+  // disables automatic pruning.
   ipHistoryRetentionDays: integer('ip_history_retention_days').notNull().default(365),
 });
 
@@ -127,8 +128,7 @@ export const users = sqliteTable(
     isOwner: integer('is_owner', { mode: 'boolean' }).notNull().default(false),
     // null = never watched anything on this server, or roster/reconciliation hasn't
     // run yet for this account. Maintained as a running max (like items.lastViewedAt)
-    // rather than derived at query time from a full play-log table — this app
-    // deliberately never accumulates one (see CLAUDE.md's Scale assumptions).
+    // rather than derived at query time from the bounded userPlayObservations table.
     lastViewedAt: integer('last_viewed_at'),
     // Webhook-only (Player.publicAddress) — never backfilled by history sync, which
     // doesn't carry IP. Unavailable entirely on non-Plex-Pass installs.
@@ -201,6 +201,42 @@ export const userIpHistory = sqliteTable(
       table.viewedAt,
     ),
     lastSeenIdx: index('user_ip_history_last_seen_idx').on(table.lastSeenAt),
+  }),
+);
+
+// One bounded row per accepted user playback webhook. Unlike userIpHistory, this
+// deliberately preserves repeated observations from the same IP so a future
+// account-sharing detector can correlate simultaneous activity, device churn, and
+// local/remote playback. It contains only the player/network fields needed for that
+// analysis—no media titles or library metadata. There is deliberately no FK to users:
+// observations survive roster removal/re-addition until the retention window expires.
+export const userPlayObservations = sqliteTable(
+  'user_play_observations',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    accountId: integer('account_id').notNull(),
+    observedAt: integer('observed_at').notNull(),
+    event: text('event').notNull(),
+    ip: text('ip'),
+    // Normalized /24 (IPv4) or /64 (IPv6) used for diversity scoring.
+    networkKey: text('network_key'),
+    playerUuid: text('player_uuid'),
+    playerTitle: text('player_title'),
+    isLocal: integer('is_local', { mode: 'boolean' }),
+  },
+  (table) => ({
+    accountObservedIdx: index('user_play_observations_account_observed_idx').on(
+      table.serverId,
+      table.accountId,
+      table.observedAt,
+    ),
+    observedAtIdx: index('user_play_observations_observed_at_idx').on(table.observedAt),
+    playerIdx: index('user_play_observations_player_idx').on(
+      table.serverId,
+      table.accountId,
+      table.playerUuid,
+    ),
   }),
 );
 

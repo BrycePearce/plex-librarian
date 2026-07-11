@@ -34,16 +34,16 @@ services:
 
 ### Environment variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DB_PATH` | No | Path to SQLite database (default: `/data/librarian.db`) |
-| `PORT` | No | HTTP port (default: `8080`) |
-| `PLEX_URL` | No | Skip OAuth — direct URL to your Plex server |
-| `PLEX_TOKEN` | No | Skip OAuth — your Plex auth token |
-| `LIBRARY_SYNC_CONCURRENCY` | No | Max libraries synced in parallel (default: `3`) |
-| `FETCH_CONCURRENCY` | No | Max concurrent Plex page requests per library (default: `8`) |
-| `SYNC_STALL_TIMEOUT_MINUTES` | No | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
-| `LOG_RETENTION_DAYS` | No | Days to keep sync history and activity feed entries before they're automatically deleted (default: `180`) |
+| Variable                     | Required | Description                                                                                                   |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `DB_PATH`                    | No       | Path to SQLite database (default: `/data/librarian.db`)                                                       |
+| `PORT`                       | No       | HTTP port (default: `8080`)                                                                                   |
+| `PLEX_URL`                   | No       | Skip OAuth — direct URL to your Plex server                                                                   |
+| `PLEX_TOKEN`                 | No       | Skip OAuth — your Plex auth token                                                                             |
+| `LIBRARY_SYNC_CONCURRENCY`   | No       | Max libraries synced in parallel (default: `3`)                                                               |
+| `FETCH_CONCURRENCY`          | No       | Max concurrent Plex page requests per library (default: `8`)                                                  |
+| `SYNC_STALL_TIMEOUT_MINUTES` | No       | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
+| `LOG_RETENTION_DAYS`         | No       | Days to keep sync history and activity feed entries before they're automatically deleted (default: `180`)     |
 
 Migrations run automatically on startup. No manual database setup required.
 
@@ -67,37 +67,42 @@ In Plex Web, go to **Settings → Webhooks → Add Webhook** and enter:
 http://<your-host>:8288/api/webhook/plex
 ```
 
-| Event | Effect |
-|-------|--------|
-| `media.play` | Updates item/user `lastViewedAt`, player, and IP history |
-| `media.scrobble` | Also updates play count and total watched (Plex's 90%-watched threshold) |
+| Event            | Effect                                                                      |
+| ---------------- | --------------------------------------------------------------------------- |
+| `media.play`     | Updates item/user `lastViewedAt` and records bounded IP/device observations |
+| `media.scrobble` | Updates Plex's authoritative watched state and records another observation  |
+
+The Users page combines recent remote-network and player diversity into a conservative,
+explainable review score. The score is not a probability or a finding that an account is
+being shared. Evidence confidence is reported separately; new users and installations with
+no observations are shown as **Insufficient data**, never as low risk.
 
 ## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/settings` | Global defaults, including stale-item, inactive-user, and IP-history retention days |
-| PATCH | `/api/settings` | Update global defaults |
-| GET | `/api/users` | Server user roster and activity summary |
-| DELETE | `/api/users/:accountId` | Revoke a user's access to this server |
-| POST | `/api/auth/plex/pin` | Start OAuth PIN flow, returns `{ pinId, authUrl }` |
-| GET | `/api/auth/plex/pin/:id` | Poll PIN status, returns `{ status, servers? }` |
-| POST | `/api/auth/plex/server` | Save chosen server after OAuth |
-| GET | `/api/auth/status` | Returns `{ configured, source, reachable? }` — `configured: false` redirects the UI to setup |
-| DELETE | `/api/auth/plex` | Disconnect / switch servers |
-| GET | `/api/libraries` | All synced libraries |
-| GET | `/api/libraries/:key/stale` | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.) |
-| PATCH | `/api/libraries/:key` | Set a per-library `staleMinAgeDays` override (`null` to use the global default) |
-| GET | `/api/libraries/:key/shows/:ratingKey` | Show detail with per-season rollups |
-| DELETE | `/api/libraries/:key/items` | Delete items' media from Plex (permanent) |
-| GET | `/api/proxy/thumb` | Server-side Plex thumbnail proxy |
-| POST | `/api/sync` | Trigger a full sync from Plex |
-| POST | `/api/sync/libraries/:key` | Trigger a sync for a single library |
-| GET | `/api/sync/history` | Last 20 sync runs |
-| GET | `/api/sync/:id` | Status of a specific sync run |
-| GET | `/api/sync/:id/events` | SSE stream of live sync progress |
-| POST | `/api/webhook/plex` | Plex webhook receiver (Plex Pass only) |
+| Method | Path                                   | Description                                                                                  |
+| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| GET    | `/health`                              | Health check                                                                                 |
+| GET    | `/api/settings`                        | Global defaults, including stale-item, inactive-user, and user-activity retention days       |
+| PATCH  | `/api/settings`                        | Update global defaults                                                                       |
+| GET    | `/api/users`                           | Server user roster, activity summary, and explainable sharing-risk assessment                |
+| DELETE | `/api/users/:accountId`                | Revoke a user's access to this server                                                        |
+| POST   | `/api/auth/plex/pin`                   | Start OAuth PIN flow, returns `{ pinId, authUrl }`                                           |
+| GET    | `/api/auth/plex/pin/:id`               | Poll PIN status, returns `{ status, servers? }`                                              |
+| POST   | `/api/auth/plex/server`                | Save chosen server after OAuth                                                               |
+| GET    | `/api/auth/status`                     | Returns `{ configured, source, reachable? }` — `configured: false` redirects the UI to setup |
+| DELETE | `/api/auth/plex`                       | Disconnect / switch servers                                                                  |
+| GET    | `/api/libraries`                       | All synced libraries                                                                         |
+| GET    | `/api/libraries/:key/stale`            | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.)                     |
+| PATCH  | `/api/libraries/:key`                  | Set a per-library `staleMinAgeDays` override (`null` to use the global default)              |
+| GET    | `/api/libraries/:key/shows/:ratingKey` | Show detail with per-season rollups                                                          |
+| DELETE | `/api/libraries/:key/items`            | Delete items' media from Plex (permanent)                                                    |
+| GET    | `/api/proxy/thumb`                     | Server-side Plex thumbnail proxy                                                             |
+| POST   | `/api/sync`                            | Trigger a full sync from Plex                                                                |
+| POST   | `/api/sync/libraries/:key`             | Trigger a sync for a single library                                                          |
+| GET    | `/api/sync/history`                    | Last 20 sync runs                                                                            |
+| GET    | `/api/sync/:id`                        | Status of a specific sync run                                                                |
+| GET    | `/api/sync/:id/events`                 | SSE stream of live sync progress                                                             |
+| POST   | `/api/webhook/plex`                    | Plex webhook receiver (Plex Pass only)                                                       |
 
 ## Development
 
