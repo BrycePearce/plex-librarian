@@ -1,6 +1,7 @@
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
+import "../../components/dataSurfaces.css";
 
 export function DuplicateGroupRow({
   item,
@@ -10,7 +11,7 @@ export function DuplicateGroupRow({
   onReview: () => void;
 }) {
   return (
-    <tr className="row-hover">
+    <tr className="row-hover group polished-row">
       <td>
         <div className="flex items-center gap-3">
           <PosterThumb
@@ -58,7 +59,11 @@ export function DuplicateGroupRow({
           : "—"}
       </td>
       <td className="text-right">
-        <button type="button" className="btn btn-sm" onClick={onReview}>
+        <button
+          type="button"
+          className="btn btn-sm opacity-70 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+          onClick={onReview}
+        >
           Review
         </button>
       </td>

@@ -39,7 +39,9 @@ function RootLayout() {
       </nav>
       <main className="scroll-area flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
-          <Outlet />
+          <div className="flex flex-col flex-1">
+            <Outlet />
+          </div>
         </div>
       </main>
       {import.meta.env.DEV && (

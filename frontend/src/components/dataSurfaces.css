@@ -1,0 +1,37 @@
+/* Shared interaction polish for data-heavy surfaces. */
+.polished-row {
+  transition:
+    background-color 140ms ease-out,
+    box-shadow 140ms ease-out;
+}
+
+.polished-row:hover,
+.polished-row:focus-within {
+  background-color: color-mix(in oklch, var(--color-primary) 6%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in oklch, var(--color-primary) 70%, transparent);
+}
+
+.interactive-card {
+  transition:
+    background-color 140ms ease-out,
+    border-color 140ms ease-out,
+    transform 140ms ease-out,
+    box-shadow 140ms ease-out;
+}
+
+.interactive-card:hover {
+  background-color: var(--color-base-300);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px color-mix(in oklch, black 15%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interactive-card,
+  .polished-row {
+    transition: none;
+  }
+
+  .interactive-card:hover {
+    transform: none;
+  }
+}

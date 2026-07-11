@@ -1,7 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, BadgeCheck } from "lucide-react";
 import { api } from "../lib/api";
 import type { DuplicateGroup } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
@@ -12,6 +12,7 @@ import { Pagination } from "../components/Pagination";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
+import { EmptyState } from "../components/EmptyState";
 
 const PAGE_SIZE = 50;
 
@@ -242,13 +243,11 @@ function DuplicatesPage() {
               ? <DuplicatesTableSkeleton />
               : data && data.groups.length === 0
               ? (
-                <div className="card bg-base-200">
-                  <div className="card-body items-center text-center py-14">
-                    <p className="text-base-content/60">
-                      No duplicate versions found.
-                    </p>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={BadgeCheck}
+                  title="No duplicate versions"
+                  description="Your library is tidy—there are no redundant synced versions in this view."
+                />
               )
               : (
                 <div className="overflow-x-auto">

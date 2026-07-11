@@ -36,3 +36,9 @@
 ::view-transition-new(root) {
   animation: theme-reveal 0.5s ease-in;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

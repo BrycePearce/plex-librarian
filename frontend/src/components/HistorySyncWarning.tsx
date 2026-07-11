@@ -1,5 +1,6 @@
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
+import "./HistorySyncWarning.css";
 
 // Callers that track a live per-library sync signal (`isSyncing`) get a softer "in
 // progress" info variant while a sync is actually running, only falling through to the

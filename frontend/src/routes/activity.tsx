@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   CheckCircle,
   Copy,
+  History,
   Trash2,
   UserX,
 } from "lucide-react";
@@ -12,6 +13,8 @@ import { api } from "../lib/api";
 import type { ActivityEvent, EventType } from "../lib/api";
 import { formatKilobytes, formatRelativeTime } from "../lib/format";
 import { ActivityListSkeleton } from "../components/Skeletons";
+import { EmptyState } from "../components/EmptyState";
+import "../components/dataSurfaces.css";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: async ({ context }) => {
@@ -79,7 +82,11 @@ function ActivityPage() {
       )}
 
       {!isLoading && !error && allEvents.length === 0 && (
-        <p className="text-base-content/40 text-sm">No activity yet.</p>
+        <EmptyState
+          icon={History}
+          title="No activity yet"
+          description="Syncs, deletions, and access changes will leave a trail here."
+        />
       )}
 
       {allEvents.length > 0 && (
@@ -210,7 +217,7 @@ function EventRow(
     : undefined;
 
   return (
-    <div className="card bg-base-200">
+    <div className="card bg-base-200 interactive-card">
       <div className="card-body flex-row items-center gap-3 py-3">
         <Icon className={`w-4 h-4 shrink-0 ${iconClass}`} />
         <span className="text-sm flex-1 min-w-0 truncate">

@@ -1,7 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ArrowLeft, User, UserX } from "lucide-react";
+import { ArrowLeft, User, UserCheck, UserX } from "lucide-react";
 import { api } from "../lib/api";
 import type { PlexUser } from "../lib/api";
 import { formatDate } from "../lib/format";
@@ -11,6 +11,8 @@ import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
 import { UsersTableSkeleton } from "../components/Skeletons";
+import { EmptyState } from "../components/EmptyState";
+import "../components/dataSurfaces.css";
 
 const PAGE_SIZE = 100;
 
@@ -143,15 +145,15 @@ function UsersPage() {
               ? <UsersTableSkeleton />
               : data && data.users.length === 0
               ? (
-                <div className="card bg-base-200">
-                  <div className="card-body items-center text-center py-14">
-                    <p className="text-base-content/60">
-                      {filter === "inactive"
-                        ? "No inactive users found."
-                        : "No users found."}
-                    </p>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={UserCheck}
+                  title={filter === "inactive"
+                    ? "Everyone looks active"
+                    : "No users found"}
+                  description={filter === "inactive"
+                    ? "No one has crossed your inactive-user threshold."
+                    : "Users with access will appear here after the roster syncs."}
+                />
               )
               : (
                 <div className="overflow-x-auto">
@@ -166,7 +168,7 @@ function UsersPage() {
                     </thead>
                     <tbody>
                       {data!.users.map((u) => (
-                        <tr key={u.accountId}>
+                        <tr key={u.accountId} className="group polished-row">
                           <td>
                             <div className="flex items-center gap-3">
                               {u.thumb
@@ -216,7 +218,7 @@ function UsersPage() {
                             {!u.isOwner && (
                               <button
                                 type="button"
-                                className="btn btn-ghost btn-xs btn-square text-error"
+                                className="btn btn-ghost btn-xs btn-square text-error opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                                 onClick={() => openReview(u)}
                                 aria-label={`Remove ${u.username}'s access`}
                                 title="Remove access"

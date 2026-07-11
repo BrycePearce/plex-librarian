@@ -1,64 +1,3 @@
-/* Animated "beam" ring for banners that want to draw the eye (sync-status alerts) — a
-   bright arc chases around the border via a rotating conic-gradient, clipped to a thin
-   ring with a mask so it reads as a border effect rather than a filled background. The
-   angle lives in a registered custom property so the browser can interpolate it smoothly
-   frame-to-frame instead of snapping between conic-gradient recalculations. */
-@property --beam-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
-.banner-beam {
-  position: relative;
-  overflow: hidden;
-  --beam-color: var(--color-primary);
-}
-
-.banner-beam::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--beam-angle),
-    transparent 0deg,
-    transparent 265deg,
-    var(--beam-color) 300deg,
-    color-mix(in oklch, var(--beam-color) 35%, white) 320deg,
-    var(--beam-color) 340deg,
-    transparent 360deg
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: banner-beam-spin 2.8s linear infinite;
-  pointer-events: none;
-}
-
-.banner-beam-warning {
-  --beam-color: var(--color-warning);
-}
-
-.banner-beam-info {
-  --beam-color: var(--color-info);
-}
-
-@keyframes banner-beam-spin {
-  to {
-    --beam-angle: 360deg;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .banner-beam::before {
-    animation: none;
-  }
-}
-
 .row-accent {
   transition: box-shadow 150ms ease-out;
 }
@@ -69,10 +8,8 @@
     inset 0 -1px 0 0 var(--color-primary);
 }
 
-/* Persistent "this row is checked" tint — unlike .row-accent above, this isn't hover-only:
-   it stays lit for as long as the row is selected. Plain custom properties (not Tailwind
-   utility classes) so it reliably outranks daisyUI's own layered row-hover background
-   rather than depending on cascade-layer ordering between the two. */
+/* Persistent selected-row tint. Custom properties reliably outrank daisyUI's layered
+   row-hover background without relying on cascade-layer ordering. */
 .row-selected {
   background-color: color-mix(in oklch, var(--color-primary) 6%, transparent);
 }
