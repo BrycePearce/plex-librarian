@@ -11,6 +11,11 @@ export const servers = sqliteTable('servers', {
   url: text('url').notNull(),
   accessToken: text('access_token').notNull(),
   lastConnectedAt: integer('last_connected_at').notNull(),
+  // Set only when the current roster-sync attempt (syncUsers) has completed for this
+  // server — reset to null the moment a new attempt starts, same contract as
+  // libraries.historySyncedAt. Null means the `users` table cannot yet be trusted to
+  // reflect who currently has access.
+  usersSyncedAt: integer('users_synced_at'),
 });
 
 export const libraries = sqliteTable(
@@ -84,7 +89,120 @@ export const settings = sqliteTable('settings', {
   autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).default(true),
   autoSyncHour: integer('auto_sync_hour').default(3), // 0–23 local server time; default 3am
   staleMinAgeDays: integer('stale_min_age_days').notNull().default(90),
+  // Deliberately a separate column from staleMinAgeDays rather than reused — media
+  // staleness and user inactivity are different concepts that happen to share a "days"
+  // shape. Used by GET /api/users' default `filter=inactive` threshold.
+  inactiveUserDays: integer('inactive_user_days').notNull().default(30),
+  // Global retention for per-user IP transitions. Zero disables automatic pruning.
+  ipHistoryRetentionDays: integer('ip_history_retention_days').notNull().default(365),
 });
+
+// One row per Plex account with access to a server (owner + friends/Home members
+// actually shared to that server, per plex.tv's shared_servers listing) — the roster,
+// refreshed by syncUsers() on every full sync. Deliberately keyed by the GLOBAL
+// plex.tv account id (`accountId`), not the PMS-local account id: the global id is the
+// only identifier guaranteed to exist for a user who has access but has never
+// connected/watched anything, which is exactly the "never watched" case this feature
+// exists to surface. Empirically verified (see plan) that these two id spaces are
+// genuinely different — e.g. the server owner is always local id 1 on the PMS's own
+// /accounts endpoint, but has a distinct, much larger global plex.tv account id.
+//
+// Webhook payloads (Account.id) and /status/sessions/history/all entries (accountID)
+// both report the PMS-LOCAL id, not the global one, so they can't be joined against
+// `accountId` directly. `localAccountId` bridges the gap: syncUsers() reconciles it by
+// matching username against the PMS's own /accounts endpoint. It's nullable and starts
+// out unset for a user who has access but has never actually connected to the PMS
+// (Plex doesn't allocate them a local id until they do) — activity writes fall back to
+// a username match to self-heal that mapping the first time such a user is ever seen
+// (see webhook.ts and syncLibraryHistory).
+export const users = sqliteTable(
+  'users',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    accountId: integer('account_id').notNull(),
+    localAccountId: integer('local_account_id'),
+    username: text('username').notNull(),
+    email: text('email'),
+    thumb: text('thumb'),
+    isOwner: integer('is_owner', { mode: 'boolean' }).notNull().default(false),
+    // null = never watched anything on this server, or roster/reconciliation hasn't
+    // run yet for this account. Maintained as a running max (like items.lastViewedAt)
+    // rather than derived at query time from a full play-log table — this app
+    // deliberately never accumulates one (see CLAUDE.md's Scale assumptions).
+    lastViewedAt: integer('last_viewed_at'),
+    // Webhook-only (Player.publicAddress) — never backfilled by history sync, which
+    // doesn't carry IP. Unavailable entirely on non-Plex-Pass installs.
+    lastIp: text('last_ip'),
+    // Webhook-only (Player.title — the device/player name, e.g. "LG 50UN6950ZUF" or
+    // "Chrome") — same availability caveat as lastIp. Written unconditionally on every
+    // matched event, not scrobble-gated, matching lastViewedAt/lastIp's "most recent"
+    // semantics rather than totalPlays/totalDuration's "count of real plays" semantics.
+    lastPlayer: text('last_player'),
+    // Both bumped ONLY on media.scrobble (Plex's own "this counts as a real play"
+    // signal, fired at 90% watched), not media.play — mirrors items.viewCount's
+    // existing scrobble-only gating in webhook.ts, so a play that's started but
+    // abandoned doesn't inflate either counter. totalDuration is stored in
+    // milliseconds, matching items.duration's raw-from-Plex convention (frontend
+    // divides by 1000 before formatting) — summed from Metadata.duration per scrobble,
+    // an approximation ("this play counted as one full watch-through") rather than
+    // actual elapsed playback time, which Plex doesn't report.
+    totalPlays: integer('total_plays').notNull().default(0),
+    totalDuration: integer('total_duration').notNull().default(0),
+    // Plex includes the authoritative lastViewedAt value on scrobble payloads. Keep
+    // the latest value so duplicate/retried webhook deliveries cannot increment the
+    // aggregate counters more than once.
+    lastScrobbledAt: integer('last_scrobbled_at'),
+    // Plex's own id for this specific friend/server share — NOT accountId (global
+    // plex.tv id), NOT servers.id (this app's row), NOT machineIdentifier. It's the
+    // `id` attribute on the per-user <Server> element nested inside the /api/users
+    // friends XML (see plexUsers.ts's parseFriendsXml). Required to revoke just this
+    // server's access via DELETE /api/servers/{machineIdentifier}/shared_servers/{id}
+    // — the per-server-scoped removal endpoint, not the "unfriend everywhere" one.
+    // Always null for the owner row (nothing to revoke); should be non-null for every
+    // other row once a roster sync has run, since roster membership itself already
+    // requires a matching <Server> entry to exist.
+    sharedServerId: integer('shared_server_id'),
+    // Bumped ONLY by syncUsers()' roster upsert — webhook/history writes to
+    // lastViewedAt/lastIp/lastPlayer/totalPlays/totalDuration/localAccountId must never
+    // touch this column. It's what the
+    // post-sync prune (`WHERE updated_at < now`) uses to drop users no longer in the
+    // roster; letting activity writes refresh it would let a departed user's stray
+    // in-flight webhook event keep them from ever being pruned.
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.accountId] }),
+    lastViewedAtIdx: index('users_last_viewed_at_idx').on(table.serverId, table.lastViewedAt),
+    localAccountIdx: index('users_local_account_idx').on(table.serverId, table.localAccountId),
+  }),
+);
+
+// One row per IP transition for an account, not one row per play event. `viewedAt`
+// records when the transition began and `lastSeenAt` is refreshed while the same IP
+// remains current. That preserves the recency needed by a future account-sharing
+// detector without growing this table for every play. The hourly scheduler applies the
+// administrator's retention setting. There is deliberately no FK to
+// users: roster membership is mutable, but the collected history must survive access
+// removal and re-addition. The server FK still removes all history with its server.
+export const userIpHistory = sqliteTable(
+  'user_ip_history',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    accountId: integer('account_id').notNull(),
+    ip: text('ip').notNull(),
+    viewedAt: integer('viewed_at').notNull(),
+    lastSeenAt: integer('last_seen_at').notNull(),
+  },
+  (table) => ({
+    accountIdx: index('user_ip_history_account_idx').on(
+      table.serverId,
+      table.accountId,
+      table.viewedAt,
+    ),
+    lastSeenIdx: index('user_ip_history_last_seen_idx').on(table.lastSeenAt),
+  }),
+);
 
 export const seasons = sqliteTable(
   'seasons',
@@ -242,7 +360,7 @@ export const events = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     serverId: integer('server_id').references(() => servers.id),
     type: text('type', {
-      enum: ['sync.completed', 'sync.failed', 'items.deleted', 'media.deleted'],
+      enum: ['sync.completed', 'sync.failed', 'items.deleted', 'media.deleted', 'user.removed'],
     })
       .notNull(),
     payload: text('payload'), // JSON: event-specific detail, see EventType in shared/types.ts

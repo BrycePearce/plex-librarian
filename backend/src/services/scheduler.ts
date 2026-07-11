@@ -1,7 +1,7 @@
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, lt, ne } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { LOG_RETENTION_DAYS, pruneOlderThan } from '../db/prune.ts';
-import { settings, syncLog } from '../db/schema.ts';
+import { settings, syncLog, userIpHistory } from '../db/schema.ts';
 import { PlexConfigError, resolveActiveServer } from '../lib/plex.ts';
 import type { PlexClient } from '../lib/plex.ts';
 import { sweepStalePendingSyncs, triggerFullSync } from './syncManager.ts';
@@ -22,6 +22,17 @@ async function pruneOldSyncLogs(): Promise<void> {
     LOG_RETENTION_DAYS,
     ne(syncLog.status, 'pending'),
   );
+}
+
+async function pruneOldUserIpHistory(): Promise<void> {
+  const [row] = await db.select({ days: settings.ipHistoryRetentionDays })
+    .from(settings)
+    .where(eq(settings.id, 1))
+    .limit(1);
+  const days = row?.days ?? 365;
+  if (days === 0) return;
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  await db.delete(userIpHistory).where(lt(userIpHistory.lastSeenAt, cutoff));
 }
 
 const STALE_THRESHOLD_SECONDS = 24 * 60 * 60;
@@ -100,9 +111,9 @@ async function sweepStalePendingRows(): Promise<void> {
 // pruning failure can't silently skip the sync-trigger check that follows it.
 export async function startupSyncIfStale(): Promise<void> {
   try {
-    await Promise.all([pruneOldEvents(), pruneOldSyncLogs()]);
+    await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserIpHistory()]);
   } catch (err) {
-    console.error('Activity/sync log pruning failed:', err);
+    console.error('Scheduled data pruning failed:', err);
   }
   try {
     const active = await resolveActiveServerOrNull();
@@ -138,9 +149,9 @@ export function startScheduler(): void {
       console.error('Stale-pending sync sweep failed:', err);
     }
     try {
-      await Promise.all([pruneOldEvents(), pruneOldSyncLogs()]);
+      await Promise.all([pruneOldEvents(), pruneOldSyncLogs(), pruneOldUserIpHistory()]);
     } catch (err) {
-      console.error('Activity/sync log pruning failed:', err);
+      console.error('Scheduled data pruning failed:', err);
     }
     try {
       const { enabled, hour } = await getAutoSyncSettings();

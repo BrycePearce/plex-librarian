@@ -6,6 +6,7 @@ import {
   CheckCircle,
   Copy,
   Trash2,
+  UserX,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityEvent, EventType } from "../lib/api";
@@ -120,6 +121,7 @@ const EVENT_ICON: Record<EventType, typeof CheckCircle> = {
   "sync.failed": AlertCircle,
   "items.deleted": Trash2,
   "media.deleted": Copy,
+  "user.removed": UserX,
 };
 
 const EVENT_ICON_CLASS: Record<EventType, string> = {
@@ -127,6 +129,7 @@ const EVENT_ICON_CLASS: Record<EventType, string> = {
   "sync.failed": "text-error",
   "items.deleted": "text-warning",
   "media.deleted": "text-warning",
+  "user.removed": "text-error",
 };
 
 function libraryLabel(
@@ -174,6 +177,10 @@ function describeEvent(
       return `Removed a duplicate version of ${title} from ${
         libraryLabel(libraryKey, titleByKey)
       }`;
+    }
+    case "user.removed": {
+      const { username } = event.payload;
+      return `Removed ${username}'s access to this server`;
     }
   }
 }

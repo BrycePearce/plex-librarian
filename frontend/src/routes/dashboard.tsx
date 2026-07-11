@@ -149,9 +149,8 @@ function DashboardInner() {
   // below depend on it). Only holds up rendering while there's nothing real to show yet
   // (no libraries, or none with items) — a returning user whose libraries already loaded
   // shouldn't wait on history just to render their populated grid.
-  const hasAnyImportedItems = librariesData?.libraries.some((lib) =>
-    lib.itemCount > 0
-  ) ?? false;
+  const hasAnyImportedItems =
+    librariesData?.libraries.some((lib) => lib.itemCount > 0) ?? false;
   const isCheckingFirstRun = librariesData !== undefined &&
     !hasAnyImportedItems &&
     isHistoryLoading;
@@ -183,6 +182,7 @@ function DashboardInner() {
     if (activeGlobalSyncId === null) return;
     if (!globalSyncDone && globalSyncError === null) return;
     void qc.invalidateQueries({ queryKey: ["libraries"] });
+    void qc.invalidateQueries({ queryKey: ["users"] });
     void qc.invalidateQueries({ queryKey: ["sync", "history"] });
     void qc.invalidateQueries({ queryKey: ["events"] });
     if (globalSyncError !== null) {
@@ -253,9 +253,11 @@ function DashboardInner() {
         </div>
       )}
 
-      {/* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
+      {
+        /* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
           progress, so showing this panel too would be a duplicate. It stays visible
-          while isCheckingFirstRun, since that state has no progress display of its own. */}
+          while isCheckingFirstRun, since that state has no progress display of its own. */
+      }
       {!isFirstRun && (
         <AnimatePresence>
           {(activeGlobalSyncId !== null || triggerSync.isPending) && (
@@ -275,102 +277,106 @@ function DashboardInner() {
         </AnimatePresence>
       )}
 
-      {libsLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
-            <LibraryCardSkeleton key={i} />
-          ))}
-        </div>
-      ) : isCheckingFirstRun ? (
-        // Neutral spinner rather than a content-shaped skeleton: we already know
-        // there's nothing with items yet, just not yet whether that means "first sync
-        // in progress" or "genuinely empty" — a grid of card skeletons would wrongly
-        // imply libraries are about to appear right before it flips to the first-run
-        // hero instead.
-        <div className="flex justify-center py-16">
-          <span className="loading loading-ring w-10 text-primary" />
-        </div>
-      ) : isFirstRun ? (
-        <FirstRunHero progress={globalSyncProgress ?? undefined} />
-      ) : (
-        <>
-          {librariesData && (
-            <>
-              <motion.div
-                variants={containerVariants}
-                initial="hidden"
-                animate="show"
-                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-              >
-                {(showAllLibraries
-                  ? librariesData.libraries
-                  : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT))
-                  .map((
-                    lib,
-                  ) => (
-                    <LibraryCard
-                      key={lib.key}
-                      lib={lib}
-                      globalSyncing={isSyncing}
-                    />
-                  ))}
-              </motion.div>
-              {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm gap-1"
-                    onClick={() => setShowAllLibraries((v) => !v)}
-                  >
-                    <ChevronDown
-                      className={`w-4 h-4 transition-transform ${
-                        showAllLibraries ? "rotate-180" : ""
-                      }`}
-                    />
-                    {showAllLibraries
-                      ? "Show fewer"
-                      : `Show ${
-                        librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
-                      } more`}
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-
-          {history && history.length > 0 && (
-            <div className="space-y-3">
-              <h2 className="text-lg font-semibold">Recent syncs</h2>
-              <div className="overflow-x-auto">
-                <table className="table table-sm">
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Library</th>
-                      <th>Started</th>
-                      <th>Duration</th>
-                      <th>Items</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map((s) => (
-                      <SyncRow
-                        key={s.id}
-                        sync={s}
-                        libraryTitle={s.libraryKey
-                          ? (librariesData?.libraries.find(
-                            (l) => l.key === s.libraryKey,
-                          )?.title ?? s.libraryKey)
-                          : null}
+      {libsLoading
+        ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
+              <LibraryCardSkeleton key={i} />
+            ))}
+          </div>
+        )
+        : isCheckingFirstRun
+        ? (
+          // Neutral spinner rather than a content-shaped skeleton: we already know
+          // there's nothing with items yet, just not yet whether that means "first sync
+          // in progress" or "genuinely empty" — a grid of card skeletons would wrongly
+          // imply libraries are about to appear right before it flips to the first-run
+          // hero instead.
+          <div className="flex justify-center py-16">
+            <span className="loading loading-ring w-10 text-primary" />
+          </div>
+        )
+        : isFirstRun
+        ? <FirstRunHero progress={globalSyncProgress ?? undefined} />
+        : (
+          <>
+            {librariesData && (
+              <>
+                <motion.div
+                  variants={containerVariants}
+                  initial="hidden"
+                  animate="show"
+                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                >
+                  {(showAllLibraries
+                    ? librariesData.libraries
+                    : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT))
+                    .map((
+                      lib,
+                    ) => (
+                      <LibraryCard
+                        key={lib.key}
+                        lib={lib}
+                        globalSyncing={isSyncing}
                       />
                     ))}
-                  </tbody>
-                </table>
+                </motion.div>
+                {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm gap-1"
+                      onClick={() => setShowAllLibraries((v) => !v)}
+                    >
+                      <ChevronDown
+                        className={`w-4 h-4 transition-transform ${
+                          showAllLibraries ? "rotate-180" : ""
+                        }`}
+                      />
+                      {showAllLibraries
+                        ? "Show fewer"
+                        : `Show ${
+                          librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
+                        } more`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {history && history.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-lg font-semibold">Recent syncs</h2>
+                <div className="overflow-x-auto">
+                  <table className="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Status</th>
+                        <th>Library</th>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Items</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((s) => (
+                        <SyncRow
+                          key={s.id}
+                          sync={s}
+                          libraryTitle={s.libraryKey
+                            ? (librariesData?.libraries.find(
+                              (l) => l.key === s.libraryKey,
+                            )?.title ?? s.libraryKey)
+                            : null}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
-        </>
-      )}
+            )}
+          </>
+        )}
     </div>
   );
 }
@@ -549,17 +555,19 @@ function FirstRunHero({ progress }: { progress?: LibrarySyncProgress[] }) {
           </p>
         </div>
 
-        {progress?.length ? (
-          <div className="w-full max-w-sm flex flex-col gap-2.5 text-left">
-            {progress.map((lib) => <LibraryProgressRow key={lib.key} lib={lib} />)}
-            <div className="text-xs text-base-content/40 text-center pt-1">
-              {doneCount} of {progress.length} libraries done ·{" "}
-              {animatedTotal.toLocaleString()} items so far
+        {progress?.length
+          ? (
+            <div className="w-full max-w-sm flex flex-col gap-2.5 text-left">
+              {progress.map((lib) => (
+                <LibraryProgressRow key={lib.key} lib={lib} />
+              ))}
+              <div className="text-xs text-base-content/40 text-center pt-1">
+                {doneCount} of {progress.length} libraries done ·{" "}
+                {animatedTotal.toLocaleString()} items so far
+              </div>
             </div>
-          </div>
-        ) : (
-          <span className="loading loading-ring w-12 text-primary" />
-        )}
+          )
+          : <span className="loading loading-ring w-12 text-primary" />}
       </div>
     </motion.div>
   );

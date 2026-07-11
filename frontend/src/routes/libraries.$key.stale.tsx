@@ -23,6 +23,7 @@ import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
 import { DeleteResultAlert } from "../components/DeleteResultAlert";
+import { Pagination } from "../components/Pagination";
 import { useItemSelection } from "./-stale/useItemSelection";
 import { useScrollToOffset } from "./-stale/useScrollToOffset";
 import { StaleFilters } from "./-stale/StaleFilters";
@@ -445,29 +446,11 @@ function StalePage() {
                 />
               )}
 
-            {totalPages > 1 && (
-              <div className="flex justify-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={page === 0}
-                  onClick={() => goToOffset((page - 1) * PAGE_SIZE)}
-                >
-                  Previous
-                </button>
-                <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
-                  {page + 1} / {totalPages}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={page >= totalPages - 1}
-                  onClick={() => goToOffset((page + 1) * PAGE_SIZE)}
-                >
-                  Next
-                </button>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={(p) => goToOffset(p * PAGE_SIZE)}
+            />
           </>
         )}
 

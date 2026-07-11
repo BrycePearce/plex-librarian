@@ -8,6 +8,7 @@ import { formatKilobytes } from "../lib/format";
 import { useDeleteItems } from "../lib/useDeleteItems";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { DeleteResultAlert } from "../components/DeleteResultAlert";
+import { Pagination } from "../components/Pagination";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
 
@@ -278,29 +279,11 @@ function DuplicatesPage() {
                 </div>
               )}
 
-            {totalPages > 1 && (
-              <div className="flex justify-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={page === 0}
-                  onClick={() => setOffset((page - 1) * PAGE_SIZE)}
-                >
-                  Previous
-                </button>
-                <span className="btn btn-sm btn-ghost no-animation pointer-events-none">
-                  {page + 1} / {totalPages}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={page >= totalPages - 1}
-                  onClick={() => setOffset((page + 1) * PAGE_SIZE)}
-                >
-                  Next
-                </button>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+            />
           </>
         )}
 

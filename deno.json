@@ -4,5 +4,8 @@
   "tasks": {
     "dev": "deno task --filter backend dev & deno task --filter frontend dev",
     "build": "deno task --filter frontend build"
+  },
+  "lint": {
+    "exclude": ["frontend/src/routeTree.gen.ts"]
   }
 }

@@ -40,7 +40,6 @@ services:
 | `PORT` | No | HTTP port (default: `8080`) |
 | `PLEX_URL` | No | Skip OAuth — direct URL to your Plex server |
 | `PLEX_TOKEN` | No | Skip OAuth — your Plex auth token |
-| `PLEX_WEBHOOK_SECRET` | No | Validates incoming Plex webhook requests |
 | `LIBRARY_SYNC_CONCURRENCY` | No | Max libraries synced in parallel (default: `3`) |
 | `FETCH_CONCURRENCY` | No | Max concurrent Plex page requests per library (default: `8`) |
 | `SYNC_STALL_TIMEOUT_MINUTES` | No | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
@@ -68,20 +67,20 @@ In Plex Web, go to **Settings → Webhooks → Add Webhook** and enter:
 http://<your-host>:8288/api/webhook/plex
 ```
 
-If you set `PLEX_WEBHOOK_SECRET`, append `?token=<secret>` to the URL. Requests without a matching token are rejected with 401.
-
 | Event | Effect |
 |-------|--------|
-| `media.play` | Updates `lastViewedAt` to now |
-| `media.scrobble` | Updates `lastViewedAt` + `viewCount` (Plex's 90%-watched threshold) |
+| `media.play` | Updates item/user `lastViewedAt`, player, and IP history |
+| `media.scrobble` | Also updates play count and total watched (Plex's 90%-watched threshold) |
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| GET | `/api/settings` | Global defaults, e.g. `{ staleMinAgeDays }` |
+| GET | `/api/settings` | Global defaults, including stale-item, inactive-user, and IP-history retention days |
 | PATCH | `/api/settings` | Update global defaults |
+| GET | `/api/users` | Server user roster and activity summary |
+| DELETE | `/api/users/:accountId` | Revoke a user's access to this server |
 | POST | `/api/auth/plex/pin` | Start OAuth PIN flow, returns `{ pinId, authUrl }` |
 | GET | `/api/auth/plex/pin/:id` | Poll PIN status, returns `{ status, servers? }` |
 | POST | `/api/auth/plex/server` | Save chosen server after OAuth |

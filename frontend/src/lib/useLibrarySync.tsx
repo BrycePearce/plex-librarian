@@ -1,10 +1,4 @@
-import {
-  useState,
-  useEffect,
-  useRef,
-  createContext,
-  useContext,
-} from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -87,10 +81,12 @@ export function useLibrarySync(libraryKey: string) {
   // happens to include this library. The two need different "is this library done yet"
   // logic below, since a global run's overall completion covers every library, not just
   // this one — id and scope always change together, hence one state slot for both.
-  const [attached, setAttached] = useState<{
-    id: number;
-    scope: "library" | "global";
-  } | null>(null);
+  const [attached, setAttached] = useState<
+    {
+      id: number;
+      scope: "library" | "global";
+    } | null
+  >(null);
 
   const {
     progress,
@@ -118,21 +114,21 @@ export function useLibrarySync(libraryKey: string) {
   // (e.g. the stale-items page) key a warning-vs-info banner off `isSyncing`; without
   // this, a page refresh could paint the "not syncing" banner for one frame before
   // flipping to "syncing" once the effect catches up.
-  const pendingFromHistory =
-    attached === null
-      ? history?.find(
-          (h) =>
-            h.status === "pending" &&
-            h.id !== handledSyncId.current &&
-            (h.libraryKey === libraryKey || h.libraryKey === null),
-        )
-      : undefined;
+  const pendingFromHistory = attached === null
+    ? history?.find(
+      (h) =>
+        h.status === "pending" &&
+        h.id !== handledSyncId.current &&
+        (h.libraryKey === libraryKey || h.libraryKey === null),
+    )
+    : undefined;
   useEffect(() => {
-    if (pendingFromHistory)
+    if (pendingFromHistory) {
       setAttached({
         id: pendingFromHistory.id,
         scope: pendingFromHistory.libraryKey === null ? "global" : "library",
       });
+    }
   }, [pendingFromHistory]);
 
   // For a global run, this library's SSE progress entry reaching the 'done' phase means
@@ -140,13 +136,17 @@ export function useLibrarySync(libraryKey: string) {
   const thisLibraryPhase = progress?.find(
     (lib) => lib.key === libraryKey,
   )?.phase;
-  const isThisLibraryDone =
-    attached?.scope === "global" ? thisLibraryPhase === "done" : isDone;
+  const isThisLibraryDone = attached?.scope === "global"
+    ? thisLibraryPhase === "done"
+    : isDone;
 
   useEffect(() => {
     if (attached === null) return;
     if (!isThisLibraryDone && syncError === null) return;
     debouncedInvalidateLibraries(qc);
+    // Roster reconciliation runs before every sync, and each completed library history
+    // walk can advance users.lastViewedAt, so refresh the Users page as well.
+    void qc.invalidateQueries({ queryKey: ["users"] });
     // Not debounced — this key is scoped to this one library, so there's nothing for
     // it to coalesce with, and this is likely the page the user is actually watching.
     void qc.invalidateQueries({ queryKey: ["stale", libraryKey] });
@@ -170,8 +170,7 @@ export function useLibrarySync(libraryKey: string) {
     },
   });
 
-  const isSyncing =
-    (attached !== null && !isThisLibraryDone) ||
+  const isSyncing = (attached !== null && !isThisLibraryDone) ||
     mutation.isPending ||
     pendingFromHistory !== undefined;
 

@@ -14,6 +14,7 @@ import libraries from './routes/libraries.ts';
 import proxy from './routes/proxy.ts';
 import settings from './routes/settings.ts';
 import sync from './routes/sync.ts';
+import users from './routes/users.ts';
 import webhook from './routes/webhook.ts';
 
 await runMigrations(
@@ -32,10 +33,8 @@ void (async () => {
   try {
     const plex = await createPlexClient();
     const hasPass = await plex.hasPlexPass();
-    const secret = Deno.env.get('PLEX_WEBHOOK_SECRET');
     if (hasPass) {
-      const hint = secret ? ` (append ?token=<PLEX_WEBHOOK_SECRET> to the URL)` : '';
-      console.log(`Plex Pass detected — register your webhook URL: /api/webhook/plex${hint}`);
+      console.log('Plex Pass detected — register your webhook URL: /api/webhook/plex');
     } else {
       console.log('No Plex Pass detected — webhook ingestion unavailable (manual sync only)');
     }
@@ -66,6 +65,7 @@ app.route('/api/libraries', libraries);
 app.route('/api/proxy', proxy);
 app.route('/api/settings', settings);
 app.route('/api/sync', sync);
+app.route('/api/users', users);
 app.route('/api/webhook', webhook);
 
 const staticDir = Deno.env.get('STATIC_DIR');

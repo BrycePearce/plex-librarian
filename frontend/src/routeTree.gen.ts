@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as UsersRouteImport } from './routes/users'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as DuplicatesRouteImport } from './routes/duplicates'
@@ -19,6 +20,11 @@ import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.s
 import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey'
 
+const UsersRoute = UsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SetupRoute = SetupRouteImport.update({
   id: '/setup',
   path: '/setup',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
+  '/users': typeof UsersRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
+  '/users': typeof UsersRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
+  '/users': typeof UsersRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/duplicates'
     | '/settings'
     | '/setup'
+    | '/users'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/duplicates'
     | '/settings'
     | '/setup'
+    | '/users'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/duplicates'
     | '/settings'
     | '/setup'
+    | '/users'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -144,6 +156,7 @@ export interface RootRouteChildren {
   DuplicatesRoute: typeof DuplicatesRoute
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
+  UsersRoute: typeof UsersRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
   LibrariesKeyMoviesRatingKeyRoute: typeof LibrariesKeyMoviesRatingKeyRoute
   LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
@@ -151,6 +164,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/users': {
+      id: '/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/setup': {
       id: '/setup'
       path: '/setup'
@@ -224,6 +244,7 @@ const rootRouteChildren: RootRouteChildren = {
   DuplicatesRoute: DuplicatesRoute,
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
+  UsersRoute: UsersRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
   LibrariesKeyMoviesRatingKeyRoute: LibrariesKeyMoviesRatingKeyRoute,
   LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,

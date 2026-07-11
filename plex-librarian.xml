@@ -14,7 +14,7 @@
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
-  <!-- --init ensures proper signal handling (graceful shutdown) -->
+  <!-- Docker init mode ensures proper signal handling and graceful shutdown. -->
   <ExtraParams>--init</ExtraParams>
   <PostArgs/>
   <CPUset/>
@@ -64,17 +64,6 @@
     Description="Optional. Your Plex authentication token. Set this together with Plex URL to bypass the OAuth setup wizard."
     Type="Variable"
     Display="always"
-    Required="false"
-    Mask="true"/>
-
-  <Config
-    Name="Webhook Secret"
-    Target="PLEX_WEBHOOK_SECRET"
-    Default=""
-    Mode=""
-    Description="Optional. Appended to your Plex webhook URL as ?token=SECRET to authenticate incoming events. Requires Plex Pass."
-    Type="Variable"
-    Display="advanced"
     Required="false"
     Mask="true"/>
 

@@ -10,6 +10,9 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react"
   },
+  "lint": {
+    "exclude": ["src/routeTree.gen.ts"]
+  },
   "imports": {
     "react": "npm:react@^19.2.7",
     "react/jsx-runtime": "npm:react@^19.2.7/jsx-runtime",

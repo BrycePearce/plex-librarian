@@ -9,13 +9,12 @@ import {
   findOrCreateServer,
   getActiveServer,
   PLEX_CLIENT_PRODUCT,
+  PLEX_TV,
   resolveActiveServer,
 } from '../lib/plex.ts';
 import { triggerFullSync } from '../services/syncManager.ts';
 
 const router = new Hono();
-
-const PLEX_TV = 'https://plex.tv';
 
 // Fetches the plex.tv account profile (username + avatar) for display in the navbar.
 // Best-effort only — a failure here shouldn't affect the configured/reachable status,

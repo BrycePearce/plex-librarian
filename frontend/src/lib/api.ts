@@ -12,9 +12,11 @@ import type {
   StaleResponse,
   ShowDetail,
   MovieDetail,
+  RemoveUserResponse,
   Settings,
   SyncLog,
   SyncTriggerResponse,
+  UsersResponse,
 } from '@shared/types'
 
 export type {
@@ -33,6 +35,7 @@ export type {
   PinPollResult,
   PlexConnection,
   PlexServer,
+  PlexUser,
   Library,
   LibrariesResponse,
   StaleItem,
@@ -45,6 +48,8 @@ export type {
   SyncTriggerResponse,
   LibraryPhase,
   LibrarySyncProgress,
+  RemoveUserResponse,
+  UsersResponse,
 } from '@shared/types'
 
 // Frontend-only types (not part of the API contract)
@@ -161,11 +166,35 @@ export const api = {
   settings: {
     get: () =>
       apiFetch<Settings>('/settings'),
-    update: (staleMinAgeDays: number) =>
+    // Only the keys present in `partial` are validated/changed server-side — see
+    // routes/settings.ts — so the independent Settings inputs can each
+    // save independently without clobbering the other's value.
+    update: (partial: Partial<Settings>) =>
       apiFetch<Settings>('/settings', {
         method: 'PATCH',
-        body: JSON.stringify({ staleMinAgeDays }),
+        body: JSON.stringify(partial),
       }),
+  },
+  users: {
+    list: (
+      params: {
+        inactiveDays?: number
+        filter?: 'all' | 'inactive'
+        sort?: 'lastViewedAt' | 'username'
+        order?: 'asc' | 'desc'
+        limit?: number
+        offset?: number
+      } = {},
+    ) => {
+      const q = new URLSearchParams()
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) q.set(k, String(v))
+      }
+      const qs = q.toString()
+      return apiFetch<UsersResponse>(`/users${qs ? `?${qs}` : ''}`)
+    },
+    remove: (accountId: number) =>
+      apiFetch<RemoveUserResponse>(`/users/${accountId}`, { method: 'DELETE' }),
   },
   sync: {
     trigger: () =>
@@ -200,7 +229,15 @@ export const api = {
 // 'status']`, which callers usually just refetched a line earlier), forcing pointless
 // extra fetches and a visible flash back to loading state for data that has nothing to
 // do with the active server.
-const SERVER_SCOPED_QUERY_ROOTS = ['libraries', 'sync', 'stale', 'show', 'duplicates', 'events']
+const SERVER_SCOPED_QUERY_ROOTS = [
+  'libraries',
+  'sync',
+  'stale',
+  'show',
+  'duplicates',
+  'events',
+  'users',
+]
 
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
   return qc.resetQueries({

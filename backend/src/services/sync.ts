@@ -1,4 +1,4 @@
-import { and, eq, lt, notInArray, type SQL, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, lt, notInArray, type SQL, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../db/index.ts';
 import {
   episodeMediaVersions,
@@ -6,7 +6,9 @@ import {
   items,
   libraries,
   seasons,
+  servers,
   syncLog,
+  users,
 } from '../db/schema.ts';
 import {
   episodeVersionsByLibrary,
@@ -15,8 +17,9 @@ import {
   mediaVersionsByLibrary,
   seasonsByLibrary,
 } from '../db/scope.ts';
-import { PLEX_TYPE } from '../lib/plex.ts';
+import { getActiveServer, PLEX_TYPE } from '../lib/plex.ts';
 import type { PlexClient, PlexEpisodeMediaVersion, PlexLibrary } from '../lib/plex.ts';
+import { fetchServerRoster } from '../lib/plexUsers.ts';
 import { logEvents } from './events.ts';
 import type { LogEventInput } from './events.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
@@ -279,6 +282,13 @@ async function syncLibraryHistory(
   // Build ratingKey → max(viewedAt) across all users and all pages before writing.
   // The map is bounded by unique items in the library (not total play count).
   const maxViewedAt = new Map<string, number>();
+  // Same idea, keyed by the history entry's PMS-LOCAL accountID (see
+  // PlexHistoryEntry.accountID in plex.ts) — bounded by unique users, not play count.
+  // Written to users.last_viewed_at via local_account_id, which syncUsers() is expected
+  // to have already reconciled for every currently-known local account by the time this
+  // runs (see runSync's call ordering) — an entry for a not-yet-reconciled account
+  // simply matches zero rows below and is picked up on the next sync instead.
+  const maxViewedAtByAccount = new Map<number, number>();
 
   for await (const page of plex.libraryHistory(lib.key)) {
     for (const entry of page) {
@@ -289,25 +299,203 @@ async function syncLibraryHistory(
       const key = entry.grandparentKey
         ? entry.grandparentKey.match(/(\d+)\/?$/)?.[1]
         : entry.ratingKey;
-      if (!key) continue;
-      const cur = maxViewedAt.get(key);
-      if (!cur || entry.viewedAt > cur) maxViewedAt.set(key, entry.viewedAt);
+      if (key) {
+        const cur = maxViewedAt.get(key);
+        if (!cur || entry.viewedAt > cur) maxViewedAt.set(key, entry.viewedAt);
+      }
+      if (entry.accountID != null) {
+        const curAcct = maxViewedAtByAccount.get(entry.accountID);
+        if (!curAcct || entry.viewedAt > curAcct) {
+          maxViewedAtByAccount.set(entry.accountID, entry.viewedAt);
+        }
+      }
     }
   }
 
-  if (maxViewedAt.size === 0) return;
+  // A local_account_id shared by more than one roster row (e.g. two accounts both
+  // falling back to plexUsers.ts's UNKNOWN_USERNAME_PLACEHOLDER) must not have this
+  // history activity blindly applied to every row that shares it — same "ambiguous
+  // match behaves like no match" rule webhook.ts enforces when resolving a single
+  // event to a unique row before writing to it. Resolved before entering the
+  // transaction below since withTransaction's callback runs synchronously and can't
+  // await this query itself.
+  const ambiguousLocalIds = maxViewedAtByAccount.size > 0
+    ? new Set(
+      (await db.select({ localAccountId: users.localAccountId })
+        .from(users)
+        .where(and(eq(users.serverId, serverId), isNotNull(users.localAccountId)))
+        .groupBy(users.localAccountId)
+        .having(sql`count(*) > 1`))
+        .map((r) => r.localAccountId as number),
+    )
+    : null;
 
-  // All UPDATEs in a single transaction — one commit instead of N individual fsyncs.
-  withTransaction((client) => {
-    const stmt = client.prepare(
-      `UPDATE items SET last_viewed_at = ?
-       WHERE server_id = ? AND rating_key = ? AND library_key = ?
-         AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
-    );
-    for (const [ratingKey, viewedAt] of maxViewedAt) {
-      stmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
-    }
+  // Both UPDATEs run in the same transaction — one commit instead of two, so a crash
+  // mid-sync can't leave item-level and per-account history backfills inconsistent
+  // with each other.
+  if (maxViewedAt.size > 0 || maxViewedAtByAccount.size > 0) {
+    withTransaction((client) => {
+      if (maxViewedAt.size > 0) {
+        const stmt = client.prepare(
+          `UPDATE items SET last_viewed_at = ?
+           WHERE server_id = ? AND rating_key = ? AND library_key = ?
+             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+        );
+        for (const [ratingKey, viewedAt] of maxViewedAt) {
+          stmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
+        }
+      }
+
+      if (maxViewedAtByAccount.size > 0) {
+        const stmt = client.prepare(
+          `UPDATE users SET last_viewed_at = ?
+           WHERE server_id = ? AND local_account_id = ?
+             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+        );
+        for (const [localAccountId, viewedAt] of maxViewedAtByAccount) {
+          if (ambiguousLocalIds!.has(localAccountId)) continue;
+          stmt.run(viewedAt, serverId, localAccountId, viewedAt);
+        }
+      }
+    });
+  }
+}
+
+// Below this, a roster refresh that just ran is considered fresh enough to skip —
+// covers back-to-back per-library resyncs of the same server, which each call syncUsers
+// but have nothing new to reconcile seconds apart.
+const USERS_SYNC_STALENESS_WINDOW_SEC = 60;
+
+// Dedupes concurrent syncUsers() calls for the same server onto a single in-flight
+// execution. Two per-library resyncs on the same server are NOT mutually exclusive
+// (syncManager's conflict check only blocks same-library or full-sync collisions), so
+// without this, independent concurrent calls would race: each resets usersSyncedAt to
+// null, fetches its own roster snapshot, and upserts/prunes with its own `now` — whichever
+// commits last can regress usersSyncedAt backward or resurrect a row the other call had
+// just correctly pruned.
+const syncUsersInFlight = new Map<number, Promise<void>>();
+
+// Refreshes the per-server user roster (owner + friends/Home members actually shared to
+// this server) and reconciles each against the PMS's own local account ids so
+// webhook/history activity (which reports local ids) can be joined to the roster (which
+// is keyed by global plex.tv ids) — see users.localAccountId in schema.ts. Swallows all
+// failures: a roster-fetch failure (network blip, token-scope issue) must never fail the
+// library sync it's bundled into, same philosophy as logEvents. Called once per server
+// from both runSync() (before the per-library worker pool starts) and runLibrarySync()
+// (before its single syncLibrary call), so any sync pass — full or per-library — sees
+// already-reconciled local ids by the time its own syncLibraryHistory call runs.
+function syncUsers(plex: PlexClient, serverId: number, now: number): Promise<void> {
+  const existing = syncUsersInFlight.get(serverId);
+  if (existing) return existing;
+  const promise = syncUsersOnce(plex, serverId, now).finally(() => {
+    syncUsersInFlight.delete(serverId);
   });
+  syncUsersInFlight.set(serverId, promise);
+  return promise;
+}
+
+async function syncUsersOnce(plex: PlexClient, serverId: number, now: number): Promise<void> {
+  try {
+    const active = await getActiveServer();
+    // A server switch raced this sync — bail rather than write another server's roster
+    // under this serverId. Self-heals: the next sync resolves against whatever server is
+    // active by then.
+    if (!active || active.serverId !== serverId) return;
+
+    const [server] = await db.select({ usersSyncedAt: servers.usersSyncedAt })
+      .from(servers)
+      .where(eq(servers.id, serverId))
+      .limit(1);
+    if (
+      server?.usersSyncedAt != null &&
+      now - server.usersSyncedAt < USERS_SYNC_STALENESS_WINDOW_SEC
+    ) {
+      return;
+    }
+
+    await db.update(servers).set({ usersSyncedAt: null }).where(eq(servers.id, serverId));
+
+    const roster = await fetchServerRoster(
+      active.clientId,
+      active.accessToken,
+      active.machineIdentifier,
+    );
+    // The PMS's own /accounts endpoint is a separate, less reliable source than plex.tv
+    // (the PMS itself can be mid-restart while plex.tv is fine) — tolerate its failure
+    // rather than discarding an already-successful roster fetch. Local ids simply stay
+    // unreconciled this cycle and self-heal on the next successful sync or webhook.
+    let localAccounts: Awaited<ReturnType<typeof plex.localAccounts>> = [];
+    try {
+      localAccounts = await plex.localAccounts();
+    } catch (err) {
+      console.error(
+        `syncUsers: failed to fetch local accounts for server ${serverId}, skipping local id reconciliation this cycle:`,
+        err,
+      );
+    }
+    // Ambiguous names (two PMS-local accounts sharing one) are dropped rather than
+    // letting the later one silently win — an unresolvable match should behave the
+    // same as no match, not a coin flip between two real accounts.
+    const localIdByUsername = new Map<string, number>();
+    const ambiguousUsernames = new Set<string>();
+    for (const a of localAccounts) {
+      if (localIdByUsername.has(a.name)) {
+        ambiguousUsernames.add(a.name);
+      } else {
+        localIdByUsername.set(a.name, a.id);
+      }
+    }
+
+    if (roster.length > 0) {
+      await db.insert(users)
+        .values(
+          roster.map((u) => ({
+            serverId,
+            accountId: u.accountId,
+            // The PMS's local account id 1 is always the server owner (see
+            // PlexLocalAccount in plex.ts) — resolved directly rather than through
+            // username matching, which is fragile if the owner's plex.tv username
+            // differs from the display name the PMS's own /accounts reports for them.
+            localAccountId: u.isOwner
+              ? 1
+              : ambiguousUsernames.has(u.username)
+              ? null
+              : localIdByUsername.get(u.username) ?? null,
+            username: u.username,
+            email: u.email,
+            thumb: u.thumb,
+            isOwner: u.isOwner,
+            sharedServerId: u.sharedServerId,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [users.serverId, users.accountId],
+          set: {
+            // A null resolved id this cycle (no /accounts match this time, or an
+            // ambiguous name) must not erase a localAccountId already reconciled by an
+            // earlier sync or self-healed by a webhook — only overwrite when this
+            // sync actually resolved a value.
+            localAccountId: sql`coalesce(${excl(users.localAccountId)}, ${users.localAccountId})`,
+            username: excl(users.username),
+            email: excl(users.email),
+            thumb: excl(users.thumb),
+            isOwner: excl(users.isOwner),
+            sharedServerId: excl(users.sharedServerId),
+            updatedAt: excl(users.updatedAt),
+          },
+        });
+      // Accounts no longer in the roster (access revoked, friendship removed) — hard
+      // delete matches every other table's prune-on-full-sync pattern (items/libraries/
+      // seasons). No data loss risk: lastViewedAt rebuilds itself from full history on
+      // re-add, same as items.
+      await db.delete(users).where(and(eq(users.serverId, serverId), lt(users.updatedAt, now)));
+    }
+
+    await db.update(servers).set({ usersSyncedAt: now }).where(eq(servers.id, serverId));
+  } catch (err) {
+    console.error(`syncUsers failed for server ${serverId}:`, err);
+  }
 }
 
 async function syncLibrary(
@@ -592,6 +780,11 @@ export async function runSync(
     );
   }
 
+  // Roster is a per-server concern, not per-library — refresh it once, before any
+  // library's own syncLibraryHistory call needs already-reconciled local account ids
+  // to attribute activity to (see syncUsers' comment above).
+  await syncUsers(plex, serverId, now);
+
   let totalItems = 0;
 
   // Worker pool: each worker pulls the next library off the shared queue as soon as
@@ -638,6 +831,12 @@ export async function runLibrarySync(
   reporter?.onLibraries?.([{ key: lib.key, title: lib.title }]);
 
   const now = Math.floor(Date.now() / 1000);
+
+  // Same reconciliation this library's own syncLibraryHistory call needs (see syncUsers'
+  // comment above) — a per-library resync is its own sync pass just like runSync(), so
+  // it needs local account ids reconciled going in too, not just full syncs.
+  await syncUsers(plex, serverId, now);
+
   let itemCount = 0;
   await syncLibrary(
     plex,

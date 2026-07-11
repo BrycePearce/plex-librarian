@@ -36,6 +36,7 @@ export interface PlexWebhookPayload {
     grandparentRatingKey?: string; // show ratingKey when type === 'episode'
     viewCount?: number;
     lastViewedAt?: number;
+    duration?: number; // ms — used to accumulate users.totalDuration on scrobble
   };
 }
 
@@ -123,10 +124,24 @@ export interface PlexEpisodeMediaVersion {
 
 // History entry returned by /status/sessions/history/all — cross-user, all accounts.
 // grandparentKey is a path ("/library/metadata/76749"), not a bare ratingKey.
+// accountID is the PMS-LOCAL account id (see users.localAccountId in schema.ts for why
+// this is a different id space than the plex.tv global account id used elsewhere).
 interface PlexHistoryEntry {
   ratingKey: string;
   grandparentKey?: string; // "/library/metadata/<showRatingKey>" when type === 'episode'
   viewedAt?: number;
+  accountID?: number;
+}
+
+// One row per account the PMS itself knows about — allocated lazily the first time
+// that account actually connects/plays something, NOT at share-grant time. id 0 is
+// always a nameless system/placeholder account; id 1 is always the server owner. Used
+// only to reconcile the PMS-local id (which webhook/history events report) against the
+// plex.tv global account id (which the roster in plexUsers.ts reports) by username
+// match — see users.localAccountId in schema.ts.
+export interface PlexLocalAccount {
+  id: number;
+  name: string;
 }
 
 const ITEMS_PAGE_SIZE = 300;
@@ -143,6 +158,10 @@ export const PLEX_TYPE = {
   ALBUM: 9,
   TRACK: 10,
 } as const;
+
+// plex.tv account-level API root — distinct from a PMS's own URL. Shared by auth.ts
+// (OAuth PIN flow, account profile lookup) and plexUsers.ts (roster fetch).
+export const PLEX_TV = 'https://plex.tv';
 
 export const PLEX_CLIENT_PRODUCT = 'Plex Librarian';
 const PLEX_CLIENT_VERSION = '1.0.0';
@@ -336,6 +355,20 @@ export class PlexClient {
   async identity(): Promise<string> {
     const data = await this.get<{ MediaContainer: { machineIdentifier: string } }>('/identity');
     return data.MediaContainer.machineIdentifier;
+  }
+
+  // Accounts the PMS itself knows about — see PlexLocalAccount above for why this
+  // exists (bridging local ids used by webhooks/history to the global ids used by the
+  // plex.tv roster). id 0's nameless placeholder is filtered out here so callers never
+  // have to remember to skip it.
+  async localAccounts(): Promise<PlexLocalAccount[]> {
+    const data = await this.get<
+      { MediaContainer: { Account?: Array<{ id: number; name?: string }> } }
+    >(
+      '/accounts',
+    );
+    return (data.MediaContainer.Account ?? [])
+      .filter((a): a is { id: number; name: string } => a.id !== 0 && !!a.name);
   }
 
   // Deletes an item's media from Plex (metadata + underlying file(s) on disk).

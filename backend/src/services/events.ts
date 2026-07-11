@@ -6,6 +6,7 @@ import type {
   MediaDeletedPayload,
   SyncCompletedPayload,
   SyncFailedPayload,
+  UserRemovedPayload,
 } from '@plex-librarian/shared/types.ts';
 
 // Discriminated on `type` so a caller can't attach a payload shape that doesn't match
@@ -16,7 +17,8 @@ export type LogEventInput =
   | { serverId: number; type: 'sync.completed'; payload?: SyncCompletedPayload }
   | { serverId: number; type: 'sync.failed'; payload?: SyncFailedPayload }
   | { serverId: number; type: 'items.deleted'; payload?: ItemsDeletedPayload }
-  | { serverId: number; type: 'media.deleted'; payload?: MediaDeletedPayload };
+  | { serverId: number; type: 'media.deleted'; payload?: MediaDeletedPayload }
+  | { serverId: number; type: 'user.removed'; payload?: UserRemovedPayload };
 
 // Never lets a logging failure fail the caller — recording that a sync/deletion
 // happened is secondary to the action itself actually succeeding. Takes an array (not

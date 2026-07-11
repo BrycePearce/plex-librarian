@@ -9,6 +9,7 @@ import {
   LogOut,
   Settings,
   User,
+  Users,
 } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { AuthStatus } from "../lib/api";
@@ -120,6 +121,18 @@ export function UserMenu() {
               >
                 <Copy className="w-4 h-4" />
                 Duplicates
+              </Link>
+            </li>
+            <li>
+              <Link
+                to="/users"
+                search={{ filter: "all" }}
+                role="menuitem"
+                className="flex items-center gap-2 leading-none"
+                onClick={() => setOpen(false)}
+              >
+                <Users className="w-4 h-4" />
+                Users
               </Link>
             </li>
             <li>
