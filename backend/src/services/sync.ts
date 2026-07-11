@@ -365,6 +365,10 @@ async function syncLibraryHistory(
 // covers back-to-back per-library resyncs of the same server, which each call syncUsers
 // but have nothing new to reconcile seconds apart.
 const USERS_SYNC_STALENESS_WINDOW_SEC = 60;
+// Keep roster upserts below SQLite's bound-parameter limit. Each user currently binds
+// nine values, and a conservative fixed batch also keeps statement compilation and
+// transient allocations small on unusually large shared servers.
+const USERS_UPSERT_BATCH_SIZE = 500;
 
 // Dedupes concurrent syncUsers() calls for the same server onto a single in-flight
 // execution. Two per-library resyncs on the same server are NOT mutually exclusive
@@ -447,44 +451,47 @@ async function syncUsersOnce(plex: PlexClient, serverId: number, now: number): P
     }
 
     if (roster.length > 0) {
-      await db.insert(users)
-        .values(
-          roster.map((u) => ({
-            serverId,
-            accountId: u.accountId,
-            // The PMS's local account id 1 is always the server owner (see
-            // PlexLocalAccount in plex.ts) — resolved directly rather than through
-            // username matching, which is fragile if the owner's plex.tv username
-            // differs from the display name the PMS's own /accounts reports for them.
-            localAccountId: u.isOwner
-              ? 1
-              : ambiguousUsernames.has(u.username)
-              ? null
-              : localIdByUsername.get(u.username) ?? null,
-            username: u.username,
-            email: u.email,
-            thumb: u.thumb,
-            isOwner: u.isOwner,
-            sharedServerId: u.sharedServerId,
-            updatedAt: now,
-          })),
-        )
-        .onConflictDoUpdate({
-          target: [users.serverId, users.accountId],
-          set: {
-            // A null resolved id this cycle (no /accounts match this time, or an
-            // ambiguous name) must not erase a localAccountId already reconciled by an
-            // earlier sync or self-healed by a webhook — only overwrite when this
-            // sync actually resolved a value.
-            localAccountId: sql`coalesce(${excl(users.localAccountId)}, ${users.localAccountId})`,
-            username: excl(users.username),
-            email: excl(users.email),
-            thumb: excl(users.thumb),
-            isOwner: excl(users.isOwner),
-            sharedServerId: excl(users.sharedServerId),
-            updatedAt: excl(users.updatedAt),
-          },
-        });
+      for (let offset = 0; offset < roster.length; offset += USERS_UPSERT_BATCH_SIZE) {
+        const batch = roster.slice(offset, offset + USERS_UPSERT_BATCH_SIZE);
+        await db.insert(users)
+          .values(
+            batch.map((u) => ({
+              serverId,
+              accountId: u.accountId,
+              // The PMS's local account id 1 is always the server owner (see
+              // PlexLocalAccount in plex.ts) — resolved directly rather than through
+              // username matching, which is fragile if the owner's plex.tv username
+              // differs from the display name the PMS's own /accounts reports for them.
+              localAccountId: u.isOwner
+                ? 1
+                : ambiguousUsernames.has(u.username)
+                ? null
+                : localIdByUsername.get(u.username) ?? null,
+              username: u.username,
+              email: u.email,
+              thumb: u.thumb,
+              isOwner: u.isOwner,
+              sharedServerId: u.sharedServerId,
+              updatedAt: now,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [users.serverId, users.accountId],
+            set: {
+              // A null resolved id this cycle (no /accounts match this time, or an
+              // ambiguous name) must not erase a localAccountId already reconciled by
+              // an earlier sync or self-healed by a webhook — only overwrite when this
+              // sync actually resolved a value.
+              localAccountId: sql`coalesce(${excl(users.localAccountId)}, ${users.localAccountId})`,
+              username: excl(users.username),
+              email: excl(users.email),
+              thumb: excl(users.thumb),
+              isOwner: excl(users.isOwner),
+              sharedServerId: excl(users.sharedServerId),
+              updatedAt: excl(users.updatedAt),
+            },
+          });
+      }
       // Accounts no longer in the roster (access revoked, friendship removed) — hard
       // delete matches every other table's prune-on-full-sync pattern (items/libraries/
       // seasons). No data loss risk: lastViewedAt rebuilds itself from full history on

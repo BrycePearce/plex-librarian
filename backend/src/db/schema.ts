@@ -173,6 +173,7 @@ export const users = sqliteTable(
   (table) => ({
     pk: primaryKey({ columns: [table.serverId, table.accountId] }),
     lastViewedAtIdx: index('users_last_viewed_at_idx').on(table.serverId, table.lastViewedAt),
+    usernameIdx: index('users_username_idx').on(table.serverId, table.username),
     localAccountIdx: index('users_local_account_idx').on(table.serverId, table.localAccountId),
   }),
 );
@@ -229,6 +230,12 @@ export const userPlayObservations = sqliteTable(
     accountObservedIdx: index('user_play_observations_account_observed_idx').on(
       table.serverId,
       table.accountId,
+      table.observedAt,
+    ),
+    accountEventObservedIdx: index('user_play_observations_account_event_observed_idx').on(
+      table.serverId,
+      table.accountId,
+      table.event,
       table.observedAt,
     ),
     observedAtIdx: index('user_play_observations_observed_at_idx').on(table.observedAt),

@@ -1,0 +1,2 @@
+CREATE INDEX `user_play_observations_account_event_observed_idx` ON `user_play_observations` (`server_id`,`account_id`,`event`,`observed_at`);--> statement-breakpoint
+CREATE INDEX `users_username_idx` ON `users` (`server_id`,`username`);

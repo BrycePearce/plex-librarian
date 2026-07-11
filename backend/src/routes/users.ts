@@ -1,13 +1,29 @@
 import { Hono } from 'hono';
-import { and, asc, count, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { servers, settings, users } from '../db/schema.ts';
+import { servers, settings, userPlayObservations, users } from '../db/schema.ts';
 import { userByAccountId, usersByServer } from '../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
 import { getActiveServer } from '../lib/plex.ts';
 import { PlexRemoveUserError, removeUserAccess } from '../lib/plexUsers.ts';
 import { logEvents } from '../services/events.ts';
-import { assessUserSharingRisk } from '../services/userSharingRisk.ts';
+import {
+  assessUserSharingRisk,
+  type SharingObservationStats,
+} from '../services/userSharingRisk.ts';
 import type { PlexUser, RemoveUserResponse, UsersResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -20,6 +36,86 @@ const SORT_COLUMNS = {
 type SortKey = keyof typeof SORT_COLUMNS;
 
 const DEFAULT_INACTIVE_DAYS = 30;
+
+async function sharingStatsForAccounts(
+  serverId: number,
+  accountIds: number[],
+  riskWindowCutoff: number,
+): Promise<Map<number, SharingObservationStats>> {
+  // Aggregate only the users on this page. Two grouped scans replace several
+  // correlated observation scans per row and keep memory bounded by the page limit.
+  const result = new Map<number, SharingObservationStats>();
+  if (accountIds.length === 0) return result;
+
+  const observation = userPlayObservations;
+  const [aggregates, dailyRemoteNetworks] = await Promise.all([
+    db.select({
+      accountId: observation.accountId,
+      observationCount: sql<number>`count(*)`,
+      firstObservedAt: sql<number>`min(${observation.observedAt})`,
+      lastObservedAt: sql<number>`max(${observation.observedAt})`,
+      activeDays: sql<number>`count(DISTINCT date(${observation.observedAt}, 'unixepoch'))`,
+      completeObservationCount: sql<number>`sum(
+        CASE WHEN ${observation.ip} IS NOT NULL AND ${observation.playerUuid} IS NOT NULL
+          THEN 1 ELSE 0 END
+      )`,
+      remoteNetworks30d: sql<number>`count(DISTINCT CASE
+        WHEN ${observation.observedAt} >= ${riskWindowCutoff} AND ${observation.isLocal} = 0
+          THEN coalesce(${observation.networkKey}, ${observation.ip}) END
+      )`,
+      remotePlayers30d: sql<number>`count(DISTINCT CASE
+        WHEN ${observation.observedAt} >= ${riskWindowCutoff} AND ${observation.isLocal} = 0
+          THEN ${observation.playerUuid} END
+      )`,
+    })
+      .from(observation)
+      .where(and(
+        eq(observation.serverId, serverId),
+        inArray(observation.accountId, accountIds),
+        eq(observation.event, 'media.play'),
+      ))
+      .groupBy(observation.accountId),
+    db.select({
+      accountId: observation.accountId,
+      networkCount: sql<number>`count(DISTINCT coalesce(
+        ${observation.networkKey}, ${observation.ip}
+      ))`,
+    })
+      .from(observation)
+      .where(and(
+        eq(observation.serverId, serverId),
+        inArray(observation.accountId, accountIds),
+        eq(observation.event, 'media.play'),
+        eq(observation.isLocal, false),
+        isNotNull(observation.ip),
+        gte(observation.observedAt, riskWindowCutoff),
+      ))
+      .groupBy(observation.accountId, sql`date(${observation.observedAt}, 'unixepoch')`),
+  ]);
+
+  const maxRemoteNetworksByAccount = new Map<number, number>();
+  for (const row of dailyRemoteNetworks) {
+    maxRemoteNetworksByAccount.set(
+      row.accountId,
+      Math.max(maxRemoteNetworksByAccount.get(row.accountId) ?? 0, row.networkCount),
+    );
+  }
+
+  for (const row of aggregates) {
+    result.set(row.accountId, {
+      observationCount: row.observationCount,
+      firstObservedAt: row.firstObservedAt,
+      lastObservedAt: row.lastObservedAt,
+      activeDays: row.activeDays,
+      completeObservationCount: row.completeObservationCount,
+      remoteNetworks30d: row.remoteNetworks30d,
+      remotePlayers30d: row.remotePlayers30d,
+      maxRemoteNetworksPerDay30d: maxRemoteNetworksByAccount.get(row.accountId) ?? 0,
+    });
+  }
+
+  return result;
+}
 
 // Small dataset by nature (server users, not media), so a single count()+select() pair
 // is plenty; no GROUP_FETCH_CAP-style two-pass fetch needed like duplicates.ts (that
@@ -98,56 +194,14 @@ router.get('/', async (c) => {
       thumb: users.thumb,
       isOwner: users.isOwner,
       lastViewedAt: users.lastViewedAt,
-      observationCount: sql<number>`(
-        SELECT count(*) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play'
-      )`,
-      firstObservedAt: sql<number | null>`(
-        SELECT min(o.observed_at) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play'
-      )`,
-      lastObservedAt: sql<number | null>`(
-        SELECT max(o.observed_at) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play'
-      )`,
-      activeDays: sql<number>`(
-        SELECT count(DISTINCT date(o.observed_at, 'unixepoch'))
-        FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play'
-      )`,
-      completeObservationCount: sql<number>`(
-        SELECT count(*) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play' AND o.ip IS NOT NULL AND o.player_uuid IS NOT NULL
-      )`,
-      remoteNetworks30d: sql<number>`(
-        SELECT count(DISTINCT coalesce(o.network_key, o.ip)) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
-          AND o.is_local = 0 AND o.ip IS NOT NULL
-      )`,
-      remotePlayers30d: sql<number>`(
-        SELECT count(DISTINCT o.player_uuid) FROM user_play_observations o
-        WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-          AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
-          AND o.is_local = 0 AND o.player_uuid IS NOT NULL
-      )`,
-      maxRemoteNetworksPerDay30d: sql<number>`coalesce((
-        SELECT max(network_count) FROM (
-          SELECT count(DISTINCT coalesce(o.network_key, o.ip)) AS network_count
-          FROM user_play_observations o
-          WHERE o.server_id = ${serverId} AND o.account_id = ${users.accountId}
-            AND o.event = 'media.play' AND o.observed_at >= ${riskWindowCutoff}
-            AND o.is_local = 0 AND o.ip IS NOT NULL
-          GROUP BY date(o.observed_at, 'unixepoch')
-        )
-      ), 0)`,
     }).from(users).where(where).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(offset),
   ]);
+
+  const sharingStats = await sharingStatsForAccounts(
+    serverId,
+    rows.map((row) => row.accountId),
+    riskWindowCutoff,
+  );
 
   return c.json(
     {
@@ -163,15 +217,15 @@ router.get('/', async (c) => {
         thumb: u.thumb,
         isOwner: u.isOwner,
         lastViewedAt: u.lastViewedAt,
-        sharingRisk: assessUserSharingRisk({
-          observationCount: u.observationCount,
-          firstObservedAt: u.firstObservedAt,
-          lastObservedAt: u.lastObservedAt,
-          activeDays: u.activeDays,
-          completeObservationCount: u.completeObservationCount,
-          remoteNetworks30d: u.remoteNetworks30d,
-          remotePlayers30d: u.remotePlayers30d,
-          maxRemoteNetworksPerDay30d: u.maxRemoteNetworksPerDay30d,
+        sharingRisk: assessUserSharingRisk(sharingStats.get(u.accountId) ?? {
+          observationCount: 0,
+          firstObservedAt: null,
+          lastObservedAt: null,
+          activeDays: 0,
+          completeObservationCount: 0,
+          remoteNetworks30d: 0,
+          remotePlayers30d: 0,
+          maxRemoteNetworksPerDay30d: 0,
         }),
       })),
     } satisfies UsersResponse,
