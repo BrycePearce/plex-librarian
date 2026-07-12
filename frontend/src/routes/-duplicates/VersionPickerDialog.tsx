@@ -4,6 +4,7 @@ import { AlertTriangle, Trash2 } from "lucide-react";
 import type { DuplicateGroup, MediaVersion } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { versionLabel } from "../../lib/mediaVersion";
+import "../../components/dataSurfaces.css";
 
 // The version with the largest fileSize is treated as "the one to keep" and starts
 // unchecked — every other version starts pre-checked for deletion. Ties keep the first.
@@ -69,7 +70,7 @@ export function VersionPickerDialog({
 
   return (
     <dialog ref={dialogRef} className="modal" onClose={onCancel}>
-      <div className="modal-box">
+      <div className="modal-box polished-modal">
         <h3 className="font-bold text-lg flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-error" />{" "}
           Resolve duplicate versions

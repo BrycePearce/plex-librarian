@@ -10,6 +10,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { Variants } from "motion/react";
 import {
   AlertCircle,
+  ArrowRight,
   CheckCircle,
   ChevronDown,
   Clock,
@@ -20,7 +21,6 @@ import {
   Library as LibraryGlyph,
   Music,
   RefreshCw,
-  Settings,
   Tv,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -47,6 +47,8 @@ import {
   LibraryCardSkeleton,
   StatsStripSkeleton,
 } from "../components/Skeletons";
+import "./dashboard.css";
+import { SectionHeading } from "../components/Workspace";
 
 // Shared orchestration for the stats strip and library grid: the container just declares
 // the stagger timing, each child only needs `variants={cardVariants}` to inherit the
@@ -190,26 +192,30 @@ function DashboardInner() {
   }, [globalSyncDone, globalSyncError, activeGlobalSyncId, qc]);
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Libraries</h1>
-          <p className="text-base-content/50 text-sm mt-1">
+    <div className="dashboard-page space-y-8">
+      <header className="dashboard-header">
+        <div className="dashboard-heading">
+          <div className="dashboard-eyebrow">
+            <span className="dashboard-live-dot" /> Library intelligence
+          </div>
+          <h1>Dashboard</h1>
+          <p>
             {!libsLoading && !isCheckingFirstRun && librariesData
               ? isFirstRun
                 ? "First sync in progress…"
-                : `${librariesData.total} libraries`
+                : `A clear view of ${librariesData.total} libraries, storage, and sync health.`
               : "—"}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link to="/settings" className="btn btn-ghost gap-2" title="Settings">
-            <Settings className="w-4 h-4" />
-            Settings
-          </Link>
+        <div className="dashboard-header-actions">
+          {!isAnySyncing && !libsLoading && (
+            <span className="dashboard-health">
+              <CheckCircle className="size-4" /> Synced
+            </span>
+          )}
           <button
             type="button"
-            className="btn btn-primary gap-2"
+            className="btn btn-primary dashboard-sync-button"
             onClick={() => triggerSync.mutate()}
             disabled={isAnySyncing}
           >
@@ -219,7 +225,7 @@ function DashboardInner() {
             {isSyncing ? "Syncing…" : "Sync all"}
           </button>
         </div>
-      </div>
+      </header>
 
       {libsLoading && <StatsStripSkeleton />}
       {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
@@ -270,6 +276,14 @@ function DashboardInner() {
         </AnimatePresence>
       )}
 
+      {!isFirstRun && !isCheckingFirstRun && (
+        <SectionHeading
+          eyebrow="Collection"
+          title="Your libraries"
+          meta={librariesData ? `${librariesData.total} connected` : undefined}
+        />
+      )}
+
       {libsLoading
         ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -299,7 +313,7 @@ function DashboardInner() {
                   variants={containerVariants}
                   initial="hidden"
                   animate="show"
-                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                  className="library-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
                 >
                   {(showAllLibraries
                     ? librariesData.libraries
@@ -338,9 +352,19 @@ function DashboardInner() {
             )}
 
             {history && history.length > 0 && (
-              <div className="space-y-3">
-                <h2 className="text-lg font-semibold">Recent syncs</h2>
-                <div className="overflow-x-auto">
+              <section className="dashboard-panel sync-history-panel">
+                <div className="dashboard-panel-header">
+                  <SectionHeading
+                    eyebrow="Operations"
+                    title="Recent syncs"
+                    meta={
+                      <Link to="/activity" className="dashboard-panel-link">
+                        View activity <ArrowRight className="size-4" />
+                      </Link>
+                    }
+                  />
+                </div>
+                <div className="overflow-x-auto sync-history-table">
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -366,7 +390,7 @@ function DashboardInner() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </section>
             )}
           </>
         )}
@@ -427,7 +451,12 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
   const animatedSize = useCountUp(totals.size, 900);
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="show"
+      className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+    >
       <StatTile
         icon={<Database className="w-5 h-5" />}
         iconClass="bg-primary/20 text-primary"
@@ -446,7 +475,7 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
         label="Last synced"
         value={totals.lastSync ? formatRelativeTime(totals.lastSync) : "—"}
       />
-    </div>
+    </motion.div>
   );
 }
 
@@ -462,19 +491,19 @@ function StatTile({
   value: string;
 }) {
   return (
-    <div className="card bg-base-200">
-      <div className="card-body flex-row items-center gap-4 py-4">
+    <motion.div variants={cardVariants} className="dashboard-stat-card">
+      <div className="dashboard-stat-content">
         <div
-          className={`w-10 h-10 rounded-lg shrink-0 flex items-center justify-center ${iconClass}`}
+          className={`dashboard-stat-icon ${iconClass}`}
         >
           {icon}
         </div>
-        <div className="min-w-0">
-          <p className="text-xs text-base-content/40">{label}</p>
-          <p className="text-xl font-semibold font-mono truncate">{value}</p>
+        <div className="dashboard-stat-copy">
+          <p>{label}</p>
+          <strong>{value}</strong>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -643,20 +672,20 @@ function LibraryCard(
       whileHover={{ y: -4 }}
       whileTap={{ scale: 0.98 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      className="card bg-base-200 hover:bg-base-300 hover:shadow-lg transition-[background-color,box-shadow] cursor-pointer"
+      className={`library-card library-card-${lib.type} card cursor-pointer`}
       onClick={() =>
         void navigate({
           to: "/libraries/$key/stale",
           params: { key: lib.key },
         })}
     >
-      <div className="card-body gap-3">
+      <div className="card-body gap-4">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <LibraryIcon type={lib.type} />
             <div className="min-w-0">
-              <h2 className="font-semibold truncate">{lib.title}</h2>
-              <p className="text-xs text-base-content/40 capitalize">
+              <h3 className="font-semibold truncate">{lib.title}</h3>
+              <p className="library-type capitalize">
                 {lib.type}
               </p>
             </div>
@@ -680,13 +709,14 @@ function LibraryCard(
             />
           </button>
         </div>
-        <div className="text-xs text-base-content/40 flex items-center gap-1.5">
+        <div className="library-card-meta text-xs flex items-center gap-1.5">
           <span>{lib.itemCount.toLocaleString()} items</span>
           <span>·</span>
           <span>{formatKilobytes(lib.totalFileSize)}</span>
           <span>·</span>
           <span>Synced {formatRelativeTime(lib.syncedAt)}</span>
         </div>
+        <div className="library-card-accent" />
       </div>
     </motion.div>
   );
@@ -714,7 +744,7 @@ function SyncRow({
   libraryTitle: string | null;
 }) {
   return (
-    <tr>
+    <tr className="sync-history-row">
       <td>
         {sync.status === "pending" && (
           <span className="badge badge-info gap-1 min-w-22 justify-center leading-none">
@@ -722,7 +752,7 @@ function SyncRow({
           </span>
         )}
         {sync.status === "success" && (
-          <span className="badge badge-success gap-1 min-w-22 justify-center leading-none">
+          <span className="badge dashboard-success-badge gap-1 min-w-22 justify-center leading-none">
             <CheckCircle className="w-3 h-3" /> success
           </span>
         )}

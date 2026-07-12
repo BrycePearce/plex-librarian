@@ -24,7 +24,7 @@ export function StaleFilters({
   onDuplicatesOnlyChange: (value: boolean) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+    <div className="stale-filter-controls flex flex-wrap items-end gap-x-3 gap-y-2">
       <label className="form-control gap-1">
         <span className="label-text text-xs">Watch status</span>
         <select

@@ -6,9 +6,10 @@ import {
   useQueryClient,
   skipToken,
 } from "@tanstack/react-query";
-import { Server, ExternalLink } from "lucide-react";
+import { Server, ExternalLink, Library } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { PlexServer } from "../lib/api";
+import "../components/workspace.css";
 
 export const Route = createFileRoute("/setup")({
   beforeLoad: async ({ context }) => {
@@ -92,10 +93,12 @@ function SetupPage() {
   });
 
   return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-8rem)]">
+    <div className="setup-page flex items-center justify-center min-h-[calc(100vh-8rem)]">
       {step === "initial" && (
-        <div className="card bg-base-200 shadow-xl w-full max-w-md">
+        <div className="card workspace-surface setup-card w-full max-w-md">
           <div className="card-body items-center text-center gap-6">
+            <span className="setup-brand-mark"><Library className="size-7" /></span>
+            <span className="workspace-eyebrow">Library intelligence</span>
             <h1 className="card-title text-3xl">Welcome</h1>
             <p className="text-base-content/60">
               Sign in with Plex to get started.
@@ -122,7 +125,7 @@ function SetupPage() {
       )}
 
       {step === "polling" && (
-        <div className="card bg-base-200 shadow-xl w-full max-w-md">
+        <div className="card workspace-surface setup-card w-full max-w-md">
           <div className="card-body items-center text-center gap-6 py-10">
             {pinExpired ? (
               <div className="alert alert-warning text-sm w-full">
@@ -165,7 +168,7 @@ function SetupPage() {
       )}
 
       {step === "pick-server" && (
-        <div className="card bg-base-200 shadow-xl w-full max-w-md">
+        <div className="card workspace-surface setup-card w-full max-w-md">
           <div className="card-body gap-4">
             <h2 className="card-title text-2xl">Choose your server</h2>
             <p className="text-base-content/60 text-sm text-center">

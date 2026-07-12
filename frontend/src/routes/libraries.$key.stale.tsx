@@ -5,7 +5,16 @@ import {
 } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Copy, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  ArrowLeft,
+  Clock3,
+  Copy,
+  Database,
+  HardDrive,
+  RefreshCw,
+  SlidersHorizontal,
+} from "lucide-react";
 import { api, isNotFoundError } from "../lib/api";
 import type {
   DeleteItemsResponse,
@@ -30,6 +39,7 @@ import { StaleFilters } from "./-stale/StaleFilters";
 import { StaleItemsTable } from "./-stale/StaleItemsTable";
 import { SelectionActionBar } from "./-stale/SelectionActionBar";
 import { DeleteConfirmDialog } from "./-stale/DeleteConfirmDialog";
+import { SectionHeading } from "../components/Workspace";
 import "./libraries.$key.stale.css";
 
 const PAGE_SIZE = 50;
@@ -98,6 +108,26 @@ export const Route = createFileRoute("/libraries/$key/stale")({
 
 function pageFileSize(items: StaleItem[]): number {
   return items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
+}
+
+function LibraryInsight({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="library-insight">
+      <span className="library-insight-icon">{icon}</span>
+      <span>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </span>
+    </div>
+  );
 }
 
 function StalePage() {
@@ -268,20 +298,28 @@ function StalePage() {
   const showFilters = !isNotSyncedYet && !isStaleError;
 
   return (
-    <div className={`space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}>
+    <div className={`stale-page space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}>
       {
         /* Sticky (not the table) per explicit preference: the back/title/sync row and the
           filter controls pin to the top of <main>'s scroll as you scroll past them, while
           the table scrolls away normally underneath — no bounded/independently-scrolling
           table box. */
       }
-      <div className="sticky top-0 z-20 bg-base-100 -mx-4 px-4 pt-2 pb-4 space-y-4 border-b border-base-300">
-        <div className="flex items-center gap-4">
-          <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-            <ArrowLeft className="w-4 h-4" /> Back
+      <div className="library-workspace-header sticky top-0 z-20 -mx-4 px-4 pt-2 pb-4 space-y-4">
+        <div className="library-header-row flex items-center gap-4">
+          <Link
+            to="/dashboard"
+            className="library-back-button btn btn-ghost btn-sm"
+            aria-label="Back to dashboard"
+            title="Back to dashboard"
+          >
+            <ArrowLeft className="w-4 h-4" />
           </Link>
-          <div className="flex-1">
-            <h1 className="text-2xl font-bold">Stale Items</h1>
+          <div className="library-heading flex-1">
+            <div className="library-title-line">
+              <h1>{thisLibrary?.title ?? "Stale Items"}</h1>
+              <span>Stale analysis</span>
+            </div>
             <p className="text-base-content/50 text-sm">
               {data
                 ? (
@@ -299,7 +337,7 @@ function StalePage() {
                 )}
             </p>
           </div>
-          <div className="flex flex-col items-end gap-1">
+          <div className="library-header-actions flex flex-col items-end gap-1">
             <div className="flex gap-2">
               {(thisLibrary?.type === "movie" || thisLibrary?.type === "show") && (
                 <Link
@@ -314,7 +352,7 @@ function StalePage() {
               )}
               <button
                 type="button"
-                className="btn btn-sm gap-2"
+                className="btn btn-primary btn-sm gap-2 library-sync-action"
                 onClick={trigger}
                 disabled={isSyncing}
               >
@@ -333,7 +371,11 @@ function StalePage() {
         </div>
 
         {showFilters && (
-          <StaleFilters
+          <div className="library-filter-surface">
+            <div className="library-filter-title">
+              <SlidersHorizontal className="size-4" /> Analysis controls
+            </div>
+            <StaleFilters
             days={params.days ?? staleSearchDefaults.days}
             filter={params.filter ?? staleSearchDefaults.filter}
             onDaysChange={(days) =>
@@ -347,9 +389,35 @@ function StalePage() {
             duplicatesOnly={params.duplicatesOnly ?? staleSearchDefaults.duplicatesOnly}
             onDuplicatesOnlyChange={(duplicatesOnly) =>
               setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))}
-          />
+            />
+          </div>
         )}
       </div>
+
+      {data && !isNotSyncedYet && !isStaleError && (
+        <div className="library-insight-strip">
+          <LibraryInsight
+            icon={<Database />}
+            label="Matching items"
+            value={data.total.toLocaleString()}
+          />
+          <LibraryInsight
+            icon={<HardDrive />}
+            label="On this page"
+            value={formatKilobytes(pageFileSize(data.items))}
+          />
+          <LibraryInsight
+            icon={<Database />}
+            label="Library size"
+            value={thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"}
+          />
+          <LibraryInsight
+            icon={<Clock3 />}
+            label="Inactive for"
+            value={`${params.days ?? staleSearchDefaults.days}+ days`}
+          />
+        </div>
+      )}
 
       {isNotSyncedYet
         ? (
@@ -411,6 +479,14 @@ function StalePage() {
                 )}
               </DeleteResultAlert>
             )}
+
+            <SectionHeading
+              eyebrow="Content review"
+              title="Stale items"
+              meta={data
+                ? `Showing ${pageItems.length.toLocaleString()} of ${data.total.toLocaleString()}`
+                : undefined}
+            />
 
             <SelectionActionBar
               count={selection.selected.size}

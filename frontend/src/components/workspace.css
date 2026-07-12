@@ -1,0 +1,38 @@
+.workspace-page { position: relative; isolation: isolate; padding-bottom: 3rem; }
+.workspace-page::before { content: ""; position: absolute; z-index: -1; top: -8rem; left: -6rem; width: 34rem; height: 22rem; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--color-primary) 7%, transparent), transparent 68%); pointer-events: none; }
+.workspace-sticky-header { margin-inline: -1rem; padding: .5rem 1rem 1rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); background: color-mix(in oklab, var(--color-base-100) 90%, transparent); backdrop-filter: blur(18px); }
+.workspace-page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; padding: .25rem 0 .5rem; }
+.workspace-page-heading { display: flex; min-width: 0; align-items: center; gap: .8rem; }
+.workspace-back-button { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); border-radius: 11px; color: color-mix(in oklab, var(--color-base-content) 55%, transparent); transition: color 150ms, border-color 150ms, background 150ms; }
+.workspace-back-button:hover { color: var(--color-primary); border-color: color-mix(in oklab, var(--color-primary) 30%, transparent); background: color-mix(in oklab, var(--color-primary) 7%, transparent); }
+.workspace-page-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-primary) 22%, transparent); border-radius: 13px; color: var(--color-primary); background: color-mix(in oklab, var(--color-primary) 12%, transparent); }
+.workspace-page-copy { min-width: 0; }
+.workspace-eyebrow { color: color-mix(in oklab, var(--color-primary) 75%, var(--color-base-content)); font-size: .63rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+.workspace-page-copy h1 { margin-top: .25rem; font-size: clamp(1.65rem, 3vw, 2.1rem); font-weight: 750; letter-spacing: -.04em; line-height: 1.12; }
+.workspace-page-copy p { margin-top: .4rem; color: color-mix(in oklab, var(--color-base-content) 45%, transparent); font-size: .8rem; }
+.workspace-page-actions { display: flex; align-items: center; gap: .65rem; }
+.workspace-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.workspace-section-heading h2 { margin-top: .22rem; font-size: 1.12rem; font-weight: 700; letter-spacing: -.025em; }
+.workspace-section-meta { color: color-mix(in oklab, var(--color-base-content) 40%, transparent); font-size: .72rem; }
+.workspace-surface { overflow: hidden; border: 1px solid color-mix(in oklab, var(--color-base-content) 8%, transparent); border-radius: 17px; background: color-mix(in oklab, var(--color-base-200) 72%, transparent); }
+.workspace-filter-surface { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; border: 1px solid color-mix(in oklab, var(--color-base-content) 8%, transparent); border-radius: 14px; padding: .85rem 1rem; background: color-mix(in oklab, var(--color-base-200) 72%, transparent); }
+.workspace-surface .table thead { color: color-mix(in oklab, var(--color-base-content) 42%, transparent); font-size: .65rem; letter-spacing: .035em; text-transform: uppercase; }
+.settings-page { margin-inline: auto; }
+.settings-card .card-body { padding: 1.35rem 1.5rem; }
+.settings-card h2 { font-size: .88rem; font-weight: 700; letter-spacing: -.01em; }
+.settings-card + .settings-card { margin-top: -.25rem; }
+.activity-feed .polished-row + .polished-row { border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
+.media-detail-header { padding: .25rem 0 .5rem; }
+.media-detail-surface { padding: 1.35rem; }
+.media-detail-surface > img { border-radius: 12px; box-shadow: 0 10px 28px rgb(0 0 0 / .2); }
+.media-detail-surface .grid { align-self: center; flex: 1; }
+.setup-page { position: relative; isolation: isolate; }
+.setup-page::before { content: ""; position: absolute; z-index: -1; width: min(70vw, 50rem); height: min(70vw, 50rem); border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--color-primary) 11%, transparent), transparent 65%); }
+.setup-card { border-color: color-mix(in oklab, var(--color-primary) 12%, transparent); background: color-mix(in oklab, var(--color-base-200) 94%, transparent); box-shadow: 0 24px 70px rgb(0 0 0 / .16); backdrop-filter: blur(16px); }
+.setup-brand-mark { display: grid; width: 58px; height: 58px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-primary) 38%, transparent); border-radius: 18px; color: var(--color-primary-content); background: linear-gradient(145deg, color-mix(in oklab, var(--color-primary) 78%, white), var(--color-primary)); box-shadow: 0 14px 34px color-mix(in oklab, var(--color-primary) 25%, transparent); }
+
+@media (max-width: 650px) {
+  .workspace-page-header { align-items: stretch; flex-direction: column; gap: 1rem; }
+  .workspace-page-actions { justify-content: flex-end; }
+  .workspace-page-icon { display: none; }
+}

@@ -25,9 +25,29 @@
   box-shadow: 0 8px 24px color-mix(in oklch, black 15%, transparent);
 }
 
+/* Dialogs use elevation and structure rather than the interactive row rail: a static
+   rail would imply hover/selection, while these surfaces need calm visual hierarchy. */
+.polished-modal {
+  border: 1px solid var(--color-base-300);
+  transition:
+    translate 120ms ease-out,
+    scale 120ms ease-out,
+    opacity 100ms ease-out,
+    box-shadow 120ms ease-out;
+  box-shadow:
+    0 24px 64px color-mix(in oklch, black 32%, transparent),
+    0 2px 10px color-mix(in oklch, black 18%, transparent);
+}
+
+.polished-modal .modal-action {
+  border-top: 1px solid color-mix(in oklch, var(--color-base-content) 10%, transparent);
+  padding-top: 1rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .interactive-card,
-  .polished-row {
+  .polished-row,
+  .polished-modal {
     transition: none;
   }
 

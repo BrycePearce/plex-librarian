@@ -21,7 +21,7 @@ export function SelectionActionBar({
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 40 }}
           transition={{ type: "spring", stiffness: 300, damping: 28 }}
-          className="fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
+          className="selection-command-bar fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
         >
           <span>
             {count} item{count === 1 ? "" : "s"} selected ·{" "}

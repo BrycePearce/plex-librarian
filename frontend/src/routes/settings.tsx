@@ -1,10 +1,11 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check } from "lucide-react";
+import { Check, Settings as SettingsIcon } from "lucide-react";
 import { api } from "../lib/api";
 import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
+import { PageHeader } from "../components/Workspace";
 
 const MAX_INACTIVITY_DAYS = 36_500;
 
@@ -20,15 +21,15 @@ function SettingsPage() {
   });
 
   return (
-    <div className="space-y-6 max-w-md">
-      <div className="flex items-center gap-4">
-        <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <h1 className="text-2xl font-bold">Settings</h1>
-      </div>
+    <div className="workspace-page settings-page space-y-6 max-w-3xl">
+      <PageHeader
+        eyebrow="Application preferences"
+        title="Settings"
+        description="Tune how Plex Librarian identifies stale content and user activity."
+        icon={SettingsIcon}
+      />
 
-      <div className="card bg-base-200">
+      <div className="card workspace-surface settings-card">
         <div className="card-body gap-4">
           <div className="space-y-3">
             <div>
@@ -61,7 +62,7 @@ function SettingsPage() {
         </div>
       </div>
 
-      <div className="card bg-base-200">
+      <div className="card workspace-surface settings-card">
         <div className="card-body gap-4">
           <div className="space-y-3">
             <div>
@@ -94,7 +95,7 @@ function SettingsPage() {
         </div>
       </div>
 
-      <div className="card bg-base-200">
+      <div className="card workspace-surface settings-card">
         <div className="card-body gap-4">
           <div className="space-y-3">
             <div>

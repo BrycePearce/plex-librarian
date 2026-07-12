@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ArrowLeft, BadgeCheck } from "lucide-react";
+import { BadgeCheck, Copy } from "lucide-react";
 import { api } from "../lib/api";
 import type { DuplicateGroup } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
@@ -14,6 +14,7 @@ import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import { requireAuth } from "../lib/requireAuth";
+import { DataSurface, PageHeader } from "../components/Workspace";
 
 const PAGE_SIZE = 50;
 
@@ -167,30 +168,28 @@ function DuplicatesPage() {
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold">Duplicate Versions</h1>
-          <p className="text-base-content/50 text-sm">
-            {data
-              ? `${data.total.toLocaleString()} with multiple synced versions`
-              : 
-              <span className="skeleton inline-block h-3 w-40 align-middle" />}
-          </p>
-        </div>
-        <select
-          className="select select-bordered select-sm"
-          value={type}
-          onChange={(e) => setType(e.target.value as TypeFilter)}
-          aria-label="Filter by media type"
-        >
-          <option value="all">All</option>
-          <option value="movie">Movies</option>
-          <option value="tv">TV</option>
-        </select>
+    <div className="workspace-page space-y-6">
+      <div className="workspace-sticky-header sticky top-0 z-20">
+        <PageHeader
+          eyebrow="Storage intelligence"
+          title="Duplicate versions"
+          icon={Copy}
+          description={data
+            ? `${data.total.toLocaleString()} with multiple synced versions`
+            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+          actions={
+            <select
+              className="select select-bordered select-sm"
+              value={type}
+              onChange={(e) => setType(e.target.value as TypeFilter)}
+              aria-label="Filter by media type"
+            >
+              <option value="all">All</option>
+              <option value="movie">Movies</option>
+              <option value="tv">TV</option>
+            </select>
+          }
+        />
       </div>
 
       {isError
@@ -244,7 +243,7 @@ function DuplicatesPage() {
                 />
               )
               : (
-                <div className="overflow-x-auto">
+                <DataSurface className="overflow-x-auto">
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -266,7 +265,7 @@ function DuplicatesPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DataSurface>
               )}
 
             <Pagination

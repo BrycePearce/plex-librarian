@@ -24,7 +24,10 @@ function currentTheme(): Theme {
 
 // Not yet in every lib.dom.d.ts — feature-detected below rather than relied on statically.
 interface ViewTransitionDocument extends Document {
-  startViewTransition?(callback: () => void): { ready: Promise<void> };
+  startViewTransition?(callback: () => void): {
+    ready: Promise<void>;
+    finished: Promise<void>;
+  };
 }
 
 // Screen coordinates the reveal animation expands outward from — pass the click event's
@@ -68,7 +71,13 @@ export function useTheme(): [
       root.setProperty("--theme-reveal-y", `${origin.y}px`);
       root.setProperty("--theme-reveal-radius", `${endRadius}px`);
     }
-    startViewTransition(apply);
+    // Prevent theme-dependent component transitions from all firing underneath the
+    // browser's full-page snapshots. The reveal itself remains compositor-driven.
+    document.documentElement.classList.add("theme-transitioning");
+    const transition = startViewTransition(apply);
+    void transition.finished.finally(() => {
+      document.documentElement.classList.remove("theme-transitioning");
+    });
   };
 
   return [theme, setTheme];

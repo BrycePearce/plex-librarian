@@ -29,12 +29,20 @@
   }
 }
 
+/* Avoid animating every theme-dependent component beneath the browser snapshots. */
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition: none !important;
+}
+
 ::view-transition-old(root) {
   animation: none;
 }
 
 ::view-transition-new(root) {
   animation: theme-reveal 0.5s ease-in;
+  will-change: clip-path;
 }
 
 @media (prefers-reduced-motion: reduce) {

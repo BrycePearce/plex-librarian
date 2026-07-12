@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { AlertTriangle, UserX } from "lucide-react";
 import type { PlexUser } from "../../lib/api";
+import "../../components/dataSurfaces.css";
 
 export function RemoveUserConfirmDialog({
   dialogRef,
@@ -19,7 +20,7 @@ export function RemoveUserConfirmDialog({
 }) {
   return (
     <dialog ref={dialogRef} className="modal" onClose={onCancel}>
-      <div className="modal-box">
+      <div className="modal-box polished-modal">
         <h3 className="font-bold text-lg flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-error" />
           Remove {user?.username}'s access?

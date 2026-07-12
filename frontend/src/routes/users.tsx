@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, User, UserCheck, UserX } from "lucide-react";
+import { ArrowDown, ArrowUp, User, UserCheck, UserX, Users } from "lucide-react";
 import { api } from "../lib/api";
 import type { PlexUser } from "../lib/api";
 import { formatDate } from "../lib/format";
@@ -14,6 +14,7 @@ import { UsersTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
 import { requireAuth } from "../lib/requireAuth";
+import { DataSurface, FilterSurface, PageHeader } from "../components/Workspace";
 
 const PAGE_SIZE = 100;
 const MAX_INACTIVITY_DAYS = 36_500;
@@ -165,26 +166,22 @@ function UsersPage() {
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold">Users</h1>
-          <p className="text-base-content/50 text-sm">
-            {data
-              ? `${data.total.toLocaleString()} ${
-                search.filter === "all" && search.risk === "all"
-                  ? "with access to this server"
-                  : "matching users"
-              }`
-              : <span className="skeleton inline-block h-3 w-40 align-middle" />}
-          </p>
-        </div>
-      </div>
+    <div className="workspace-page space-y-6">
+      <div className="workspace-sticky-header sticky top-0 z-20 space-y-4">
+        <PageHeader
+          eyebrow="Access intelligence"
+          title="Users"
+          icon={Users}
+          description={data
+            ? `${data.total.toLocaleString()} ${
+              search.filter === "all" && search.risk === "all"
+                ? "with access to this server"
+                : "matching users"
+            }`
+            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+        />
 
-      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+        <FilterSurface>
         <label className="form-control gap-1">
           <span className="label-text text-xs">Activity</span>
           <select
@@ -275,6 +272,7 @@ function UsersPage() {
               )}
           </select>
         </label>
+        </FilterSurface>
       </div>
 
       {data && (
@@ -327,7 +325,7 @@ function UsersPage() {
                 />
               )
               : (
-                <div className="overflow-x-auto">
+                <DataSurface className="overflow-x-auto">
                   <table className="table table-sm">
                     <thead>
                       <tr>
@@ -420,7 +418,7 @@ function UsersPage() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </DataSurface>
               )}
 
             <Pagination

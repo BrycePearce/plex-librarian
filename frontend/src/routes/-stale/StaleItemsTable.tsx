@@ -2,6 +2,7 @@ import { AnimatePresence } from "motion/react";
 import { ArrowDown, ArrowUp, Sparkles } from "lucide-react";
 import type { SortKey, StaleItem, StaleParams } from "../../lib/api";
 import { StaleItemRow } from "./StaleItemRow";
+import { DataSurface } from "../../components/Workspace";
 
 function SortTh({
   label,
@@ -88,7 +89,7 @@ export function StaleItemsTable({
   ));
 
   return (
-    <div className="overflow-x-auto">
+    <DataSurface className="stale-results-surface overflow-x-auto">
       <progress
         className={`progress progress-primary w-full h-0.5 mb-1 transition-opacity ${
           isFetching ? "opacity-100" : "opacity-0"
@@ -191,6 +192,6 @@ export function StaleItemsTable({
             )}
         </div>
       )}
-    </div>
+    </DataSurface>
   );
 }

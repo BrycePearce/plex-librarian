@@ -15,6 +15,7 @@ import { PosterThumb } from "../components/PosterThumb";
 import { requireAuth } from "../lib/requireAuth";
 import { DetailStat } from "../components/DetailStat";
 import { useSyncedDetail } from "../lib/useSyncedDetail";
+import { DataSurface } from "../components/Workspace";
 
 export const Route = createFileRoute("/libraries/$key/movies/$ratingKey")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -38,28 +39,33 @@ function MovieDetailPage() {
   const movie = data?.movie;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
+    <div className="workspace-page media-detail-page space-y-6">
+      <div className="media-detail-header flex items-center gap-4">
         {canGoBack
           ? (
             <button
               type="button"
-              className="btn btn-ghost btn-sm gap-1"
+              className="workspace-back-button"
+              aria-label="Back"
+              title="Back"
               onClick={() => router.history.back()}
             >
-              <ArrowLeft className="w-4 h-4" /> Back
+              <ArrowLeft className="w-4 h-4" />
             </button>
           )
           : (
             <Link
               to="/libraries/$key/stale"
               params={{ key }}
-              className="btn btn-ghost btn-sm gap-1"
+              className="workspace-back-button"
+              aria-label="Back to stale items"
+              title="Back to stale items"
             >
-              <ArrowLeft className="w-4 h-4" /> Back
+              <ArrowLeft className="w-4 h-4" />
             </Link>
           )}
-        <div>
+        <div className="workspace-page-copy">
+          <span className="workspace-eyebrow">Movie details</span>
           <h1 className="text-2xl font-bold">{movie?.title ?? "…"}</h1>
           {movie?.year && (
             <p className="text-base-content/50 text-sm">{movie.year}</p>
@@ -99,7 +105,7 @@ function MovieDetailPage() {
               }
             />
 
-            <div className="flex gap-6 items-start">
+            <DataSurface className="media-detail-surface flex gap-6 items-start">
               <PosterThumb
                 thumb={movie?.thumb ?? null}
                 width={120}
@@ -129,7 +135,7 @@ function MovieDetailPage() {
                 />
                 <DetailStat label="Plays" value={String(movie?.viewCount ?? 0)} />
               </div>
-            </div>
+            </DataSurface>
           </>
         )}
     </div>

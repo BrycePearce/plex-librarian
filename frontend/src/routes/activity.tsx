@@ -1,8 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
-  ArrowLeft,
   CheckCircle,
   Copy,
   History,
@@ -16,6 +15,7 @@ import { ActivityListSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
 import { requireAuth } from "../lib/requireAuth";
+import { DataSurface, PageHeader } from "../components/Workspace";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -56,13 +56,13 @@ function ActivityPage() {
   const allEvents = data?.pages.flatMap((p) => p.events) ?? [];
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div className="flex items-center gap-4">
-        <Link to="/dashboard" className="btn btn-ghost btn-sm gap-1">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <h1 className="text-2xl font-bold">Activity</h1>
-      </div>
+    <div className="workspace-page space-y-6 max-w-4xl">
+      <PageHeader
+        eyebrow="Audit trail"
+        title="Activity"
+        description="A chronological record of syncs, deletions, and access changes."
+        icon={History}
+      />
 
       {isLoading && (
         <ActivityListSkeleton />
@@ -84,7 +84,7 @@ function ActivityPage() {
       )}
 
       {allEvents.length > 0 && (
-        <div className="space-y-2">
+        <DataSurface className="activity-feed divide-y divide-base-300">
           {allEvents.map((event) => (
             <EventRow
               key={event.id}
@@ -92,7 +92,7 @@ function ActivityPage() {
               libraryTitleByKey={libraryTitleByKey}
             />
           ))}
-        </div>
+        </DataSurface>
       )}
 
       {hasNextPage && (
@@ -211,8 +211,8 @@ function EventRow(
     : undefined;
 
   return (
-    <div className="card bg-base-200 interactive-card">
-      <div className="card-body flex-row items-center gap-3 py-3">
+    <div className="polished-row">
+      <div className="flex items-center gap-3 px-4 py-3.5">
         <Icon className={`w-4 h-4 shrink-0 ${iconClass}`} />
         <span className="text-sm flex-1 min-w-0 truncate">
           {describeEvent(event, libraryTitleByKey)}
