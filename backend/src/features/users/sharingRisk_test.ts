@@ -1,5 +1,5 @@
-import { assessUserSharingRisk, type SharingObservationStats } from './userSharingRisk.ts';
-import { networkKeyForIp } from '../lib/network.ts';
+import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
+import { networkKeyForIp } from './network.ts';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

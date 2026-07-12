@@ -2,8 +2,8 @@
   "name": "backend",
   "exports": {},
   "tasks": {
-    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
-    "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/main.ts",
+    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/server.ts",
+    "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/server.ts",
     "db:generate": "deno run -A --env-file=.env npm:drizzle-kit generate",
     "db:migrate": "deno run --allow-read --allow-write --allow-env --allow-ffi --allow-net --env-file=.env src/db/migrate.ts",
     "fmt": "deno fmt",
@@ -16,9 +16,9 @@
   },
   "imports": {
     "hono": "jsr:@hono/hono@^4",
-    "hono/logger": "https://jsr.io/@hono/hono/4.12.23/src/middleware/logger/index.ts",
-    "hono/body-limit": "https://jsr.io/@hono/hono/4.12.23/src/middleware/body-limit/index.ts",
-    "hono/deno": "https://jsr.io/@hono/hono/4.12.23/src/adapter/deno/index.ts",
+    "hono/logger": "jsr:@hono/hono@^4/logger",
+    "hono/body-limit": "jsr:@hono/hono@^4/body-limit",
+    "hono/deno": "jsr:@hono/hono@^4/deno",
     "@std/crypto": "jsr:@std/crypto@^1",
     "@std/dotenv": "jsr:@std/dotenv@^0.225",
     "@std/path": "jsr:@std/path@^1",

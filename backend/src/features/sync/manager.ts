@@ -1,7 +1,8 @@
-import { withTransaction } from '../db/index.ts';
-import type { PlexClient } from '../lib/plex.ts';
-import { failStalePendingSyncs, finalizeSyncLog, runLibrarySync, runSync } from './sync.ts';
-import type { SyncReporter } from './sync.ts';
+import { withTransaction } from '../../db/index.ts';
+import type { PlexClient } from '../../integrations/plex/index.ts';
+import { runLibrarySync, runSync } from './service.ts';
+import type { SyncReporter } from './service.ts';
+import { failStalePendingSyncs, finalizeSyncLog } from './syncLog.ts';
 import type { LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
 
 type ActiveServer = { client: PlexClient; serverId: number };
@@ -26,7 +27,7 @@ const itemStartTimes = new WeakMap<LibrarySyncProgress, number>();
 // If a sync produces no progress (no phase transition, no item count increment) for
 // this long, it's treated as stalled and failed outright. Every individual Plex request
 // already has its own 30s timeout with limited retries (see PlexClient.get in
-// lib/plex.ts), so a normal dead connection fails fast — this is a backstop for
+// integrations/plex), so a normal dead connection fails fast — this is a backstop for
 // whatever lets a request evade that (observed once: a Plex host powered off mid-sync,
 // which can leave a connection silently hanging rather than erroring, for 13+ hours).
 // The orphaned task, if it ever does settle on its own after this fires, is a no-op:
@@ -199,7 +200,7 @@ async function runSyncTask(
   }
 }
 
-// Takes the already-resolved active server (see resolveActiveServer() in lib/plex.ts)
+// Takes the already-resolved active server (see resolveActiveServer() in integrations/plex)
 // from the caller and threads the same {client, serverId} pair through to both the
 // sync_log insert and the task that actually executes the sync — so a server switch
 // racing with the caller's resolution can't log the row under one server while syncing

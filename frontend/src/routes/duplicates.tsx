@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ArrowLeft, BadgeCheck } from "lucide-react";
@@ -13,6 +13,7 @@ import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
+import { requireAuth } from "../lib/requireAuth";
 
 const PAGE_SIZE = 50;
 
@@ -27,14 +28,7 @@ function validateDuplicatesSearch(
 
 export const Route = createFileRoute("/duplicates")({
   validateSearch: validateDuplicatesSearch,
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DuplicatesPage,
 });
 

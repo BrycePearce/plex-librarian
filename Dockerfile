@@ -30,7 +30,7 @@ COPY frontend/deno.json /app/frontend/deno.json
 COPY --from=builder /app/frontend/dist/ /app/frontend/dist/
 
 # Cache TypeScript modules
-RUN deno cache src/main.ts
+RUN deno cache src/server.ts
 
 # Pre-download the @db/sqlite native FFI DLL so first boot doesn't need internet
 RUN printf 'import "@db/sqlite";\n' > warmup.ts \
@@ -46,4 +46,4 @@ EXPOSE 8080
 
 CMD ["deno", "run", \
      "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", \
-     "src/main.ts"]
+     "src/server.ts"]

@@ -1,4 +1,4 @@
-import { buildPlexHeaders, PLEX_TV } from './plex.ts';
+import { buildPlexHeaders, PLEX_TV } from './index.ts';
 
 // The synthetic username assigned when Plex's friends XML gives us neither a username
 // nor a title for an account (rare, but real — see parseFriendsXml/fetchServerRoster

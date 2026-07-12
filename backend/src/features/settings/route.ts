@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { settings } from '../db/schema.ts';
+import { db } from '../../db/index.ts';
+import { settings } from '../../db/schema.ts';
 import type { Settings } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono();

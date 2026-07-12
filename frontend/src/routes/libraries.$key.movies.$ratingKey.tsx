@@ -1,31 +1,23 @@
 import {
   createFileRoute,
   Link,
-  redirect,
   useCanGoBack,
   useRouter,
 } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { api, isNotFoundError } from "../lib/api";
+import { api } from "../lib/api";
 import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
 import { MovieDetailSkeleton } from "../components/Skeletons";
 import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
 import { PosterThumb } from "../components/PosterThumb";
-import { useSyncHistory } from "../lib/useLibrarySync";
-import { useNotSyncedYet } from "../lib/useNotSyncedYet";
+import { requireAuth } from "../lib/requireAuth";
+import { DetailStat } from "../components/DetailStat";
+import { useSyncedDetail } from "../lib/useSyncedDetail";
 
 export const Route = createFileRoute("/libraries/$key/movies/$ratingKey")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: MovieDetailPage,
 });
 
@@ -37,19 +29,11 @@ function MovieDetailPage() {
   // link to the library's stale list instead of a real browser-back.
   const canGoBack = useCanGoBack();
 
-  const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
-  const anySyncPending = history?.some((h) => h.status === "pending") ?? false;
-  const syncMightResolveThis = anySyncPending || isHistoryLoading;
-
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["movie", key, ratingKey],
-    queryFn: () => api.libraries.movieDetail(key, ratingKey),
-    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 2,
-    refetchInterval: (query) =>
-      isNotFoundError(query.state.error) && syncMightResolveThis ? 4000 : false,
-  });
-
-  const isNotFoundYet = useNotSyncedYet(isError, error, syncMightResolveThis);
+  const { data, isLoading, isError, error, refetch, isNotFoundYet } =
+    useSyncedDetail(
+      ["movie", key, ratingKey],
+      () => api.libraries.movieDetail(key, ratingKey),
+    );
 
   const movie = data?.movie;
 
@@ -123,19 +107,19 @@ function MovieDetailPage() {
                 className="w-24 h-36"
               />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
-                <Stat
+                <DetailStat
                   label="Size"
                   value={movie?.fileSize != null
                     ? formatKilobytes(movie.fileSize)
                     : "—"}
                 />
-                <Stat
+                <DetailStat
                   label="Duration"
                   value={movie?.duration != null
                     ? formatDuration(Math.floor(movie.duration / 1000))
                     : "—"}
                 />
-                <Stat
+                <DetailStat
                   label="Last viewed"
                   value={movie?.lastViewedAt
                     ? formatDate(movie.lastViewedAt)
@@ -143,20 +127,11 @@ function MovieDetailPage() {
                     ? "Unknown"
                     : "Never"}
                 />
-                <Stat label="Plays" value={String(movie?.viewCount ?? 0)} />
+                <DetailStat label="Plays" value={String(movie?.viewCount ?? 0)} />
               </div>
             </div>
           </>
         )}
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs text-base-content/40">{label}</div>
-      <div className="font-semibold">{value}</div>
     </div>
   );
 }

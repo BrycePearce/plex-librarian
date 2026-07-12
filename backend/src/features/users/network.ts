@@ -2,9 +2,7 @@ function ipv4Octets(value: string): number[] | null {
   const parts = value.split('.');
   if (parts.length !== 4) return null;
   const octets = parts.map(Number);
-  return octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
-    ? octets
-    : null;
+  return octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? octets : null;
 }
 
 function ipv6Hextets(value: string): string[] | null {

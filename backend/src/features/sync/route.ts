@@ -1,11 +1,11 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { desc, eq } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { libraries, syncLog } from '../db/schema.ts';
-import { libraryByKey, syncLogById } from '../db/scope.ts';
-import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
-import { resolveActiveServer } from '../lib/plex.ts';
+import { db } from '../../db/index.ts';
+import { libraries, syncLog } from '../../db/schema.ts';
+import { libraryByKey, syncLogById } from '../../db/scope.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import {
   getSyncProgress,
   isSyncActive,
@@ -13,7 +13,7 @@ import {
   triggerFullSync,
   triggerLibrarySync,
   unregisterStream,
-} from '../services/syncManager.ts';
+} from './manager.ts';
 import type { SyncLog, SyncTriggerResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();

@@ -13,17 +13,14 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { servers, settings, userPlayObservations, users } from '../db/schema.ts';
-import { userByAccountId, usersByServer } from '../db/scope.ts';
-import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
-import { getActiveServer } from '../lib/plex.ts';
-import { PlexRemoveUserError, removeUserAccess } from '../lib/plexUsers.ts';
-import { logEvents } from '../services/events.ts';
-import {
-  assessUserSharingRisk,
-  type SharingObservationStats,
-} from '../services/userSharingRisk.ts';
+import { db } from '../../db/index.ts';
+import { servers, settings, userPlayObservations, users } from '../../db/schema.ts';
+import { userByAccountId, usersByServer } from '../../db/scope.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
+import { getActiveServer } from '../../integrations/plex/index.ts';
+import { PlexRemoveUserError, removeUserAccess } from '../../integrations/plex/accounts.ts';
+import { logEvents } from '../events/service.ts';
+import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
 import type { PlexUser, RemoveUserResponse, UsersResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -217,16 +214,18 @@ router.get('/', async (c) => {
         thumb: u.thumb,
         isOwner: u.isOwner,
         lastViewedAt: u.lastViewedAt,
-        sharingRisk: assessUserSharingRisk(sharingStats.get(u.accountId) ?? {
-          observationCount: 0,
-          firstObservedAt: null,
-          lastObservedAt: null,
-          activeDays: 0,
-          completeObservationCount: 0,
-          remoteNetworks30d: 0,
-          remotePlayers30d: 0,
-          maxRemoteNetworksPerDay30d: 0,
-        }),
+        sharingRisk: assessUserSharingRisk(
+          sharingStats.get(u.accountId) ?? {
+            observationCount: 0,
+            firstObservedAt: null,
+            lastObservedAt: null,
+            activeDays: 0,
+            completeObservationCount: 0,
+            remoteNetworks30d: 0,
+            remotePlayers30d: 0,
+            maxRemoteNetworksPerDay30d: 0,
+          },
+        ),
       })),
     } satisfies UsersResponse,
   );

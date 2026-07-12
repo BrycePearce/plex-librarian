@@ -14,7 +14,7 @@ import {
   type SQL,
   sql,
 } from 'drizzle-orm';
-import { db } from '../db/index.ts';
+import { db } from '../../db/index.ts';
 import {
   episodeMediaVersions,
   itemMediaVersions,
@@ -22,7 +22,7 @@ import {
   libraries,
   seasons,
   settings,
-} from '../db/schema.ts';
+} from '../../db/schema.ts';
 import {
   episodeVersionsByLibrary,
   HAS_DUPLICATE_VERSIONS,
@@ -31,10 +31,10 @@ import {
   libraryByKey,
   mediaVersionsByLibrary,
   seasonsByShow,
-} from '../db/scope.ts';
-import { createPlexClient, PlexDeleteError } from '../lib/plex.ts';
-import { logEvents } from '../services/events.ts';
-import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
+} from '../../db/scope.ts';
+import { createPlexClient, PlexDeleteError } from '../../integrations/plex/index.ts';
+import { logEvents } from '../events/service.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
   LibrariesResponse,
@@ -370,7 +370,7 @@ router.delete('/:key/items', async (c) => {
 
   // Only ever act on items that actually belong to this library/server — guards
   // against a client passing ratingKeys scraped from a different library or server.
-  // fileSize (decimal KB — see extractFileSize in lib/plex.ts) is captured here
+  // fileSize (decimal KB — see extractFileSize in integrations/plex) is captured here
   // (before the rows are deleted below) so the activity event can report space
   // freed without a second query.
   const owned = await db.select({ ratingKey: items.ratingKey, fileSize: items.fileSize })

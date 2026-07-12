@@ -73,8 +73,8 @@ export const userByUsername = (serverId: number, username: string) =>
 
 // The single definition of "these grouped Media versions constitute a genuine
 // duplicate" (see Duplicate detection in CLAUDE.md) — shared by the global
-// /api/duplicates endpoint (routes/duplicates.ts) and the per-library
-// ?duplicatesOnly stale filter (routes/libraries.ts) so a future change to the rule
+// /api/duplicates endpoint and the per-library ?duplicatesOnly stale filter so a future
+// change to the rule
 // (e.g. excluding a version flagged inaccessible) can't be applied to one and
 // silently forgotten in the other.
 export const HAS_DUPLICATE_VERSIONS = sql`count(*) >= 2`;

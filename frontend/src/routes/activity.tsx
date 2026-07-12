@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -15,16 +15,10 @@ import { formatKilobytes, formatRelativeTime } from "../lib/format";
 import { ActivityListSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
+import { requireAuth } from "../lib/requireAuth";
 
 export const Route = createFileRoute("/activity")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: ActivityPage,
 });
 

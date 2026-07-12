@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { settings } from '../db/schema.ts';
+import { db } from '../../db/index.ts';
+import { settings } from '../../db/schema.ts';
 import {
   buildPlexHeaders,
   clearPlexClientCache,
@@ -11,8 +11,8 @@ import {
   PLEX_CLIENT_PRODUCT,
   PLEX_TV,
   resolveActiveServer,
-} from '../lib/plex.ts';
-import { triggerFullSync } from '../services/syncManager.ts';
+} from '../../integrations/plex/index.ts';
+import { triggerFullSync } from '../sync/manager.ts';
 
 const router = new Hono();
 

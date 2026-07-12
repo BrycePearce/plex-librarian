@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { and, desc, eq, lt } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { events } from '../db/schema.ts';
-import { type ActiveServerVariables, withActiveServerId } from '../middleware/activeServer.ts';
+import { db } from '../../db/index.ts';
+import { events } from '../../db/schema.ts';
+import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type { ActivityEvent, ActivityEventsResponse } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();

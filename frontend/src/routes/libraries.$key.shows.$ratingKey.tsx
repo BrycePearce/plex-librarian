@@ -1,13 +1,11 @@
 import {
   createFileRoute,
   Link,
-  redirect,
   useCanGoBack,
   useRouter,
 } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { api, isNotFoundError } from "../lib/api";
+import { api } from "../lib/api";
 import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
 import type { Season } from "../lib/api";
 import { ShowDetailSkeleton } from "../components/Skeletons";
@@ -15,18 +13,12 @@ import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
 import { PosterThumb } from "../components/PosterThumb";
-import { useSyncHistory } from "../lib/useLibrarySync";
-import { useNotSyncedYet } from "../lib/useNotSyncedYet";
+import { requireAuth } from "../lib/requireAuth";
+import { DetailStat } from "../components/DetailStat";
+import { useSyncedDetail } from "../lib/useSyncedDetail";
 
 export const Route = createFileRoute("/libraries/$key/shows/$ratingKey")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: ShowDetailPage,
 });
 
@@ -46,19 +38,11 @@ function ShowDetailPage() {
   // would produce (the backend can't tell the two apart). No `useLibrarySync` on this
   // page to invalidate us once a sync lands, so this falls back to the lightweight
   // shared history query already used elsewhere just to know whether anything's running.
-  const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
-  const anySyncPending = history?.some((h) => h.status === "pending") ?? false;
-  const syncMightResolveThis = anySyncPending || isHistoryLoading;
-
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["show", key, ratingKey],
-    queryFn: () => api.libraries.showDetail(key, ratingKey),
-    retry: (failureCount, err) => !isNotFoundError(err) && failureCount < 2,
-    refetchInterval: (query) =>
-      isNotFoundError(query.state.error) && syncMightResolveThis ? 4000 : false,
-  });
-
-  const isNotFoundYet = useNotSyncedYet(isError, error, syncMightResolveThis);
+  const { data, isLoading, isError, error, refetch, isNotFoundYet } =
+    useSyncedDetail(
+      ["show", key, ratingKey],
+      () => api.libraries.showDetail(key, ratingKey),
+    );
 
   const show = data?.show;
 
@@ -132,14 +116,14 @@ function ShowDetailPage() {
                 className="w-24 h-36"
               />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
-                <Stat
+                <DetailStat
                   label="Total size"
                   value={show?.fileSize != null
                     ? formatKilobytes(show.fileSize)
                     : "—"}
                 />
-                <Stat label="Seasons" value={String(data.seasons.length)} />
-                <Stat
+                <DetailStat label="Seasons" value={String(data.seasons.length)} />
+                <DetailStat
                   label="Last viewed"
                   value={show?.lastViewedAt
                     ? formatDate(show.lastViewedAt)
@@ -147,7 +131,7 @@ function ShowDetailPage() {
                     ? "Unknown"
                     : "Never"}
                 />
-                <Stat label="Plays" value={String(show?.viewCount ?? 0)} />
+                <DetailStat label="Plays" value={String(show?.viewCount ?? 0)} />
               </div>
             </div>
 
@@ -177,15 +161,6 @@ function ShowDetailPage() {
             </div>
           </>
         )}
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs text-base-content/40">{label}</div>
-      <div className="font-semibold">{value}</div>
     </div>
   );
 }

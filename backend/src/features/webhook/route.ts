@@ -1,11 +1,11 @@
 import { Hono } from 'hono';
-import { db, withTransaction } from '../db/index.ts';
-import { items, users } from '../db/schema.ts';
-import { itemByRatingKey, userByLocalAccountId, userByUsername } from '../db/scope.ts';
-import { getActiveServer } from '../lib/plex.ts';
-import type { PlexWebhookPayload } from '../lib/plex.ts';
-import { networkKeyForIp } from '../lib/network.ts';
-import { UNKNOWN_USERNAME_PLACEHOLDER } from '../lib/plexUsers.ts';
+import { db, withTransaction } from '../../db/index.ts';
+import { items, users } from '../../db/schema.ts';
+import { itemByRatingKey, userByLocalAccountId, userByUsername } from '../../db/scope.ts';
+import { getActiveServer } from '../../integrations/plex/index.ts';
+import type { PlexWebhookPayload } from '../../integrations/plex/index.ts';
+import { UNKNOWN_USERNAME_PLACEHOLDER } from '../../integrations/plex/accounts.ts';
+import { networkKeyForIp } from '../users/network.ts';
 
 // media.play  — fires immediately on playback start; stamps lastViewedAt = now for real-time feel
 // media.scrobble — fires at 90% watched; carries Plex's authoritative viewCount increment

@@ -1,19 +1,13 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Check } from "lucide-react";
 import { api } from "../lib/api";
+import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
 
 export const Route = createFileRoute("/settings")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: SettingsPage,
 });
 

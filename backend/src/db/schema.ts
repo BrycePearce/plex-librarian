@@ -322,7 +322,7 @@ export const itemMediaVersions = sqliteTable(
 // assumptions) — so storing one row per episode unconditionally would scale with total
 // episode count across every TV library on the server, which is exactly what this app
 // avoids elsewhere. Filtering to genuine duplicates only at WRITE time
-// (mapEpisodeMediaVersions in lib/plex.ts) keeps this table's size bounded by actual
+// (mapEpisodeMediaVersions in integrations/plex) keeps this table's size bounded by actual
 // duplicate-episode count, not library size. episodeRatingKey is NOT FK'd (no episodes
 // table exists to reference); seasonRatingKey and showRatingKey are FK'd since those
 // parent rows do exist. episodeTitle/episodeIndex/seasonIndex are denormalized here

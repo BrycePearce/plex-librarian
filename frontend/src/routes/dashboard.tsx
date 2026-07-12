@@ -1,7 +1,6 @@
 import {
   createFileRoute,
   Link,
-  redirect,
   useNavigate,
 } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,6 +42,7 @@ import {
   useSyncHistory,
 } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
+import { requireAuth } from "../lib/requireAuth";
 import {
   LibraryCardSkeleton,
   StatsStripSkeleton,
@@ -66,14 +66,7 @@ const cardVariants: Variants = {
 };
 
 export const Route = createFileRoute("/dashboard")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DashboardPage,
 });
 

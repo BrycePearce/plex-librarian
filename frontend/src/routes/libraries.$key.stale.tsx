@@ -1,7 +1,6 @@
 import {
   createFileRoute,
   Link,
-  redirect,
   stripSearchParams,
 } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +17,7 @@ import { formatKilobytes } from "../lib/format";
 import { useLibrarySync } from "../lib/useLibrarySync";
 import { useNotSyncedYet } from "../lib/useNotSyncedYet";
 import { useDeleteItems } from "../lib/useDeleteItems";
+import { requireAuth } from "../lib/requireAuth";
 import { StaleTableSkeleton } from "../components/Skeletons";
 import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
@@ -92,14 +92,7 @@ export const Route = createFileRoute("/libraries/$key/stale")({
   search: {
     middlewares: [stripSearchParams(staleSearchDefaults)],
   },
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: StalePage,
 });
 

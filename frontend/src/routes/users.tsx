@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ArrowLeft, User, UserCheck, UserX } from "lucide-react";
@@ -13,6 +13,7 @@ import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
 import { UsersTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
+import { requireAuth } from "../lib/requireAuth";
 
 const PAGE_SIZE = 100;
 
@@ -27,14 +28,7 @@ function validateUsersSearch(
 
 export const Route = createFileRoute("/users")({
   validateSearch: validateUsersSearch,
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: ["auth", "status"],
-      queryFn: api.auth.status,
-      staleTime: 60_000,
-    });
-    if (!status.configured) throw redirect({ to: "/setup" });
-  },
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: UsersPage,
 });
 

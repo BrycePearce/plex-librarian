@@ -1,16 +1,11 @@
 import { and, desc, eq, lt, ne } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { LOG_RETENTION_DAYS, pruneOlderThan } from '../db/prune.ts';
-import {
-  settings,
-  syncLog,
-  userIpHistory,
-  userPlayObservations,
-} from '../db/schema.ts';
-import { PlexConfigError, resolveActiveServer } from '../lib/plex.ts';
-import type { PlexClient } from '../lib/plex.ts';
-import { sweepStalePendingSyncs, triggerFullSync } from './syncManager.ts';
-import { pruneOldEvents } from './events.ts';
+import { db } from '../../db/index.ts';
+import { LOG_RETENTION_DAYS, pruneOlderThan } from '../../db/prune.ts';
+import { settings, syncLog, userIpHistory, userPlayObservations } from '../../db/schema.ts';
+import { PlexConfigError, resolveActiveServer } from '../../integrations/plex/index.ts';
+import type { PlexClient } from '../../integrations/plex/index.ts';
+import { sweepStalePendingSyncs, triggerFullSync } from './manager.ts';
+import { pruneOldEvents } from '../events/service.ts';
 
 // Prunes by finishedAt (not startedAt) so a sync's row survives for the full retention
 // window counted from when it actually finished, not from when it started — otherwise a
@@ -43,7 +38,7 @@ async function pruneOldUserActivityHistory(): Promise<void> {
 
 const STALE_THRESHOLD_SECONDS = 24 * 60 * 60;
 
-// Resolves the active server (see resolveActiveServer() in lib/plex.ts) rather than
+// Resolves the active server (see resolveActiveServer() in integrations/plex) rather than
 // reading settings.activeServerId directly, so an env-var-configured server that's
 // never been touched this process gets its `servers` row/activeServerId resolved here —
 // otherwise the staleness check below wouldn't yet know which server's history to look

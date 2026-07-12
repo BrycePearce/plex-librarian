@@ -1,5 +1,5 @@
 import type { Context, Next } from 'hono';
-import { getActiveServerIdOrNull } from '../lib/plex.ts';
+import { getActiveServerIdOrNull } from '../integrations/plex/index.ts';
 
 export type ActiveServerVariables = { activeServerId: number | null };
 

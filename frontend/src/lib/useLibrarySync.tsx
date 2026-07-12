@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -41,17 +49,16 @@ export function useSyncHistory() {
   });
 }
 
-type SyncContextValue = {
+type SyncActions = {
   increment: () => void;
   decrement: () => void;
-  count: number;
 };
 
-const ActiveSyncContext = createContext<SyncContextValue>({
+const ActiveSyncActionsContext = createContext<SyncActions>({
   increment: () => {},
   decrement: () => {},
-  count: 0,
 });
+const ActiveSyncCountContext = createContext(0);
 
 export function LibrarySyncProvider({
   children,
@@ -59,22 +66,29 @@ export function LibrarySyncProvider({
   children: ReactNode;
 }) {
   const [count, setCount] = useState(0);
-  const increment = () => setCount((c) => c + 1);
-  const decrement = () => setCount((c) => Math.max(0, c - 1));
+  const increment = useCallback(() => setCount((current) => current + 1), []);
+  const decrement = useCallback(
+    () => setCount((current) => Math.max(0, current - 1)),
+    [],
+  );
+  const actions = useMemo(() => ({ increment, decrement }), [increment, decrement]);
+
   return (
-    <ActiveSyncContext.Provider value={{ increment, decrement, count }}>
-      {children}
-    </ActiveSyncContext.Provider>
+    <ActiveSyncActionsContext.Provider value={actions}>
+      <ActiveSyncCountContext.Provider value={count}>
+        {children}
+      </ActiveSyncCountContext.Provider>
+    </ActiveSyncActionsContext.Provider>
   );
 }
 
 export function useAnyLibrarySyncing(): boolean {
-  return useContext(ActiveSyncContext).count > 0;
+  return useContext(ActiveSyncCountContext) > 0;
 }
 
 export function useLibrarySync(libraryKey: string) {
   const qc = useQueryClient();
-  const { increment, decrement } = useContext(ActiveSyncContext);
+  const { increment, decrement } = useContext(ActiveSyncActionsContext);
   // A pending sync we've attached to is either scoped to just this library (triggered
   // from this page's own "Sync" button, or reattached to one still running after a
   // remount) or a global "Sync all" run (libraryKey: null on the sync_log row) that

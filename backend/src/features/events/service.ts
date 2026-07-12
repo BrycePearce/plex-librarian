@@ -1,6 +1,6 @@
-import { db } from '../db/index.ts';
-import { LOG_RETENTION_DAYS, pruneOlderThan } from '../db/prune.ts';
-import { events } from '../db/schema.ts';
+import { db } from '../../db/index.ts';
+import { LOG_RETENTION_DAYS, pruneOlderThan } from '../../db/prune.ts';
+import { events } from '../../db/schema.ts';
 import type {
   ItemsDeletedPayload,
   MediaDeletedPayload,
