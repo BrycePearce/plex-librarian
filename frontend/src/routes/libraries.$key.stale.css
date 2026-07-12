@@ -1,13 +1,3 @@
-.row-accent {
-  transition: box-shadow 150ms ease-out;
-}
-
-.group:hover .row-accent {
-  box-shadow:
-    inset 0 1px 0 0 var(--color-primary),
-    inset 0 -1px 0 0 var(--color-primary);
-}
-
 /* Persistent selected-row tint. Custom properties reliably outrank daisyUI's layered
    row-hover background without relying on cascade-layer ordering. */
 .row-selected {

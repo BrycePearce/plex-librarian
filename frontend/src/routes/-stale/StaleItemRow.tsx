@@ -4,6 +4,7 @@ import { Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
+import "../../components/dataSurfaces.css";
 
 // `hidden`/`exit` play on delete (rows are only ever wrapped in AnimatePresence for a
 // same-page deletion — see `animateRowRemoval` in the stale page) and, when `animateIn` is
@@ -107,7 +108,7 @@ export function StaleItemRow({
           delay: Math.min(index, 12) * 0.02,
         }
         : undefined}
-      className={`row-hover group cursor-pointer ${
+      className={`row-hover group polished-row cursor-pointer ${
         selected ? "row-selected" : ""
       }`}
       onClick={onToggle}
