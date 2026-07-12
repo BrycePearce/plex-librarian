@@ -114,7 +114,7 @@ export function StaleItemRow({
       onClick={onToggle}
     >
       <td
-        className={`row-accent ${
+        className={`${
           selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""
         }`}
       >
@@ -127,7 +127,7 @@ export function StaleItemRow({
           aria-label={`Select ${item.title}`}
         />
       </td>
-      <td className="row-accent">
+      <td>
         {item.type === "show" || item.type === "movie"
           ? (
             <Link
@@ -161,7 +161,7 @@ export function StaleItemRow({
             </div>
           )}
       </td>
-      <td className="row-accent text-sm font-mono truncate relative overflow-hidden">
+      <td className="text-sm font-mono truncate relative overflow-hidden">
         {item.fileSize != null && (
           <motion.div
             className="absolute inset-y-1.5 left-0 bg-primary/15 rounded-sm"
@@ -178,7 +178,7 @@ export function StaleItemRow({
           {item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
         </span>
       </td>
-      <td className="row-accent text-sm text-base-content/70 truncate">
+      <td className="text-sm text-base-content/70 truncate">
         {item.lastViewedAt && dotInfo
           ? (
             <span className="inline-flex items-center gap-1.5">
@@ -204,13 +204,13 @@ export function StaleItemRow({
             </span>
           )}
       </td>
-      <td className="row-accent text-sm text-base-content/70 truncate">
+      <td className="text-sm text-base-content/70 truncate">
         {item.addedAt ? formatDate(item.addedAt) : "—"}
       </td>
-      <td className="row-accent text-sm font-mono truncate">
+      <td className="text-sm font-mono truncate">
         {item.viewCount ?? 0}
       </td>
-      <td className="row-accent overflow-hidden">
+      <td className="overflow-hidden">
         <motion.button
           type="button"
           className={`btn btn-ghost btn-xs btn-square text-error ${
