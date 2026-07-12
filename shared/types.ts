@@ -237,6 +237,10 @@ export interface UsersResponse {
   // null, this list may be incomplete or stale, same contract as Library.historySyncedAt.
   usersSyncedAt: number | null;
   inactiveDays: number;
+  defaultInactiveDays: number;
+  risk: 'all' | 'attention' | SharingRiskLevel;
+  sort: 'username' | 'lastViewedAt' | 'sharingRisk';
+  order: 'asc' | 'desc';
   limit: number;
   offset: number;
   total: number;

@@ -92,6 +92,8 @@ export const settings = sqliteTable('settings', {
   // Deliberately a separate column from staleMinAgeDays rather than reused — media
   // staleness and user inactivity are different concepts that happen to share a "days"
   // shape. Used by GET /api/users' default `filter=inactive` threshold.
+  // SQLite's historical column default remains 30; migration 0027 promotes the
+  // singleton setting to the application default of 90 without rebuilding the table.
   inactiveUserDays: integer('inactive_user_days').notNull().default(30),
   // Global retention for per-user IP transitions and playback observations. Zero
   // disables automatic pruning.

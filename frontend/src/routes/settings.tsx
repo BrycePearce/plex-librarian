@@ -6,6 +6,8 @@ import { api } from "../lib/api";
 import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
 
+const MAX_INACTIVITY_DAYS = 36_500;
+
 export const Route = createFileRoute("/settings")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: SettingsPage,
@@ -31,7 +33,7 @@ function SettingsPage() {
           <div className="space-y-3">
             <div>
               <h2 className="font-medium">
-                Default grace period for new items
+                Default minimum age for never-watched items
               </h2>
               <p className="text-sm text-base-content/40 mt-0.5">
                 Unwatched items added within this many days are not considered
@@ -52,7 +54,7 @@ function SettingsPage() {
                   type="number"
                   className="input input-bordered input-sm w-24"
                   disabled
-                  aria-label="Loading default grace period"
+                  aria-label="Loading default minimum item age"
                 />
               )}
           </div>
@@ -65,7 +67,7 @@ function SettingsPage() {
             <div>
               <h2 className="font-medium">Inactive user threshold</h2>
               <p className="text-sm text-base-content/40 mt-0.5">
-                Users not watched anything in at least this many days are
+                Users who haven't watched anything in at least this many days are
                 flagged inactive on the Users page.
               </p>
             </div>
@@ -77,6 +79,7 @@ function SettingsPage() {
                     api.settings.update({ inactiveUserDays: value })}
                   getSavedValue={(updated) => updated.inactiveUserDays}
                   invalidateQueryKey={["users"]}
+                  maxDays={MAX_INACTIVITY_DAYS}
                 />
               )
               : (
@@ -131,7 +134,7 @@ function SettingsPage() {
 // Generic over which settings key it saves (see api.settings.update's comment for why
 // two of these can save independently without clobbering each other).
 function DebouncedDaysInput(
-  { initialDays, mutationFn, getSavedValue, invalidateQueryKey }: {
+  { initialDays, mutationFn, getSavedValue, invalidateQueryKey, maxDays }: {
     initialDays: number;
     mutationFn: (value: number) => Promise<Settings>;
     getSavedValue: (updated: Settings) => number;
@@ -140,6 +143,7 @@ function DebouncedDaysInput(
     // straight into the cache below via setQueryData, but dependent queries have no
     // such direct link and would otherwise keep serving a stale threshold.
     invalidateQueryKey?: unknown[];
+    maxDays?: number;
   },
 ) {
   const qc = useQueryClient();
@@ -166,7 +170,8 @@ function DebouncedDaysInput(
   useEffect(() => () => clearTimeout(savedTimeoutRef.current), []);
 
   const parsed = Number(days);
-  const valid = days !== "" && Number.isInteger(parsed) && parsed >= 0;
+  const valid = days !== "" && Number.isInteger(parsed) && parsed >= 0 &&
+    (maxDays === undefined || parsed <= maxDays);
 
   // Debounced auto-save: waits for typing to settle so we don't PATCH on every keystroke.
   useEffect(() => {
@@ -180,6 +185,7 @@ function DebouncedDaysInput(
       <input
         type="number"
         min={0}
+        max={maxDays}
         step={1}
         className={`input input-bordered input-sm w-24 ${
           !valid ? "input-error" : ""

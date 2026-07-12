@@ -179,8 +179,9 @@ export const api = {
     list: (
       params: {
         inactiveDays?: number
-        filter?: 'all' | 'inactive'
-        sort?: 'lastViewedAt' | 'username'
+        filter?: 'all' | 'inactive' | 'never'
+        risk?: 'all' | 'attention' | 'review' | 'watch' | 'low' | 'insufficient_data'
+        sort?: 'lastViewedAt' | 'username' | 'sharingRisk'
         order?: 'asc' | 'desc'
         limit?: number
         offset?: number

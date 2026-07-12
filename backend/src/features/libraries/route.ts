@@ -43,6 +43,7 @@ import type {
   ShowDetail,
   StaleResponse,
 } from '@plex-librarian/shared/types.ts';
+import { staleCutoffs } from './staleFilters.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -120,35 +121,38 @@ router.get('/:key/stale', async (c) => {
     .limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
-  // Minimum staleness: items not viewed in at least this many days (default 365).
-  // Use filter=unwatched for never-watched items regardless of age.
-  const rawDays = parseInt(c.req.query('days') ?? '365', 10);
-  if (!Number.isNaN(rawDays) && rawDays < 1) {
+  // Minimum inactivity: time since last view for watched items, or time since added for
+  // never-watched items (default 365).
+  const rawDays = Number(c.req.query('days') ?? '365');
+  if (!Number.isInteger(rawDays) || rawDays < 1) {
     return c.json({
-      error: 'days must be at least 1; use filter=unwatched for never-watched items',
+      error: 'days must be a positive integer',
     }, 400);
   }
-  const days = Number.isNaN(rawDays) ? 365 : rawDays;
+  const days = rawDays;
 
   // Maximum staleness: upper bound for range-bucket queries (e.g. days=365&maxDays=730 → 1-2 yr).
   // Must be greater than days; otherwise the time window is inverted and matches nothing.
   const rawMaxDays = c.req.query('maxDays');
-  const parsedMaxDays = rawMaxDays !== undefined ? parseInt(rawMaxDays, 10) : null;
-  if (parsedMaxDays !== null && (Number.isNaN(parsedMaxDays) || parsedMaxDays < 1)) {
-    return c.json({ error: 'maxDays must be at least 1' }, 400);
+  const parsedMaxDays = rawMaxDays !== undefined ? Number(rawMaxDays) : null;
+  if (parsedMaxDays !== null && (!Number.isInteger(parsedMaxDays) || parsedMaxDays < 1)) {
+    return c.json({ error: 'maxDays must be a positive integer' }, 400);
   }
   const maxDays = parsedMaxDays;
   if (maxDays !== null && maxDays <= days) {
     return c.json({ error: 'maxDays must be greater than days' }, 400);
   }
 
-  // Items added within this window are excluded from unwatched results.
+  // Additional minimum-age safety floor for never-watched items.
   // Resolution order: explicit query param > library override > global default > 90.
   const rawMinAgeDays = c.req.query('minAgeDays');
   let minAgeDays: number;
   if (rawMinAgeDays !== undefined) {
-    const parsed = parseInt(rawMinAgeDays, 10);
-    minAgeDays = Number.isNaN(parsed) || parsed < 0 ? 90 : parsed;
+    const parsed = Number(rawMinAgeDays);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return c.json({ error: 'minAgeDays must be a non-negative integer' }, 400);
+    }
+    minAgeDays = parsed;
   } else if (library.staleMinAgeDays !== null) {
     minAgeDays = library.staleMinAgeDays;
   } else {
@@ -178,23 +182,37 @@ router.get('/:key/stale', async (c) => {
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
   const now = Math.floor(Date.now() / 1000);
-  const minCutoff = now - days * 86400;
-  const maxCutoff = maxDays !== null ? now - maxDays * 86400 : null;
-  const ageCutoff = now - minAgeDays * 86400;
-
-  // Watched but stale: viewed before minCutoff, and (if maxDays set) after maxCutoff.
-  const watchedStaleCond = and(
-    isNotNull(items.lastViewedAt),
-    maxCutoff !== null
-      ? and(lt(items.lastViewedAt, minCutoff), gte(items.lastViewedAt, maxCutoff))
-      : lt(items.lastViewedAt, minCutoff),
+  const {
+    viewedBefore,
+    viewedOnOrAfter,
+    unwatchedAddedBefore,
+    unwatchedAddedOnOrAfter,
+  } = staleCutoffs(
+    now,
+    days,
+    maxDays,
+    minAgeDays,
   );
 
-  // Unwatched: null lastViewedAt AND added before the minAgeDays cutoff.
-  // Items with null addedAt are included — unknown add date doesn't mean recently added.
+  // Watched but stale: viewed before the minimum boundary and, for range queries,
+  // on or after the maximum boundary.
+  const watchedStaleCond = and(
+    isNotNull(items.lastViewedAt),
+    viewedOnOrAfter !== null
+      ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
+      : lt(items.lastViewedAt, viewedBefore),
+  );
+
+  // Unwatched: null lastViewedAt AND old enough for both the selected inactivity
+  // duration and the minimum-item-age safety floor (the stricter boundary wins).
+  // Unknown add dates are excluded: they cannot prove that the item has met the selected
+  // threshold, which matters when this list informs destructive cleanup decisions.
   const unwatchedCond = and(
     isNull(items.lastViewedAt),
-    or(isNull(items.addedAt), lt(items.addedAt, ageCutoff)),
+    isNotNull(items.addedAt),
+    unwatchedAddedOnOrAfter !== null
+      ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
+      : lt(items.addedAt, unwatchedAddedBefore),
   );
 
   const staleCond = filter === 'unwatched'

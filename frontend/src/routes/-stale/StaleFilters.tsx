@@ -24,9 +24,22 @@ export function StaleFilters({
   onDuplicatesOnlyChange: (value: boolean) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
       <label className="form-control gap-1">
-        <span className="label-text text-xs">Not viewed in</span>
+        <span className="label-text text-xs">Watch status</span>
+        <select
+          className="select select-bordered select-sm"
+          value={filter}
+          onChange={(e) =>
+            onFilterChange(e.target.value as StaleParams["filter"])}
+        >
+          <option value="all">Any status</option>
+          <option value="watched">Previously watched</option>
+          <option value="unwatched">Never watched</option>
+        </select>
+      </label>
+      <label className="form-control gap-1">
+        <span className="label-text text-xs">Inactive at least</span>
         <select
           className="select select-bordered select-sm"
           value={days}
@@ -40,31 +53,22 @@ export function StaleFilters({
         </select>
       </label>
       <label className="form-control gap-1">
-        <span className="label-text text-xs">Filter</span>
-        <select
-          className="select select-bordered select-sm"
-          value={filter}
-          onChange={(e) =>
-            onFilterChange(e.target.value as StaleParams["filter"])}
-        >
-          <option value="all">All</option>
-          <option value="watched">Watched</option>
-          <option value="unwatched">Unwatched</option>
-        </select>
-      </label>
-      <label className="form-control gap-1">
-        <span className="label-text text-xs">New item grace period</span>
+        <span className="label-text text-xs">Never-watched age floor</span>
         <select
           className="select select-bordered select-sm"
           value={gracePeriodValue}
           onChange={(e) => onGracePeriodChange(e.target.value)}
+          disabled={filter === "watched"}
+          title={filter === "watched"
+            ? "Not used when showing previously watched items"
+            : "The stricter inactivity or age requirement wins"}
         >
           <option value="default">
             {gracePeriodValue === "default" && defaultGraceDays != null
               ? `Default (${defaultGraceDays} days)`
               : "Default"}
           </option>
-          <option value={0}>No grace period</option>
+          <option value={0}>No additional minimum</option>
           <option value={30}>30 days</option>
           <option value={60}>60 days</option>
           <option value={90}>90 days</option>
@@ -74,7 +78,7 @@ export function StaleFilters({
       </label>
       {(libraryType === "movie" || libraryType === "show") && (
         <div className="form-control gap-1">
-          <span className="label-text text-xs">Duplicates</span>
+          <span className="label-text text-xs">Storage copies</span>
           <div className="flex items-center gap-2 h-8">
             <input
               type="checkbox"
@@ -85,8 +89,8 @@ export function StaleFilters({
             />
             <label htmlFor="duplicates-only" className="text-sm cursor-pointer">
               {libraryType === "movie"
-                ? "Multiple versions only"
-                : "Shows with duplicate episodes only"}
+                ? "Multiple versions"
+                : "Duplicate episodes"}
             </label>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { settings } from '../../db/schema.ts';
 import type { Settings } from '@plex-librarian/shared/types.ts';
+import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
 
 const router = new Hono();
 
@@ -20,7 +21,7 @@ router.get('/', async (c) => {
   return c.json(
     {
       staleMinAgeDays: row?.staleMinAgeDays ?? 90,
-      inactiveUserDays: row?.inactiveUserDays ?? 30,
+      inactiveUserDays: row?.inactiveUserDays ?? 90,
       ipHistoryRetentionDays: row?.ipHistoryRetentionDays ?? 365,
     } satisfies Settings,
   );
@@ -54,9 +55,11 @@ router.patch('/', async (c) => {
   if (body.inactiveUserDays !== undefined) {
     if (
       typeof body.inactiveUserDays !== 'number' || !Number.isInteger(body.inactiveUserDays) ||
-      body.inactiveUserDays < 0
+      body.inactiveUserDays < 0 || body.inactiveUserDays > MAX_INACTIVITY_DAYS
     ) {
-      return c.json({ error: 'inactiveUserDays must be a non-negative integer' }, 400);
+      return c.json({
+        error: `inactiveUserDays must be an integer between 0 and ${MAX_INACTIVITY_DAYS}`,
+      }, 400);
     }
     set.inactiveUserDays = body.inactiveUserDays;
   }

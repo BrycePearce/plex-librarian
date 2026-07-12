@@ -67,7 +67,7 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
   const offset = Number(search.offset);
   const minAgeDays = Number(search.minAgeDays);
   return {
-    days: Number.isFinite(days) && days > 0 ? days : staleSearchDefaults.days,
+    days: Number.isInteger(days) && days > 0 ? days : staleSearchDefaults.days,
     filter: (FILTERS as readonly string[]).includes(search.filter as string)
       ? (search.filter as StaleParams["filter"])
       : staleSearchDefaults.filter,
@@ -83,7 +83,7 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
       ? Math.floor(offset)
       : staleSearchDefaults.offset,
     limit: PAGE_SIZE,
-    ...(Number.isFinite(minAgeDays) && minAgeDays >= 0 ? { minAgeDays } : {}),
+    ...(Number.isInteger(minAgeDays) && minAgeDays >= 0 ? { minAgeDays } : {}),
   };
 }
 

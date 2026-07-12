@@ -1,16 +1,12 @@
 import { Hono } from 'hono';
 import {
   and,
-  asc,
-  count,
-  desc,
   eq,
   gte,
   inArray,
   isNotNull,
   isNull,
   lt,
-  or,
   sql,
 } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
@@ -22,17 +18,21 @@ import { PlexRemoveUserError, removeUserAccess } from '../../integrations/plex/a
 import { logEvents } from '../events/service.ts';
 import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
 import type { PlexUser, RemoveUserResponse, UsersResponse } from '@plex-librarian/shared/types.ts';
+import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 
-const SORT_COLUMNS = {
-  lastViewedAt: users.lastViewedAt,
-  username: users.username,
-} as const;
-type SortKey = keyof typeof SORT_COLUMNS;
+type SortKey = 'username' | 'lastViewedAt' | 'sharingRisk';
+type RiskFilter =
+  | 'all'
+  | 'attention'
+  | 'review'
+  | 'watch'
+  | 'low'
+  | 'insufficient_data';
 
-const DEFAULT_INACTIVE_DAYS = 30;
+const DEFAULT_INACTIVE_DAYS = 90;
 
 async function sharingStatsForAccounts(
   serverId: number,
@@ -114,9 +114,8 @@ async function sharingStatsForAccounts(
   return result;
 }
 
-// Small dataset by nature (server users, not media), so a single count()+select() pair
-// is plenty; no GROUP_FETCH_CAP-style two-pass fetch needed like duplicates.ts (that
-// one caps an aggregate query, this isn't one).
+// Small dataset by nature (server users, not media), so fetching the matching roster
+// before derived-risk filtering and pagination stays bounded in normal operation.
 router.get('/', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) {
@@ -129,6 +128,10 @@ router.get('/', async (c) => {
       {
         usersSyncedAt: null,
         inactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
+        defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
+        risk: 'all',
+        sort: 'username',
+        order: 'asc',
         limit: 100,
         offset: 0,
         total: 0,
@@ -150,23 +153,41 @@ router.get('/', async (c) => {
   const usersSyncedAt = serverRow?.usersSyncedAt ?? null;
 
   const rawInactiveDays = c.req.query('inactiveDays');
-  const parsedInactiveDays = rawInactiveDays !== undefined ? parseInt(rawInactiveDays, 10) : NaN;
-  const inactiveDays = !Number.isNaN(parsedInactiveDays) && parsedInactiveDays >= 0
-    ? parsedInactiveDays
-    : settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS;
+  const parsedInactiveDays = rawInactiveDays !== undefined ? Number(rawInactiveDays) : null;
+  if (
+    rawInactiveDays !== undefined &&
+    (!/^\d+$/.test(rawInactiveDays) || !Number.isInteger(parsedInactiveDays) ||
+      parsedInactiveDays! > MAX_INACTIVITY_DAYS)
+  ) {
+    return c.json({
+      error: `inactiveDays must be an integer between 0 and ${MAX_INACTIVITY_DAYS}`,
+    }, 400);
+  }
+  const inactiveDays = parsedInactiveDays ??
+    settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS;
 
-  // filter=all (default): every user with access
-  // filter=inactive: never watched, or last watched before the inactiveDays cutoff
-  const filter = c.req.query('filter') === 'inactive' ? 'inactive' : 'all';
+  const rawFilter = c.req.query('filter');
+  const filter = rawFilter === 'inactive' || rawFilter === 'never' ? rawFilter : 'all';
 
-  const rawSort = c.req.query('sort') ?? 'lastViewedAt';
-  const sort: SortKey = rawSort in SORT_COLUMNS ? rawSort as SortKey : 'lastViewedAt';
-  // Default asc, not desc: SQLite sorts NULL first in ASC, so the default view leads
-  // with never-watched users (lastViewedAt IS NULL) and the longest-idle accounts —
-  // the cases an "inactive users" feature exists to surface — rather than burying them
-  // after everyone who's ever watched anything, which a desc default would do.
+  const rawRisk = c.req.query('risk') ?? 'all';
+  const risk: RiskFilter = [
+    'all',
+    'attention',
+    'review',
+    'watch',
+    'low',
+    'insufficient_data',
+  ].includes(rawRisk)
+    ? rawRisk as RiskFilter
+    : 'all';
+
+  const rawSort = c.req.query('sort') ?? 'username';
+  const sort: SortKey = ['username', 'lastViewedAt', 'sharingRisk'].includes(rawSort)
+    ? rawSort as SortKey
+    : 'username';
+  // Owner-first alphabetical is the stable directory default. Other sorts use the
+  // requested direction and username as a deterministic tie-breaker.
   const orderStr = c.req.query('order') === 'desc' ? 'desc' : 'asc';
-  const order = orderStr === 'asc' ? asc : desc;
 
   const rawLimit = parseInt(c.req.query('limit') ?? '100', 10);
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 100 : Math.min(rawLimit, 500);
@@ -176,23 +197,26 @@ router.get('/', async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - inactiveDays * 86400;
   const riskWindowCutoff = now - 30 * 86400;
-  const inactiveCond = or(isNull(users.lastViewedAt), lt(users.lastViewedAt, cutoff));
+  const neverWatchedCond = isNull(users.lastViewedAt);
+  const inactiveCond = and(isNotNull(users.lastViewedAt), lt(users.lastViewedAt, cutoff));
 
   const where = filter === 'inactive'
     ? and(usersByServer(serverId), inactiveCond)
+    : filter === 'never'
+    ? and(usersByServer(serverId), neverWatchedCond)
     : usersByServer(serverId);
 
-  const [[{ total }], rows] = await Promise.all([
-    db.select({ total: count() }).from(users).where(where),
-    db.select({
-      accountId: users.accountId,
-      username: users.username,
-      email: users.email,
-      thumb: users.thumb,
-      isOwner: users.isOwner,
-      lastViewedAt: users.lastViewedAt,
-    }).from(users).where(where).orderBy(order(SORT_COLUMNS[sort])).limit(limit).offset(offset),
-  ]);
+  // Sharing risk is derived from observation aggregates rather than stored on users.
+  // Server rosters are naturally small, so assess the activity-filtered roster first,
+  // then risk-filter, sort, and page it in memory to keep totals and pages correct.
+  const rows = await db.select({
+    accountId: users.accountId,
+    username: users.username,
+    email: users.email,
+    thumb: users.thumb,
+    isOwner: users.isOwner,
+    lastViewedAt: users.lastViewedAt,
+  }).from(users).where(where);
 
   const sharingStats = await sharingStatsForAccounts(
     serverId,
@@ -200,33 +224,65 @@ router.get('/', async (c) => {
     riskWindowCutoff,
   );
 
+  const assessedUsers: PlexUser[] = rows.map((u) => ({
+    ...u,
+    sharingRisk: assessUserSharingRisk(
+      sharingStats.get(u.accountId) ?? {
+        observationCount: 0,
+        firstObservedAt: null,
+        lastObservedAt: null,
+        activeDays: 0,
+        completeObservationCount: 0,
+        remoteNetworks30d: 0,
+        remotePlayers30d: 0,
+        maxRemoteNetworksPerDay30d: 0,
+      },
+    ),
+  }));
+
+  const riskFiltered = assessedUsers.filter((user) =>
+    risk === 'all' ||
+    (risk === 'attention'
+      ? user.sharingRisk.riskLevel === 'watch' || user.sharingRisk.riskLevel === 'review'
+      : user.sharingRisk.riskLevel === risk)
+  );
+  const direction = orderStr === 'asc' ? 1 : -1;
+  const riskRank = { insufficient_data: 0, low: 1, watch: 2, review: 3 } as const;
+  riskFiltered.sort((a, b) => {
+    if (sort === 'username') {
+      if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1;
+      return direction * a.username.localeCompare(b.username, undefined, { sensitivity: 'base' });
+    }
+    if (sort === 'sharingRisk') {
+      const rankDifference = riskRank[a.sharingRisk.riskLevel] -
+        riskRank[b.sharingRisk.riskLevel];
+      return direction * rankDifference ||
+        direction * (a.sharingRisk.riskScore - b.sharingRisk.riskScore) ||
+        a.username.localeCompare(b.username, undefined, { sensitivity: 'base' });
+    }
+    // Never-watched users lead oldest-first and trail most-recent-first.
+    if (a.lastViewedAt === null || b.lastViewedAt === null) {
+      if (a.lastViewedAt === b.lastViewedAt) return a.username.localeCompare(b.username);
+      return a.lastViewedAt === null ? -direction : direction;
+    }
+    return direction * (a.lastViewedAt - b.lastViewedAt || a.username.localeCompare(b.username));
+  });
+
+  const total = riskFiltered.length;
+  const page = riskFiltered.slice(offset, offset + limit);
+
   return c.json(
     {
       usersSyncedAt,
       inactiveDays,
+      defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
+      risk,
+      sort,
+      order: orderStr,
       limit,
       offset,
       total,
-      users: rows.map((u): PlexUser => ({
-        accountId: u.accountId,
-        username: u.username,
-        email: u.email,
-        thumb: u.thumb,
-        isOwner: u.isOwner,
-        lastViewedAt: u.lastViewedAt,
-        sharingRisk: assessUserSharingRisk(
-          sharingStats.get(u.accountId) ?? {
-            observationCount: 0,
-            firstObservedAt: null,
-            lastObservedAt: null,
-            activeDays: 0,
-            completeObservationCount: 0,
-            remoteNetworks30d: 0,
-            remotePlayers30d: 0,
-            maxRemoteNetworksPerDay30d: 0,
-          },
-        ),
-      })),
+      users: page,
     } satisfies UsersResponse,
   );
 });
