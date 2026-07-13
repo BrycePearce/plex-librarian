@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { UserMenu } from "./UserMenu";
+import { StaleLibraryNav } from "./sidebar/StaleLibraryNav";
 
 const navGroups = [
   {
@@ -135,6 +136,7 @@ function SidebarContent({ collapsed, id }: { collapsed: boolean; id: string }) {
         {navGroups.map((group) => (
           <div className="sidebar-group" key={group.label}>
             <div className="sidebar-group-label">{group.label}</div>
+            {group.label === "Insights" && <StaleLibraryNav collapsed={collapsed} />}
             {group.items.map((item) => {
               const Icon = item.icon;
               return (
