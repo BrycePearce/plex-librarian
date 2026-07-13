@@ -20,15 +20,15 @@ const navGroups = [
   {
     label: "Overview",
     items: [
-      { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
+      { label: "Home", to: "/dashboard", icon: LayoutDashboard },
     ],
   },
   {
     label: "Insights",
     items: [
-      { label: "Activity", to: "/activity", icon: Activity },
       { label: "Duplicates", to: "/duplicates", icon: Copy, search: { type: "all" } },
       { label: "Users", to: "/users", icon: Users, search: { filter: "all" } },
+      { label: "Activity", to: "/activity", icon: Activity },
     ],
   },
   {

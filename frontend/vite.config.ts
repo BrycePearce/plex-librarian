@@ -42,7 +42,7 @@ export default defineConfig({
     // Polling sidesteps the native watcher entirely at the cost of a bit more CPU — scoped
     // to Windows since native fs events work fine elsewhere and polling isn't free.
     watch: {
-      usePolling: Deno.build.os === 'windows',
+      usePolling: (globalThis as typeof globalThis & { Deno?: typeof Deno }).Deno?.build.os === 'windows',
     },
   },
 })

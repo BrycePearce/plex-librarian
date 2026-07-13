@@ -1,8 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -14,6 +10,7 @@ import {
   CheckCircle,
   ChevronDown,
   Clock,
+  Copy,
   Database,
   Film,
   HardDrive,
@@ -22,6 +19,7 @@ import {
   Music,
   RefreshCw,
   Tv,
+  Users,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type {
@@ -43,10 +41,7 @@ import {
 } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
 import { requireAuth } from "../lib/requireAuth";
-import {
-  LibraryCardSkeleton,
-  StatsStripSkeleton,
-} from "../components/Skeletons";
+import { StatsStripSkeleton } from "../components/Skeletons";
 import "./dashboard.css";
 import { SectionHeading } from "../components/Workspace";
 
@@ -83,14 +78,11 @@ function DashboardPage() {
 // Matches the skeleton's hardcoded card count below — capping the real grid to the
 // same number means a library list longer than this can never cause a skeleton→real
 // layout shift once data loads (see LibraryCardSkeleton usage further down).
-const LIBRARY_PREVIEW_COUNT = 6;
-
 function DashboardInner() {
   const qc = useQueryClient();
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
-  const [showAllLibraries, setShowAllLibraries] = useState(false);
 
   const {
     data: librariesData,
@@ -192,18 +184,18 @@ function DashboardInner() {
   }, [globalSyncDone, globalSyncError, activeGlobalSyncId, qc]);
 
   return (
-    <div className="dashboard-page space-y-8">
+    <div className="dashboard-page space-y-6">
       <header className="dashboard-header">
         <div className="dashboard-heading">
           <div className="dashboard-eyebrow">
             <span className="dashboard-live-dot" /> Library intelligence
           </div>
-          <h1>Dashboard</h1>
+          <h1>Home</h1>
           <p>
             {!libsLoading && !isCheckingFirstRun && librariesData
               ? isFirstRun
                 ? "First sync in progress…"
-                : `A clear view of ${librariesData.total} libraries, storage, and sync health.`
+                : `Your library health, priorities, and next best actions.`
               : "—"}
           </p>
         </div>
@@ -230,6 +222,10 @@ function DashboardInner() {
       {libsLoading && <StatsStripSkeleton />}
       {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
         <StatsStrip libraries={librariesData.libraries} />
+      )}
+
+      {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
+        <HomeDirectory libraries={librariesData.libraries} />
       )}
 
       {globalSyncError !== null && (
@@ -276,23 +272,7 @@ function DashboardInner() {
         </AnimatePresence>
       )}
 
-      {!isFirstRun && !isCheckingFirstRun && (
-        <SectionHeading
-          eyebrow="Collection"
-          title="Your libraries"
-          meta={librariesData ? `${librariesData.total} connected` : undefined}
-        />
-      )}
-
-      {libsLoading
-        ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {Array.from({ length: LIBRARY_PREVIEW_COUNT }).map((_, i) => (
-              <LibraryCardSkeleton key={i} />
-            ))}
-          </div>
-        )
-        : isCheckingFirstRun
+      {isCheckingFirstRun
         ? (
           // Neutral spinner rather than a content-shaped skeleton: we already know
           // there's nothing with items yet, just not yet whether that means "first sync
@@ -307,50 +287,6 @@ function DashboardInner() {
         ? <FirstRunHero progress={globalSyncProgress ?? undefined} />
         : (
           <>
-            {librariesData && (
-              <>
-                <motion.div
-                  variants={containerVariants}
-                  initial="hidden"
-                  animate="show"
-                  className="library-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-                >
-                  {(showAllLibraries
-                    ? librariesData.libraries
-                    : librariesData.libraries.slice(0, LIBRARY_PREVIEW_COUNT))
-                    .map((
-                      lib,
-                    ) => (
-                      <LibraryCard
-                        key={lib.key}
-                        lib={lib}
-                        globalSyncing={isSyncing}
-                      />
-                    ))}
-                </motion.div>
-                {librariesData.libraries.length > LIBRARY_PREVIEW_COUNT && (
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm gap-1"
-                      onClick={() => setShowAllLibraries((v) => !v)}
-                    >
-                      <ChevronDown
-                        className={`w-4 h-4 transition-transform ${
-                          showAllLibraries ? "rotate-180" : ""
-                        }`}
-                      />
-                      {showAllLibraries
-                        ? "Show fewer"
-                        : `Show ${
-                          librariesData.libraries.length - LIBRARY_PREVIEW_COUNT
-                        } more`}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-
             {history && history.length > 0 && (
               <section className="dashboard-panel sync-history-panel">
                 <div className="dashboard-panel-header">
@@ -376,7 +312,7 @@ function DashboardInner() {
                       </tr>
                     </thead>
                     <tbody>
-                      {history.map((s) => (
+                      {history.slice(0, 3).map((s) => (
                         <SyncRow
                           key={s.id}
                           sync={s}
@@ -476,6 +412,109 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
         value={totals.lastSync ? formatRelativeTime(totals.lastSync) : "—"}
       />
     </motion.div>
+  );
+}
+
+function HomeDirectory({ libraries }: { libraries: Library[] }) {
+  const [showAllLibraries, setShowAllLibraries] = useState(false);
+  const visibleLibraries = showAllLibraries ? libraries : libraries.slice(0, 6);
+  const sections = [
+    {
+      index: "02",
+      to: "/duplicates" as const,
+      icon: Copy,
+      tone: "accent",
+      label: "Versions",
+      title: "Duplicates",
+      detail: "Compare multiple synced versions of movies and episodes.",
+      cta: "Open duplicates",
+      search: { type: "all" as const },
+    },
+    {
+      index: "03",
+      to: "/users" as const,
+      icon: Users,
+      tone: "primary",
+      label: "Viewing",
+      title: "Users",
+      detail: "Explore viewing history and activity across Plex users.",
+      cta: "Open users",
+      search: { filter: "all" as const },
+    },
+  ];
+
+  return (
+    <section className="home-directory">
+      <SectionHeading eyebrow="Workspace" title="Explore Plex Librarian" />
+      <motion.div
+        className="home-directory-list"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <motion.div variants={cardVariants} className="home-stale-section home-collection-section">
+          <div className="home-stale-heading">
+            <span className="home-directory-index">01</span>
+            <span className="home-directory-icon"><LibraryGlyph className="size-5" /></span>
+            <span className="home-directory-copy">
+              <small>Collection</small>
+              <strong>Libraries</strong>
+              <span>Select a library to review stale and unwatched content.</span>
+            </span>
+            <span className="home-collection-count">{libraries.length} active</span>
+          </div>
+          <div className="home-stale-libraries">
+            {visibleLibraries.map((library) => (
+              <Link
+                key={library.key}
+                to="/libraries/$key/stale"
+                params={{ key: library.key }}
+                className={`home-stale-library home-library-${library.type}`}
+              >
+                <LibraryIcon type={library.type} />
+                <span className="home-library-name">
+                  <strong>{library.title}</strong>
+                  <small>{library.itemCount.toLocaleString()} items · {formatKilobytes(library.totalFileSize)}</small>
+                </span>
+                {library.historySyncedAt === null && <i title="Watch history is still syncing" />}
+                <ArrowRight className="size-3.5" />
+              </Link>
+            ))}
+            {libraries.length > 6 && (
+              <button
+                type="button"
+                className="home-library-more"
+                onClick={() => setShowAllLibraries((value) => !value)}
+              >
+                <ChevronDown className={`size-4 ${showAllLibraries ? "rotate-180" : ""}`} />
+                {showAllLibraries ? "Show fewer" : `Show ${libraries.length - 6} more`}
+              </button>
+            )}
+          </div>
+        </motion.div>
+        {sections.map((section) => {
+          const Icon = section.icon;
+          return (
+            <motion.div key={section.to} variants={cardVariants}>
+              <Link
+                to={section.to}
+                search={"search" in section ? section.search : undefined}
+                className={`home-directory-section home-directory-${section.tone}`}
+              >
+                <span className="home-directory-index">{section.index}</span>
+                <span className="home-directory-icon"><Icon className="size-5" /></span>
+                <span className="home-directory-copy">
+                  <small>{section.label}</small>
+                  <strong>{section.title}</strong>
+                  <span>{section.detail}</span>
+                </span>
+                <span className="home-directory-cta">{section.cta} <ArrowRight className="size-4" /></span>
+              </Link>
+            </motion.div>
+          );
+        })}
+      </motion.div>
+    </section>
   );
 }
 

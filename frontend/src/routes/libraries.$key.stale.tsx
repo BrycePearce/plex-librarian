@@ -310,8 +310,8 @@ function StalePage() {
           <Link
             to="/dashboard"
             className="library-back-button btn btn-ghost btn-sm"
-            aria-label="Back to dashboard"
-            title="Back to dashboard"
+            aria-label="Back to Home"
+            title="Back to Home"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>

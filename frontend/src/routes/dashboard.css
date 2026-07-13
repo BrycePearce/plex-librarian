@@ -1,4 +1,4 @@
-.dashboard-page { position: relative; isolation: isolate; padding-bottom: 3rem; }
+.dashboard-page { position: relative; isolation: isolate; padding-bottom: 1rem; }
 .dashboard-page::before { content: ""; position: absolute; z-index: -1; top: -8rem; left: -6rem; width: 36rem; height: 24rem; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--color-primary) 8%, transparent), transparent 68%); pointer-events: none; }
 
 .dashboard-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; padding: .3rem 0 .5rem; }
@@ -11,13 +11,63 @@
 .dashboard-health { display: flex; align-items: center; gap: .45rem; color: color-mix(in oklab, var(--color-success) 68%, var(--color-base-content)); font-size: .72rem; font-weight: 600; white-space: nowrap; }
 .dashboard-sync-button { min-width: 7.5rem; gap: .5rem; border: 1px solid color-mix(in oklab, var(--color-primary) 60%, white); box-shadow: 0 3px 10px rgb(0 0 0 / .12); }
 
-.dashboard-stat-card { position: relative; overflow: hidden; min-height: 108px; border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); border-radius: 16px; background: linear-gradient(145deg, color-mix(in oklab, var(--color-base-200) 97%, white 3%), color-mix(in oklab, var(--color-base-200) 94%, var(--color-primary) 6%)); }
+.dashboard-stat-card { position: relative; overflow: hidden; min-height: 96px; border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); border-radius: 16px; background: linear-gradient(145deg, color-mix(in oklab, var(--color-base-200) 97%, white 3%), color-mix(in oklab, var(--color-base-200) 94%, var(--color-primary) 6%)); }
 .dashboard-stat-card::after { content: ""; position: absolute; right: -2rem; bottom: -4rem; width: 9rem; height: 9rem; border-radius: 50%; background: color-mix(in oklab, var(--color-primary) 8%, transparent); }
 .dashboard-stat-content { display: flex; height: 100%; align-items: center; gap: 1rem; padding: 1.25rem 1.35rem; }
 .dashboard-stat-icon { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; border: 1px solid color-mix(in oklab, currentColor 22%, transparent); border-radius: 13px; }
 .dashboard-stat-copy { display: flex; min-width: 0; flex-direction: column; }
 .dashboard-stat-copy p { color: color-mix(in oklab, var(--color-base-content) 48%, transparent); font-size: .7rem; }
 .dashboard-stat-copy strong { overflow: hidden; margin-top: .15rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.3rem; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+
+.action-launchpad { display: flex; flex-direction: column; gap: 1rem; }
+.action-launchpad-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.action-card { --action-color: var(--color-primary); position: relative; display: grid; min-height: 154px; grid-template-columns: auto 1fr; grid-template-rows: 1fr auto; gap: .8rem 1rem; overflow: hidden; padding: 1.15rem; border: 1px solid color-mix(in oklab, var(--action-color) 18%, color-mix(in oklab, var(--color-base-content) 7%, transparent)); border-radius: 16px; background: radial-gradient(circle at 100% 0, color-mix(in oklab, var(--action-color) 11%, transparent), transparent 42%), color-mix(in oklab, var(--color-base-200) 97%, transparent); color: var(--color-base-content); text-decoration: none; transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease; }
+.action-card:hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--action-color) 38%, transparent); box-shadow: 0 10px 24px rgb(0 0 0 / .11); }
+.action-card-secondary { --action-color: var(--color-secondary); }
+.action-card-accent { --action-color: var(--color-accent); }
+.action-card-icon { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--action-color) 26%, transparent); border-radius: 13px; background: color-mix(in oklab, var(--action-color) 15%, transparent); color: var(--action-color); }
+.action-card-copy { display: flex; min-width: 0; flex-direction: column; }
+.action-card-copy small { color: color-mix(in oklab, var(--action-color) 74%, var(--color-base-content)); font-size: .6rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.action-card-copy strong { margin-top: .2rem; font-size: .9rem; letter-spacing: -.015em; }
+.action-card-copy > span { margin-top: .25rem; color: color-mix(in oklab, var(--color-base-content) 43%, transparent); font-size: .68rem; line-height: 1.45; }
+.action-card-cta { display: flex; grid-column: 1 / -1; align-items: center; justify-content: flex-end; gap: .35rem; color: color-mix(in oklab, var(--action-color) 75%, var(--color-base-content)); font-size: .67rem; font-weight: 700; }
+
+.home-directory { display: flex; flex-direction: column; gap: 1rem; }
+.home-directory-list { overflow: hidden; border: 1px solid color-mix(in oklab, var(--color-base-content) 8%, transparent); border-radius: 18px; background: color-mix(in oklab, var(--color-base-200) 96%, transparent); }
+.home-stale-section { --directory-color: var(--color-secondary); padding: .9rem 1.25rem 1rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); background: linear-gradient(90deg, color-mix(in oklab, var(--directory-color) 6%, transparent), transparent 48%); }
+.home-collection-section { --directory-color: var(--color-primary); background: radial-gradient(circle at 0 0, color-mix(in oklab, var(--directory-color) 9%, transparent), transparent 38%), linear-gradient(90deg, color-mix(in oklab, var(--directory-color) 5%, transparent), transparent 55%); }
+.home-stale-heading { display: grid; grid-template-columns: 2rem 3rem minmax(0, 1fr) auto; align-items: center; gap: 1rem; }
+.home-collection-count { padding: .28rem .55rem; border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent); border-radius: 99px; background: color-mix(in oklab, var(--color-primary) 8%, transparent); color: color-mix(in oklab, var(--color-primary) 72%, var(--color-base-content)); font-size: .61rem; font-weight: 700; white-space: nowrap; }
+.home-stale-libraries { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; margin: .8rem 0 0 6rem; }
+.home-stale-library { --library-color: var(--color-primary); display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; padding: .5rem .6rem; border: 1px solid color-mix(in oklab, var(--library-color) 12%, color-mix(in oklab, var(--color-base-content) 7%, transparent)); border-radius: 11px; background: linear-gradient(135deg, color-mix(in oklab, var(--library-color) 5%, var(--color-base-300)), color-mix(in oklab, var(--color-base-300) 38%, transparent)); color: var(--color-base-content); text-decoration: none; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
+.home-library-show { --library-color: var(--color-secondary); }
+.home-library-artist { --library-color: var(--color-accent); }
+.home-stale-library:hover { border-color: color-mix(in oklab, var(--directory-color) 30%, transparent); background: color-mix(in oklab, var(--directory-color) 9%, var(--color-base-200)); }
+.home-stale-library:hover { transform: translateY(-1px); border-color: color-mix(in oklab, var(--library-color) 32%, transparent); background: color-mix(in oklab, var(--library-color) 9%, var(--color-base-200)); }
+.home-stale-library > .w-8 { width: 1.9rem; height: 1.9rem; padding: .38rem; border-radius: 9px; }
+.home-library-name { display: flex; min-width: 0; flex-direction: column; }
+.home-library-name strong { overflow: hidden; font-size: .7rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.home-library-name small { margin-top: .08rem; color: color-mix(in oklab, var(--color-base-content) 38%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .54rem; white-space: nowrap; }
+.home-stale-library i { width: 5px; height: 5px; border-radius: 50%; background: var(--color-warning); box-shadow: 0 0 7px color-mix(in oklab, var(--color-warning) 65%, transparent); }
+.home-stale-library > svg:last-child { color: color-mix(in oklab, var(--library-color) 72%, var(--color-base-content)); transition: transform 140ms ease; }
+.home-stale-library:hover > svg:last-child { transform: translateX(2px); }
+.home-library-more { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: .4rem; padding: .5rem .65rem; border: 1px dashed color-mix(in oklab, var(--color-base-content) 14%, transparent); border-radius: 11px; color: color-mix(in oklab, var(--color-base-content) 48%, transparent); font-size: .65rem; font-weight: 650; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }
+.home-library-more:hover { border-color: color-mix(in oklab, var(--color-primary) 28%, transparent); background: color-mix(in oklab, var(--color-primary) 6%, transparent); color: var(--color-primary); }
+.home-library-more svg { transition: transform 160ms ease; }
+.home-directory-section { --directory-color: var(--color-primary); display: grid; min-height: 92px; grid-template-columns: 2rem 3rem minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: .8rem 1.25rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); color: var(--color-base-content); text-decoration: none; transition: background 150ms ease; }
+.home-directory-list > div:last-child .home-directory-section { border-bottom: 0; }
+.home-directory-section:hover { background: color-mix(in oklab, var(--directory-color) 6%, transparent); }
+.home-directory-secondary { --directory-color: var(--color-secondary); }
+.home-directory-accent { --directory-color: var(--color-accent); }
+.home-directory-index { color: color-mix(in oklab, var(--color-base-content) 24%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .62rem; }
+.home-directory-icon { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid color-mix(in oklab, var(--directory-color) 24%, transparent); border-radius: 13px; background: color-mix(in oklab, var(--directory-color) 13%, transparent); color: var(--directory-color); }
+.home-directory-copy { display: grid; min-width: 0; grid-template-columns: 9rem minmax(0, 1fr); align-items: baseline; column-gap: 1.25rem; }
+.home-directory-copy small { grid-column: 1; color: color-mix(in oklab, var(--directory-color) 72%, var(--color-base-content)); font-size: .6rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.home-directory-copy strong { grid-column: 1; margin-top: .15rem; font-size: 1rem; letter-spacing: -.02em; }
+.home-directory-copy > span { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: color-mix(in oklab, var(--color-base-content) 43%, transparent); font-size: .72rem; line-height: 1.5; }
+.home-directory-cta { display: flex; min-width: 8.5rem; align-items: center; justify-content: flex-end; gap: .4rem; color: color-mix(in oklab, var(--directory-color) 76%, var(--color-base-content)); font-size: .68rem; font-weight: 700; }
+.home-directory-section:hover .home-directory-cta svg { transform: translateX(3px); }
+.home-directory-cta svg { transition: transform 150ms ease; }
 
 .dashboard-section-heading { display: flex; align-items: end; justify-content: space-between; padding-top: .25rem; }
 .dashboard-section-heading h2, .dashboard-panel-header h2 { margin-top: .25rem; font-size: 1.15rem; font-weight: 700; letter-spacing: -.025em; }
@@ -49,4 +99,21 @@
   .dashboard-header-actions { justify-content: flex-end; }
   .dashboard-health { display: none; }
   .library-card-meta { flex-wrap: wrap; }
+  .home-directory-section { grid-template-columns: 2.75rem minmax(0, 1fr) auto; padding: 1rem; }
+  .home-directory-index { display: none; }
+  .home-directory-copy { display: flex; flex-direction: column; }
+  .home-directory-copy > span { margin-top: .2rem; }
+  .home-directory-cta { min-width: 0; font-size: 0; }
+  .home-stale-heading { grid-template-columns: 2.75rem minmax(0, 1fr) auto; }
+  .home-stale-heading .home-directory-index { display: none; }
+  .home-stale-libraries { grid-template-columns: 1fr 1fr; margin-left: 0; }
+}
+
+@media (max-width: 480px) {
+  .home-stale-libraries { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 900px) {
+  .action-launchpad-grid { grid-template-columns: 1fr; }
+  .action-card { min-height: 128px; }
 }
