@@ -1,7 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Check, Settings as SettingsIcon } from "lucide-react";
+import {
+  Archive,
+  Check,
+  Mail,
+  Settings as SettingsIcon,
+  Users,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import { api } from "../lib/api";
 import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
@@ -29,18 +36,17 @@ function SettingsPage() {
         icon={SettingsIcon}
       />
 
-      <div className="card workspace-surface settings-card">
-        <div className="card-body gap-4">
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium">
-                Default minimum age for never-watched items
-              </h2>
-              <p className="text-sm text-base-content/40 mt-0.5">
-                Unwatched items added within this many days are not considered
-                stale. Libraries without their own override use this default.
-              </p>
-            </div>
+      <div className="settings-sections">
+        <SettingsSection
+          icon={Archive}
+          tone="primary"
+          title="Stale content"
+          description="Control when unwatched library items become candidates for review."
+        >
+          <SettingRow
+            title="Default minimum age for never-watched items"
+            description="Unwatched items added within this many days are not considered stale. Libraries without their own override use this default."
+          >
             {data
               ? (
                 <DebouncedDaysInput
@@ -50,94 +56,20 @@ function SettingsPage() {
                   getSavedValue={(updated) => updated.staleMinAgeDays}
                 />
               )
-              : (
-                <input
-                  type="number"
-                  className="input input-bordered input-sm w-24"
-                  disabled
-                  aria-label="Loading default minimum item age"
-                />
-              )}
-          </div>
-        </div>
-      </div>
+              : <LoadingDaysInput label="Loading default minimum item age" />}
+          </SettingRow>
+        </SettingsSection>
 
-      <div className="card workspace-surface settings-card">
-        <div className="card-body gap-4">
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium">Pending invitation threshold</h2>
-              <p className="text-sm text-base-content/40 mt-0.5">
-                Pending Plex invitations at least this old are highlighted for
-                follow-up on the Users page.
-              </p>
-            </div>
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.pendingInviteStaleDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ pendingInviteStaleDays: value })}
-                  getSavedValue={(updated) => updated.pendingInviteStaleDays}
-                  invalidateQueryKey={["users", "invitations"]}
-                  maxDays={MAX_INACTIVITY_DAYS}
-                />
-              )
-              : (
-                <input
-                  type="number"
-                  className="input input-bordered input-sm w-24"
-                  disabled
-                  aria-label="Loading pending invitation threshold"
-                />
-              )}
-          </div>
-        </div>
-      </div>
-
-      <div className="card workspace-surface settings-card">
-        <div className="card-body gap-4">
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium">Overdue invitation threshold</h2>
-              <p className="text-sm text-base-content/40 mt-0.5">
-                Pending invitations at least this old are marked overdue. This
-                must be at least the pending invitation threshold.
-              </p>
-            </div>
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.pendingInviteCriticalDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ pendingInviteCriticalDays: value })}
-                  getSavedValue={(updated) => updated.pendingInviteCriticalDays}
-                  invalidateQueryKey={["users", "invitations"]}
-                  maxDays={MAX_INACTIVITY_DAYS}
-                />
-              )
-              : (
-                <input
-                  type="number"
-                  className="input input-bordered input-sm w-24"
-                  disabled
-                  aria-label="Loading overdue invitation threshold"
-                />
-              )}
-          </div>
-        </div>
-      </div>
-
-      <div className="card workspace-surface settings-card">
-        <div className="card-body gap-4">
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium">Inactive user threshold</h2>
-              <p className="text-sm text-base-content/40 mt-0.5">
-                Users who haven't watched anything in at least this many days
-                are flagged inactive on the Users page.
-              </p>
-            </div>
+        <SettingsSection
+          icon={Users}
+          tone="accent"
+          title="User activity"
+          description="Define inactivity and how long detailed playback observations are retained."
+        >
+          <SettingRow
+            title="Inactive user threshold"
+            description="Users who haven't watched anything in at least this many days are flagged inactive on the Users page."
+          >
             {data
               ? (
                 <DebouncedDaysInput
@@ -149,28 +81,12 @@ function SettingsPage() {
                   maxDays={MAX_INACTIVITY_DAYS}
                 />
               )
-              : (
-                <input
-                  type="number"
-                  className="input input-bordered input-sm w-24"
-                  disabled
-                  aria-label="Loading inactive user threshold"
-                />
-              )}
-          </div>
-        </div>
-      </div>
-
-      <div className="card workspace-surface settings-card">
-        <div className="card-body gap-4">
-          <div className="space-y-3">
-            <div>
-              <h2 className="font-medium">User activity retention</h2>
-              <p className="text-sm text-base-content/40 mt-0.5">
-                Keep user IP, device, and playback observations for this many
-                days. Set to 0 to keep them forever.
-              </p>
-            </div>
+              : <LoadingDaysInput label="Loading inactive user threshold" />}
+          </SettingRow>
+          <SettingRow
+            title="User activity retention"
+            description="Keep user IP, device, and playback observations for this many days. Set to 0 to keep them forever."
+          >
             {data
               ? (
                 <DebouncedDaysInput
@@ -180,18 +96,102 @@ function SettingsPage() {
                   getSavedValue={(updated) => updated.ipHistoryRetentionDays}
                 />
               )
-              : (
-                <input
-                  type="number"
-                  className="input input-bordered input-sm w-24"
-                  disabled
-                  aria-label="Loading user activity retention"
+              : <LoadingDaysInput label="Loading user activity retention" />}
+          </SettingRow>
+        </SettingsSection>
+
+        <SettingsSection
+          icon={Mail}
+          tone="secondary"
+          title="Invitations"
+          description="Choose when unanswered Plex invitations need attention."
+        >
+          <SettingRow
+            title="Pending invitation threshold"
+            description="Pending Plex invitations at least this old are highlighted for follow-up on the Users page."
+          >
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.pendingInviteStaleDays}
+                  mutationFn={(value) =>
+                    api.settings.update({ pendingInviteStaleDays: value })}
+                  getSavedValue={(updated) => updated.pendingInviteStaleDays}
+                  invalidateQueryKey={["users", "invitations"]}
+                  maxDays={MAX_INACTIVITY_DAYS}
                 />
-              )}
-          </div>
-        </div>
+              )
+              : <LoadingDaysInput label="Loading pending invitation threshold" />}
+          </SettingRow>
+          <SettingRow
+            title="Overdue invitation threshold"
+            description="Pending invitations at least this old are marked overdue. This must be at least the pending invitation threshold."
+          >
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.pendingInviteCriticalDays}
+                  mutationFn={(value) =>
+                    api.settings.update({ pendingInviteCriticalDays: value })}
+                  getSavedValue={(updated) => updated.pendingInviteCriticalDays}
+                  invalidateQueryKey={["users", "invitations"]}
+                  maxDays={MAX_INACTIVITY_DAYS}
+                />
+              )
+              : <LoadingDaysInput label="Loading overdue invitation threshold" />}
+          </SettingRow>
+        </SettingsSection>
       </div>
     </div>
+  );
+}
+
+function SettingsSection({ icon: Icon, tone, title, description, children }: {
+  icon: typeof Archive;
+  tone: "primary" | "secondary" | "accent";
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`workspace-surface settings-section settings-section-${tone}`}>
+      <header className="settings-section-header">
+        <span className="settings-section-icon"><Icon className="size-5" /></span>
+        <span>
+          <small>Preferences</small>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </span>
+      </header>
+      <div className="settings-section-fields">{children}</div>
+    </section>
+  );
+}
+
+function SettingRow({ title, description, children }: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-field-row">
+      <div>
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+      <div className="settings-field-control">{children}</div>
+    </div>
+  );
+}
+
+function LoadingDaysInput({ label }: { label: string }) {
+  return (
+    <input
+      type="number"
+      className="input input-bordered input-sm w-24"
+      disabled
+      aria-label={label}
+    />
   );
 }
 
