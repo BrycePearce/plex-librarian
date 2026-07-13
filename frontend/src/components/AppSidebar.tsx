@@ -118,7 +118,12 @@ export function AppSidebar() {
 
 function Brand() {
   return (
-    <Link to="/dashboard" className="sidebar-brand" aria-label="Plex Librarian dashboard">
+    <Link
+      to="/dashboard"
+      preload="viewport"
+      className="sidebar-brand"
+      aria-label="Plex Librarian dashboard"
+    >
       <span className="sidebar-brand-mark"><Library className="size-5" /></span>
       <span className="sidebar-brand-copy">
         <strong>Plex Librarian</strong>
@@ -143,6 +148,7 @@ function SidebarContent({ collapsed, id }: { collapsed: boolean; id: string }) {
                 <Link
                   key={item.to}
                   to={item.to}
+                  preload="viewport"
                   search={"search" in item ? item.search : undefined}
                   className="sidebar-link"
                   activeProps={{

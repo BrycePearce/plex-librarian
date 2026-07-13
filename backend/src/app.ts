@@ -37,6 +37,19 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/webhook', webhook);
 
   if (staticDir) {
+    // Vite fingerprints every production asset filename, so these responses can be
+    // cached permanently: a changed file gets a new URL on the next deployment. HTML
+    // keeps revalidating so clients promptly discover those new asset URLs.
+    app.use('/*', async (c, next) => {
+      await next();
+      if (c.res.status !== 200) return;
+
+      if (c.req.path.startsWith('/assets/')) {
+        c.header('Cache-Control', 'public, max-age=31536000, immutable');
+      } else if (c.res.headers.get('Content-Type')?.includes('text/html')) {
+        c.header('Cache-Control', 'no-cache');
+      }
+    });
     app.use('/*', serveStatic({ root: staticDir }));
     app.get('/*', async (c) => c.html(await Deno.readTextFile(join(staticDir, 'index.html'))));
   }

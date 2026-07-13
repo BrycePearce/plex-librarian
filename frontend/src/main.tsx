@@ -17,6 +17,11 @@ const queryClient = new QueryClient({
 const router = createRouter({
   routeTree,
   context: { queryClient },
+  // Route components are split into on-demand chunks by the Vite router plugin.
+  // Preload on deliberate hover/focus/touch intent so normal navigation still feels
+  // immediate without eagerly downloading every page during initial startup.
+  defaultPreload: 'intent',
+  defaultPreloadDelay: 25,
   // Every route's `beforeLoad` awaits a network round-trip (the auth-status check) before
   // anything renders. Without this, that wait shows a blank page — most visible on a hard
   // refresh or a session's first navigation, since the check is cached for 60s afterward.

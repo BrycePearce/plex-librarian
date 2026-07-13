@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
-import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // This config runs under `deno run -A npm:vite` (see frontend/deno.json), so the real
 // `Deno` global is always present at runtime — but frontend/ is outside the Deno LSP's
@@ -12,20 +14,18 @@ declare const Deno: { build: { os: string } }
 
 export default defineConfig({
   plugins: [
-    TanStackRouterVite({
+    tanstackRouter({
       routesDirectory: './src/routes',
       generatedRouteTree: './src/routeTree.gen.ts',
+      autoCodeSplitting: true,
     }),
-    react({
-      babel: {
-        plugins: ['babel-plugin-react-compiler'],
-      },
-    }),
+    react(),
+    babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
   ],
   resolve: {
     alias: {
-      '@shared': resolve(import.meta.dirname!, '../shared'),
+      '@shared': resolve(fileURLToPath(new URL('.', import.meta.url)), '../shared'),
     },
   },
   server: {
