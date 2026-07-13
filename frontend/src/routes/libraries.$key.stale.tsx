@@ -110,6 +110,12 @@ function pageFileSize(items: StaleItem[]): number {
   return items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
 }
 
+function libraryTone(type?: string): "primary" | "secondary" | "accent" {
+  if (type === "show") return "secondary";
+  if (type === "artist") return "accent";
+  return "primary";
+}
+
 function LibraryInsight({
   icon,
   label,
@@ -298,7 +304,11 @@ function StalePage() {
   const showFilters = !isNotSyncedYet && !isStaleError;
 
   return (
-    <div className={`stale-page space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}>
+    <div
+      className={`stale-page workspace-tone-${libraryTone(thisLibrary?.type)} space-y-6 ${
+        selection.selected.size > 0 ? "pb-20" : ""
+      }`}
+    >
       {
         /* Sticky (not the table) per explicit preference: the back/title/sync row and the
           filter controls pin to the top of <main>'s scroll as you scroll past them, while

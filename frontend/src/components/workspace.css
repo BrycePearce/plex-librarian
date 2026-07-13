@@ -1,13 +1,16 @@
-.workspace-page { position: relative; isolation: isolate; padding-bottom: 3rem; }
-.workspace-page::before { content: ""; position: absolute; z-index: -1; top: -8rem; left: -6rem; width: 34rem; height: 22rem; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--color-primary) 7%, transparent), transparent 68%); pointer-events: none; }
+.workspace-page { --workspace-color: var(--color-primary); position: relative; isolation: isolate; padding-bottom: 3rem; }
+.workspace-tone-primary { --workspace-color: var(--color-primary); }
+.workspace-tone-secondary { --workspace-color: var(--color-secondary); }
+.workspace-tone-accent { --workspace-color: var(--color-accent); }
+.workspace-page::before { content: ""; position: absolute; z-index: -1; top: -8rem; left: -6rem; width: 34rem; height: 22rem; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--workspace-color) 7%, transparent), transparent 68%); pointer-events: none; }
 .workspace-sticky-header { margin-inline: -1rem; padding: .5rem 1rem 1rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); background: color-mix(in oklab, var(--color-base-100) 90%, transparent); backdrop-filter: blur(18px); }
 .workspace-page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; padding: .25rem 0 .5rem; }
 .workspace-page-heading { display: flex; min-width: 0; align-items: center; gap: .8rem; }
 .workspace-back-button { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); border-radius: 11px; color: color-mix(in oklab, var(--color-base-content) 55%, transparent); transition: color 150ms, border-color 150ms, background 150ms; }
-.workspace-back-button:hover { color: var(--color-primary); border-color: color-mix(in oklab, var(--color-primary) 30%, transparent); background: color-mix(in oklab, var(--color-primary) 7%, transparent); }
-.workspace-page-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-primary) 22%, transparent); border-radius: 13px; color: var(--color-primary); background: color-mix(in oklab, var(--color-primary) 12%, transparent); }
+.workspace-back-button:hover { color: var(--workspace-color, var(--color-primary)); border-color: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 30%, transparent); background: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 7%, transparent); }
+.workspace-page-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--workspace-color, var(--color-primary)) 22%, transparent); border-radius: 13px; color: var(--workspace-color, var(--color-primary)); background: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 12%, transparent); }
 .workspace-page-copy { min-width: 0; }
-.workspace-eyebrow { color: color-mix(in oklab, var(--color-primary) 75%, var(--color-base-content)); font-size: .63rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+.workspace-eyebrow { color: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 75%, var(--color-base-content)); font-size: .63rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
 .workspace-page-copy h1 { margin-top: .25rem; font-size: clamp(1.65rem, 3vw, 2.1rem); font-weight: 750; letter-spacing: -.04em; line-height: 1.12; }
 .workspace-page-copy p { margin-top: .4rem; color: color-mix(in oklab, var(--color-base-content) 45%, transparent); font-size: .8rem; }
 .workspace-page-actions { display: flex; align-items: center; gap: .65rem; }

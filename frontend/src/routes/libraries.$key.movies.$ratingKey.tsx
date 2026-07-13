@@ -39,7 +39,7 @@ function MovieDetailPage() {
   const movie = data?.movie;
 
   return (
-    <div className="workspace-page media-detail-page space-y-6">
+    <div className="workspace-page workspace-tone-primary media-detail-page space-y-6">
       <div className="media-detail-header flex items-center gap-4">
         {canGoBack
           ? (

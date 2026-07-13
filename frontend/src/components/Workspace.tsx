@@ -9,6 +9,7 @@ export function PageHeader({
   title,
   description,
   icon: Icon,
+  tone = "primary",
   backTo = "/dashboard",
   actions,
 }: {
@@ -16,11 +17,12 @@ export function PageHeader({
   title: ReactNode;
   description?: ReactNode;
   icon?: LucideIcon;
+  tone?: "primary" | "secondary" | "accent";
   backTo?: "/dashboard";
   actions?: ReactNode;
 }) {
   return (
-    <header className="workspace-page-header">
+    <header className={`workspace-page-header workspace-tone-${tone}`}>
       <div className="workspace-page-heading">
         <Link
           to={backTo}

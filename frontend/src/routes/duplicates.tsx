@@ -20,9 +20,9 @@ const PAGE_SIZE = 50;
 
 type TypeFilter = "all" | "movie" | "tv";
 
-function validateDuplicatesSearch(
-  search: Record<string, unknown>,
-): { type: TypeFilter } {
+function validateDuplicatesSearch(search: Record<string, unknown>): {
+  type: TypeFilter;
+} {
   const type = search.type;
   return { type: type === "movie" || type === "tv" ? type : "all" };
 }
@@ -52,16 +52,14 @@ function DuplicatesPage() {
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
-  const [deleteResult, setDeleteResult] = useState<
-    {
-      mode: "versions" | "whole-item";
-      title?: string;
-      deletedCount: number;
-      failedCount: number;
-      fileSizeFreed: number;
-      errors: string[];
-    } | null
-  >(null);
+  const [deleteResult, setDeleteResult] = useState<{
+    mode: "versions" | "whole-item";
+    title?: string;
+    deletedCount: number;
+    failedCount: number;
+    fileSizeFreed: number;
+    errors: string[];
+  } | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
@@ -77,23 +75,28 @@ function DuplicatesPage() {
   // Sequential, not concurrent — same "destructive and must stay attributable"
   // reasoning as the bulk stale-item delete flow.
   const deleteVersionsMutation = useMutation({
-    mutationFn: async (
-      { group, mediaIds }: { group: DuplicateGroup; mediaIds: number[] },
-    ) => {
+    mutationFn: async ({
+      group,
+      mediaIds,
+    }: {
+      group: DuplicateGroup;
+      mediaIds: number[];
+    }) => {
       let deletedCount = 0;
       let fileSizeFreed = 0;
       const errors: string[] = [];
       for (const mediaId of mediaIds) {
         try {
-          const res = group.mediaType === "movie"
-            ? await api.duplicates.deleteMovieMediaVersion(
-              group.ratingKey,
-              mediaId,
-            )
-            : await api.duplicates.deleteEpisodeMediaVersion(
-              group.episodeRatingKey,
-              mediaId,
-            );
+          const res =
+            group.mediaType === "movie"
+              ? await api.duplicates.deleteMovieMediaVersion(
+                  group.ratingKey,
+                  mediaId,
+                )
+              : await api.duplicates.deleteEpisodeMediaVersion(
+                  group.episodeRatingKey,
+                  mediaId,
+                );
           deletedCount++;
           fileSizeFreed += res.fileSizeFreed;
         } catch (err) {
@@ -139,9 +142,8 @@ function DuplicatesPage() {
               failedCount: res.failed.length,
               // deleteItems doesn't return freed size per item; the group's own
               // combined size already reflects every version being removed.
-              fileSizeFreed: res.deleted.length > 0
-                ? (group.combinedFileSize ?? 0)
-                : 0,
+              fileSizeFreed:
+                res.deleted.length > 0 ? (group.combinedFileSize ?? 0) : 0,
               errors: res.failed.map((f) => f.error),
             });
             setReviewItem(null);
@@ -168,15 +170,20 @@ function DuplicatesPage() {
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
   return (
-    <div className="workspace-page space-y-6">
+    <div className="workspace-page workspace-tone-accent space-y-6">
       <div className="workspace-sticky-header sticky top-0 z-20">
         <PageHeader
           eyebrow="Storage intelligence"
           title="Duplicate versions"
           icon={Copy}
-          description={data
-            ? `${data.total.toLocaleString()} with multiple synced versions`
-            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+          tone="accent"
+          description={
+            data ? (
+              `${data.total.toLocaleString()} with multiple synced versions`
+            ) : (
+              <span className="skeleton inline-block h-3 w-40 align-middle" />
+            )
+          }
           actions={
             <select
               className="select select-bordered select-sm"
@@ -192,98 +199,96 @@ function DuplicatesPage() {
         />
       </div>
 
-      {isError
-        ? (
-          <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load duplicates"}
-            onRetry={() => void refetch()}
-          />
-        )
-        : (
-          <>
-            {deleteResult && (
-              <DeleteResultAlert
-                variant={deleteResult.failedCount > 0 ? "warning" : "success"}
-                onDismiss={() => setDeleteResult(null)}
-              >
-                {deleteResult.mode === "whole-item"
-                  ? (
-                    <>
-                      Deleted "{deleteResult.title}" from Plex{" "}
-                      ({formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                    </>
-                  )
-                  : (
-                    <>
-                      Deleted {deleteResult.deletedCount} version
-                      {deleteResult.deletedCount === 1 ? "" : "s"}{" "}
-                      ({formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                    </>
-                  )}
-                {deleteResult.failedCount > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.failedCount} failed:{" "}
-                    {deleteResult.errors.join("; ")}
-                  </>
-                )}
-              </DeleteResultAlert>
-            )}
-
-            {isLoading
-              ? <DuplicatesTableSkeleton />
-              : data && data.groups.length === 0
-              ? (
-                <EmptyState
-                  icon={BadgeCheck}
-                  title="No duplicate versions"
-                  description="Your library is tidy—there are no redundant synced versions in this view."
-                />
-              )
-              : (
-                <DataSurface className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Title</th>
-                        <th>Versions</th>
-                        <th>Combined size</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data?.groups.map((item) => (
-                        <DuplicateGroupRow
-                          key={item.mediaType === "movie"
-                            ? item.ratingKey
-                            : item.episodeRatingKey}
-                          item={item}
-                          onReview={() => openReview(item)}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
-                </DataSurface>
+      {isError ? (
+        <ErrorAlert
+          message={
+            error instanceof Error ? error.message : "Failed to load duplicates"
+          }
+          onRetry={() => void refetch()}
+        />
+      ) : (
+        <>
+          {deleteResult && (
+            <DeleteResultAlert
+              variant={deleteResult.failedCount > 0 ? "warning" : "success"}
+              onDismiss={() => setDeleteResult(null)}
+            >
+              {deleteResult.mode === "whole-item" ? (
+                <>
+                  Deleted "{deleteResult.title}" from Plex (
+                  {formatKilobytes(deleteResult.fileSizeFreed)} freed).
+                </>
+              ) : (
+                <>
+                  Deleted {deleteResult.deletedCount} version
+                  {deleteResult.deletedCount === 1 ? "" : "s"} (
+                  {formatKilobytes(deleteResult.fileSizeFreed)} freed).
+                </>
               )}
+              {deleteResult.failedCount > 0 && (
+                <>
+                  {" "}
+                  {deleteResult.failedCount} failed:{" "}
+                  {deleteResult.errors.join("; ")}
+                </>
+              )}
+            </DeleteResultAlert>
+          )}
 
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+          {isLoading ? (
+            <DuplicatesTableSkeleton />
+          ) : data && data.groups.length === 0 ? (
+            <EmptyState
+              icon={BadgeCheck}
+              title="No duplicate versions"
+              description="Your library is tidy—there are no redundant synced versions in this view."
             />
-          </>
-        )}
+          ) : (
+            <DataSurface className="overflow-x-auto">
+              <table className="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Versions</th>
+                    <th>Combined size</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data?.groups.map((item) => (
+                    <DuplicateGroupRow
+                      key={
+                        item.mediaType === "movie"
+                          ? item.ratingKey
+                          : item.episodeRatingKey
+                      }
+                      item={item}
+                      onReview={() => openReview(item)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </DataSurface>
+          )}
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+          />
+        </>
+      )}
 
       <VersionPickerDialog
         dialogRef={dialogRef}
         item={reviewItem}
-        pending={deleteWholeItemMutation.isPending ||
-          deleteVersionsMutation.isPending}
+        pending={
+          deleteWholeItemMutation.isPending || deleteVersionsMutation.isPending
+        }
         error={deleteWholeItemMutation.error ?? deleteVersionsMutation.error}
         onConfirm={(mediaIds, deleteWholeItem) =>
-          reviewItem && handleConfirm(reviewItem, mediaIds, deleteWholeItem)}
+          reviewItem && handleConfirm(reviewItem, mediaIds, deleteWholeItem)
+        }
         onCancel={closeReview}
       />
     </div>
