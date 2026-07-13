@@ -23,6 +23,135 @@ export interface PlexRosterUser {
   sharedServerId: number | null;
 }
 
+export interface PlexPendingInvitation {
+  inviteId: number;
+  username: string | null;
+  email: string | null;
+  thumb: string | null;
+  createdAt: number;
+  libraryCount: number | null;
+  friend: boolean;
+  home: boolean;
+  server: boolean;
+}
+
+export type PendingInvitationServerMatch = 'matched' | 'ambiguous' | 'unavailable';
+
+type PlexOwnedResource = {
+  name?: string;
+  provides?: string;
+  owned?: boolean;
+  clientIdentifier?: string;
+};
+
+export function resolvePendingInvitationServer(
+  resources: PlexOwnedResource[],
+  machineIdentifier: string,
+): { serverMatch: PendingInvitationServerMatch; serverName: string | null } {
+  const isOwnedServer = (resource: PlexOwnedResource) =>
+    resource.owned === true &&
+    !!resource.provides?.split(',').map((value) => value.trim()).includes('server');
+  const activeResource = resources.find((resource) =>
+    isOwnedServer(resource) && resource.clientIdentifier === machineIdentifier
+  );
+  if (!activeResource?.name) return { serverMatch: 'unavailable', serverName: null };
+  const sameNameServers = resources.filter((resource) =>
+    isOwnedServer(resource) && resource.name === activeResource.name
+  );
+  return sameNameServers.length === 1
+    ? { serverMatch: 'matched', serverName: activeResource.name }
+    : { serverMatch: 'ambiguous', serverName: null };
+}
+
+export function parsePendingInvitationsXml(
+  xml: string,
+  activeServerName: string,
+): PlexPendingInvitation[] {
+  const invitations: PlexPendingInvitation[] = [];
+  const inviteBlockRe = /<Invite\b([^>]*?)(?:\/>|>([\s\S]*?)<\/Invite>)/g;
+  let match: RegExpExecArray | null;
+  while ((match = inviteBlockRe.exec(xml))) {
+    const attrs = parseAttrs(match[1]);
+    if (attrs.server !== '1') continue;
+    const inner = match[2] ?? '';
+    const serverTagRe = /<Server\b([^>]*?)(?:\/>|>[\s\S]*?<\/Server>)/g;
+    let serverMatch: RegExpExecArray | null;
+    let libraryCount: number | null = null;
+    let targetsActiveServer = false;
+    while ((serverMatch = serverTagRe.exec(inner))) {
+      const serverAttrs = parseAttrs(serverMatch[1]);
+      if (serverAttrs.name !== activeServerName) continue;
+      targetsActiveServer = true;
+      const parsedCount = Number(serverAttrs.numLibraries);
+      libraryCount = Number.isFinite(parsedCount) ? parsedCount : null;
+      break;
+    }
+    if (!targetsActiveServer) continue;
+
+    const inviteId = Number(attrs.id);
+    const rawCreatedAt = attrs.createdAt ?? '';
+    const numericCreatedAt = /^\d+$/.test(rawCreatedAt) ? Number(rawCreatedAt) : null;
+    const createdAt = numericCreatedAt ?? Math.floor(Date.parse(rawCreatedAt) / 1000);
+    if (!Number.isFinite(inviteId) || !Number.isFinite(createdAt)) continue;
+    invitations.push({
+      inviteId,
+      username: attrs.username || attrs.friendlyName || null,
+      email: attrs.email || null,
+      thumb: attrs.thumb || null,
+      createdAt,
+      libraryCount,
+      friend: attrs.friend === '1',
+      home: attrs.home === '1',
+      server: attrs.server === '1',
+    });
+  }
+  return invitations.sort((a, b) => a.createdAt - b.createdAt || a.inviteId - b.inviteId);
+}
+
+export async function cancelPendingServerInvitation(
+  clientId: string,
+  accessToken: string,
+  machineIdentifier: string,
+  inviteId: number,
+): Promise<void> {
+  const pending = await fetchPendingServerInvitations(
+    clientId,
+    accessToken,
+    machineIdentifier,
+  );
+  if (pending.serverMatch !== 'matched') {
+    throw new Error(`Cannot safely assign invitation to this server: ${pending.serverMatch}`);
+  }
+  const invitation = pending.invitations.find((candidate) => candidate.inviteId === inviteId);
+  if (!invitation) throw new PlexPendingInvitationError(404, 'Pending invitation not found');
+
+  const params = new URLSearchParams({
+    friend: String(Number(invitation.friend)),
+    home: String(Number(invitation.home)),
+    server: String(Number(invitation.server)),
+  });
+  const res = await fetch(`${PLEX_TV}/api/invites/requested/${inviteId}?${params}`, {
+    method: 'DELETE',
+    headers: buildPlexHeaders(clientId, accessToken),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    res.body?.cancel();
+    throw new PlexPendingInvitationError(
+      res.status,
+      `Plex ${res.status} cancelling pending invitation ${inviteId}`,
+    );
+  }
+  res.body?.cancel();
+}
+
+export class PlexPendingInvitationError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'PlexPendingInvitationError';
+  }
+}
+
 // Decodes the handful of XML entities that can legitimately appear in Plex's
 // attribute values (usernames/emails are otherwise plain text). Not a general XML
 // entity decoder — deliberately narrow, matching this module's narrow parsing scope.
@@ -194,6 +323,51 @@ export async function fetchServerRoster(
     // (e.g. as a Home member) — dedupe so they're never double-counted.
     ...friends.filter((f) => f.accountId !== owner.id),
   ];
+}
+
+// Plex's pending-invite response identifies nested servers by display name rather than
+// machineIdentifier. Resolve that name through the owner's resource list and only use it
+// when exactly one owned PMS has the name; duplicate names are deliberately ambiguous.
+export async function fetchPendingServerInvitations(
+  clientId: string,
+  accessToken: string,
+  machineIdentifier: string,
+): Promise<{
+  serverMatch: PendingInvitationServerMatch;
+  invitations: PlexPendingInvitation[];
+}> {
+  const headers = buildPlexHeaders(clientId, accessToken);
+  const [invitesRes, resourcesRes] = await Promise.all([
+    fetchPlexTvWithRetry(`${PLEX_TV}/api/invites/requested`, headers),
+    fetchPlexTvWithRetry(
+      `${PLEX_TV}/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1`,
+      headers,
+    ),
+  ]);
+
+  if (!invitesRes.ok) {
+    invitesRes.body?.cancel();
+    resourcesRes.body?.cancel();
+    throw new Error(`Plex ${invitesRes.status} fetching pending invitations`);
+  }
+  if (!resourcesRes.ok) {
+    invitesRes.body?.cancel();
+    resourcesRes.body?.cancel();
+    throw new Error(`Plex ${resourcesRes.status} fetching server resources`);
+  }
+
+  const resources = await resourcesRes.json() as PlexOwnedResource[];
+  const resolved = resolvePendingInvitationServer(resources, machineIdentifier);
+  if (resolved.serverMatch !== 'matched' || !resolved.serverName) {
+    invitesRes.body?.cancel();
+    return { serverMatch: resolved.serverMatch, invitations: [] };
+  }
+
+  const xml = await invitesRes.text();
+  return {
+    serverMatch: 'matched',
+    invitations: parsePendingInvitationsXml(xml, resolved.serverName),
+  };
 }
 
 // Revokes a friend's access to just THIS server — DELETE /api/servers/{machineIdentifier}

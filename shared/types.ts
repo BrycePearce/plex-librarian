@@ -40,6 +40,8 @@ export type PinPollResult =
 export interface Settings {
   staleMinAgeDays: number;
   inactiveUserDays: number;
+  pendingInviteStaleDays: number;
+  pendingInviteCriticalDays: number;
   ipHistoryRetentionDays: number;
 }
 
@@ -194,8 +196,8 @@ export interface DeleteMediaVersionResponse {
 // --- Users (inactive-user and account-sharing review) ---
 // Surfaces who has access to the server and how active they are — including revoking
 // a user's access via DELETE /api/users/:accountId (see RemoveUserResponse below).
-// lastViewedAt is null both for a genuine never-watched user and for one not yet
-// reconciled by a sync — see usersSyncedAt below.
+// activityStatus distinguishes a genuine never-watched user from one whose identity
+// or cross-user history could not yet be reconciled.
 
 export interface PlexUser {
   accountId: number;
@@ -204,15 +206,18 @@ export interface PlexUser {
   thumb: string | null;
   isOwner: boolean;
   lastViewedAt: number | null;
+  activityStatus: UserActivityStatus;
   sharingRisk: SharingRiskAssessment;
 }
 
-export type SharingDataConfidence = 'none' | 'low' | 'medium' | 'high';
-export type SharingRiskLevel = 'insufficient_data' | 'low' | 'watch' | 'review';
+export type UserActivityStatus = "watched" | "never" | "unknown";
+
+export type SharingDataConfidence = "none" | "low" | "medium" | "high";
+export type SharingRiskLevel = "insufficient_data" | "low" | "watch" | "review";
 export type SharingRiskSignalType =
-  | 'remote_network_diversity'
-  | 'remote_device_diversity'
-  | 'rapid_network_switching';
+  | "remote_network_diversity"
+  | "remote_device_diversity"
+  | "rapid_network_switching";
 
 export interface SharingRiskSignal {
   type: SharingRiskSignalType;
@@ -236,11 +241,13 @@ export interface UsersResponse {
   // Null until the roster has synced at least once for the current server — while
   // null, this list may be incomplete or stale, same contract as Library.historySyncedAt.
   usersSyncedAt: number | null;
+  // True only after every video library has completed its current history walk.
+  historyComplete: boolean;
   inactiveDays: number;
   defaultInactiveDays: number;
-  risk: 'all' | 'attention' | SharingRiskLevel;
-  sort: 'username' | 'lastViewedAt' | 'sharingRisk';
-  order: 'asc' | 'desc';
+  risk: "all" | "attention" | SharingRiskLevel;
+  sort: "username" | "lastViewedAt" | "sharingRisk";
+  order: "asc" | "desc";
   limit: number;
   offset: number;
   total: number;
@@ -250,6 +257,37 @@ export interface UsersResponse {
 export interface RemoveUserResponse {
   accountId: number;
   username: string;
+}
+
+export interface PendingInvitation {
+  inviteId: number;
+  username: string | null;
+  email: string | null;
+  thumb: string | null;
+  createdAt: number;
+  libraryCount: number | null;
+  ageStatus: "current" | "stale" | "critical";
+}
+
+export interface PendingInvitationsResponse {
+  staleAfterDays: number;
+  criticalAfterDays: number;
+  serverMatch: "matched" | "ambiguous" | "unavailable";
+  overallTotal: number;
+  total: number;
+  staleCount: number;
+  criticalCount: number;
+  filter: "all" | "attention" | "current" | "stale" | "critical";
+  search: string;
+  sort: "createdAt" | "username" | "libraryCount";
+  order: "asc" | "desc";
+  limit: number;
+  offset: number;
+  invitations: PendingInvitation[];
+}
+
+export interface CancelPendingInvitationResponse {
+  inviteId: number;
 }
 
 // --- Item deletion ---

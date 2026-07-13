@@ -1,24 +1,28 @@
 import { Hono } from 'hono';
-import {
-  and,
-  eq,
-  gte,
-  inArray,
-  isNotNull,
-  isNull,
-  lt,
-  sql,
-} from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { servers, settings, userPlayObservations, users } from '../../db/schema.ts';
+import { libraries, servers, settings, userPlayObservations, users } from '../../db/schema.ts';
 import { userByAccountId, usersByServer } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { getActiveServer } from '../../integrations/plex/index.ts';
-import { PlexRemoveUserError, removeUserAccess } from '../../integrations/plex/accounts.ts';
+import {
+  cancelPendingServerInvitation,
+  fetchPendingServerInvitations,
+  PlexPendingInvitationError,
+  PlexRemoveUserError,
+  removeUserAccess,
+} from '../../integrations/plex/accounts.ts';
 import { logEvents } from '../events/service.ts';
 import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
-import type { PlexUser, RemoveUserResponse, UsersResponse } from '@plex-librarian/shared/types.ts';
+import type {
+  CancelPendingInvitationResponse,
+  PendingInvitationsResponse,
+  PlexUser,
+  RemoveUserResponse,
+  UsersResponse,
+} from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
+import { userActivityStatus } from './activityStatus.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -33,6 +37,34 @@ type RiskFilter =
   | 'insufficient_data';
 
 const DEFAULT_INACTIVE_DAYS = 90;
+const PENDING_INVITATION_CACHE_MS = 60_000;
+const pendingInvitationCache = new Map<
+  number,
+  {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof fetchPendingServerInvitations>>>;
+  }
+>();
+
+function cachedPendingInvitations(
+  active: NonNullable<Awaited<ReturnType<typeof getActiveServer>>>,
+) {
+  const cached = pendingInvitationCache.get(active.serverId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = fetchPendingServerInvitations(
+    active.clientId,
+    active.accessToken,
+    active.machineIdentifier,
+  ).catch((err) => {
+    pendingInvitationCache.delete(active.serverId);
+    throw err;
+  });
+  pendingInvitationCache.set(active.serverId, {
+    expiresAt: Date.now() + PENDING_INVITATION_CACHE_MS,
+    value,
+  });
+  return value;
+}
 
 async function sharingStatsForAccounts(
   serverId: number,
@@ -127,6 +159,7 @@ router.get('/', async (c) => {
     return c.json(
       {
         usersSyncedAt: null,
+        historyComplete: false,
         inactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
         defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
         risk: 'all',
@@ -140,7 +173,7 @@ router.get('/', async (c) => {
     );
   }
 
-  const [[serverRow], [settingsRow]] = await Promise.all([
+  const [[serverRow], [settingsRow], libraryHistoryRows] = await Promise.all([
     db.select({ usersSyncedAt: servers.usersSyncedAt }).from(servers).where(
       eq(servers.id, serverId),
     )
@@ -149,8 +182,14 @@ router.get('/', async (c) => {
       eq(settings.id, 1),
     )
       .limit(1),
+    db.select({ type: libraries.type, historySyncedAt: libraries.historySyncedAt })
+      .from(libraries)
+      .where(eq(libraries.serverId, serverId)),
   ]);
   const usersSyncedAt = serverRow?.usersSyncedAt ?? null;
+  const videoLibraryHistory = libraryHistoryRows.filter((library) => library.type !== 'artist');
+  const historyComplete = videoLibraryHistory.length > 0 &&
+    videoLibraryHistory.every((library) => library.historySyncedAt !== null);
 
   const rawInactiveDays = c.req.query('inactiveDays');
   const parsedInactiveDays = rawInactiveDays !== undefined ? Number(rawInactiveDays) : null;
@@ -167,17 +206,19 @@ router.get('/', async (c) => {
     settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS;
 
   const rawFilter = c.req.query('filter');
-  const filter = rawFilter === 'inactive' || rawFilter === 'never' ? rawFilter : 'all';
+  const filter = rawFilter === 'inactive' || rawFilter === 'never' || rawFilter === 'unknown'
+    ? rawFilter
+    : 'all';
 
   const rawRisk = c.req.query('risk') ?? 'all';
   const risk: RiskFilter = [
-    'all',
-    'attention',
-    'review',
-    'watch',
-    'low',
-    'insufficient_data',
-  ].includes(rawRisk)
+      'all',
+      'attention',
+      'review',
+      'watch',
+      'low',
+      'insufficient_data',
+    ].includes(rawRisk)
     ? rawRisk as RiskFilter
     : 'all';
 
@@ -197,15 +238,6 @@ router.get('/', async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - inactiveDays * 86400;
   const riskWindowCutoff = now - 30 * 86400;
-  const neverWatchedCond = isNull(users.lastViewedAt);
-  const inactiveCond = and(isNotNull(users.lastViewedAt), lt(users.lastViewedAt, cutoff));
-
-  const where = filter === 'inactive'
-    ? and(usersByServer(serverId), inactiveCond)
-    : filter === 'never'
-    ? and(usersByServer(serverId), neverWatchedCond)
-    : usersByServer(serverId);
-
   // Sharing risk is derived from observation aggregates rather than stored on users.
   // Server rosters are naturally small, so assess the activity-filtered roster first,
   // then risk-filter, sort, and page it in memory to keep totals and pages correct.
@@ -216,15 +248,26 @@ router.get('/', async (c) => {
     thumb: users.thumb,
     isOwner: users.isOwner,
     lastViewedAt: users.lastViewedAt,
-  }).from(users).where(where);
+    localAccountId: users.localAccountId,
+  }).from(users).where(usersByServer(serverId));
+
+  const activityFiltered = rows.map((row) => ({
+    ...row,
+    activityStatus: userActivityStatus(row.lastViewedAt, row.localAccountId, historyComplete),
+  })).filter((user) =>
+    filter === 'all' ||
+    (filter === 'inactive'
+      ? user.lastViewedAt !== null && user.lastViewedAt < cutoff
+      : user.activityStatus === filter)
+  );
 
   const sharingStats = await sharingStatsForAccounts(
     serverId,
-    rows.map((row) => row.accountId),
+    activityFiltered.map((row) => row.accountId),
     riskWindowCutoff,
   );
 
-  const assessedUsers: PlexUser[] = rows.map((u) => ({
+  const assessedUsers: PlexUser[] = activityFiltered.map(({ localAccountId: _, ...u }) => ({
     ...u,
     sharingRisk: assessUserSharingRisk(
       sharingStats.get(u.accountId) ?? {
@@ -260,7 +303,8 @@ router.get('/', async (c) => {
         direction * (a.sharingRisk.riskScore - b.sharingRisk.riskScore) ||
         a.username.localeCompare(b.username, undefined, { sensitivity: 'base' });
     }
-    // Never-watched users lead oldest-first and trail most-recent-first.
+    // Users without a trustworthy timestamp (never or unknown) lead oldest-first and
+    // trail most-recent-first; username keeps the two null-timestamp groups stable.
     if (a.lastViewedAt === null || b.lastViewedAt === null) {
       if (a.lastViewedAt === b.lastViewedAt) return a.username.localeCompare(b.username);
       return a.lastViewedAt === null ? -direction : direction;
@@ -274,6 +318,7 @@ router.get('/', async (c) => {
   return c.json(
     {
       usersSyncedAt,
+      historyComplete,
       inactiveDays,
       defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
       risk,
@@ -300,6 +345,158 @@ router.get('/', async (c) => {
 // same precedent as duplicates.ts's deletePlexMediaTolerating404). A failed Plex call
 // this way leaves local state matching reality instead of needing a compensating
 // rollback.
+// Pending invitations are live Plex data rather than roster rows: they have not become
+// users yet, and accepting one should appear without waiting for a library sync. Plex
+// identifies the target server by name only, so the integration verifies uniqueness
+// among owned servers before attributing invitations to the active server.
+router.get('/invitations', async (c) => {
+  const rawFilter = c.req.query('filter') ?? 'all';
+  const filter = ['all', 'attention', 'current', 'stale', 'critical'].includes(rawFilter)
+    ? rawFilter as PendingInvitationsResponse['filter']
+    : 'all';
+  const search = (c.req.query('search') ?? '').trim().slice(0, 200);
+  const rawSort = c.req.query('sort') ?? 'createdAt';
+  const sort = ['createdAt', 'username', 'libraryCount'].includes(rawSort)
+    ? rawSort as PendingInvitationsResponse['sort']
+    : 'createdAt';
+  const order = c.req.query('order') === 'desc' ? 'desc' : 'asc';
+  const parsedLimit = Number(c.req.query('limit') ?? 25);
+  const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
+    ? Math.min(parsedLimit, 100)
+    : 25;
+  const parsedOffset = Number(c.req.query('offset') ?? 0);
+  const offset = Number.isSafeInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+
+  const active = await getActiveServer();
+  if (!active) {
+    return c.json(
+      {
+        staleAfterDays: 30,
+        criticalAfterDays: 90,
+        serverMatch: 'unavailable',
+        overallTotal: 0,
+        total: 0,
+        staleCount: 0,
+        criticalCount: 0,
+        filter,
+        search,
+        sort,
+        order,
+        limit,
+        offset,
+        invitations: [],
+      } satisfies PendingInvitationsResponse,
+    );
+  }
+
+  const [settingsRow] = await db.select({
+    pendingInviteStaleDays: settings.pendingInviteStaleDays,
+    pendingInviteCriticalDays: settings.pendingInviteCriticalDays,
+  }).from(settings).where(eq(settings.id, 1)).limit(1);
+  const staleAfterDays = settingsRow?.pendingInviteStaleDays ?? 30;
+  const criticalAfterDays = settingsRow?.pendingInviteCriticalDays ?? 90;
+
+  try {
+    const result = await cachedPendingInvitations(active);
+    const now = Math.floor(Date.now() / 1000);
+    const staleCutoff = now - staleAfterDays * 86_400;
+    const criticalCutoff = now - criticalAfterDays * 86_400;
+    const classified = result.invitations.map((invitation) => ({
+      invitation,
+      ageStatus: invitation.createdAt <= criticalCutoff
+        ? 'critical' as const
+        : invitation.createdAt <= staleCutoff
+        ? 'stale' as const
+        : 'current' as const,
+    }));
+    const criticalCount = classified.filter((entry) => entry.ageStatus === 'critical').length;
+    const staleCount = classified.filter((entry) => entry.ageStatus === 'stale').length;
+    const normalizedSearch = search.toLocaleLowerCase();
+    const filtered = classified.filter((entry) => {
+      const matchesStatus = filter === 'all' ||
+        (filter === 'attention'
+          ? entry.ageStatus === 'stale' || entry.ageStatus === 'critical'
+          : entry.ageStatus === filter);
+      const matchesSearch = !normalizedSearch ||
+        entry.invitation.username?.toLocaleLowerCase().includes(normalizedSearch) ||
+        entry.invitation.email?.toLocaleLowerCase().includes(normalizedSearch);
+      return matchesStatus && matchesSearch;
+    });
+    const direction = order === 'asc' ? 1 : -1;
+    filtered.sort((a, b) => {
+      if (sort === 'username') {
+        const aName = a.invitation.username || a.invitation.email || '';
+        const bName = b.invitation.username || b.invitation.email || '';
+        return direction * aName.localeCompare(bName, undefined, { sensitivity: 'base' }) ||
+          a.invitation.inviteId - b.invitation.inviteId;
+      }
+      if (sort === 'libraryCount') {
+        return direction *
+            ((a.invitation.libraryCount ?? -1) - (b.invitation.libraryCount ?? -1)) ||
+          a.invitation.createdAt - b.invitation.createdAt;
+      }
+      return direction * (a.invitation.createdAt - b.invitation.createdAt) ||
+        a.invitation.inviteId - b.invitation.inviteId;
+    });
+    const total = filtered.length;
+    return c.json(
+      {
+        staleAfterDays,
+        criticalAfterDays,
+        serverMatch: result.serverMatch,
+        overallTotal: classified.length,
+        total,
+        staleCount,
+        criticalCount,
+        filter,
+        search,
+        sort,
+        order,
+        limit,
+        offset,
+        invitations: filtered.slice(offset, offset + limit).map(({ invitation, ageStatus }) => ({
+          inviteId: invitation.inviteId,
+          username: invitation.username,
+          email: invitation.email,
+          thumb: invitation.thumb,
+          createdAt: invitation.createdAt,
+          libraryCount: invitation.libraryCount,
+          ageStatus,
+        })),
+      } satisfies PendingInvitationsResponse,
+    );
+  } catch (err) {
+    console.error(`Failed to fetch pending invitations for server ${active.serverId}:`, err);
+    return c.json({ error: 'Unable to fetch pending invitations from Plex' }, 502);
+  }
+});
+
+router.delete('/invitations/:inviteId', async (c) => {
+  const inviteId = Number(c.req.param('inviteId'));
+  if (!Number.isSafeInteger(inviteId) || inviteId <= 0) {
+    return c.json({ error: 'inviteId must be a positive integer' }, 400);
+  }
+  const active = await getActiveServer();
+  if (!active) return c.json({ error: 'Plex is not configured' }, 409);
+
+  try {
+    await cancelPendingServerInvitation(
+      active.clientId,
+      active.accessToken,
+      active.machineIdentifier,
+      inviteId,
+    );
+    pendingInvitationCache.delete(active.serverId);
+    return c.json({ inviteId } satisfies CancelPendingInvitationResponse);
+  } catch (err) {
+    if (err instanceof PlexPendingInvitationError && err.status === 404) {
+      return c.json({ error: 'Pending invitation no longer exists' }, 404);
+    }
+    console.error(`Failed to cancel pending invitation ${inviteId}:`, err);
+    return c.json({ error: 'Unable to cancel pending invitation in Plex' }, 502);
+  }
+});
+
 router.delete('/:accountId', async (c) => {
   const accountId = parseInt(c.req.param('accountId'), 10);
   if (Number.isNaN(accountId)) return c.json({ error: 'accountId must be an integer' }, 400);

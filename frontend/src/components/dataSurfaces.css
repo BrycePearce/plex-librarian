@@ -11,6 +11,24 @@
   box-shadow: inset 2px 0 0 color-mix(in oklch, var(--color-primary) 70%, transparent);
 }
 
+/* Status explanations belong to the data surface vocabulary: quieter than a global
+   warning, but accented enough to connect visually with the badge that opened them. */
+.activity-status-tooltip {
+  --tt-bg: color-mix(in oklch, var(--color-base-200) 90%, var(--color-warning) 10%);
+}
+
+.activity-status-tooltip[data-tip]::before {
+  color: var(--color-base-content);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 38%, var(--color-base-300));
+  border-radius: var(--radius-box);
+  padding: 0.55rem 0.7rem;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow:
+    0 10px 28px color-mix(in oklch, black 22%, transparent),
+    0 1px 0 color-mix(in oklch, white 6%, transparent) inset;
+}
+
 .interactive-card {
   transition:
     background-color 140ms ease-out,

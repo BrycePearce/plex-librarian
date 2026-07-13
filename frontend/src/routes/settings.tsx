@@ -66,10 +66,76 @@ function SettingsPage() {
         <div className="card-body gap-4">
           <div className="space-y-3">
             <div>
+              <h2 className="font-medium">Pending invitation threshold</h2>
+              <p className="text-sm text-base-content/40 mt-0.5">
+                Pending Plex invitations at least this old are highlighted for
+                follow-up on the Users page.
+              </p>
+            </div>
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.pendingInviteStaleDays}
+                  mutationFn={(value) =>
+                    api.settings.update({ pendingInviteStaleDays: value })}
+                  getSavedValue={(updated) => updated.pendingInviteStaleDays}
+                  invalidateQueryKey={["users", "invitations"]}
+                  maxDays={MAX_INACTIVITY_DAYS}
+                />
+              )
+              : (
+                <input
+                  type="number"
+                  className="input input-bordered input-sm w-24"
+                  disabled
+                  aria-label="Loading pending invitation threshold"
+                />
+              )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card workspace-surface settings-card">
+        <div className="card-body gap-4">
+          <div className="space-y-3">
+            <div>
+              <h2 className="font-medium">Overdue invitation threshold</h2>
+              <p className="text-sm text-base-content/40 mt-0.5">
+                Pending invitations at least this old are marked overdue. This
+                must be at least the pending invitation threshold.
+              </p>
+            </div>
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.pendingInviteCriticalDays}
+                  mutationFn={(value) =>
+                    api.settings.update({ pendingInviteCriticalDays: value })}
+                  getSavedValue={(updated) => updated.pendingInviteCriticalDays}
+                  invalidateQueryKey={["users", "invitations"]}
+                  maxDays={MAX_INACTIVITY_DAYS}
+                />
+              )
+              : (
+                <input
+                  type="number"
+                  className="input input-bordered input-sm w-24"
+                  disabled
+                  aria-label="Loading overdue invitation threshold"
+                />
+              )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card workspace-surface settings-card">
+        <div className="card-body gap-4">
+          <div className="space-y-3">
+            <div>
               <h2 className="font-medium">Inactive user threshold</h2>
               <p className="text-sm text-base-content/40 mt-0.5">
-                Users who haven't watched anything in at least this many days are
-                flagged inactive on the Users page.
+                Users who haven't watched anything in at least this many days
+                are flagged inactive on the Users page.
               </p>
             </div>
             {data

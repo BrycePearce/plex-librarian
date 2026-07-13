@@ -1,28 +1,32 @@
-import type { QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from "@tanstack/react-query";
 import type {
   ActivityEventsResponse,
   AuthStatus,
+  CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
   DuplicatesResponse,
-  PlexPin,
-  PinPollResult,
-  Library,
   LibrariesResponse,
-  StaleResponse,
-  ShowDetail,
+  Library,
   MovieDetail,
+  PendingInvitation,
+  PendingInvitationsResponse,
+  PinPollResult,
+  PlexPin,
   RemoveUserResponse,
   Settings,
+  ShowDetail,
+  StaleResponse,
   SyncLog,
   SyncTriggerResponse,
   UsersResponse,
-} from '@shared/types'
+} from "@shared/types";
 
 export type {
   ActivityEvent,
   ActivityEventsResponse,
   AuthStatus,
+  CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
   DuplicateEpisodeGroup,
@@ -30,192 +34,260 @@ export type {
   DuplicateMovieGroup,
   DuplicatesResponse,
   EventType,
-  MediaVersion,
-  PlexPin,
-  PinPollResult,
-  PlexConnection,
-  PlexServer,
-  PlexUser,
-  Library,
   LibrariesResponse,
-  StaleItem,
-  StaleResponse,
-  Season,
-  ShowDetail,
-  MovieDetail,
-  Settings,
-  SyncLog,
-  SyncTriggerResponse,
+  Library,
   LibraryPhase,
   LibrarySyncProgress,
+  MediaVersion,
+  MovieDetail,
+  PendingInvitation,
+  PendingInvitationsResponse,
+  PinPollResult,
+  PlexConnection,
+  PlexPin,
+  PlexServer,
+  PlexUser,
   RemoveUserResponse,
+  Season,
+  Settings,
+  ShowDetail,
+  StaleItem,
+  StaleResponse,
+  SyncLog,
+  SyncTriggerResponse,
   UsersResponse,
-} from '@shared/types'
+} from "@shared/types";
 
 // Frontend-only types (not part of the API contract)
-export type SortKey = 'fileSize' | 'lastViewedAt' | 'addedAt' | 'title' | 'year' | 'viewCount'
+export type SortKey =
+  | "fileSize"
+  | "lastViewedAt"
+  | "addedAt"
+  | "title"
+  | "year"
+  | "viewCount";
 
 export interface StaleParams {
-  days?: number
-  maxDays?: number
-  minAgeDays?: number
-  filter?: 'all' | 'watched' | 'unwatched'
-  duplicatesOnly?: boolean
-  sort?: SortKey
-  order?: 'asc' | 'desc'
-  limit?: number
-  offset?: number
+  days?: number;
+  maxDays?: number;
+  minAgeDays?: number;
+  filter?: "all" | "watched" | "unwatched";
+  duplicatesOnly?: boolean;
+  sort?: SortKey;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 }
 
 // --- Fetch client ---
 
-const BASE = '/api'
+const BASE = "/api";
 
 // Carries the HTTP status alongside the message so callers can distinguish, e.g., a 404
 // for "this row doesn't exist yet" (a legitimate not-yet-synced state) from a real failure.
 export class ApiError extends Error {
-  status: number
+  status: number;
   constructor(status: number, message: string) {
-    super(message)
-    this.status = status
+    super(message);
+    this.status = status;
   }
 }
 
 export function isNotFoundError(err: unknown): err is ApiError {
-  return err instanceof ApiError && err.status === 404
+  return err instanceof ApiError && err.status === 404;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,
-  })
+  });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string }
-    const message = body.error ?? res.statusText
-    throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1))
+    const body = await res.json().catch(() => ({ error: res.statusText })) as {
+      error?: string;
+    };
+    const message = body.error ?? res.statusText;
+    throw new ApiError(
+      res.status,
+      message.charAt(0).toUpperCase() + message.slice(1),
+    );
   }
-  return res.json() as Promise<T>
+  return res.json() as Promise<T>;
 }
 
 export const api = {
   auth: {
-    status: () =>
-      apiFetch<AuthStatus>('/auth/status'),
-    createPin: () =>
-      apiFetch<PlexPin>('/auth/plex/pin', { method: 'POST' }),
-    pollPin: (id: number) =>
-      apiFetch<PinPollResult>(`/auth/plex/pin/${id}`),
+    status: () => apiFetch<AuthStatus>("/auth/status"),
+    createPin: () => apiFetch<PlexPin>("/auth/plex/pin", { method: "POST" }),
+    pollPin: (id: number) => apiFetch<PinPollResult>(`/auth/plex/pin/${id}`),
     chooseServer: (
       serverUrl: string,
       accessToken: string,
       machineIdentifier: string,
       name: string,
     ) =>
-      apiFetch<{ ok: true }>('/auth/plex/server', {
-        method: 'POST',
-        body: JSON.stringify({ serverUrl, accessToken, machineIdentifier, name }),
+      apiFetch<{ ok: true }>("/auth/plex/server", {
+        method: "POST",
+        body: JSON.stringify({
+          serverUrl,
+          accessToken,
+          machineIdentifier,
+          name,
+        }),
       }),
     disconnect: () =>
-      apiFetch<{ ok: true }>('/auth/plex', { method: 'DELETE' }),
+      apiFetch<{ ok: true }>("/auth/plex", { method: "DELETE" }),
   },
   libraries: {
     list: (limit = 100, offset = 0) =>
       apiFetch<LibrariesResponse>(`/libraries?limit=${limit}&offset=${offset}`),
     stale: (key: string, params: StaleParams = {}) => {
-      const q = new URLSearchParams()
+      const q = new URLSearchParams();
       for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined) q.set(k, String(v))
+        if (v !== undefined) q.set(k, String(v));
       }
-      return apiFetch<StaleResponse>(`/libraries/${encodeURIComponent(key)}/stale?${q}`)
+      return apiFetch<StaleResponse>(
+        `/libraries/${encodeURIComponent(key)}/stale?${q}`,
+      );
     },
     showDetail: (key: string, ratingKey: string) =>
-      apiFetch<ShowDetail>(`/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(ratingKey)}`),
+      apiFetch<ShowDetail>(
+        `/libraries/${encodeURIComponent(key)}/shows/${
+          encodeURIComponent(ratingKey)
+        }`,
+      ),
     movieDetail: (key: string, ratingKey: string) =>
-      apiFetch<MovieDetail>(`/libraries/${encodeURIComponent(key)}/movies/${encodeURIComponent(ratingKey)}`),
+      apiFetch<MovieDetail>(
+        `/libraries/${encodeURIComponent(key)}/movies/${
+          encodeURIComponent(ratingKey)
+        }`,
+      ),
     updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
-        method: 'PATCH',
+        method: "PATCH",
         body: JSON.stringify({ staleMinAgeDays }),
       }),
     deleteItems: (key: string, ratingKeys: string[]) =>
-      apiFetch<DeleteItemsResponse>(`/libraries/${encodeURIComponent(key)}/items`, {
-        method: 'DELETE',
-        body: JSON.stringify({ ratingKeys }),
-      }),
+      apiFetch<DeleteItemsResponse>(
+        `/libraries/${encodeURIComponent(key)}/items`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ ratingKeys }),
+        },
+      ),
   },
   duplicates: {
-    list: (params: { type?: 'movie' | 'tv' | 'all'; limit?: number; offset?: number } = {}) => {
-      const q = new URLSearchParams()
+    list: (
+      params: {
+        type?: "movie" | "tv" | "all";
+        limit?: number;
+        offset?: number;
+      } = {},
+    ) => {
+      const q = new URLSearchParams();
       for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined) q.set(k, String(v))
+        if (v !== undefined) q.set(k, String(v));
       }
-      return apiFetch<DuplicatesResponse>(`/duplicates?${q}`)
+      return apiFetch<DuplicatesResponse>(`/duplicates?${q}`);
     },
     deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
       apiFetch<DeleteMediaVersionResponse>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,
-        { method: 'DELETE' },
+        { method: "DELETE" },
       ),
     deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
       apiFetch<DeleteMediaVersionResponse>(
-        `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media/${mediaId}`,
-        { method: 'DELETE' },
+        `/duplicates/episodes/${
+          encodeURIComponent(episodeRatingKey)
+        }/media/${mediaId}`,
+        { method: "DELETE" },
       ),
   },
   settings: {
-    get: () =>
-      apiFetch<Settings>('/settings'),
+    get: () => apiFetch<Settings>("/settings"),
     // Only the keys present in `partial` are validated/changed server-side — see
     // routes/settings.ts — so the independent Settings inputs can each
     // save independently without clobbering the other's value.
     update: (partial: Partial<Settings>) =>
-      apiFetch<Settings>('/settings', {
-        method: 'PATCH',
+      apiFetch<Settings>("/settings", {
+        method: "PATCH",
         body: JSON.stringify(partial),
       }),
   },
   users: {
-    list: (
+    invitations: (
       params: {
-        inactiveDays?: number
-        filter?: 'all' | 'inactive' | 'never'
-        risk?: 'all' | 'attention' | 'review' | 'watch' | 'low' | 'insufficient_data'
-        sort?: 'lastViewedAt' | 'username' | 'sharingRisk'
-        order?: 'asc' | 'desc'
-        limit?: number
-        offset?: number
+        filter?: "all" | "attention" | "current" | "stale" | "critical";
+        search?: string;
+        sort?: "createdAt" | "username" | "libraryCount";
+        order?: "asc" | "desc";
+        limit?: number;
+        offset?: number;
       } = {},
     ) => {
-      const q = new URLSearchParams()
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined) q.set(k, String(v))
+      const q = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") q.set(key, String(value));
       }
-      const qs = q.toString()
-      return apiFetch<UsersResponse>(`/users${qs ? `?${qs}` : ''}`)
+      const query = q.toString();
+      return apiFetch<PendingInvitationsResponse>(
+        `/users/invitations${query ? `?${query}` : ""}`,
+      );
+    },
+    cancelInvitation: (inviteId: number) =>
+      apiFetch<CancelPendingInvitationResponse>(
+        `/users/invitations/${inviteId}`,
+        {
+          method: "DELETE",
+        },
+      ),
+    list: (
+      params: {
+        inactiveDays?: number;
+        filter?: "all" | "inactive" | "never" | "unknown";
+        risk?:
+          | "all"
+          | "attention"
+          | "review"
+          | "watch"
+          | "low"
+          | "insufficient_data";
+        sort?: "lastViewedAt" | "username" | "sharingRisk";
+        order?: "asc" | "desc";
+        limit?: number;
+        offset?: number;
+      } = {},
+    ) => {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined) q.set(k, String(v));
+      }
+      const qs = q.toString();
+      return apiFetch<UsersResponse>(`/users${qs ? `?${qs}` : ""}`);
     },
     remove: (accountId: number) =>
-      apiFetch<RemoveUserResponse>(`/users/${accountId}`, { method: 'DELETE' }),
+      apiFetch<RemoveUserResponse>(`/users/${accountId}`, { method: "DELETE" }),
   },
   sync: {
-    trigger: () =>
-      apiFetch<SyncTriggerResponse>('/sync', { method: 'POST' }),
+    trigger: () => apiFetch<SyncTriggerResponse>("/sync", { method: "POST" }),
     triggerLibrary: (key: string) =>
-      apiFetch<SyncTriggerResponse>(`/sync/libraries/${encodeURIComponent(key)}`, { method: 'POST' }),
-    poll: (id: number) =>
-      apiFetch<SyncLog>(`/sync/${id}`),
+      apiFetch<SyncTriggerResponse>(
+        `/sync/libraries/${encodeURIComponent(key)}`,
+        { method: "POST" },
+      ),
+    poll: (id: number) => apiFetch<SyncLog>(`/sync/${id}`),
     history: (limit = 20) =>
       apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
   },
   events: {
     list: (params: { limit?: number; before?: number } = {}) => {
-      const q = new URLSearchParams()
-      if (params.limit !== undefined) q.set('limit', String(params.limit))
-      if (params.before !== undefined) q.set('before', String(params.before))
-      return apiFetch<ActivityEventsResponse>(`/events?${q}`)
+      const q = new URLSearchParams();
+      if (params.limit !== undefined) q.set("limit", String(params.limit));
+      if (params.before !== undefined) q.set("before", String(params.before));
+      return apiFetch<ActivityEventsResponse>(`/events?${q}`);
     },
   },
-}
+};
 
 // Connecting, switching, or disconnecting the active server points every server-scoped
 // query — libraries, sync history, stale lists, show detail, activity events — at a
@@ -231,18 +303,18 @@ export const api = {
 // extra fetches and a visible flash back to loading state for data that has nothing to
 // do with the active server.
 const SERVER_SCOPED_QUERY_ROOTS = [
-  'libraries',
-  'sync',
-  'stale',
-  'show',
-  'duplicates',
-  'events',
-  'users',
-]
+  "libraries",
+  "sync",
+  "stale",
+  "show",
+  "duplicates",
+  "events",
+  "users",
+];
 
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
   return qc.resetQueries({
     predicate: (query) =>
       SERVER_SCOPED_QUERY_ROOTS.includes(query.queryKey[0] as string),
-  })
+  });
 }

@@ -121,7 +121,7 @@ function Brand() {
       <span className="sidebar-brand-mark"><Library className="size-5" /></span>
       <span className="sidebar-brand-copy">
         <strong>Plex Librarian</strong>
-        <small>Library intelligence</small>
+        <small>Library health</small>
       </span>
     </Link>
   );

@@ -95,6 +95,9 @@ export const settings = sqliteTable('settings', {
   // SQLite's historical column default remains 30; migration 0027 promotes the
   // singleton setting to the application default of 90 without rebuilding the table.
   inactiveUserDays: integer('inactive_user_days').notNull().default(30),
+  // Pending server invitations older than this are highlighted on the Users page.
+  pendingInviteStaleDays: integer('pending_invite_stale_days').notNull().default(30),
+  pendingInviteCriticalDays: integer('pending_invite_critical_days').notNull().default(90),
   // Global retention for per-user IP transitions and playback observations. Zero
   // disables automatic pruning.
   ipHistoryRetentionDays: integer('ip_history_retention_days').notNull().default(365),

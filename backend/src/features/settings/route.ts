@@ -12,6 +12,8 @@ router.get('/', async (c) => {
   const [row] = await db.select({
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
+    pendingInviteStaleDays: settings.pendingInviteStaleDays,
+    pendingInviteCriticalDays: settings.pendingInviteCriticalDays,
     ipHistoryRetentionDays: settings.ipHistoryRetentionDays,
   })
     .from(settings)
@@ -22,6 +24,8 @@ router.get('/', async (c) => {
     {
       staleMinAgeDays: row?.staleMinAgeDays ?? 90,
       inactiveUserDays: row?.inactiveUserDays ?? 90,
+      pendingInviteStaleDays: row?.pendingInviteStaleDays ?? 30,
+      pendingInviteCriticalDays: row?.pendingInviteCriticalDays ?? 90,
       ipHistoryRetentionDays: row?.ipHistoryRetentionDays ?? 365,
     } satisfies Settings,
   );
@@ -37,6 +41,8 @@ router.patch('/', async (c) => {
   const body = await c.req.json() as {
     staleMinAgeDays?: unknown;
     inactiveUserDays?: unknown;
+    pendingInviteStaleDays?: unknown;
+    pendingInviteCriticalDays?: unknown;
     ipHistoryRetentionDays?: unknown;
   };
 
@@ -64,6 +70,33 @@ router.patch('/', async (c) => {
     set.inactiveUserDays = body.inactiveUserDays;
   }
 
+  if (body.pendingInviteStaleDays !== undefined) {
+    if (
+      typeof body.pendingInviteStaleDays !== 'number' ||
+      !Number.isInteger(body.pendingInviteStaleDays) || body.pendingInviteStaleDays < 0 ||
+      body.pendingInviteStaleDays > MAX_INACTIVITY_DAYS
+    ) {
+      return c.json({
+        error: `pendingInviteStaleDays must be an integer between 0 and ${MAX_INACTIVITY_DAYS}`,
+      }, 400);
+    }
+    set.pendingInviteStaleDays = body.pendingInviteStaleDays;
+  }
+
+  if (body.pendingInviteCriticalDays !== undefined) {
+    if (
+      typeof body.pendingInviteCriticalDays !== 'number' ||
+      !Number.isInteger(body.pendingInviteCriticalDays) || body.pendingInviteCriticalDays < 0 ||
+      body.pendingInviteCriticalDays > MAX_INACTIVITY_DAYS
+    ) {
+      return c.json({
+        error:
+          `overdue invitation threshold must be an integer between 0 and ${MAX_INACTIVITY_DAYS}`,
+      }, 400);
+    }
+    set.pendingInviteCriticalDays = body.pendingInviteCriticalDays;
+  }
+
   if (body.ipHistoryRetentionDays !== undefined) {
     if (
       typeof body.ipHistoryRetentionDays !== 'number' ||
@@ -72,6 +105,23 @@ router.patch('/', async (c) => {
       return c.json({ error: 'ipHistoryRetentionDays must be a non-negative integer' }, 400);
     }
     set.ipHistoryRetentionDays = body.ipHistoryRetentionDays;
+  }
+
+  if (body.pendingInviteStaleDays !== undefined || body.pendingInviteCriticalDays !== undefined) {
+    const [current] = await db.select({
+      stale: settings.pendingInviteStaleDays,
+      critical: settings.pendingInviteCriticalDays,
+    }).from(settings).where(eq(settings.id, 1)).limit(1);
+    const effectiveStale = (body.pendingInviteStaleDays as number | undefined) ??
+      current?.stale ?? 30;
+    const effectiveCritical = (body.pendingInviteCriticalDays as number | undefined) ??
+      current?.critical ?? 90;
+    if (effectiveCritical < effectiveStale) {
+      return c.json(
+        { error: 'overdue invitation threshold must be at least the aging threshold' },
+        400,
+      );
+    }
   }
 
   if (Object.keys(set).length === 0) {
@@ -88,6 +138,8 @@ router.patch('/', async (c) => {
   const [row] = await db.select({
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
+    pendingInviteStaleDays: settings.pendingInviteStaleDays,
+    pendingInviteCriticalDays: settings.pendingInviteCriticalDays,
     ipHistoryRetentionDays: settings.ipHistoryRetentionDays,
   })
     .from(settings)
@@ -98,6 +150,8 @@ router.patch('/', async (c) => {
     {
       staleMinAgeDays: row!.staleMinAgeDays,
       inactiveUserDays: row!.inactiveUserDays,
+      pendingInviteStaleDays: row!.pendingInviteStaleDays,
+      pendingInviteCriticalDays: row!.pendingInviteCriticalDays,
       ipHistoryRetentionDays: row!.ipHistoryRetentionDays,
     } satisfies Settings,
   );
