@@ -131,6 +131,10 @@ function DashboardInner() {
   // catch syncs still pending from elsewhere (avoids a 409 + flicker on "Sync all").
   const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
   const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
+  const lastSyncedAt = librariesData?.libraries.reduce(
+    (latest, library) => Math.max(latest, library.syncedAt),
+    0,
+  ) ?? 0;
 
   // Whether this is a first sync is ambiguous until `history` has loaded (both signals
   // below depend on it). Only holds up rendering while there's nothing real to show yet
@@ -202,7 +206,10 @@ function DashboardInner() {
         <div className="dashboard-header-actions">
           {!isAnySyncing && !libsLoading && (
             <span className="dashboard-health">
-              <CheckCircle className="size-4" /> Synced
+              <CheckCircle className="size-4" />
+              {lastSyncedAt
+                ? `Synced ${formatRelativeTime(lastSyncedAt)}`
+                : "Ready to sync"}
             </span>
           )}
           <button
@@ -396,18 +403,21 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
       <StatTile
         icon={<Database className="w-5 h-5" />}
         iconClass="bg-primary/20 text-primary"
+        tone="primary"
         label="Total items"
         value={animatedItems.toLocaleString()}
       />
       <StatTile
         icon={<HardDrive className="w-5 h-5" />}
         iconClass="bg-secondary/20 text-secondary"
+        tone="secondary"
         label="Library size"
         value={formatKilobytes(animatedSize)}
       />
       <StatTile
         icon={<Clock className="w-5 h-5" />}
         iconClass="bg-accent/20 text-accent"
+        tone="accent"
         label="Last synced"
         value={totals.lastSync ? formatRelativeTime(totals.lastSync) : "—"}
       />
@@ -521,16 +531,21 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
 function StatTile({
   icon,
   iconClass,
+  tone,
   label,
   value,
 }: {
   icon: ReactNode;
   iconClass: string;
+  tone: "primary" | "secondary" | "accent";
   label: string;
   value: string;
 }) {
   return (
-    <motion.div variants={cardVariants} className="dashboard-stat-card">
+    <motion.div
+      variants={cardVariants}
+      className={`dashboard-stat-card dashboard-stat-${tone}`}
+    >
       <div className="dashboard-stat-content">
         <div
           className={`dashboard-stat-icon ${iconClass}`}
