@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
-import { ArchiveRestore, ChevronDown, Film, Music, Search, Tv, X } from "lucide-react";
+import { ArchiveRestore, ChevronRight, Film, Music, Search, Tv, X } from "lucide-react";
 import type { Library } from "../../lib/api";
 import { api } from "../../lib/api";
 import "./StaleLibraryNav.css";
@@ -99,8 +99,7 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
       >
         <span className="sidebar-link-icon"><ArchiveRestore className="size-[18px]" /></span>
         <span className="sidebar-link-label">Stale content</span>
-        <ChevronDown className={`stale-sidebar-chevron ${expanded ? "rotate-180" : ""}`} />
-        <span className="sidebar-active-dot" />
+        <ChevronRight className={`stale-sidebar-chevron ${expanded ? "rotate-90" : ""}`} />
       </button>
 
       <AnimatePresence initial={false}>

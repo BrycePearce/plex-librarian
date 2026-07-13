@@ -1,6 +1,7 @@
 .stale-sidebar-nav { display: flex; min-width: 0; flex-direction: column; }
 .stale-sidebar-trigger { width: 100%; border: 0; text-align: left; }
-.stale-sidebar-chevron { width: 14px; height: 14px; margin-left: auto; color: color-mix(in oklab, var(--color-base-content) 34%, transparent); transition: transform 160ms ease; }
+.stale-sidebar-chevron { width: 14px; height: 14px; margin-left: auto; color: color-mix(in oklab, var(--color-base-content) 34%, transparent); transition: rotate 160ms ease, color 150ms ease, filter 150ms ease; }
+.stale-sidebar-trigger.is-active .stale-sidebar-chevron { color: var(--color-primary); filter: drop-shadow(0 0 6px color-mix(in oklab, var(--color-primary) 55%, transparent)); }
 .stale-sidebar-children { display: flex; overflow: hidden; flex-direction: column; gap: 2px; margin: 1px 0 3px 1.05rem; padding-left: 1rem; border-left: 1px solid color-mix(in oklab, var(--color-primary) 20%, transparent); }
 .stale-sidebar-caption { padding: .35rem .55rem .15rem; color: color-mix(in oklab, var(--color-base-content) 28%, transparent); font-size: .52rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .stale-sidebar-child { display: flex; min-width: 0; align-items: center; gap: .5rem; padding: .42rem .5rem; border-radius: 8px; color: color-mix(in oklab, var(--color-base-content) 48%, transparent); font-size: .67rem; font-weight: 600; text-decoration: none; transition: color 130ms ease, background 130ms ease; }
