@@ -204,6 +204,13 @@
       "when": 1783854000000,
       "tag": "0029_pending_invite_critical_days",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1783900800000,
+      "tag": "0030_sharing_risk_retention",
+      "breakpoints": true
     }
   ]
 }

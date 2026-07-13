@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { settings } from '../../db/schema.ts';
 import type { Settings } from '@plex-librarian/shared/types.ts';
-import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
+import { MAX_INACTIVITY_DAYS, MIN_USER_ACTIVITY_RETENTION_DAYS } from '../../configLimits.ts';
 
 const router = new Hono();
 
@@ -100,9 +100,14 @@ router.patch('/', async (c) => {
   if (body.ipHistoryRetentionDays !== undefined) {
     if (
       typeof body.ipHistoryRetentionDays !== 'number' ||
-      !Number.isInteger(body.ipHistoryRetentionDays) || body.ipHistoryRetentionDays < 0
+      !Number.isInteger(body.ipHistoryRetentionDays) || body.ipHistoryRetentionDays < 0 ||
+      (body.ipHistoryRetentionDays > 0 &&
+        body.ipHistoryRetentionDays < MIN_USER_ACTIVITY_RETENTION_DAYS)
     ) {
-      return c.json({ error: 'ipHistoryRetentionDays must be a non-negative integer' }, 400);
+      return c.json({
+        error:
+          `ipHistoryRetentionDays must be 0 (keep forever) or at least ${MIN_USER_ACTIVITY_RETENTION_DAYS}`,
+      }, 400);
     }
     set.ipHistoryRetentionDays = body.ipHistoryRetentionDays;
   }

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { libraries, servers, settings, userPlayObservations, users } from '../../db/schema.ts';
 import { userByAccountId, usersByServer } from '../../db/scope.ts';
@@ -14,6 +14,7 @@ import {
 } from '../../integrations/plex/accounts.ts';
 import { logEvents } from '../events/service.ts';
 import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
+import { sharingPlaybackPatterns } from './playbackPatterns.ts';
 import type {
   CancelPendingInvitationResponse,
   PendingInvitationsResponse,
@@ -71,13 +72,13 @@ async function sharingStatsForAccounts(
   accountIds: number[],
   riskWindowCutoff: number,
 ): Promise<Map<number, SharingObservationStats>> {
-  // Aggregate only the users on this page. Two grouped scans replace several
-  // correlated observation scans per row and keep memory bounded by the page limit.
+  // Aggregate only the requested users. One grouped scan plus one bounded 30-day
+  // lifecycle scan replaces several correlated observation scans per row.
   const result = new Map<number, SharingObservationStats>();
   if (accountIds.length === 0) return result;
 
   const observation = userPlayObservations;
-  const [aggregates, dailyRemoteNetworks] = await Promise.all([
+  const [aggregates, recentPlayback] = await Promise.all([
     db.select({
       accountId: observation.accountId,
       observationCount: sql<number>`count(*)`,
@@ -102,33 +103,28 @@ async function sharingStatsForAccounts(
         eq(observation.serverId, serverId),
         inArray(observation.accountId, accountIds),
         eq(observation.event, 'media.play'),
+        gte(observation.observedAt, riskWindowCutoff),
       ))
       .groupBy(observation.accountId),
     db.select({
       accountId: observation.accountId,
-      networkCount: sql<number>`count(DISTINCT coalesce(
-        ${observation.networkKey}, ${observation.ip}
-      ))`,
+      observedAt: observation.observedAt,
+      event: observation.event,
+      ip: observation.ip,
+      networkKey: observation.networkKey,
+      playerUuid: observation.playerUuid,
+      isLocal: observation.isLocal,
     })
       .from(observation)
       .where(and(
         eq(observation.serverId, serverId),
         inArray(observation.accountId, accountIds),
-        eq(observation.event, 'media.play'),
-        eq(observation.isLocal, false),
-        isNotNull(observation.ip),
         gte(observation.observedAt, riskWindowCutoff),
       ))
-      .groupBy(observation.accountId, sql`date(${observation.observedAt}, 'unixepoch')`),
+      .orderBy(asc(observation.accountId), asc(observation.observedAt), asc(observation.id)),
   ]);
 
-  const maxRemoteNetworksByAccount = new Map<number, number>();
-  for (const row of dailyRemoteNetworks) {
-    maxRemoteNetworksByAccount.set(
-      row.accountId,
-      Math.max(maxRemoteNetworksByAccount.get(row.accountId) ?? 0, row.networkCount),
-    );
-  }
+  const playbackPatterns = sharingPlaybackPatterns(recentPlayback);
 
   for (const row of aggregates) {
     result.set(row.accountId, {
@@ -139,7 +135,10 @@ async function sharingStatsForAccounts(
       completeObservationCount: row.completeObservationCount,
       remoteNetworks30d: row.remoteNetworks30d,
       remotePlayers30d: row.remotePlayers30d,
-      maxRemoteNetworksPerDay30d: maxRemoteNetworksByAccount.get(row.accountId) ?? 0,
+      maxRemoteNetworksPerHour30d: playbackPatterns.get(row.accountId)?.maxRemoteNetworksPerHour ??
+        0,
+      concurrentRemotePlaybackDays30d:
+        playbackPatterns.get(row.accountId)?.concurrentRemotePlaybackDays ?? 0,
     });
   }
 
@@ -278,7 +277,8 @@ router.get('/', async (c) => {
         completeObservationCount: 0,
         remoteNetworks30d: 0,
         remotePlayers30d: 0,
-        maxRemoteNetworksPerDay30d: 0,
+        maxRemoteNetworksPerHour30d: 0,
+        concurrentRemotePlaybackDays30d: 0,
       },
     ),
   }));

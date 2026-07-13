@@ -15,6 +15,7 @@ import type { Settings } from "../lib/api";
 import { PageHeader } from "../components/Workspace";
 
 const MAX_INACTIVITY_DAYS = 36_500;
+const MIN_USER_ACTIVITY_RETENTION_DAYS = 30;
 
 export const Route = createFileRoute("/settings")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -85,7 +86,7 @@ function SettingsPage() {
           </SettingRow>
           <SettingRow
             title="User activity retention"
-            description="Keep user IP, device, and playback observations for this many days. Set to 0 to keep them forever."
+            description="Keep user IP, device, and playback observations for at least the full 30-day sharing-risk window. Set to 0 to keep them forever."
           >
             {data
               ? (
@@ -94,6 +95,8 @@ function SettingsPage() {
                   mutationFn={(value) =>
                     api.settings.update({ ipHistoryRetentionDays: value })}
                   getSavedValue={(updated) => updated.ipHistoryRetentionDays}
+                  minimumNonZero={MIN_USER_ACTIVITY_RETENTION_DAYS}
+                  invalidateQueryKey={["users"]}
                 />
               )
               : <LoadingDaysInput label="Loading user activity retention" />}
@@ -201,7 +204,7 @@ function LoadingDaysInput({ label }: { label: string }) {
 // Generic over which settings key it saves (see api.settings.update's comment for why
 // two of these can save independently without clobbering each other).
 function DebouncedDaysInput(
-  { initialDays, mutationFn, getSavedValue, invalidateQueryKey, maxDays }: {
+  { initialDays, mutationFn, getSavedValue, invalidateQueryKey, maxDays, minimumNonZero }: {
     initialDays: number;
     mutationFn: (value: number) => Promise<Settings>;
     getSavedValue: (updated: Settings) => number;
@@ -211,6 +214,7 @@ function DebouncedDaysInput(
     // such direct link and would otherwise keep serving a stale threshold.
     invalidateQueryKey?: unknown[];
     maxDays?: number;
+    minimumNonZero?: number;
   },
 ) {
   const qc = useQueryClient();
@@ -238,6 +242,7 @@ function DebouncedDaysInput(
 
   const parsed = Number(days);
   const valid = days !== "" && Number.isInteger(parsed) && parsed >= 0 &&
+    (minimumNonZero === undefined || parsed === 0 || parsed >= minimumNonZero) &&
     (maxDays === undefined || parsed <= maxDays);
 
   // Debounced auto-save: waits for typing to settle so we don't PATCH on every keystroke.
@@ -259,6 +264,9 @@ function DebouncedDaysInput(
         }`}
         value={days}
         onChange={(e) => setDays(e.target.value)}
+        title={minimumNonZero === undefined
+          ? undefined
+          : `Enter 0 or at least ${minimumNonZero} days`}
       />
       <span className="text-sm text-base-content/40">days</span>
       {update.isPending && (

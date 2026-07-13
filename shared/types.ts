@@ -217,7 +217,8 @@ export type SharingRiskLevel = "insufficient_data" | "low" | "watch" | "review";
 export type SharingRiskSignalType =
   | "remote_network_diversity"
   | "remote_device_diversity"
-  | "rapid_network_switching";
+  | "rapid_network_switching"
+  | "concurrent_remote_playback";
 
 export interface SharingRiskSignal {
   type: SharingRiskSignalType;

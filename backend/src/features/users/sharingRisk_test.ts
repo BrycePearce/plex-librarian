@@ -13,7 +13,8 @@ const EMPTY_STATS: SharingObservationStats = {
   completeObservationCount: 0,
   remoteNetworks30d: 0,
   remotePlayers30d: 0,
-  maxRemoteNetworksPerDay30d: 0,
+  maxRemoteNetworksPerHour30d: 0,
+  concurrentRemotePlaybackDays30d: 0,
 };
 
 Deno.test('sharing risk reports insufficient data instead of low risk for a new user', () => {
@@ -38,6 +39,19 @@ Deno.test('sharing confidence matures independently of risk', () => {
   assert(result.riskScore === 0, 'expected confidence not to inflate risk');
 });
 
+Deno.test('sparse clean observations remain insufficient rather than affirmative low risk', () => {
+  const result = assessUserSharingRisk({
+    ...EMPTY_STATS,
+    observationCount: 1,
+    firstObservedAt: 1_700_000_000,
+    lastObservedAt: 1_700_000_000,
+    activeDays: 1,
+    completeObservationCount: 1,
+  });
+  assert(result.riskLevel === 'insufficient_data', 'expected limited data');
+  assert(result.dataConfidence === 'low', 'expected low confidence');
+});
+
 Deno.test('multiple supporting signals produce an explainable review result', () => {
   const result = assessUserSharingRisk({
     ...EMPTY_STATS,
@@ -48,12 +62,26 @@ Deno.test('multiple supporting signals produce an explainable review result', ()
     completeObservationCount: 12,
     remoteNetworks30d: 9,
     remotePlayers30d: 8,
-    maxRemoteNetworksPerDay30d: 4,
+    maxRemoteNetworksPerHour30d: 4,
   });
   assert(result.riskLevel === 'review', 'expected review risk');
   assert(result.riskScore === 50, 'expected deterministic signal weights');
   assert(result.dataConfidence === 'medium', 'expected medium evidence confidence');
   assert(result.signals.length === 3, 'expected three supporting signals');
+});
+
+Deno.test('recurring concurrent remote playback is review strength on its own', () => {
+  const result = assessUserSharingRisk({
+    ...EMPTY_STATS,
+    observationCount: 8,
+    firstObservedAt: 1_700_000_000,
+    lastObservedAt: 1_700_000_000 + 8 * 86400,
+    activeDays: 4,
+    completeObservationCount: 8,
+    concurrentRemotePlaybackDays30d: 2,
+  });
+  assert(result.riskLevel === 'review', 'expected recurring concurrency to require review');
+  assert(result.riskScore === 35, 'expected recurring concurrency weight');
 });
 
 Deno.test('network keys group address churn into stable prefixes', () => {

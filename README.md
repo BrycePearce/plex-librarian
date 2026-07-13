@@ -70,12 +70,16 @@ http://<your-host>:8288/api/webhook/plex
 | Event            | Effect                                                                      |
 | ---------------- | --------------------------------------------------------------------------- |
 | `media.play`     | Updates item/user `lastViewedAt` and records bounded IP/device observations |
+| `media.pause`    | Closes an observed playback interval for concurrency analysis               |
+| `media.resume`   | Resumes an observed playback interval and updates recent activity           |
+| `media.stop`     | Closes an observed playback interval for concurrency analysis               |
 | `media.scrobble` | Updates Plex's authoritative watched state and records another observation  |
 
-The Users page combines recent remote-network and player diversity into a conservative,
-explainable review score. The score is not a probability or a finding that an account is
-being shared. Evidence confidence is reported separately; new users and installations with
-no observations are shown as **Insufficient data**, never as low risk.
+The Users page combines recent remote-network and player diversity, rapid network changes,
+and recurring concurrent remote playback into a conservative, explainable review score.
+The score is not a probability or a finding that an account is being shared. Evidence
+confidence uses the same 30-day window as the score; sparse or missing observations are
+shown as **Limited data**, never as affirmative low risk.
 
 ## API
 

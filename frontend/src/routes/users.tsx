@@ -950,7 +950,9 @@ function SharingRiskCell({
 }) {
   const label =
     assessment.riskLevel === "insufficient_data"
-      ? "Not enough data"
+      ? assessment.observationCount > 0
+        ? "Limited data"
+        : "Not enough data"
       : assessment.riskLevel === "review"
         ? "Review"
         : assessment.riskLevel === "watch"
@@ -975,7 +977,7 @@ function SharingRiskCell({
 
   return (
     <div
-      className="inline-flex items-center"
+      className="inline-flex items-center gap-1.5"
       title={`${title} Confidence: ${assessment.dataConfidence}.`}
     >
       {assessment.riskLevel === "insufficient_data" ? (
@@ -983,6 +985,11 @@ function SharingRiskCell({
       ) : (
         <span className={`badge badge-sm badge-outline ${badgeClass}`}>
           {label} · {assessment.riskScore}
+        </span>
+      )}
+      {assessment.dataConfidence !== "none" && (
+        <span className="text-[10px] text-base-content/40 whitespace-nowrap">
+          {assessment.dataConfidence} confidence
         </span>
       )}
     </div>

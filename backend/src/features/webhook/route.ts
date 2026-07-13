@@ -7,9 +7,16 @@ import type { PlexWebhookPayload } from '../../integrations/plex/index.ts';
 import { UNKNOWN_USERNAME_PLACEHOLDER } from '../../integrations/plex/accounts.ts';
 import { networkKeyForIp } from '../users/network.ts';
 
-// media.play  — fires immediately on playback start; stamps lastViewedAt = now for real-time feel
-// media.scrobble — fires at 90% watched; carries Plex's authoritative viewCount increment
-const HANDLED_EVENTS = new Set(['media.play', 'media.scrobble']);
+// The full lifecycle lets sharing-risk analysis bound concurrent playback sessions.
+// Only play/resume/scrobble update item state; pause/stop are observation-only closers.
+const PLAYBACK_EVENTS = new Set([
+  'media.play',
+  'media.pause',
+  'media.resume',
+  'media.stop',
+  'media.scrobble',
+]);
+const ITEM_ACTIVITY_EVENTS = new Set(['media.play', 'media.resume', 'media.scrobble']);
 
 const router = new Hono();
 
@@ -26,7 +33,7 @@ router.post('/plex', async (c) => {
   }
 
   const { Metadata } = payload;
-  if (!HANDLED_EVENTS.has(payload.event) || !Metadata?.ratingKey) return c.json({ ok: true });
+  if (!PLAYBACK_EVENTS.has(payload.event) || !Metadata?.ratingKey) return c.json({ ok: true });
 
   // Webhooks fire per-server — only apply updates that belong to the currently active
   // server, identified
@@ -52,35 +59,36 @@ router.post('/plex', async (c) => {
   const isScrobble = payload.event === 'media.scrobble';
   const isEpisode = Metadata.type === 'episode';
 
-  // For episodes, update the parent show row. Episode ratingKeys are not stored
-  // in items — only show-level rows are, so we must use grandparentRatingKey.
-  const itemKey = isEpisode ? Metadata.grandparentRatingKey : Metadata.ratingKey;
-  if (!itemKey) {
-    console.warn(
-      `webhook ${payload.event}: episode missing grandparentRatingKey — skipping DB update`,
-    );
-    return c.json({ ok: true });
-  }
+  if (ITEM_ACTIVITY_EVENTS.has(payload.event)) {
+    // For episodes, update the parent show row. Episode ratingKeys are not stored
+    // in items — only show-level rows are, so we must use grandparentRatingKey.
+    const itemKey = isEpisode ? Metadata.grandparentRatingKey : Metadata.ratingKey;
+    if (!itemKey) {
+      console.warn(
+        `webhook ${payload.event}: episode missing grandparentRatingKey — skipping item update`,
+      );
+    } else {
+      const updated = await db
+        .update(items)
+        .set({
+          lastViewedAt: now,
+          updatedAt: now,
+          // viewCount on episodes reflects that episode only, not the show total — skip it.
+          ...(!isEpisode && isScrobble && Metadata.viewCount != null
+            ? { viewCount: Metadata.viewCount }
+            : {}),
+        })
+        .where(itemByRatingKey(serverId, itemKey))
+        .returning({ ratingKey: items.ratingKey });
 
-  const updated = await db
-    .update(items)
-    .set({
-      lastViewedAt: now,
-      updatedAt: now,
-      // viewCount on episodes reflects that episode only, not the show total — skip it.
-      ...(!isEpisode && isScrobble && Metadata.viewCount != null
-        ? { viewCount: Metadata.viewCount }
-        : {}),
-    })
-    .where(itemByRatingKey(serverId, itemKey))
-    .returning({ ratingKey: items.ratingKey });
-
-  if (updated.length === 0) {
-    console.warn(
-      `webhook ${payload.event}: ${
-        isEpisode ? 'show' : 'item'
-      } ratingKey ${itemKey} not in DB — sync first`,
-    );
+      if (updated.length === 0) {
+        console.warn(
+          `webhook ${payload.event}: ${
+            isEpisode ? 'show' : 'item'
+          } ratingKey ${itemKey} not in DB — sync first`,
+        );
+      }
+    }
   }
 
   // payload.Account.id is the PMS-LOCAL account id, not the global plex.tv id that
@@ -104,9 +112,9 @@ router.post('/plex', async (c) => {
   // while another event from the current IP refreshes that transition's lastSeenAt.
   // This retains recent evidence for a sharing detector without growing the table for
   // every play. The last-IP change and history write are committed atomically below.
-  // User-level activity includes personal network data, so never accept it from an
-  // unauthenticated endpoint. Item-level updates above remain available for existing
-  // installs that intentionally run without a secret.
+  // Like the rest of the application, webhook ingestion assumes deployment on a
+  // trusted self-hosted network. A future authentication layer should protect every
+  // route coherently rather than creating a webhook-only security boundary.
   if (payload.Account?.id != null && payload.Account.id !== 0) {
     // Resolve to a single roster row by primary key before writing anything — neither
     // local_account_id nor username is guaranteed unique in the schema (see
