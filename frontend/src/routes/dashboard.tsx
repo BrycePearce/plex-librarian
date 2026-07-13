@@ -41,7 +41,7 @@ import {
 } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
 import { requireAuth } from "../lib/requireAuth";
-import { StatsStripSkeleton } from "../components/Skeletons";
+import { DashboardSkeleton } from "../components/Skeletons";
 import "./dashboard.css";
 import { SectionHeading } from "../components/Workspace";
 
@@ -49,16 +49,37 @@ import { SectionHeading } from "../components/Workspace";
 // the stagger timing, each child only needs `variants={cardVariants}` to inherit the
 // hidden → show transition from whichever container it's mounted under.
 const containerVariants: Variants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.06 } },
+  hidden: { opacity: 1 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.025 },
+  },
 };
 
-const cardVariants: Variants = {
-  hidden: { opacity: 0, y: 12 },
+const pageVariants: Variants = {
+  hidden: { opacity: 0, y: 7 },
   show: {
     opacity: 1,
     y: 0,
-    transition: { type: "spring", stiffness: 300, damping: 26 },
+    transition: { duration: 0.26, ease: "easeOut" },
+  },
+};
+
+const pageSectionVariants: Variants = {
+  hidden: { opacity: 1, y: 0 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.2, ease: "easeOut" },
+  },
+};
+
+const cardVariants: Variants = {
+  hidden: { opacity: 0.72, y: 4 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.2, ease: "easeOut" },
   },
 };
 
@@ -104,6 +125,7 @@ function DashboardInner() {
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
   const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
+  const isDashboardLoading = libsLoading || isHistoryLoading;
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -196,15 +218,15 @@ function DashboardInner() {
           </div>
           <h1>Home</h1>
           <p>
-            {!libsLoading && !isCheckingFirstRun && librariesData
+            {!isDashboardLoading && !isCheckingFirstRun && librariesData
               ? isFirstRun
                 ? "First sync in progress…"
                 : `Your library health, priorities, and next best actions.`
-              : "—"}
+              : "Your library health, priorities, and next best actions."}
           </p>
         </div>
         <div className="dashboard-header-actions">
-          {!isAnySyncing && !libsLoading && (
+          {!isAnySyncing && !isDashboardLoading && (
             <span className="dashboard-health">
               <CheckCircle className="size-4" />
               {lastSyncedAt
@@ -216,7 +238,7 @@ function DashboardInner() {
             type="button"
             className="btn btn-primary dashboard-sync-button"
             onClick={() => triggerSync.mutate()}
-            disabled={isAnySyncing}
+            disabled={isAnySyncing || isDashboardLoading}
           >
             <RefreshCw
               className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
@@ -226,7 +248,14 @@ function DashboardInner() {
         </div>
       </header>
 
-      {libsLoading && <StatsStripSkeleton />}
+      {isDashboardLoading && <DashboardSkeleton />}
+      {!isDashboardLoading && (
+        <motion.div
+          className="dashboard-content-sequence space-y-6"
+          variants={pageVariants}
+          initial="hidden"
+          animate="show"
+        >
       {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
         <StatsStrip libraries={librariesData.libraries} />
       )}
@@ -279,7 +308,7 @@ function DashboardInner() {
         </AnimatePresence>
       )}
 
-      {isCheckingFirstRun
+      {!libsLoading && (isCheckingFirstRun
         ? (
           // Neutral spinner rather than a content-shaped skeleton: we already know
           // there's nothing with items yet, just not yet whether that means "first sync
@@ -295,7 +324,10 @@ function DashboardInner() {
         : (
           <>
             {history && history.length > 0 && (
-              <section className="dashboard-panel sync-history-panel">
+              <motion.section
+                className="dashboard-panel sync-history-panel"
+                variants={pageSectionVariants}
+              >
                 <div className="dashboard-panel-header">
                   <SectionHeading
                     eyebrow="Operations"
@@ -333,10 +365,12 @@ function DashboardInner() {
                     </tbody>
                   </table>
                 </div>
-              </section>
+              </motion.section>
             )}
           </>
-        )}
+        ))}
+        </motion.div>
+      )}
     </div>
   );
 }
@@ -396,8 +430,6 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
   return (
     <motion.div
       variants={containerVariants}
-      initial="hidden"
-      animate="show"
       className="grid grid-cols-1 sm:grid-cols-3 gap-4"
     >
       <StatTile
@@ -454,13 +486,14 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
   ];
 
   return (
-    <section className="home-directory">
+    <motion.section
+      className="home-directory"
+      variants={pageSectionVariants}
+    >
       <SectionHeading eyebrow="Workspace" title="Explore Plex Librarian" />
       <motion.div
         className="home-directory-list"
         variants={containerVariants}
-        initial="hidden"
-        animate="show"
       >
         <motion.div variants={cardVariants} className="home-stale-section home-collection-section">
           <div className="home-stale-heading">
@@ -524,7 +557,7 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
           );
         })}
       </motion.div>
-    </section>
+    </motion.section>
   );
 }
 

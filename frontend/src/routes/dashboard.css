@@ -107,6 +107,22 @@
 .sync-history-row:hover { background: color-mix(in oklab, var(--color-base-content) 3%, transparent); }
 .dashboard-success-badge { border-color: color-mix(in oklab, var(--color-success) 22%, transparent); color: color-mix(in oklab, var(--color-success) 72%, var(--color-base-content)); background: color-mix(in oklab, var(--color-success) 12%, transparent); }
 
+.dashboard-loading { position: relative; overflow: hidden; }
+.dashboard-loading::after { content: ""; position: absolute; z-index: 5; inset: 0; width: 38%; background: linear-gradient(90deg, transparent, color-mix(in oklab, white 5%, transparent), transparent); transform: translateX(-120%); animation: dashboard-skeleton-sweep 1.8s ease-in-out infinite; pointer-events: none; }
+.dashboard-skeleton-block { display: block; background: color-mix(in oklab, var(--color-base-content) 8%, transparent); }
+.dashboard-skeleton-stat { pointer-events: none; }
+.dashboard-skeleton-stat::before { display: none; }
+.dashboard-skeleton-collection { min-height: 192px; }
+.dashboard-skeleton-library { grid-template-columns: auto minmax(0, 1fr); pointer-events: none; }
+.dashboard-skeleton-library::before { display: none; }
+.dashboard-skeleton-directory-row { pointer-events: none; }
+.dashboard-skeleton-history { min-height: 246px; }
+.dashboard-skeleton-table-row { display: grid; grid-template-columns: 1.05fr .9fr 1.45fr .7fr .45fr; align-items: center; min-height: 41px; padding: 0 .65rem; border-top: 1px solid color-mix(in oklab, var(--color-base-content) 6%, transparent); }
+
+@keyframes dashboard-skeleton-sweep {
+  55%, 100% { transform: translateX(330%); }
+}
+
 @keyframes dashboard-health-breathe {
   0%, 100% { opacity: .78; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.06); }
@@ -114,6 +130,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dashboard-health svg { animation: none; }
+  .dashboard-loading::after { animation: none; }
   .dashboard-stat-card, .dashboard-stat-card::after, .dashboard-stat-icon, .dashboard-stat-icon svg, .home-directory-icon { transition-duration: 0.01ms; }
   .dashboard-stat-card:hover { transform: none; }
   .dashboard-stat-card:hover::after, .dashboard-stat-card:hover .dashboard-stat-icon, .dashboard-stat-card:hover .dashboard-stat-icon svg, .home-directory-section:hover .home-directory-icon { transform: none; }

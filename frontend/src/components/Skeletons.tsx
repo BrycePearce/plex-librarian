@@ -178,6 +178,91 @@ export function MovieDetailSkeleton() {
   );
 }
 
+export function DashboardSkeleton() {
+  return (
+    <div className="dashboard-loading space-y-6" aria-label="Loading dashboard">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="dashboard-stat-card dashboard-skeleton-stat">
+            <div className="dashboard-stat-content">
+              <span className="dashboard-skeleton-block size-11 rounded-[13px] shrink-0" />
+              <span className="space-y-2 flex-1">
+                <span className="dashboard-skeleton-block block h-2.5 w-16 rounded" />
+                <span className="dashboard-skeleton-block block h-5 w-24 rounded" />
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <section className="home-directory">
+        <div className="dashboard-section-heading">
+          <div>
+            <span className="dashboard-section-kicker">Workspace</span>
+            <h2>Explore Plex Librarian</h2>
+          </div>
+        </div>
+        <div className="home-directory-list">
+          <div className="home-stale-section home-collection-section dashboard-skeleton-collection">
+            <div className="home-stale-heading">
+              <span className="home-directory-index">01</span>
+              <span className="dashboard-skeleton-block size-11 rounded-[13px]" />
+              <span className="space-y-2">
+                <span className="dashboard-skeleton-block block h-2 w-20 rounded" />
+                <span className="dashboard-skeleton-block block h-4 w-28 rounded" />
+              </span>
+              <span className="dashboard-skeleton-block h-6 w-16 rounded-full" />
+            </div>
+            <div className="home-stale-libraries">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="home-stale-library dashboard-skeleton-library">
+                  <span className="dashboard-skeleton-block size-8 rounded-lg" />
+                  <span className="space-y-1.5">
+                    <span className="dashboard-skeleton-block block h-2.5 w-20 rounded" />
+                    <span className="dashboard-skeleton-block block h-2 w-28 max-w-full rounded" />
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {["02", "03"].map((index) => (
+            <div key={index} className="home-directory-section dashboard-skeleton-directory-row">
+              <span className="home-directory-index">{index}</span>
+              <span className="dashboard-skeleton-block size-11 rounded-[13px]" />
+              <span className="space-y-2">
+                <span className="dashboard-skeleton-block block h-2 w-16 rounded" />
+                <span className="dashboard-skeleton-block block h-4 w-24 rounded" />
+              </span>
+              <span className="dashboard-skeleton-block h-2.5 w-24 rounded" />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="dashboard-panel dashboard-skeleton-history">
+        <div className="dashboard-panel-header">
+          <div className="space-y-2">
+            <span className="dashboard-section-kicker">Operations</span>
+            <h2>Recent syncs</h2>
+          </div>
+        </div>
+        <div className="sync-history-table">
+          {Array.from({ length: 4 }).map((_, row) => (
+            <div key={row} className="dashboard-skeleton-table-row">
+              {Array.from({ length: 5 }).map((__, column) => (
+                <span
+                  key={column}
+                  className={`dashboard-skeleton-block h-2.5 rounded ${column === 1 ? "w-28" : "w-16"}`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function UsersTableSkeleton({ rows = 8 }: { rows?: number }) {
   return (
     <div className="overflow-x-auto" aria-label="Loading users">

@@ -52,9 +52,7 @@ interface UsersSearch {
   order: SortOrder;
 }
 
-function validateUsersSearch(
-  search: Record<string, unknown>,
-): UsersSearch {
+function validateUsersSearch(search: Record<string, unknown>): UsersSearch {
   const inactiveDays = Number(search.inactiveDays);
   const riskValues: RiskFilter[] = [
     "all",
@@ -66,19 +64,22 @@ function validateUsersSearch(
   ];
   const sortValues: SortKey[] = ["username", "lastViewedAt", "sharingRisk"];
   return {
-    filter: search.filter === "inactive" || search.filter === "never" ||
-        search.filter === "unknown"
-      ? search.filter
-      : "all",
-    ...(Number.isInteger(inactiveDays) && inactiveDays >= 0 &&
-        inactiveDays <= MAX_INACTIVITY_DAYS
+    filter:
+      search.filter === "inactive" ||
+      search.filter === "never" ||
+      search.filter === "unknown"
+        ? search.filter
+        : "all",
+    ...(Number.isInteger(inactiveDays) &&
+    inactiveDays >= 0 &&
+    inactiveDays <= MAX_INACTIVITY_DAYS
       ? { inactiveDays }
       : {}),
     risk: riskValues.includes(search.risk as RiskFilter)
-      ? search.risk as RiskFilter
+      ? (search.risk as RiskFilter)
       : "all",
     sort: sortValues.includes(search.sort as SortKey)
-      ? search.sort as SortKey
+      ? (search.sort as SortKey)
       : "username",
     order: search.order === "desc" ? "desc" : "asc",
   };
@@ -115,22 +116,22 @@ function UsersPage() {
   }
 
   const inactivePresets = [30, 60, 90, 180, 365];
-  const [customActivityFilter, setCustomActivityFilter] = useState<
-    ActivityFilter | null
-  >(null);
-  const activityMode = search.filter === "all"
-    ? "all"
-    : search.filter === "never"
-    ? "never"
-    : search.filter === "unknown"
-    ? "unknown"
-    : customActivityFilter === search.filter ||
-        (search.inactiveDays !== undefined &&
-          !inactivePresets.includes(search.inactiveDays))
-    ? `${search.filter}:custom`
-    : search.inactiveDays === undefined
-    ? `${search.filter}:default`
-    : `${search.filter}:${search.inactiveDays}`;
+  const [customActivityFilter, setCustomActivityFilter] =
+    useState<ActivityFilter | null>(null);
+  const activityMode =
+    search.filter === "all"
+      ? "all"
+      : search.filter === "never"
+        ? "never"
+        : search.filter === "unknown"
+          ? "unknown"
+          : customActivityFilter === search.filter ||
+              (search.inactiveDays !== undefined &&
+                !inactivePresets.includes(search.inactiveDays))
+            ? `${search.filter}:custom`
+            : search.inactiveDays === undefined
+              ? `${search.filter}:default`
+              : `${search.filter}:${search.inactiveDays}`;
 
   function setActivityMode(value: string) {
     if (value === "all") {
@@ -204,13 +205,17 @@ function UsersPage() {
           eyebrow="Plex access"
           title="Users"
           icon={Users}
-          description={data
-            ? `${data.total.toLocaleString()} ${
-              search.filter === "all" && search.risk === "all"
-                ? "with access to this server"
-                : "matching users"
-            }`
-            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+          description={
+            data ? (
+              `${data.total.toLocaleString()} ${
+                search.filter === "all" && search.risk === "all"
+                  ? "with access to this server"
+                  : "matching users"
+              }`
+            ) : (
+              <span className="skeleton inline-block h-3 w-40 align-middle" />
+            )
+          }
         />
 
         <FilterSurface>
@@ -255,7 +260,8 @@ function UsersPage() {
               className="select select-bordered select-sm"
               value={search.risk}
               onChange={(e) =>
-                updateSearch({ risk: e.target.value as RiskFilter })}
+                updateSearch({ risk: e.target.value as RiskFilter })
+              }
             >
               <option value="all">Any risk</option>
               <option value="attention">Needs attention</option>
@@ -283,28 +289,25 @@ function UsersPage() {
               className="select select-bordered select-sm"
               value={search.order}
               onChange={(e) =>
-                updateSearch({ order: e.target.value as SortOrder })}
+                updateSearch({ order: e.target.value as SortOrder })
+              }
             >
-              {search.sort === "username"
-                ? (
-                  <>
-                    <option value="asc">A–Z</option>
-                    <option value="desc">Z–A</option>
-                  </>
-                )
-                : search.sort === "lastViewedAt"
-                ? (
-                  <>
-                    <option value="asc">Oldest first</option>
-                    <option value="desc">Newest first</option>
-                  </>
-                )
-                : (
-                  <>
-                    <option value="desc">Highest first</option>
-                    <option value="asc">Lowest first</option>
-                  </>
-                )}
+              {search.sort === "username" ? (
+                <>
+                  <option value="asc">A–Z</option>
+                  <option value="desc">Z–A</option>
+                </>
+              ) : search.sort === "lastViewedAt" ? (
+                <>
+                  <option value="asc">Oldest first</option>
+                  <option value="desc">Newest first</option>
+                </>
+              ) : (
+                <>
+                  <option value="desc">Highest first</option>
+                  <option value="asc">Lowest first</option>
+                </>
+              )}
             </select>
           </label>
         </FilterSurface>
@@ -319,169 +322,166 @@ function UsersPage() {
 
       <PendingInvitationsPanel />
 
-      {isError
-        ? (
-          <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load users"}
-            onRetry={() => void refetch()}
-          />
-        )
-        : (
-          <>
-            {removeResult && (
-              <DeleteResultAlert
-                variant="success"
-                onDismiss={() => setRemoveResult(null)}
-              >
-                Removed {removeResult.username}'s access to this server.
-              </DeleteResultAlert>
-            )}
+      {isError ? (
+        <ErrorAlert
+          message={
+            error instanceof Error ? error.message : "Failed to load users"
+          }
+          onRetry={() => void refetch()}
+        />
+      ) : (
+        <>
+          {removeResult && (
+            <DeleteResultAlert
+              variant="success"
+              onDismiss={() => setRemoveResult(null)}
+            >
+              Removed {removeResult.username}'s access to this server.
+            </DeleteResultAlert>
+          )}
 
-            {isLoading
-              ? <UsersTableSkeleton />
-              : data && data.users.length === 0
-              ? (
-                <EmptyState
-                  icon={UserCheck}
-                  title={search.risk !== "all"
-                    ? "No users match this risk filter"
-                    : search.filter === "never"
+          {isLoading ? (
+            <UsersTableSkeleton />
+          ) : data && data.users.length === 0 ? (
+            <EmptyState
+              icon={UserCheck}
+              title={
+                search.risk !== "all"
+                  ? "No users match this risk filter"
+                  : search.filter === "never"
                     ? "Everyone has watched something"
                     : search.filter === "unknown"
-                    ? "All user activity is resolved"
-                    : search.filter === "inactive"
-                    ? "Everyone looks active"
-                    : "No users found"}
-                  description={search.risk !== "all"
-                    ? "Try another risk level or broaden the activity filter."
-                    : search.filter === "never"
+                      ? "All user activity is resolved"
+                      : search.filter === "inactive"
+                        ? "Everyone looks active"
+                        : "No users found"
+              }
+              description={
+                search.risk !== "all"
+                  ? "Try another risk level or broaden the activity filter."
+                  : search.filter === "never"
                     ? "No users with access are currently marked as never watched."
                     : search.filter === "unknown"
-                    ? "Every user's Plex identity and watch history could be reconciled."
-                    : search.filter === "inactive"
-                    ? "No one has crossed your inactive-user threshold."
-                    : "Users with access will appear here after the roster syncs."}
-                />
-              )
-              : (
-                <DataSurface className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <UserSortTh
-                          label="User"
-                          field="username"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        <UserSortTh
-                          label="Last watched"
-                          field="lastViewedAt"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        <UserSortTh
-                          label="Sharing risk"
-                          field="sharingRisk"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data!.users.map((u) => (
-                        <tr key={u.accountId} className="group polished-row">
-                          <td>
-                            <div className="flex items-center gap-3">
-                              {u.thumb
-                                ? (
-                                  <img
-                                    src={u.thumb}
-                                    alt=""
-                                    referrerPolicy="no-referrer"
-                                    className="w-8 h-8 rounded-full object-cover bg-base-300 shrink-0"
-                                  />
-                                )
-                                : (
-                                  <div className="w-8 h-8 rounded-full bg-base-300 shrink-0 flex items-center justify-center">
-                                    <User className="w-4 h-4 text-base-content/40" />
-                                  </div>
-                                )}
-                              <div className="min-w-0">
-                                <div className="font-medium flex items-center gap-1.5">
-                                  <span className="truncate">{u.username}</span>
-                                  {u.isOwner && (
-                                    <span className="badge badge-outline badge-sm shrink-0">
-                                      Owner
-                                    </span>
-                                  )}
-                                </div>
-                                {u.email && (
-                                  <div className="text-xs text-base-content/40 truncate">
-                                    {u.email}
-                                  </div>
-                                )}
-                              </div>
+                      ? "Every user's Plex identity and watch history could be reconciled."
+                      : search.filter === "inactive"
+                        ? "No one has crossed your inactive-user threshold."
+                        : "Users with access will appear here after the roster syncs."
+              }
+            />
+          ) : (
+            <DataSurface className="overflow-x-auto">
+              <table className="table table-sm">
+                <thead>
+                  <tr>
+                    <UserSortTh
+                      label="User"
+                      field="username"
+                      sort={search.sort}
+                      order={search.order}
+                      onSort={toggleSort}
+                    />
+                    <UserSortTh
+                      label="Last watched"
+                      field="lastViewedAt"
+                      sort={search.sort}
+                      order={search.order}
+                      onSort={toggleSort}
+                    />
+                    <UserSortTh
+                      label="Sharing risk"
+                      field="sharingRisk"
+                      sort={search.sort}
+                      order={search.order}
+                      onSort={toggleSort}
+                    />
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data!.users.map((u) => (
+                    <tr key={u.accountId} className="group polished-row">
+                      <td>
+                        <div className="flex items-center gap-3">
+                          {u.thumb ? (
+                            <img
+                              loading="lazy"
+                              src={u.thumb}
+                              alt=""
+                              referrerPolicy="no-referrer"
+                              className="w-8 h-8 rounded-full object-cover bg-base-300 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-base-300 shrink-0 flex items-center justify-center">
+                              <User className="w-4 h-4 text-base-content/40" />
                             </div>
-                          </td>
-                          <td className="text-sm text-base-content/70">
-                            {u.activityStatus === "watched" && u.lastViewedAt
-                              ? formatDate(u.lastViewedAt)
-                              : u.activityStatus === "never"
-                              ? (
-                                <span className="badge badge-error badge-outline badge-sm">
-                                  never
-                                </span>
-                              )
-                              : (
-                                <span
-                                  className="tooltip tooltip-right activity-status-tooltip"
-                                  data-tip="Activity unknown — Plex hasn't provided enough information to match this user with their playback history."
-                                  tabIndex={0}
-                                  aria-label="Activity unknown. Plex hasn't provided enough information to match this user with their playback history."
-                                >
-                                  <span className="badge badge-warning badge-outline badge-sm">
-                                    unknown
-                                  </span>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-medium flex items-center gap-1.5">
+                              <span className="truncate">{u.username}</span>
+                              {u.isOwner && (
+                                <span className="badge badge-outline badge-sm shrink-0">
+                                  Owner
                                 </span>
                               )}
-                          </td>
-                          <td>
-                            <SharingRiskCell assessment={u.sharingRisk} />
-                          </td>
-                          <td className="text-right">
-                            {!u.isOwner && (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-xs btn-square text-error opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
-                                onClick={() => openReview(u)}
-                                aria-label={`Remove ${u.username}'s access`}
-                                title="Remove access"
-                              >
-                                <UserX className="w-4 h-4" />
-                              </button>
+                            </div>
+                            {u.email && (
+                              <div className="text-xs text-base-content/40 truncate">
+                                {u.email}
+                              </div>
                             )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </DataSurface>
-              )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="text-sm text-base-content/70">
+                        {u.activityStatus === "watched" && u.lastViewedAt ? (
+                          formatDate(u.lastViewedAt)
+                        ) : u.activityStatus === "never" ? (
+                          <span className="badge badge-error badge-outline badge-sm">
+                            never
+                          </span>
+                        ) : (
+                          <span
+                            className="tooltip tooltip-right activity-status-tooltip"
+                            data-tip="Activity unknown — Plex hasn't provided enough information to match this user with their playback history."
+                            tabIndex={0}
+                            aria-label="Activity unknown. Plex hasn't provided enough information to match this user with their playback history."
+                          >
+                            <span className="badge badge-warning badge-outline badge-sm">
+                              unknown
+                            </span>
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <SharingRiskCell assessment={u.sharingRisk} />
+                      </td>
+                      <td className="text-right">
+                        {!u.isOwner && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs btn-square text-error opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+                            onClick={() => openReview(u)}
+                            aria-label={`Remove ${u.username}'s access`}
+                            title="Remove access"
+                          >
+                            <UserX className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DataSurface>
+          )}
 
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPageChange={(p) => setOffset(p * PAGE_SIZE)}
-            />
-          </>
-        )}
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+          />
+        </>
+      )}
 
       <RemoveUserConfirmDialog
         dialogRef={dialogRef}
@@ -489,7 +489,8 @@ function UsersPage() {
         pending={removeMutation.isPending}
         error={removeMutation.error}
         onConfirm={() =>
-          reviewUser && removeMutation.mutate(reviewUser.accountId)}
+          reviewUser && removeMutation.mutate(reviewUser.accountId)
+        }
         onCancel={closeReview}
       />
     </div>
@@ -530,9 +531,8 @@ function PendingInvitationsPanel() {
     staleTime: 60_000,
   });
   const { data, isLoading: loading, error } = query;
-  const [revokeInvitation, setRevokeInvitation] = useState<
-    PendingInvitation | null
-  >(null);
+  const [revokeInvitation, setRevokeInvitation] =
+    useState<PendingInvitation | null>(null);
   const revokeDialogRef = useRef<HTMLDialogElement>(null);
   const revokeMutation = useMutation({
     mutationFn: api.users.cancelInvitation,
@@ -666,36 +666,34 @@ function PendingInvitationsPanel() {
         </label>
       </div>
       <div className="overflow-x-auto">
-        {data.invitations.length === 0
-          ? (
-            <div className="px-4 py-8 text-center text-sm text-base-content/45">
-              No pending invitations match these filters.
-            </div>
-          )
-          : (
-            <table className="table table-sm">
-              <thead>
-                <tr>
-                  <th>Invitee</th>
-                  <th>Libraries</th>
-                  <th>Invitation sent</th>
-                  <th>Status</th>
-                  <th className="w-14 pr-4 text-right">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.invitations.map((invitation) => (
-                  <PendingInvitationRow
-                    key={invitation.inviteId}
-                    invitation={invitation}
-                    onRevoke={openRevoke}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
+        {data.invitations.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-base-content/45">
+            No pending invitations match these filters.
+          </div>
+        ) : (
+          <table className="table table-sm">
+            <thead>
+              <tr>
+                <th>Invitee</th>
+                <th>Libraries</th>
+                <th>Invitation sent</th>
+                <th>Status</th>
+                <th className="w-14 pr-4 text-right">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.invitations.map((invitation) => (
+                <PendingInvitationRow
+                  key={invitation.inviteId}
+                  invitation={invitation}
+                  onRevoke={openRevoke}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
       {totalPages > 1 && (
         <div className="border-t border-base-content/10 px-4 py-2">
@@ -703,7 +701,8 @@ function PendingInvitationsPanel() {
             page={page}
             totalPages={totalPages}
             onPageChange={(nextPage) =>
-              setOffset(nextPage * INVITATION_PAGE_SIZE)}
+              setOffset(nextPage * INVITATION_PAGE_SIZE)
+            }
           />
         </div>
       )}
@@ -713,10 +712,12 @@ function PendingInvitationsPanel() {
           <p className="mt-2 text-sm text-base-content/60">
             Cancel the pending Plex invitation for{" "}
             <strong className="text-base-content">
-              {revokeInvitation?.username || revokeInvitation?.email ||
+              {revokeInvitation?.username ||
+                revokeInvitation?.email ||
                 "this user"}
-            </strong>? This cancels the pending Plex invitation. They will need
-            a new invitation to gain access.
+            </strong>
+            ? This cancels the pending Plex invitation. They will need a new
+            invitation to gain access.
           </p>
           {revokeMutation.isError && (
             <div className="alert alert-error mt-4 text-sm">
@@ -738,8 +739,10 @@ function PendingInvitationsPanel() {
               type="button"
               className="btn btn-error"
               disabled={!revokeInvitation || revokeMutation.isPending}
-              onClick={() => revokeInvitation &&
-                revokeMutation.mutate(revokeInvitation.inviteId)}
+              onClick={() =>
+                revokeInvitation &&
+                revokeMutation.mutate(revokeInvitation.inviteId)
+              }
             >
               {revokeMutation.isPending && (
                 <span className="loading loading-spinner loading-xs" />
@@ -765,26 +768,25 @@ function PendingInvitationRow({
   invitation: PendingInvitation;
   onRevoke: (invitation: PendingInvitation) => void;
 }) {
-  const displayName = invitation.username || invitation.email ||
-    "Plex invitation";
+  const displayName =
+    invitation.username || invitation.email || "Plex invitation";
   return (
     <tr className="polished-row">
       <td>
         <div className="flex min-w-0 items-center gap-3">
-          {invitation.thumb
-            ? (
-              <img
-                src={invitation.thumb}
-                alt=""
-                referrerPolicy="no-referrer"
-                className="h-8 w-8 shrink-0 rounded-full bg-base-300 object-cover"
-              />
-            )
-            : (
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-base-300">
-                <Mail className="h-3.5 w-3.5 text-base-content/40" />
-              </div>
-            )}
+          {invitation.thumb ? (
+            <img
+              loading="lazy"
+              src={invitation.thumb}
+              alt=""
+              referrerPolicy="no-referrer"
+              className="h-8 w-8 shrink-0 rounded-full bg-base-300 object-cover"
+            />
+          ) : (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-base-300">
+              <Mail className="h-3.5 w-3.5 text-base-content/40" />
+            </div>
+          )}
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{displayName}</div>
             {invitation.username && invitation.email && (
@@ -808,8 +810,8 @@ function PendingInvitationRow({
               invitation.ageStatus === "critical"
                 ? "font-semibold text-error"
                 : invitation.ageStatus === "stale"
-                ? "font-medium text-warning"
-                : ""
+                  ? "font-medium text-warning"
+                  : ""
             }`}
           >
             {formatRelativeTime(invitation.createdAt)}
@@ -823,15 +825,15 @@ function PendingInvitationRow({
             invitation.ageStatus === "critical"
               ? "badge-error"
               : invitation.ageStatus === "stale"
-              ? "badge-warning"
-              : "badge-ghost"
+                ? "badge-warning"
+                : "badge-ghost"
           }`}
         >
           {invitation.ageStatus === "critical"
             ? "Overdue"
             : invitation.ageStatus === "stale"
-            ? "Aging"
-            : "Current"}
+              ? "Aging"
+              : "Current"}
         </span>
       </td>
       <td className="w-14 pr-4 text-right">
@@ -871,15 +873,17 @@ function UserSortTh({
         onClick={() => onSort(field)}
       >
         {label}
-        {active
-          ? order === "desc"
-            ? <ArrowDown className="w-3 h-3" />
-            : <ArrowUp className="w-3 h-3" />
-          : (
-            <span className="w-3 h-3 opacity-0">
-              <ArrowDown className="w-3 h-3" />
-            </span>
-          )}
+        {active ? (
+          order === "desc" ? (
+            <ArrowDown className="w-3 h-3" />
+          ) : (
+            <ArrowUp className="w-3 h-3" />
+          )
+        ) : (
+          <span className="w-3 h-3 opacity-0">
+            <ArrowDown className="w-3 h-3" />
+          </span>
+        )}
       </button>
     </th>
   );
@@ -896,7 +900,10 @@ function CustomInactiveDaysInput({
   const lastApplied = useRef(initialDays);
   const onChangeRef = useRef(onChange);
   const parsed = Number(value);
-  const valid = value !== "" && Number.isInteger(parsed) && parsed >= 0 &&
+  const valid =
+    value !== "" &&
+    Number.isInteger(parsed) &&
+    parsed >= 0 &&
     parsed <= MAX_INACTIVITY_DAYS;
 
   useEffect(() => {
@@ -924,7 +931,8 @@ function CustomInactiveDaysInput({
         }`}
         value={value}
         onChange={(e) =>
-          setValue(e.target.value.replace(/\D/g, "").slice(0, 5))}
+          setValue(e.target.value.replace(/\D/g, "").slice(0, 5))
+        }
         aria-label="Custom inactivity threshold in days"
         title={`Enter 0–${MAX_INACTIVITY_DAYS.toLocaleString()} whole days`}
       />
@@ -940,39 +948,43 @@ function SharingRiskCell({
 }: {
   assessment: PlexUser["sharingRisk"];
 }) {
-  const label = assessment.riskLevel === "insufficient_data"
-    ? "Not enough data"
-    : assessment.riskLevel === "review"
-    ? "Review"
-    : assessment.riskLevel === "watch"
-    ? "Watch"
-    : "Low";
-  const badgeClass = assessment.riskLevel === "review"
-    ? "badge-error"
-    : assessment.riskLevel === "watch"
-    ? "badge-warning"
-    : assessment.riskLevel === "low"
-    ? "badge-success"
-    : "badge-ghost";
-  const signalSummary = assessment.signals.length > 0
-    ? assessment.signals.map((signal) => signal.summary).join("; ")
-    : "No sharing signals observed";
-  const title = assessment.dataConfidence === "none"
-    ? "No playback observations have been collected for this user yet."
-    : `${assessment.observationCount} observations across ${assessment.activeDays} active days. ${signalSummary}.`;
+  const label =
+    assessment.riskLevel === "insufficient_data"
+      ? "Not enough data"
+      : assessment.riskLevel === "review"
+        ? "Review"
+        : assessment.riskLevel === "watch"
+          ? "Watch"
+          : "Low";
+  const badgeClass =
+    assessment.riskLevel === "review"
+      ? "badge-error"
+      : assessment.riskLevel === "watch"
+        ? "badge-warning"
+        : assessment.riskLevel === "low"
+          ? "badge-success"
+          : "badge-ghost";
+  const signalSummary =
+    assessment.signals.length > 0
+      ? assessment.signals.map((signal) => signal.summary).join("; ")
+      : "No sharing signals observed";
+  const title =
+    assessment.dataConfidence === "none"
+      ? "No playback observations have been collected for this user yet."
+      : `${assessment.observationCount} observations across ${assessment.activeDays} active days. ${signalSummary}.`;
 
   return (
     <div
       className="inline-flex items-center"
       title={`${title} Confidence: ${assessment.dataConfidence}.`}
     >
-      {assessment.riskLevel === "insufficient_data"
-        ? <span className="text-xs text-base-content/40">{label}</span>
-        : (
-          <span className={`badge badge-sm badge-outline ${badgeClass}`}>
-            {label} · {assessment.riskScore}
-          </span>
-        )}
+      {assessment.riskLevel === "insufficient_data" ? (
+        <span className="text-xs text-base-content/40">{label}</span>
+      ) : (
+        <span className={`badge badge-sm badge-outline ${badgeClass}`}>
+          {label} · {assessment.riskScore}
+        </span>
+      )}
     </div>
   );
 }
