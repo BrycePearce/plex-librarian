@@ -20,13 +20,30 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
-    babel({ presets: [reactCompilerPreset()] }),
+    babel({
+      presets: [reactCompilerPreset()],
+      // The plugin's default exclude only covers node_modules, but in dev Vite serves
+      // pre-bundled dependencies from .vite/deps — the React Compiler must not touch
+      // those chunks: the `react/compiler-runtime` imports it injects there bypass
+      // Vite's CJS-interop rewriting and break the page ("does not provide an export
+      // named 'c'"). First pattern below is the plugin's default, kept verbatim.
+      exclude: [/[/\\]node_modules[/\\]|^\0rolldown\/runtime\.js$/, /[/\\]\.vite[/\\]/],
+    }),
     tailwindcss(),
   ],
   resolve: {
     alias: {
       '@shared': resolve(fileURLToPath(new URL('.', import.meta.url)), '../shared'),
     },
+  },
+  optimizeDeps: {
+    // The React Compiler injects `import { c } from 'react/compiler-runtime'` into
+    // transformed modules, so the dep scanner never sees this import in source. Without
+    // pre-bundling it upfront, Vite discovers it mid-session and misses the CJS interop
+    // (its dev build assigns `exports.c` inside an IIFE, invisible to static detection),
+    // breaking every compiled module. The old plugin-react `babel` option added this
+    // automatically; with the compiler in a separate rolldown-plugin-babel pass, it's on us.
+    include: ['react/compiler-runtime'],
   },
   server: {
     port: 5173,
