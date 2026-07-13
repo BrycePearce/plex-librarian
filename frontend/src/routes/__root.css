@@ -225,7 +225,7 @@
 
 @media (max-width: 767px) {
   .app-shell { display: flex; height: 100vh; flex-direction: column; }
-  .app-shell > .app-sidebar { display: none; }
+  .app-shell > .app-sidebar:not(.app-sidebar-mobile) { display: none; }
   .app-mobile-bar {
     display: flex;
     height: 62px;

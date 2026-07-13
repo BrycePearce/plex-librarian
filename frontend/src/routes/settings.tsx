@@ -28,7 +28,7 @@ function SettingsPage() {
   });
 
   return (
-    <div className="workspace-page settings-page space-y-6 max-w-3xl">
+    <div className="workspace-page settings-page space-y-6 max-w-5xl">
       <PageHeader
         eyebrow="Application preferences"
         title="Settings"
