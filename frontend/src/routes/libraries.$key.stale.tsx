@@ -88,11 +88,12 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
     // Accepts both a real boolean (set programmatically via navigate({ search })) and
     // the string "true" (a manually-typed or bookmarked URL) — TanStack Router's search
     // serialization doesn't guarantee which shape survives a round trip.
-    duplicatesOnly: search.duplicatesOnly === true ||
-      search.duplicatesOnly === "true",
-    offset: Number.isFinite(offset) && offset >= 0
-      ? Math.floor(offset)
-      : staleSearchDefaults.offset,
+    duplicatesOnly:
+      search.duplicatesOnly === true || search.duplicatesOnly === "true",
+    offset:
+      Number.isFinite(offset) && offset >= 0
+        ? Math.floor(offset)
+        : staleSearchDefaults.offset,
     limit: PAGE_SIZE,
     ...(Number.isInteger(minAgeDays) && minAgeDays >= 0 ? { minAgeDays } : {}),
   };
@@ -103,7 +104,14 @@ export const Route = createFileRoute("/libraries/$key/stale")({
   search: {
     middlewares: [stripSearchParams(staleSearchDefaults)],
   },
-  beforeLoad: ({ context }) => requireAuth(context.queryClient),
+  beforeLoad: ({ context }) =>
+    Promise.all([
+      requireAuth(context.queryClient),
+      context.queryClient.ensureQueryData({
+        queryKey: ["libraries"],
+        queryFn: () => api.libraries.list(),
+      }),
+    ]),
   component: StalePage,
 });
 
@@ -259,9 +267,8 @@ function StalePage() {
 
   const deleteMutation = useDeleteItems([["stale", key], ["events"]]);
 
-  const goToOffset = useScrollToOffset(
-    params.offset ?? 0,
-    (offset) => setParams((p) => ({ ...p, offset })),
+  const goToOffset = useScrollToOffset(params.offset ?? 0, (offset) =>
+    setParams((p) => ({ ...p, offset })),
   );
 
   function openConfirm(items: StaleItem[]) {
@@ -284,11 +291,12 @@ function StalePage() {
     updateGracePeriod.mutate(staleMinAgeDays);
   }
 
-  const gracePeriodValue = params.minAgeDays !== undefined
-    ? String(params.minAgeDays)
-    : data?.libraryStaleMinAgeDays != null
-    ? String(data.libraryStaleMinAgeDays)
-    : "default";
+  const gracePeriodValue =
+    params.minAgeDays !== undefined
+      ? String(params.minAgeDays)
+      : data?.libraryStaleMinAgeDays != null
+        ? String(data.libraryStaleMinAgeDays)
+        : "default";
 
   const page = Math.floor((params.offset ?? 0) / PAGE_SIZE);
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
@@ -306,16 +314,14 @@ function StalePage() {
 
   return (
     <div
-      className={`stale-page workspace-tone-${
-        libraryTone(thisLibrary?.type)
-      } space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}
+      className={`stale-page workspace-tone-${libraryTone(
+        thisLibrary?.type,
+      )} space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}
     >
-      {
-        /* Sticky (not the table) per explicit preference: the back/title/sync row and the
+      {/* Sticky (not the table) per explicit preference: the back/title/sync row and the
           filter controls pin to the top of <main>'s scroll as you scroll past them, while
           the table scrolls away normally underneath — no bounded/independently-scrolling
-          table box. */
-      }
+          table box. */}
       <div className="library-workspace-header sticky top-0 z-20 -mx-4 px-4 pt-2 pb-4 space-y-4">
         <div className="library-header-row flex items-center gap-4">
           <Link
@@ -332,20 +338,16 @@ function StalePage() {
               <span>Stale analysis</span>
             </div>
             <p className="text-base-content/50 text-sm">
-              {data
-                ? (
-                  <>
-                    {data.total.toLocaleString()} items ·{" "}
-                    {formatKilobytes(pageFileSize(data.items))} on this page
-                  </>
-                )
-                : isNotSyncedYet
-                ? (
-                  "Not synced yet"
-                )
-                : (
-                  <span className="skeleton inline-block h-3 w-40 align-middle" />
-                )}
+              {data ? (
+                <>
+                  {data.total.toLocaleString()} items ·{" "}
+                  {formatKilobytes(pageFileSize(data.items))} on this page
+                </>
+              ) : isNotSyncedYet ? (
+                "Not synced yet"
+              ) : (
+                <span className="skeleton inline-block h-3 w-40 align-middle" />
+              )}
             </p>
           </div>
           <div className="library-header-actions flex flex-col items-end gap-1">
@@ -393,17 +395,21 @@ function StalePage() {
               days={params.days ?? staleSearchDefaults.days}
               filter={params.filter ?? staleSearchDefaults.filter}
               onDaysChange={(days) =>
-                setParams((p) => ({ ...p, days, offset: 0 }))}
+                setParams((p) => ({ ...p, days, offset: 0 }))
+              }
               onFilterChange={(filter) =>
-                setParams((p) => ({ ...p, filter, offset: 0 }))}
+                setParams((p) => ({ ...p, filter, offset: 0 }))
+              }
               gracePeriodValue={gracePeriodValue}
               defaultGraceDays={data?.minAgeDays}
               onGracePeriodChange={setGracePeriod}
               libraryType={thisLibrary?.type ?? ""}
-              duplicatesOnly={params.duplicatesOnly ??
-                staleSearchDefaults.duplicatesOnly}
+              duplicatesOnly={
+                params.duplicatesOnly ?? staleSearchDefaults.duplicatesOnly
+              }
               onDuplicatesOnlyChange={(duplicatesOnly) =>
-                setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))}
+                setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))
+              }
             />
           </div>
         )}
@@ -424,9 +430,9 @@ function StalePage() {
           <LibraryInsight
             icon={<Database />}
             label="Library size"
-            value={thisLibrary
-              ? formatKilobytes(thisLibrary.totalFileSize)
-              : "—"}
+            value={
+              thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"
+            }
           />
           <LibraryInsight
             icon={<Clock3 />}
@@ -436,127 +442,138 @@ function StalePage() {
         </div>
       )}
 
-      {isNotSyncedYet
-        ? (
-          <NotSyncedYetCard
-            title="This library hasn't synced yet"
-            message="It's still queued behind other libraries in the current sync — this page will pick it up automatically once it's ready."
-          />
-        )
-        : isStaleError
-        ? (
-          <ErrorAlert
-            message={staleError instanceof Error
+      {isNotSyncedYet ? (
+        <NotSyncedYetCard
+          title="This library hasn't synced yet"
+          message="It's still queued behind other libraries in the current sync — this page will pick it up automatically once it's ready."
+        />
+      ) : isStaleError ? (
+        <ErrorAlert
+          message={
+            staleError instanceof Error
               ? staleError.message
-              : "Failed to load stale items"}
-            onRetry={() => void refetchStale()}
-          />
-        )
-        : (
-          <>
-            {data && (
-              <HistorySyncWarning
-                historySyncedAt={data.historySyncedAt}
-                isSyncing={isSyncing}
-                isSyncStatusLoading={isSyncStatusLoading}
-                syncingMessage={
-                  <>
-                    Watch-history sync is running — "unknown" items may update
-                    once it finishes.
-                  </>
-                }
-                warningMessage={
-                  <>
-                    Watch-history sync hasn't completed for this library yet, so
-                    items showing{" "}
-                    <span className="badge badge-outline badge-sm align-middle">
-                      unknown
-                    </span>{" "}
-                    below may actually have been watched — the "never watched"
-                    data isn't reliable until a sync finishes. Avoid deleting
-                    based on watch status until this clears.
-                  </>
-                }
-              />
-            )}
+              : "Failed to load stale items"
+          }
+          onRetry={() => void refetchStale()}
+        />
+      ) : (
+        <>
+          {data && (
+            <HistorySyncWarning
+              historySyncedAt={data.historySyncedAt}
+              isSyncing={isSyncing}
+              isSyncStatusLoading={isSyncStatusLoading}
+              syncingMessage={
+                <>
+                  Watch-history sync is running — "unknown" items may update
+                  once it finishes.
+                </>
+              }
+              warningMessage={
+                <>
+                  Watch-history sync hasn't completed for this library yet, so
+                  items showing{" "}
+                  <span className="badge badge-outline badge-sm align-middle">
+                    unknown
+                  </span>{" "}
+                  below may actually have been watched — the "never watched"
+                  data isn't reliable until a sync finishes. Avoid deleting
+                  based on watch status until this clears.
+                </>
+              }
+            />
+          )}
 
-            {deleteResult && (
-              <DeleteResultAlert
-                variant={deleteResult.failed.length > 0 ||
-                    deleteResult.partial.length > 0
+          {deleteResult && (
+            <DeleteResultAlert
+              variant={
+                deleteResult.failed.length > 0 ||
+                deleteResult.partial.length > 0
                   ? "warning"
-                  : "success"}
-                onDismiss={() => setDeleteResult(null)}
-              >
-                Deleted {deleteResult.deleted.length} item
-                {deleteResult.deleted.length === 1 ? "" : "s"}.
-                {deleteResult.partial.length > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.partial.length}{" "}
-                    partially completed; files were removed from{" "}
-                    {deleteResult.partial.flatMap((item) =>
-                      item.deletedInstances.map((instance) =>
-                        instance.instanceName
-                      )
-                    ).join(", ")}, but failed in{" "}
-                    {deleteResult.partial.flatMap((item) =>
-                      item.failedInstances.map((instance) =>
-                        `${instance.instanceName}: ${instance.error}`
-                      )
-                    ).join("; ")}. Retry to reconcile the remaining instances.
-                  </>
-                )}
-                {deleteResult.failed.length > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.failed.length} failed:{" "}
-                    {deleteResult.failed.map((f) => f.error).join("; ")}
-                  </>
-                )}
-              </DeleteResultAlert>
-            )}
+                  : "success"
+              }
+              onDismiss={() => setDeleteResult(null)}
+            >
+              Deleted {deleteResult.deleted.length} item
+              {deleteResult.deleted.length === 1 ? "" : "s"}.
+              {deleteResult.partial.length > 0 && (
+                <>
+                  {" "}
+                  {deleteResult.partial.length} partially completed; files were
+                  removed from{" "}
+                  {deleteResult.partial
+                    .flatMap((item) =>
+                      item.deletedInstances.map(
+                        (instance) => instance.instanceName,
+                      ),
+                    )
+                    .join(", ")}
+                  , but failed in{" "}
+                  {deleteResult.partial
+                    .flatMap((item) =>
+                      item.failedInstances.map(
+                        (instance) =>
+                          `${instance.instanceName}: ${instance.error}`,
+                      ),
+                    )
+                    .join("; ")}
+                  . Retry to reconcile the remaining instances.
+                </>
+              )}
+              {deleteResult.failed.length > 0 && (
+                <>
+                  {" "}
+                  {deleteResult.failed.length} failed:{" "}
+                  {deleteResult.failed.map((f) => f.error).join("; ")}
+                </>
+              )}
+            </DeleteResultAlert>
+          )}
 
-            <SectionHeading
-              eyebrow="Content review"
-              title="Stale items"
-              meta={data
+          <SectionHeading
+            eyebrow="Content review"
+            title="Stale items"
+            meta={
+              data
                 ? `Showing ${pageItems.length.toLocaleString()} of ${data.total.toLocaleString()}`
-                : undefined}
-            />
+                : undefined
+            }
+          />
 
-            <SelectionActionBar
-              count={selection.selected.size}
-              totalSize={selection.selectedTotalSize}
-              onClear={selection.clear}
-              onDelete={() => openConfirm(selection.selectedItems)}
-            />
+          <SelectionActionBar
+            count={selection.selected.size}
+            totalSize={selection.selectedTotalSize}
+            onClear={selection.clear}
+            onDelete={() => openConfirm(selection.selectedItems)}
+          />
 
-            {isLoading ? <StaleTableSkeleton /> : (
-              <StaleItemsTable
-                items={pageItems}
-                params={params}
-                onSort={setSort}
-                isFetching={isFetching}
-                selected={selection.selected}
-                onToggle={selection.toggleOne}
-                onToggleAll={selection.toggleAllOnPage}
-                onDeleteOne={(item) => openConfirm([item])}
-                animateRowRemoval={animateRowRemoval}
-                hasAnimatedIn={hasAnimatedIn}
-                historySyncedAt={data?.historySyncedAt ?? null}
-                isSyncing={isSyncing}
-                thisLibraryItemCount={thisLibraryItemCount}
-              />
-            )}
-
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              onPageChange={(p) => goToOffset(p * PAGE_SIZE)}
+          {isLoading ? (
+            <StaleTableSkeleton />
+          ) : (
+            <StaleItemsTable
+              items={pageItems}
+              params={params}
+              onSort={setSort}
+              isFetching={isFetching}
+              selected={selection.selected}
+              onToggle={selection.toggleOne}
+              onToggleAll={selection.toggleAllOnPage}
+              onDeleteOne={(item) => openConfirm([item])}
+              animateRowRemoval={animateRowRemoval}
+              hasAnimatedIn={hasAnimatedIn}
+              historySyncedAt={data?.historySyncedAt ?? null}
+              isSyncing={isSyncing}
+              thisLibraryItemCount={thisLibraryItemCount}
             />
-          </>
-        )}
+          )}
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={(p) => goToOffset(p * PAGE_SIZE)}
+          />
+        </>
+      )}
 
       <DeleteConfirmDialog
         dialogRef={dialogRef}
@@ -578,7 +595,8 @@ function StalePage() {
                 setAnimateRowRemoval(true);
               },
             },
-          )}
+          )
+        }
         onCancel={closeConfirm}
       />
     </div>
