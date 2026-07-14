@@ -58,20 +58,23 @@
 .home-stale-heading { display: grid; grid-template-columns: 2rem 3rem minmax(0, 1fr) auto; align-items: center; gap: 1rem; }
 .home-collection-count { padding: .28rem .55rem; border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent); border-radius: 99px; background: color-mix(in oklab, var(--color-primary) 8%, transparent); color: color-mix(in oklab, var(--color-primary) 72%, var(--color-base-content)); font-size: .61rem; font-weight: 700; white-space: nowrap; }
 .home-stale-libraries { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; margin: .8rem 0 0 6rem; }
-.home-stale-library { --library-color: var(--color-primary); position: relative; display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; overflow: hidden; padding: .5rem .6rem; border: 1px solid color-mix(in oklab, var(--library-color) 12%, color-mix(in oklab, var(--color-base-content) 7%, transparent)); border-radius: 11px; background: linear-gradient(135deg, color-mix(in oklab, var(--library-color) 5%, var(--color-base-300)), color-mix(in oklab, var(--color-base-300) 38%, transparent)); color: var(--color-base-content); text-decoration: none; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
-.home-stale-library::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--library-color) 7%, transparent) 0, color-mix(in oklab, var(--library-color) 7%, transparent) 1px, transparent 1px, transparent 10px); mask-image: linear-gradient(90deg, transparent 8%, rgb(0 0 0 / .15) 42%, black 100%); opacity: .72; pointer-events: none; transition: opacity 140ms ease; }
+.home-stale-library { --library-color: var(--color-primary); position: relative; display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; overflow: hidden; padding: .5rem .6rem; border: 1px solid color-mix(in oklab, var(--library-color) 12%, color-mix(in oklab, var(--color-base-content) 7%, transparent)); border-radius: 11px; background: linear-gradient(135deg, color-mix(in oklab, var(--library-color) 5%, var(--color-base-300)), color-mix(in oklab, var(--color-base-300) 38%, transparent)); color: var(--color-base-content); text-decoration: none; transition: border-color 170ms ease, background 170ms ease, box-shadow 170ms ease, opacity 170ms ease, transform 170ms ease; }
+.home-stale-library::before { content: ""; position: absolute; inset: 0 -20px 0 0; background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--library-color) 11%, transparent) 0, color-mix(in oklab, var(--library-color) 11%, transparent) 1px, transparent 1px, transparent 10px); mask-image: linear-gradient(90deg, transparent 8%, rgb(0 0 0 / .2) 42%, black 100%); opacity: .55; pointer-events: none; transition: opacity 170ms ease, transform 300ms ease; }
 .home-stale-library > * { position: relative; z-index: 1; }
 .home-library-show { --library-color: var(--color-secondary); }
 .home-library-artist { --library-color: var(--color-accent); }
-.home-stale-library:hover { transform: translateY(-1px); border-color: color-mix(in oklab, var(--library-color) 32%, transparent); background: color-mix(in oklab, var(--library-color) 9%, var(--color-base-200)); }
-.home-stale-library:hover::before { opacity: 1; }
-.home-stale-library > .w-8 { width: 1.9rem; height: 1.9rem; padding: .38rem; border-radius: 9px; }
+.home-stale-libraries:has(.home-stale-library:is(:hover, :focus-visible)) .home-stale-library:not(:is(:hover, :focus-visible)) { opacity: .68; }
+.home-stale-library:is(:hover, :focus-visible) { z-index: 1; transform: translateY(-2px); outline: none; border-color: color-mix(in oklab, var(--library-color) 46%, transparent); background: linear-gradient(135deg, color-mix(in oklab, var(--library-color) 14%, var(--color-base-200)), color-mix(in oklab, var(--library-color) 6%, var(--color-base-200))); box-shadow: 0 7px 18px rgb(0 0 0 / .14), 0 0 0 1px color-mix(in oklab, var(--library-color) 9%, transparent), inset 0 0 22px color-mix(in oklab, var(--library-color) 5%, transparent); }
+.home-stale-library:is(:hover, :focus-visible)::before { opacity: 1; transform: translateX(-8px); }
+.home-stale-library > .w-8 { width: 1.9rem; height: 1.9rem; padding: .38rem; border-radius: 9px; transition: box-shadow 170ms ease, transform 170ms ease; }
+.home-stale-library:is(:hover, :focus-visible) > .w-8 { transform: scale(1.06); box-shadow: 0 0 18px color-mix(in oklab, var(--library-color) 27%, transparent); }
 .home-library-name { display: flex; min-width: 0; flex-direction: column; }
 .home-library-name strong { overflow: hidden; font-size: .7rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.home-library-name small { margin-top: .08rem; color: color-mix(in oklab, var(--color-base-content) 38%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .54rem; white-space: nowrap; }
+.home-library-name small { margin-top: .08rem; color: color-mix(in oklab, var(--color-base-content) 38%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .54rem; white-space: nowrap; transition: color 170ms ease; }
+.home-stale-library:is(:hover, :focus-visible) .home-library-name small { color: color-mix(in oklab, var(--color-base-content) 55%, transparent); }
 .home-stale-library i { width: 5px; height: 5px; border-radius: 50%; background: var(--color-warning); box-shadow: 0 0 7px color-mix(in oklab, var(--color-warning) 65%, transparent); }
 .home-stale-library > svg:last-child { color: color-mix(in oklab, var(--library-color) 72%, var(--color-base-content)); transition: transform 140ms ease; }
-.home-stale-library:hover > svg:last-child { transform: translateX(2px); }
+.home-stale-library:is(:hover, :focus-visible) > svg:last-child { transform: translateX(4px); }
 .home-library-more { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: .4rem; padding: .5rem .65rem; border: 1px dashed color-mix(in oklab, var(--color-base-content) 14%, transparent); border-radius: 11px; color: color-mix(in oklab, var(--color-base-content) 48%, transparent); font-size: .65rem; font-weight: 650; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }
 .home-library-more:hover { border-color: color-mix(in oklab, var(--color-primary) 28%, transparent); background: color-mix(in oklab, var(--color-primary) 6%, transparent); color: var(--color-primary); }
 .home-library-more svg { transition: transform 160ms ease; }
@@ -140,9 +143,10 @@
 @media (prefers-reduced-motion: reduce) {
   .dashboard-health svg { animation: none; }
   .dashboard-loading::after { animation: none; }
-  .dashboard-stat-card, .dashboard-stat-card::after, .dashboard-stat-icon, .dashboard-stat-icon svg, .home-directory-icon { transition-duration: 0.01ms; }
+  .dashboard-stat-card, .dashboard-stat-card::after, .dashboard-stat-icon, .dashboard-stat-icon svg, .home-directory-icon, .home-stale-library, .home-stale-library::before, .home-stale-library > .w-8, .home-library-name small, .home-stale-library > svg:last-child { transition-duration: 0.01ms; }
   .dashboard-stat-card:hover { transform: none; }
   .dashboard-stat-card:hover::after, .dashboard-stat-card:hover .dashboard-stat-icon, .dashboard-stat-card:hover .dashboard-stat-icon svg, .home-directory-section:hover .home-directory-icon { transform: none; }
+  .home-stale-library:is(:hover, :focus-visible), .home-stale-library:is(:hover, :focus-visible)::before, .home-stale-library:is(:hover, :focus-visible) > .w-8, .home-stale-library:is(:hover, :focus-visible) > svg:last-child { transform: none; }
 }
 
 @media (max-width: 700px) {
