@@ -14,8 +14,9 @@ import {
   type SQL,
   sql,
 } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import {
+  arrDeleteAttempts,
   episodeMediaVersions,
   itemMediaVersions,
   items,
@@ -34,6 +35,13 @@ import {
 } from '../../db/scope.ts';
 import { createPlexClient, PlexDeleteError } from '../../integrations/plex/index.ts';
 import { logEvents } from '../events/service.ts';
+import {
+  arrDeleteDisposition,
+  assertArrDeleteIsUnambiguous,
+  deleteThroughArr,
+  findAmbiguousExternalIds,
+  getArrDeleteTargets,
+} from '../arr/delete.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
@@ -357,14 +365,17 @@ router.patch('/:key', async (c) => {
   return c.json({ ...library, staleMinAgeDays: body.staleMinAgeDays });
 });
 
-// Deletes items' media from Plex (metadata + underlying file(s) on disk — permanent,
-// not a soft delete) and prunes the corresponding local rows. For TV libraries, items
-// are synced at show granularity (see CLAUDE.md), so deleting a show's ratingKey
-// cascades to all of its episodes on Plex's side; the local `seasons` rows follow via
-// the items -> seasons ON DELETE CASCADE FK.
+// Permanently deletes whole items and prunes the corresponding local rows. A mapped
+// movie/show library delegates file and record removal to Radarr/Sonarr, then refreshes
+// Plex; an unmapped library (or explicit plex-only request) uses Plex's destructive
+// endpoint directly. TV items are synced at show granularity, so either path removes
+// the whole show; local seasons follow through the items -> seasons cascade.
 router.delete('/:key/items', async (c) => {
   const key = c.req.param('key');
-  const body = await c.req.json().catch(() => null) as { ratingKeys?: unknown } | null;
+  const body = await c.req.json().catch(() => null) as {
+    ratingKeys?: unknown;
+    mode?: unknown;
+  } | null;
 
   if (!body || !Array.isArray(body.ratingKeys) || body.ratingKeys.length === 0) {
     return c.json({ error: 'ratingKeys must be a non-empty array' }, 400);
@@ -375,6 +386,9 @@ router.delete('/:key/items', async (c) => {
   if (!body.ratingKeys.every((k): k is string => typeof k === 'string')) {
     return c.json({ error: 'ratingKeys must be strings' }, 400);
   }
+  if (body.mode !== undefined && body.mode !== 'coordinated' && body.mode !== 'plex-only') {
+    return c.json({ error: 'mode must be coordinated or plex-only' }, 400);
+  }
   // Deduped so a client sending the same ratingKey twice can't double-count it in the
   // response or the persisted items.deleted event's deletedCount/fileSizeFreed.
   const ratingKeys = [...new Set(body.ratingKeys as string[])];
@@ -382,7 +396,7 @@ router.delete('/:key/items', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'library not found' }, 404);
 
-  const [library] = await db.select({ key: libraries.key }).from(libraries)
+  const [library] = await db.select({ key: libraries.key, type: libraries.type }).from(libraries)
     .where(libraryByKey(serverId, key)).limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
 
@@ -391,10 +405,59 @@ router.delete('/:key/items', async (c) => {
   // fileSize (decimal KB — see extractFileSize in integrations/plex) is captured here
   // (before the rows are deleted below) so the activity event can report space
   // freed without a second query.
-  const owned = await db.select({ ratingKey: items.ratingKey, fileSize: items.fileSize })
+  const owned = await db.select({
+    ratingKey: items.ratingKey,
+    fileSize: items.fileSize,
+    title: items.title,
+    type: items.type,
+    tmdbId: items.tmdbId,
+    tvdbId: items.tvdbId,
+  })
     .from(items)
     .where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
   const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
+  const itemByKey = new Map(owned.map((item) => [item.ratingKey, item]));
+  const arrTargets = body.mode === 'plex-only' ? [] : await getArrDeleteTargets(serverId, key);
+  const attemptedInstancesByItem = new Map<string, Set<number>>();
+  if (arrTargets.length > 0 && owned.length > 0) {
+    const attempts = await db.select({
+      ratingKey: arrDeleteAttempts.ratingKey,
+      instanceId: arrDeleteAttempts.arrInstanceId,
+      externalId: arrDeleteAttempts.externalId,
+    }).from(arrDeleteAttempts).where(and(
+      eq(arrDeleteAttempts.serverId, serverId),
+      inArray(arrDeleteAttempts.ratingKey, owned.map((item) => item.ratingKey)),
+      inArray(arrDeleteAttempts.arrInstanceId, arrTargets.map((target) => target.instanceId)),
+    ));
+    for (const attempt of attempts) {
+      const item = itemByKey.get(attempt.ratingKey);
+      const currentExternalId = item?.type === 'movie' ? item.tmdbId : item?.tvdbId;
+      if (currentExternalId !== attempt.externalId) continue;
+      const instanceIds = attemptedInstancesByItem.get(attempt.ratingKey) ?? new Set<number>();
+      instanceIds.add(attempt.instanceId);
+      attemptedInstancesByItem.set(attempt.ratingKey, instanceIds);
+    }
+  }
+
+  // A provider ID identifies a title, not a particular Plex item. Separate Plex
+  // editions, split duplicates, and resolution-specific libraries can therefore have
+  // multiple ratingKeys with the same TMDB/TVDB ID. In that case an Arr lookup cannot
+  // prove which item's files it found, so coordinated deletion must stop rather than
+  // risk deleting a different edition. Scope this across the whole active Plex server,
+  // not just this library, to cover common HD/4K library splits.
+  const ambiguousExternalIds = new Set<number>();
+  if (arrTargets.length > 0 && (library.type === 'movie' || library.type === 'show')) {
+    const selectedExternalIds = owned
+      .map((item) => library.type === 'movie' ? item.tmdbId : item.tvdbId)
+      .filter((id): id is number => id !== null);
+    if (selectedExternalIds.length > 0) {
+      for (
+        const externalId of withTransaction((client) =>
+          findAmbiguousExternalIds(client, serverId, library.type, selectedExternalIds)
+        )
+      ) ambiguousExternalIds.add(externalId);
+    }
+  }
 
   let client;
   try {
@@ -407,14 +470,61 @@ router.delete('/:key/items', async (c) => {
   // per-item result needs to be attributable — worth the extra latency for a
   // user-triggered, page-sized (<=200) action.
   const deleted: string[] = [];
+  const partial: DeleteItemsResponse['partial'] = [];
   const failed: { ratingKey: string; error: string }[] = [];
+  let arrMutationOccurred = false;
   for (const ratingKey of ratingKeys) {
     if (!fileSizeByKey.has(ratingKey)) {
       failed.push({ ratingKey, error: 'not found in this library' });
       continue;
     }
     try {
-      await client.deleteItem(ratingKey);
+      const item = itemByKey.get(ratingKey)!;
+      if (arrTargets.length > 0) {
+        assertArrDeleteIsUnambiguous(item, ambiguousExternalIds);
+        const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;
+        const result = await deleteThroughArr(item, arrTargets, {
+          attemptedInstanceIds: attemptedInstancesByItem.get(ratingKey),
+          onAttemptStarting: async (target) => {
+            const startedAt = Math.floor(Date.now() / 1000);
+            await db.insert(arrDeleteAttempts).values({
+              serverId,
+              ratingKey,
+              libraryKey: key,
+              arrInstanceId: target.instanceId,
+              externalId,
+              startedAt,
+            }).onConflictDoUpdate({
+              target: [
+                arrDeleteAttempts.serverId,
+                arrDeleteAttempts.ratingKey,
+                arrDeleteAttempts.arrInstanceId,
+              ],
+              set: { libraryKey: key, externalId, startedAt },
+            });
+          },
+        });
+        const disposition = arrDeleteDisposition(result);
+        arrMutationOccurred ||= disposition.shouldRefreshPlex;
+        if (disposition.status !== 'complete') {
+          if (disposition.status === 'partial') {
+            partial.push({
+              ratingKey,
+              deletedInstances: result.deletedInstances,
+              failedInstances: result.failures,
+            });
+          } else {
+            failed.push({
+              ratingKey,
+              error: result.failures.map((failure) => `${failure.instanceName}: ${failure.error}`)
+                .join('; '),
+            });
+          }
+          continue;
+        }
+      } else {
+        await client.deleteItem(ratingKey);
+      }
       await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
       deleted.push(ratingKey);
     } catch (err) {
@@ -434,18 +544,26 @@ router.delete('/:key/items', async (c) => {
   // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
   // in frontend/src/lib/format.ts.
   const fileSizeFreed = deleted.reduce((sum, rk) => sum + (fileSizeByKey.get(rk) ?? 0), 0);
+  if (arrMutationOccurred) {
+    // Arr removed the files, so Plex needs a scan instead of a second destructive
+    // delete request. Refresh is best-effort: the local/Arr outcome is already final.
+    await client.refreshLibrary(key).catch((error) => {
+      console.warn(`Could not refresh Plex library ${key} after Arr deletion`, error);
+    });
+  }
   await logEvents([{
     serverId,
     type: 'items.deleted',
     payload: {
       libraryKey: key,
       deletedCount: deleted.length,
+      partialCount: partial.length,
       failedCount: failed.length,
       fileSizeFreed,
     },
   }]);
 
-  return c.json({ deleted, failed } satisfies DeleteItemsResponse);
+  return c.json({ deleted, partial, failed } satisfies DeleteItemsResponse);
 });
 
 router.get('/:key/shows/:ratingKey', async (c) => {

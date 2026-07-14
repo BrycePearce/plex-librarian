@@ -211,6 +211,20 @@
       "when": 1783900800000,
       "tag": "0030_sharing_risk_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1783980202338,
+      "tag": "0031_peaceful_mister_fear",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1783987833395,
+      "tag": "0032_sticky_alex_wilder",
+      "breakpoints": true
     }
   ]
 }

@@ -15,6 +15,8 @@ export interface PlexItem {
   fileSize: number | null;
   duration: number | null;
   year: number | null;
+  tmdbId: number | null;
+  tvdbId: number | null;
 }
 
 export interface PlexWebhookPayload {
@@ -46,6 +48,8 @@ export interface PlexRawMetadata {
   viewCount?: number;
   duration?: number;
   year?: number;
+  Guid?: Array<{ id?: string }>;
+  guid?: string;
   // Episode-level parent references — only present on type=4 responses.
   parentRatingKey?: string; // season ratingKey
   parentIndex?: number; // season number

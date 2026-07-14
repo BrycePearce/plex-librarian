@@ -1,4 +1,5 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
+import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db } from '../../db/index.ts';
 import { servers, users } from '../../db/schema.ts';
 import { fetchServerRoster } from '../../integrations/plex/accounts.ts';
@@ -10,11 +11,6 @@ const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 // covers back-to-back per-library resyncs of the same server, which each call syncUsers
 // but have nothing new to reconcile seconds apart.
 const USERS_SYNC_STALENESS_WINDOW_SEC = 60;
-// Keep roster upserts below SQLite's bound-parameter limit. Each user currently binds
-// nine values, and a conservative fixed batch also keeps statement compilation and
-// transient allocations small on unusually large shared servers.
-const USERS_UPSERT_BATCH_SIZE = 500;
-
 // Dedupes concurrent syncUsers() calls for the same server onto a single in-flight
 // execution. Two per-library resyncs on the same server are NOT mutually exclusive
 // (manager.ts's conflict check only blocks same-library or full-sync collisions), so
@@ -96,8 +92,7 @@ async function syncUsersOnce(plex: PlexClient, serverId: number, now: number): P
     }
 
     if (roster.length > 0) {
-      for (let offset = 0; offset < roster.length; offset += USERS_UPSERT_BATCH_SIZE) {
-        const batch = roster.slice(offset, offset + USERS_UPSERT_BATCH_SIZE);
+      for (const batch of sqliteWriteBatches(roster)) {
         await db.insert(users)
           .values(
             batch.map((u) => ({

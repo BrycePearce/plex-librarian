@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { RefObject } from "react";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Copy, Trash2 } from "lucide-react";
@@ -18,9 +19,14 @@ export function DeleteConfirmDialog({
   items: StaleItem[];
   pending: boolean;
   error: unknown;
-  onConfirm: () => void;
+  onConfirm: (mode: "coordinated" | "plex-only") => void;
   onCancel: () => void;
 }) {
+  const [plexOnly, setPlexOnly] = useState(false);
+  const cancel = () => {
+    setPlexOnly(false);
+    onCancel();
+  };
   const totalSize = items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
   // Deleting here removes every synced Media version of an item, not just a redundant
   // one — surfaced per-item below (a full version tree for movies, a lighter indicator
@@ -33,7 +39,7 @@ export function DeleteConfirmDialog({
   );
 
   return (
-    <dialog ref={dialogRef} className="modal" onClose={onCancel}>
+    <dialog ref={dialogRef} className="modal" onClose={cancel}>
       <div className="modal-box polished-modal">
         <h3 className="font-bold text-lg flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-error" /> Delete {items.length}
@@ -124,11 +130,29 @@ export function DeleteConfirmDialog({
             {error instanceof Error ? error.message : "Delete failed"}
           </p>
         )}
+        <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-lg border border-base-300 bg-base-200/40 p-3">
+          <input
+            type="checkbox"
+            className="checkbox checkbox-sm mt-0.5"
+            checked={plexOnly}
+            onChange={(event) => setPlexOnly(event.target.checked)}
+            disabled={pending}
+          />
+          <span>
+            <span className="block text-sm font-medium">
+              Delete from Plex only
+            </span>
+            <span className="block text-xs text-base-content/55">
+              Skip mapped Sonarr or Radarr instances. Monitored media may be
+              downloaded again.
+            </span>
+          </span>
+        </label>
         <div className="modal-action mt-3">
           <button
             type="button"
             className="btn btn-sm"
-            onClick={onCancel}
+            onClick={cancel}
             disabled={pending}
           >
             Cancel
@@ -136,7 +160,7 @@ export function DeleteConfirmDialog({
           <button
             type="button"
             className="btn btn-sm btn-error gap-2"
-            onClick={onConfirm}
+            onClick={() => onConfirm(plexOnly ? "plex-only" : "coordinated")}
             disabled={pending}
           >
             {pending

@@ -1,138 +1,131 @@
-# plex-librarian
+# Plex Librarian
 
-Library health insights for your Plex server — find stale content, track viewing patterns, and reclaim disk space.
+Understand what is taking up space on your Plex server, find content nobody is
+watching, and clean up your library with confidence.
 
-## Unraid / Docker
+Plex Librarian is a self-hosted library health dashboard built for Plex. It
+helps you:
 
-### Unraid (Community Applications)
+- Find movies, shows, and music that have gone unwatched for months or years.
+- Sort stale content by age, size, play count, and other useful signals.
+- Find duplicate movie and episode versions that are wasting disk space.
+- Review viewing activity, inactive users, and unusual sharing patterns.
+- Delete whole titles through Sonarr or Radarr so they are not immediately
+  downloaded again.
+- Run scheduled library syncs and follow their progress from the web UI.
 
-Add the template repository URL in **Settings → Docker → Template Repositories**:
+It ships as a single Docker container and is designed to run alongside Plex on
+Unraid or any other Docker host.
 
-```
-https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/
-```
+## Install on Unraid
 
-Then install **PlexLibrarian** from the Apps tab. Map `/data` to a persistent path (e.g. `/mnt/user/appdata/plex-librarian`) and open the web UI to complete setup.
+Install **Plex Librarian** from Community Applications (the **Apps** tab). Map
+`/data` to a persistent appdata directory such as
+`/mnt/user/appdata/plex-librarian`, then start the container.
 
-### Docker Compose
+Open the web UI from the Docker page and select **Sign in with Plex** — the app
+walks you through the rest.
+
+Plex Librarian does not need access to your media shares. Sonarr, Radarr, or
+Plex performs file deletion using its own existing mounts and permissions.
+
+## Install with Docker
+
+Create a Compose file with a persistent `/data` mount:
 
 ```yaml
 services:
   plex-librarian:
-    image: ghcr.io/BrycePearce/plex-librarian:latest
+    image: ghcr.io/brycepearce/plex-librarian:latest
     container_name: plex-librarian
     ports:
       - "8288:8080"
     volumes:
-      - /path/to/appdata:/data
-    environment:
-      # Optional: skip the OAuth wizard by providing credentials directly
-      # PLEX_URL: http://192.168.1.100:32400
-      # PLEX_TOKEN: your-plex-token
+      - /path/to/appdata/plex-librarian:/data
     restart: unless-stopped
 ```
 
-### Environment variables
-
-| Variable                     | Required | Description                                                                                                   |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `DB_PATH`                    | No       | Path to SQLite database (default: `/data/librarian.db`)                                                       |
-| `PORT`                       | No       | HTTP port (default: `8080`)                                                                                   |
-| `PLEX_URL`                   | No       | Skip OAuth — direct URL to your Plex server                                                                   |
-| `PLEX_TOKEN`                 | No       | Skip OAuth — your Plex auth token                                                                             |
-| `LIBRARY_SYNC_CONCURRENCY`   | No       | Max libraries synced in parallel (default: `3`)                                                               |
-| `FETCH_CONCURRENCY`          | No       | Max concurrent Plex page requests per library (default: `8`)                                                  |
-| `SYNC_STALL_TIMEOUT_MINUTES` | No       | Abort a sync if it reports no progress for this long, e.g. a Plex host going offline mid-sync (default: `15`) |
-| `LOG_RETENTION_DAYS`         | No       | Days to keep sync history and activity feed entries before they're automatically deleted (default: `180`)     |
-
-Migrations run automatically on startup. No manual database setup required.
-
-Sync concurrency defaults are deliberately conservative to keep the container's footprint small, especially since Plex itself often runs on the same host. Only raise these if you're running on dedicated hardware with room to spare.
-
-### Manual Plex setup (skip OAuth)
-
-Set both `PLEX_URL` and `PLEX_TOKEN` to bypass the setup wizard entirely.
-
-**Finding your token:** In Plex Web, play any item, then click the three-dot menu → "Get Info" → "View XML". Your token is the `X-Plex-Token` query parameter in the URL. Alternatively, browse to `http://<your-plex-host>:32400/identity?X-Plex-Token=<token>` — if you get a valid response, the token works.
-
-**Finding your server URL:** Use `http://<local-ip>:32400` for a local server. plex.tv relay URLs (`https://xxx.plex.direct:...`) also work but local is faster.
-
-## Webhooks (Plex Pass only)
-
-Webhooks enable real-time `lastViewedAt` updates when someone plays or finishes a title, without waiting for a manual sync.
-
-In Plex Web, go to **Settings → Webhooks → Add Webhook** and enter:
-
-```
-http://<your-host>:8288/api/webhook/plex
-```
-
-| Event            | Effect                                                                      |
-| ---------------- | --------------------------------------------------------------------------- |
-| `media.play`     | Updates item/user `lastViewedAt` and records bounded IP/device observations |
-| `media.pause`    | Closes an observed playback interval for concurrency analysis               |
-| `media.resume`   | Resumes an observed playback interval and updates recent activity           |
-| `media.stop`     | Closes an observed playback interval for concurrency analysis               |
-| `media.scrobble` | Updates Plex's authoritative watched state and records another observation  |
-
-The Users page combines recent remote-network and player diversity, rapid network changes,
-and recurring concurrent remote playback into a conservative, explainable review score.
-The score is not a probability or a finding that an account is being shared. Evidence
-confidence uses the same 30-day window as the score; sparse or missing observations are
-shown as **Limited data**, never as affirmative low risk.
-
-## API
-
-| Method | Path                                   | Description                                                                                  |
-| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| GET    | `/health`                              | Health check                                                                                 |
-| GET    | `/api/settings`                        | Global defaults, including stale-item, inactive-user, and user-activity retention days       |
-| PATCH  | `/api/settings`                        | Update global defaults                                                                       |
-| GET    | `/api/users`                           | Server user roster, activity summary, and explainable sharing-risk assessment                |
-| DELETE | `/api/users/:accountId`                | Revoke a user's access to this server                                                        |
-| POST   | `/api/auth/plex/pin`                   | Start OAuth PIN flow, returns `{ pinId, authUrl }`                                           |
-| GET    | `/api/auth/plex/pin/:id`               | Poll PIN status, returns `{ status, servers? }`                                              |
-| POST   | `/api/auth/plex/server`                | Save chosen server after OAuth                                                               |
-| GET    | `/api/auth/status`                     | Returns `{ configured, source, reachable? }` — `configured: false` redirects the UI to setup |
-| DELETE | `/api/auth/plex`                       | Disconnect / switch servers                                                                  |
-| GET    | `/api/libraries`                       | All synced libraries                                                                         |
-| GET    | `/api/libraries/:key/stale`            | Stale items (supports `days`, `filter`, `sort`, `limit`, `offset`, etc.)                     |
-| PATCH  | `/api/libraries/:key`                  | Set a per-library `staleMinAgeDays` override (`null` to use the global default)              |
-| GET    | `/api/libraries/:key/shows/:ratingKey` | Show detail with per-season rollups                                                          |
-| DELETE | `/api/libraries/:key/items`            | Delete items' media from Plex (permanent)                                                    |
-| GET    | `/api/proxy/thumb`                     | Server-side Plex thumbnail proxy                                                             |
-| POST   | `/api/sync`                            | Trigger a full sync from Plex                                                                |
-| POST   | `/api/sync/libraries/:key`             | Trigger a sync for a single library                                                          |
-| GET    | `/api/sync/history`                    | Last 20 sync runs                                                                            |
-| GET    | `/api/sync/:id`                        | Status of a specific sync run                                                                |
-| GET    | `/api/sync/:id/events`                 | SSE stream of live sync progress                                                             |
-| POST   | `/api/webhook/plex`                    | Plex webhook receiver (Plex Pass only)                                                       |
-
-## Development
-
-**Prerequisites:** [Deno 2.x](https://deno.com/manual/getting_started/installation)
+Start the container, open `http://<docker-host>:8288`, and select **Sign in
+with Plex**:
 
 ```bash
-# Copy and fill in env vars
-cp backend/.env.example backend/.env
-
-# Start backend + frontend dev servers
-deno task dev
+docker compose up -d
 ```
 
-Backend: `http://localhost:8080` · Frontend: `http://localhost:5173`
+## Connect Sonarr and Radarr
 
-### Database
+Plex Librarian can coordinate whole-title deletion with Radarr for movie
+libraries and Sonarr for TV libraries. Arr removes the title and its files, then
+Plex Librarian asks Plex to refresh the affected library.
 
-Migrations run automatically when the server starts. To generate a new migration after schema changes:
+Open **Settings → Sonarr & Radarr**, add an instance with its URL and API key
+(found in Sonarr/Radarr under **Settings → General → Security**), then map each
+library to an instance under **Library mappings**.
 
-```bash
-cd backend && deno task db:generate
+Use a URL that is reachable from inside the Plex Librarian container, such as
+`http://192.168.1.20:8989` or `http://sonarr:8989` on a shared Docker network —
+not `localhost`, which points back at Plex Librarian itself.
+
+## Configuration
+
+Most settings are managed from the web UI. These environment variables are
+available for Docker and advanced Unraid installations:
+
+| Variable                     | Required | Description                                                                                           |
+| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `DB_PATH`                    | No       | SQLite database path. Default: `/data/librarian.db`                                                   |
+| `PORT`                       | No       | Container HTTP port. Default: `8080`                                                                  |
+| `PLEX_URL`                   | No       | Direct Plex server URL; use with `PLEX_TOKEN` to skip the setup wizard                                |
+| `PLEX_TOKEN`                 | No       | Plex authentication token; use with `PLEX_URL`                                                        |
+| `LIBRARY_SYNC_CONCURRENCY`   | No       | Maximum libraries synced in parallel. Default: `3`                                                    |
+| `FETCH_CONCURRENCY`          | No       | Maximum concurrent Plex page requests per library. Default: `8`                                       |
+| `SYNC_STALL_TIMEOUT_MINUTES` | No       | Abort a sync after this many minutes without progress. Default: `15`                                  |
+| `LOG_RETENTION_DAYS`         | No       | Days to retain sync history and activity entries; use `0` to retain them indefinitely. Default: `180` |
+
+The concurrency defaults are intentionally conservative because Plex Librarian
+often shares a host with Plex. Raise them only when the host has capacity to
+spare.
+
+Sonarr and Radarr connections are configured in the web UI rather than through
+environment variables so multiple instances can be managed independently.
+
+### Manual Plex configuration
+
+Set both `PLEX_URL` and `PLEX_TOKEN` to bypass the Plex authorization wizard.
+Environment variables take precedence over credentials saved through the web
+UI.
+
+Use a direct local Plex URL when possible, such as
+`http://192.168.1.100:32400`. To locate a token in Plex Web, open an item's
+three-dot menu, select **Get Info → View XML**, and copy the `X-Plex-Token`
+parameter from the resulting URL.
+
+## Optional Plex webhooks
+
+Plex Pass users can configure a webhook for faster viewing-activity updates
+between full syncs.
+
+In Plex Web, open **Settings → Webhooks → Add Webhook** and enter:
+
+```text
+http://<plex-librarian-host>:8288/api/webhook/plex
 ```
 
-Other backend tasks (run from `backend/`):
+The webhook records playback lifecycle events used for watch-state and user
+activity insights. It follows the same trusted-network security model as the
+rest of the application.
 
-```bash
-deno task fmt    # format
-deno task lint   # lint
-```
+## Backups and security
+
+All application data is stored under `/data`, including the SQLite database,
+Plex credentials, Sonarr/Radarr API keys, mappings, and activity history. Back up
+this directory and treat the backup as sensitive.
+
+Plex Librarian is intended for a trusted self-hosted network. If remote access
+is required, place it behind a reverse proxy that provides authentication and
+TLS.
+
+## Questions or problems
+
+Open an issue at
+[github.com/BrycePearce/plex-librarian/issues](https://github.com/BrycePearce/plex-librarian/issues).

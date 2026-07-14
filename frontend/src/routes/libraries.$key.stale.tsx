@@ -88,7 +88,8 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
     // Accepts both a real boolean (set programmatically via navigate({ search })) and
     // the string "true" (a manually-typed or bookmarked URL) — TanStack Router's search
     // serialization doesn't guarantee which shape survives a round trip.
-    duplicatesOnly: search.duplicatesOnly === true || search.duplicatesOnly === "true",
+    duplicatesOnly: search.duplicatesOnly === true ||
+      search.duplicatesOnly === "true",
     offset: Number.isFinite(offset) && offset >= 0
       ? Math.floor(offset)
       : staleSearchDefaults.offset,
@@ -305,9 +306,9 @@ function StalePage() {
 
   return (
     <div
-      className={`stale-page workspace-tone-${libraryTone(thisLibrary?.type)} space-y-6 ${
-        selection.selected.size > 0 ? "pb-20" : ""
-      }`}
+      className={`stale-page workspace-tone-${
+        libraryTone(thisLibrary?.type)
+      } space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}
     >
       {
         /* Sticky (not the table) per explicit preference: the back/title/sync row and the
@@ -349,10 +350,13 @@ function StalePage() {
           </div>
           <div className="library-header-actions flex flex-col items-end gap-1">
             <div className="flex gap-2">
-              {(thisLibrary?.type === "movie" || thisLibrary?.type === "show") && (
+              {(thisLibrary?.type === "movie" ||
+                thisLibrary?.type === "show") && (
                 <Link
                   to="/duplicates"
-                  search={{ type: thisLibrary.type === "show" ? "tv" : "movie" }}
+                  search={{
+                    type: thisLibrary.type === "show" ? "tv" : "movie",
+                  }}
                   className="btn btn-ghost btn-sm gap-2"
                   title="Find items with multiple synced versions"
                 >
@@ -386,19 +390,20 @@ function StalePage() {
               <SlidersHorizontal className="size-4" /> Analysis controls
             </div>
             <StaleFilters
-            days={params.days ?? staleSearchDefaults.days}
-            filter={params.filter ?? staleSearchDefaults.filter}
-            onDaysChange={(days) =>
-              setParams((p) => ({ ...p, days, offset: 0 }))}
-            onFilterChange={(filter) =>
-              setParams((p) => ({ ...p, filter, offset: 0 }))}
-            gracePeriodValue={gracePeriodValue}
-            defaultGraceDays={data?.minAgeDays}
-            onGracePeriodChange={setGracePeriod}
-            libraryType={thisLibrary?.type ?? ""}
-            duplicatesOnly={params.duplicatesOnly ?? staleSearchDefaults.duplicatesOnly}
-            onDuplicatesOnlyChange={(duplicatesOnly) =>
-              setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))}
+              days={params.days ?? staleSearchDefaults.days}
+              filter={params.filter ?? staleSearchDefaults.filter}
+              onDaysChange={(days) =>
+                setParams((p) => ({ ...p, days, offset: 0 }))}
+              onFilterChange={(filter) =>
+                setParams((p) => ({ ...p, filter, offset: 0 }))}
+              gracePeriodValue={gracePeriodValue}
+              defaultGraceDays={data?.minAgeDays}
+              onGracePeriodChange={setGracePeriod}
+              libraryType={thisLibrary?.type ?? ""}
+              duplicatesOnly={params.duplicatesOnly ??
+                staleSearchDefaults.duplicatesOnly}
+              onDuplicatesOnlyChange={(duplicatesOnly) =>
+                setParams((p) => ({ ...p, duplicatesOnly, offset: 0 }))}
             />
           </div>
         )}
@@ -419,7 +424,9 @@ function StalePage() {
           <LibraryInsight
             icon={<Database />}
             label="Library size"
-            value={thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"}
+            value={thisLibrary
+              ? formatKilobytes(thisLibrary.totalFileSize)
+              : "—"}
           />
           <LibraryInsight
             icon={<Clock3 />}
@@ -460,8 +467,8 @@ function StalePage() {
                 }
                 warningMessage={
                   <>
-                    Watch-history sync hasn't completed for this library yet,
-                    so items showing{" "}
+                    Watch-history sync hasn't completed for this library yet, so
+                    items showing{" "}
                     <span className="badge badge-outline badge-sm align-middle">
                       unknown
                     </span>{" "}
@@ -475,11 +482,31 @@ function StalePage() {
 
             {deleteResult && (
               <DeleteResultAlert
-                variant={deleteResult.failed.length > 0 ? "warning" : "success"}
+                variant={deleteResult.failed.length > 0 ||
+                    deleteResult.partial.length > 0
+                  ? "warning"
+                  : "success"}
                 onDismiss={() => setDeleteResult(null)}
               >
                 Deleted {deleteResult.deleted.length} item
                 {deleteResult.deleted.length === 1 ? "" : "s"}.
+                {deleteResult.partial.length > 0 && (
+                  <>
+                    {" "}
+                    {deleteResult.partial.length}{" "}
+                    partially completed; files were removed from{" "}
+                    {deleteResult.partial.flatMap((item) =>
+                      item.deletedInstances.map((instance) =>
+                        instance.instanceName
+                      )
+                    ).join(", ")}, but failed in{" "}
+                    {deleteResult.partial.flatMap((item) =>
+                      item.failedInstances.map((instance) =>
+                        `${instance.instanceName}: ${instance.error}`
+                      )
+                    ).join("; ")}. Retry to reconcile the remaining instances.
+                  </>
+                )}
                 {deleteResult.failed.length > 0 && (
                   <>
                     {" "}
@@ -505,25 +532,23 @@ function StalePage() {
               onDelete={() => openConfirm(selection.selectedItems)}
             />
 
-            {isLoading
-              ? <StaleTableSkeleton />
-              : (
-                <StaleItemsTable
-                  items={pageItems}
-                  params={params}
-                  onSort={setSort}
-                  isFetching={isFetching}
-                  selected={selection.selected}
-                  onToggle={selection.toggleOne}
-                  onToggleAll={selection.toggleAllOnPage}
-                  onDeleteOne={(item) => openConfirm([item])}
-                  animateRowRemoval={animateRowRemoval}
-                  hasAnimatedIn={hasAnimatedIn}
-                  historySyncedAt={data?.historySyncedAt ?? null}
-                  isSyncing={isSyncing}
-                  thisLibraryItemCount={thisLibraryItemCount}
-                />
-              )}
+            {isLoading ? <StaleTableSkeleton /> : (
+              <StaleItemsTable
+                items={pageItems}
+                params={params}
+                onSort={setSort}
+                isFetching={isFetching}
+                selected={selection.selected}
+                onToggle={selection.toggleOne}
+                onToggleAll={selection.toggleAllOnPage}
+                onDeleteOne={(item) => openConfirm([item])}
+                animateRowRemoval={animateRowRemoval}
+                hasAnimatedIn={hasAnimatedIn}
+                historySyncedAt={data?.historySyncedAt ?? null}
+                isSyncing={isSyncing}
+                thisLibraryItemCount={thisLibraryItemCount}
+              />
+            )}
 
             <Pagination
               page={page}
@@ -538,9 +563,13 @@ function StalePage() {
         items={confirmItems}
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
-        onConfirm={() =>
+        onConfirm={(mode) =>
           deleteMutation.mutate(
-            { libraryKey: key, ratingKeys: confirmItems.map((i) => i.ratingKey) },
+            {
+              libraryKey: key,
+              ratingKeys: confirmItems.map((i) => i.ratingKey),
+              mode,
+            },
             {
               onSuccess: (res) => {
                 selection.remove(res.deleted);

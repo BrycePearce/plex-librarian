@@ -1,3 +1,4 @@
+import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db } from '../../db/index.ts';
 import { LOG_RETENTION_DAYS, pruneOlderThan } from '../../db/prune.ts';
 import { events } from '../../db/schema.ts';
@@ -27,14 +28,16 @@ export type LogEventInput =
 export async function logEvents(inputs: LogEventInput[]): Promise<void> {
   if (inputs.length === 0) return;
   try {
-    await db.insert(events).values(
-      inputs.map((input) => ({
-        serverId: input.serverId,
-        type: input.type,
-        payload: input.payload ? JSON.stringify(input.payload) : null,
-        createdAt: Math.floor(Date.now() / 1000),
-      })),
-    );
+    for (const batch of sqliteWriteBatches(inputs)) {
+      await db.insert(events).values(
+        batch.map((input) => ({
+          serverId: input.serverId,
+          type: input.type,
+          payload: input.payload ? JSON.stringify(input.payload) : null,
+          createdAt: Math.floor(Date.now() / 1000),
+        })),
+      );
+    }
   } catch (err) {
     console.error('Failed to record activity event(s):', err);
   }

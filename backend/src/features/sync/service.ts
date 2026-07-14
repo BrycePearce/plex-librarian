@@ -1,4 +1,5 @@
 import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
+import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db } from '../../db/index.ts';
 import { itemMediaVersions, items, libraries } from '../../db/schema.ts';
 import { itemsByLibrary, libraryByKey, mediaVersionsByLibrary } from '../../db/scope.ts';
@@ -83,52 +84,58 @@ async function syncLibrary(
 
   for await (const page of plex.libraryItems(lib.key, typeFilter)) {
     if (page.items.length === 0) continue;
-    await db
-      .insert(items)
-      .values(
-        page.items.map((item) => ({
-          serverId,
-          ratingKey: item.ratingKey,
-          libraryKey: lib.key,
-          title: item.title,
-          type: item.type,
-          thumb: item.thumb,
-          addedAt: item.addedAt,
-          lastViewedAt: item.lastViewedAt,
-          viewCount: item.viewCount,
-          fileSize: item.fileSize,
-          duration: item.duration,
-          year: item.year,
-          updatedAt: now,
-        })),
-      )
-      .onConflictDoUpdate({
-        target: [items.serverId, items.ratingKey],
-        set: {
-          libraryKey: excl(items.libraryKey),
-          title: excl(items.title),
-          type: excl(items.type),
-          thumb: excl(items.thumb),
-          addedAt: excl(items.addedAt),
-          lastViewedAt: excl(items.lastViewedAt),
-          viewCount: excl(items.viewCount),
-          fileSize: excl(items.fileSize),
-          duration: excl(items.duration),
-          year: excl(items.year),
-          updatedAt: excl(items.updatedAt),
-        },
-      });
+    for (const batch of sqliteWriteBatches(page.items)) {
+      await db
+        .insert(items)
+        .values(
+          batch.map((item) => ({
+            serverId,
+            ratingKey: item.ratingKey,
+            libraryKey: lib.key,
+            title: item.title,
+            type: item.type,
+            thumb: item.thumb,
+            addedAt: item.addedAt,
+            lastViewedAt: item.lastViewedAt,
+            viewCount: item.viewCount,
+            fileSize: item.fileSize,
+            duration: item.duration,
+            year: item.year,
+            tmdbId: item.tmdbId,
+            tvdbId: item.tvdbId,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [items.serverId, items.ratingKey],
+          set: {
+            libraryKey: excl(items.libraryKey),
+            title: excl(items.title),
+            type: excl(items.type),
+            thumb: excl(items.thumb),
+            addedAt: excl(items.addedAt),
+            lastViewedAt: excl(items.lastViewedAt),
+            viewCount: excl(items.viewCount),
+            fileSize: excl(items.fileSize),
+            duration: excl(items.duration),
+            year: excl(items.year),
+            tmdbId: excl(items.tmdbId),
+            tvdbId: excl(items.tvdbId),
+            updatedAt: excl(items.updatedAt),
+          },
+        });
+    }
     itemCount += page.items.length;
     callbacks?.onCount(page.items.length);
 
     // Items must be upserted before their media versions within this same page — the
     // FK(server_id, item_rating_key) → items(server_id, rating_key) needs the parent
     // row to already exist. Only ever non-empty for movie libraries (see libraryItems).
-    if (page.mediaVersions.length > 0) {
+    for (const batch of sqliteWriteBatches(page.mediaVersions)) {
       await db
         .insert(itemMediaVersions)
         .values(
-          page.mediaVersions.map((v) => ({
+          batch.map((v) => ({
             serverId,
             mediaId: v.mediaId,
             itemRatingKey: v.itemRatingKey,

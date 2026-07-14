@@ -70,19 +70,45 @@ function extractFileSize(item: PlexRawMetadata): number | null {
   return Math.round(bytes / 1000);
 }
 
+export function extractExternalIds(
+  item: Pick<PlexRawMetadata, 'Guid' | 'guid'>,
+): { tmdbId: number | null; tvdbId: number | null } {
+  const ids = [...(item.Guid ?? []).map((guid) => guid.id), item.guid].filter(
+    (value): value is string => typeof value === 'string',
+  );
+
+  const findId = (provider: 'tmdb' | 'tvdb'): number | null => {
+    for (const raw of ids) {
+      const modern = raw.match(new RegExp(`^${provider}://(\\d+)`, 'i'));
+      const legacy = raw.match(
+        provider === 'tmdb' ? /themoviedb:\/\/(\d+)/i : /thetvdb:\/\/(\d+)/i,
+      );
+      const match = modern ?? legacy;
+      if (match) return Number(match[1]);
+    }
+    return null;
+  };
+
+  return { tmdbId: findId('tmdb'), tvdbId: findId('tvdb') };
+}
+
 function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
-  return raw.map((item) => ({
-    ratingKey: item.ratingKey,
-    title: item.title,
-    type: item.type,
-    thumb: item.thumb ?? null,
-    addedAt: item.addedAt ?? null,
-    lastViewedAt: item.lastViewedAt ?? null,
-    viewCount: item.viewCount ?? 0,
-    fileSize: extractFileSize(item),
-    duration: item.duration ?? null,
-    year: item.year ?? null,
-  }));
+  return raw.map((item) => {
+    const externalIds = extractExternalIds(item);
+    return {
+      ratingKey: item.ratingKey,
+      title: item.title,
+      type: item.type,
+      thumb: item.thumb ?? null,
+      addedAt: item.addedAt ?? null,
+      lastViewedAt: item.lastViewedAt ?? null,
+      viewCount: item.viewCount ?? 0,
+      fileSize: extractFileSize(item),
+      duration: item.duration ?? null,
+      year: item.year ?? null,
+      ...externalIds,
+    };
+  });
 }
 
 function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
@@ -167,7 +193,12 @@ function mapEpisodeMediaVersions(raw: PlexRawMetadata[]): PlexEpisodeMediaVersio
 export class PlexClient {
   private readonly url: string;
 
-  constructor(url: string, private readonly token: string, private readonly clientId?: string) {
+  constructor(
+    url: string,
+    private readonly token: string,
+    private readonly clientId?: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {
     this.url = url.replace(/\/$/, '');
   }
 
@@ -185,7 +216,7 @@ export class PlexClient {
 
       let res: Response;
       try {
-        res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+        res = await this.fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) });
       } catch (err) {
         // Timeouts mean the server is already struggling — don't compound it with retries.
         if (err instanceof DOMException && err.name === 'TimeoutError') throw err;
@@ -248,7 +279,7 @@ export class PlexClient {
   async deleteItem(ratingKey: string): Promise<void> {
     const url = `${this.url}/library/metadata/${ratingKey}`;
     const headers = buildPlexHeaders(this.clientId, this.token);
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: 'DELETE',
       headers,
       signal: AbortSignal.timeout(30_000),
@@ -274,7 +305,7 @@ export class PlexClient {
   async deleteMedia(ratingKey: string, mediaId: number): Promise<void> {
     const url = `${this.url}/library/metadata/${ratingKey}/media/${mediaId}`;
     const headers = buildPlexHeaders(this.clientId, this.token);
-    const res = await fetch(url, {
+    const res = await this.fetchImpl(url, {
       method: 'DELETE',
       headers,
       signal: AbortSignal.timeout(30_000),
@@ -288,6 +319,15 @@ export class PlexClient {
         `Plex ${res.status} deleting media ${mediaId} of ${ratingKey}${text ? `: ${text}` : ''}`,
       );
     }
+  }
+
+  async refreshLibrary(libraryKey: string): Promise<void> {
+    const url = `${this.url}/library/sections/${encodeURIComponent(libraryKey)}/refresh`;
+    const res = await this.fetchImpl(url, {
+      headers: buildPlexHeaders(this.clientId, this.token),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`Plex ${res.status} refreshing library ${libraryKey}`);
   }
 
   assetUrl(path: string): string {
@@ -311,10 +351,13 @@ export class PlexClient {
   private async *paginatedMetadata(
     libraryKey: string,
     typeFilter?: number,
+    includeGuids = false,
   ): AsyncGenerator<PlexRawMetadata[]> {
-    const basePath = typeFilter !== undefined
-      ? `/library/sections/${libraryKey}/all?type=${typeFilter}`
-      : `/library/sections/${libraryKey}/all`;
+    const params = new URLSearchParams();
+    if (typeFilter !== undefined) params.set('type', String(typeFilter));
+    if (includeGuids) params.set('includeGuids', '1');
+    const query = params.toString();
+    const basePath = `/library/sections/${libraryKey}/all${query ? `?${query}` : ''}`;
     const fetchPage = (start: number) =>
       this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[]; totalSize?: number } }>(
         basePath,
@@ -353,7 +396,10 @@ export class PlexClient {
     libraryKey: string,
     typeFilter?: number,
   ): AsyncGenerator<{ items: PlexItem[]; mediaVersions: PlexMediaVersion[] }> {
-    for await (const page of this.paginatedMetadata(libraryKey, typeFilter)) {
+    // External provider GUIDs are opt-in on Plex's bulk library endpoint. Request them
+    // only for item/show syncs: episode and track streams can contain millions of rows
+    // and do not need TMDB/TVDB IDs.
+    for await (const page of this.paginatedMetadata(libraryKey, typeFilter, true)) {
       yield { items: mapItems(page), mediaVersions: mapMediaVersions(page) };
     }
   }

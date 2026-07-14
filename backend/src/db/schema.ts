@@ -1,4 +1,13 @@
-import { foreignKey, index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import {
+  foreignKey,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 // One row per distinct Plex Media Server ever connected, keyed by Plex's stable
 // per-install machineIdentifier. All synced data is scoped to a server row via
@@ -54,6 +63,8 @@ export const items = sqliteTable(
     fileSize: integer('file_size'),
     duration: integer('duration'),
     year: integer('year'),
+    tmdbId: integer('tmdb_id'),
+    tvdbId: integer('tvdb_id'),
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
@@ -73,6 +84,87 @@ export const items = sqliteTable(
       table.libraryKey,
       table.fileSize,
     ),
+    tmdbIdIdx: index('items_server_tmdb_id_idx').on(table.serverId, table.tmdbId).where(
+      sql`${table.tmdbId} IS NOT NULL`,
+    ),
+    tvdbIdIdx: index('items_server_tvdb_id_idx').on(table.serverId, table.tvdbId).where(
+      sql`${table.tvdbId} IS NOT NULL`,
+    ),
+  }),
+);
+
+export const arrInstances = sqliteTable(
+  'arr_instances',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    type: text('type', { enum: ['radarr', 'sonarr'] }).notNull(),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    apiKey: text('api_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    serverIdx: index('arr_instances_server_idx').on(table.serverId),
+    serverTypeUrlUnique: uniqueIndex('arr_instances_server_type_url_unique').on(
+      table.serverId,
+      table.type,
+      table.url,
+    ),
+  }),
+);
+
+export const arrLibraryMappings = sqliteTable(
+  'arr_library_mappings',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    libraryKey: text('library_key').notNull(),
+    arrInstanceId: integer('arr_instance_id').notNull().references(() => arrInstances.id, {
+      onDelete: 'cascade',
+    }),
+    addImportExclusion: integer('add_import_exclusion', { mode: 'boolean' }).notNull().default(
+      true,
+    ),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.libraryKey, table.arrInstanceId] }),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    libraryIdx: index('arr_library_mappings_library_idx').on(table.serverId, table.libraryKey),
+  }),
+);
+
+// Durable marker written after every Arr lookup succeeds but immediately before the
+// first destructive request. If the response is lost after Arr commits the deletion,
+// a later retry can distinguish "already absent after our attempt" from "never found".
+// Deleting the local item removes the marker through the composite FK.
+export const arrDeleteAttempts = sqliteTable(
+  'arr_delete_attempts',
+  {
+    serverId: integer('server_id').notNull(),
+    ratingKey: text('rating_key').notNull(),
+    libraryKey: text('library_key').notNull(),
+    arrInstanceId: integer('arr_instance_id').notNull(),
+    externalId: integer('external_id').notNull(),
+    startedAt: integer('started_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.ratingKey, table.arrInstanceId] }),
+    itemFk: foreignKey({
+      columns: [table.serverId, table.ratingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    instanceFk: foreignKey({
+      columns: [table.arrInstanceId],
+      foreignColumns: [arrInstances.id],
+    }).onDelete('cascade'),
   }),
 );
 

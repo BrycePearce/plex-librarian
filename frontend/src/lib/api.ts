@@ -1,6 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type {
   ActivityEventsResponse,
+  ArrInstance,
+  ArrIntegrationSettings,
   AuthStatus,
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
@@ -9,11 +11,11 @@ import type {
   LibrariesResponse,
   Library,
   MovieDetail,
-  PendingInvitation,
   PendingInvitationsResponse,
   PinPollResult,
   PlexPin,
   RemoveUserResponse,
+  SaveArrInstanceRequest,
   Settings,
   ShowDetail,
   StaleResponse,
@@ -25,6 +27,10 @@ import type {
 export type {
   ActivityEvent,
   ActivityEventsResponse,
+  ArrInstance,
+  ArrIntegrationSettings,
+  ArrLibraryMapping,
+  ArrType,
   AuthStatus,
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
@@ -141,6 +147,27 @@ export const api = {
   libraries: {
     list: (limit = 100, offset = 0) =>
       apiFetch<LibrariesResponse>(`/libraries?limit=${limit}&offset=${offset}`),
+    listAll: async () => {
+      const pageSize = 1000;
+      const libraries: Library[] = [];
+      let total = 0;
+
+      do {
+        const page = await apiFetch<LibrariesResponse>(
+          `/libraries?limit=${pageSize}&offset=${libraries.length}`,
+        );
+        total = page.total;
+        libraries.push(...page.libraries);
+        if (page.libraries.length === 0) break;
+      } while (libraries.length < total);
+
+      return {
+        limit: libraries.length,
+        offset: 0,
+        total,
+        libraries,
+      } satisfies LibrariesResponse;
+    },
     stale: (key: string, params: StaleParams = {}) => {
       const q = new URLSearchParams();
       for (const [k, v] of Object.entries(params)) {
@@ -167,12 +194,16 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ staleMinAgeDays }),
       }),
-    deleteItems: (key: string, ratingKeys: string[]) =>
+    deleteItems: (
+      key: string,
+      ratingKeys: string[],
+      mode: "coordinated" | "plex-only" = "coordinated",
+    ) =>
       apiFetch<DeleteItemsResponse>(
         `/libraries/${encodeURIComponent(key)}/items`,
         {
           method: "DELETE",
-          body: JSON.stringify({ ratingKeys }),
+          body: JSON.stringify({ ratingKeys, mode }),
         },
       ),
   },
@@ -213,6 +244,35 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(partial),
       }),
+  },
+  arr: {
+    get: () => apiFetch<ArrIntegrationSettings>("/integrations/arr"),
+    createInstance: (instance: SaveArrInstanceRequest) =>
+      apiFetch<ArrInstance>("/integrations/arr/instances", {
+        method: "POST",
+        body: JSON.stringify(instance),
+      }),
+    testInstance: (id: number) =>
+      apiFetch<{ version: string | null }>(
+        `/integrations/arr/instances/${id}/test`,
+        { method: "POST" },
+      ),
+    deleteInstance: (id: number) =>
+      apiFetch<{ ok: true }>(`/integrations/arr/instances/${id}`, {
+        method: "DELETE",
+      }),
+    saveLibraryMapping: (
+      libraryKey: string,
+      instanceIds: number[],
+      addImportExclusion: boolean,
+    ) =>
+      apiFetch<{ ok: true }>(
+        `/integrations/arr/libraries/${encodeURIComponent(libraryKey)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ instanceIds, addImportExclusion }),
+        },
+      ),
   },
   users: {
     invitations: (
@@ -310,6 +370,7 @@ const SERVER_SCOPED_QUERY_ROOTS = [
   "duplicates",
   "events",
   "users",
+  "arr-integrations",
 ];
 
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {

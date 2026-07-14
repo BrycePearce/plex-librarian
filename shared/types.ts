@@ -45,6 +45,39 @@ export interface Settings {
   ipHistoryRetentionDays: number;
 }
 
+export type ArrType = "radarr" | "sonarr";
+
+export interface ArrInstance {
+  id: number;
+  type: ArrType;
+  name: string;
+  url: string;
+  apiKeyConfigured: boolean;
+}
+
+export interface ArrLibraryMapping {
+  libraryKey: string;
+  instanceId: number;
+  addImportExclusion: boolean;
+}
+
+export interface ArrIntegrationSettings {
+  instances: ArrInstance[];
+  mappings: ArrLibraryMapping[];
+}
+
+export interface SaveArrInstanceRequest {
+  type: ArrType;
+  name: string;
+  url: string;
+  apiKey: string;
+}
+
+export interface SaveArrLibraryMappingRequest {
+  instanceIds: number[];
+  addImportExclusion: boolean;
+}
+
 // --- Libraries ---
 
 export interface Library {
@@ -295,10 +328,20 @@ export interface CancelPendingInvitationResponse {
 
 export interface DeleteItemsRequest {
   ratingKeys: string[];
+  mode?: "coordinated" | "plex-only";
 }
 
 export interface DeleteItemsResponse {
   deleted: string[];
+  partial: Array<{
+    ratingKey: string;
+    deletedInstances: Array<
+      { instanceId: number; instanceName: string; alreadyAbsent: boolean }
+    >;
+    failedInstances: Array<
+      { instanceId: number; instanceName: string; error: string }
+    >;
+  }>;
   failed: { ratingKey: string; error: string }[];
 }
 
@@ -360,6 +403,9 @@ export interface SyncFailedPayload {
 export interface ItemsDeletedPayload {
   libraryKey: string;
   deletedCount: number;
+  // Optional so activity rows written before coordinated partial results existed
+  // remain readable after an upgrade.
+  partialCount?: number;
   failedCount: number;
   // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
   // in frontend/src/lib/format.ts.

@@ -64,9 +64,7 @@ function ActivityPage() {
         icon={History}
       />
 
-      {isLoading && (
-        <ActivityListSkeleton />
-      )}
+      {isLoading && <ActivityListSkeleton />}
 
       {error && (
         <div className="alert alert-error">
@@ -162,15 +160,20 @@ function describeEvent(
         : `Full sync failed: ${error}`;
     }
     case "items.deleted": {
-      const { libraryKey, deletedCount, failedCount } = event.payload;
+      const { libraryKey, deletedCount, failedCount, partialCount = 0 } =
+        event.payload;
       const label = libraryLabel(libraryKey, titleByKey);
-      if (failedCount === 0) {
+      if (failedCount === 0 && partialCount === 0) {
         return `Deleted ${deletedCount} item(s) from ${label}`;
       }
-      if (deletedCount === 0) {
+      if (deletedCount === 0 && partialCount === 0) {
         return `Failed to delete ${failedCount} item(s) from ${label}`;
       }
-      return `Deleted ${deletedCount} item(s) from ${label} (${failedCount} failed)`;
+      const outcomes = [
+        partialCount > 0 ? `${partialCount} partial` : null,
+        failedCount > 0 ? `${failedCount} failed` : null,
+      ].filter(Boolean).join(", ");
+      return `Deleted ${deletedCount} item(s) from ${label} (${outcomes})`;
     }
     case "media.deleted": {
       const { libraryKey, title } = event.payload;
@@ -196,7 +199,8 @@ function EventRow(
   // instead of the neutral "items deleted" warning treatment, so a half-failed delete
   // isn't visually indistinguishable from a fully successful one.
   const hasFailedDelete = event.type === "items.deleted" &&
-    !!event.payload && event.payload.failedCount > 0;
+    !!event.payload &&
+    (event.payload.failedCount > 0 || (event.payload.partialCount ?? 0) > 0);
   const Icon = hasFailedDelete ? AlertCircle : EVENT_ICON[event.type];
   const iconClass = hasFailedDelete
     ? "text-error"

@@ -56,6 +56,7 @@ function DuplicatesPage() {
     mode: "versions" | "whole-item";
     title?: string;
     deletedCount: number;
+    partialCount: number;
     failedCount: number;
     fileSizeFreed: number;
     errors: string[];
@@ -106,6 +107,7 @@ function DuplicatesPage() {
       return {
         mode: "versions" as const,
         deletedCount,
+        partialCount: 0,
         failedCount: errors.length,
         fileSizeFreed,
         errors,
@@ -139,12 +141,20 @@ function DuplicatesPage() {
               mode: "whole-item",
               title: group.title,
               deletedCount: res.deleted.length,
+              partialCount: res.partial.length,
               failedCount: res.failed.length,
               // deleteItems doesn't return freed size per item; the group's own
               // combined size already reflects every version being removed.
               fileSizeFreed:
                 res.deleted.length > 0 ? (group.combinedFileSize ?? 0) : 0,
-              errors: res.failed.map((f) => f.error),
+              errors: [
+                ...res.partial.flatMap((item) =>
+                  item.failedInstances.map((instance) =>
+                    `${instance.instanceName}: ${instance.error}`
+                  )
+                ),
+                ...res.failed.map((failure) => failure.error),
+              ],
             });
             setReviewItem(null);
             dialogRef.current?.close();
@@ -210,25 +220,42 @@ function DuplicatesPage() {
         <>
           {deleteResult && (
             <DeleteResultAlert
-              variant={deleteResult.failedCount > 0 ? "warning" : "success"}
+              variant={deleteResult.failedCount > 0 ||
+                  deleteResult.partialCount > 0
+                ? "warning"
+                : "success"}
               onDismiss={() => setDeleteResult(null)}
             >
-              {deleteResult.mode === "whole-item" ? (
+              {deleteResult.mode === "whole-item" &&
+                deleteResult.partialCount > 0 && (
+                <>
+                  Partially deleted "{deleteResult.title}" from its mapped media
+                  managers. Retry to reconcile the remaining instances.
+                </>
+              )}
+              {deleteResult.mode === "whole-item" &&
+                deleteResult.partialCount === 0 &&
+                deleteResult.deletedCount === 0 && (
+                <>Could not delete "{deleteResult.title}".</>
+              )}
+              {deleteResult.mode === "whole-item" &&
+                deleteResult.deletedCount > 0 && (
                 <>
                   Deleted "{deleteResult.title}" from Plex (
                   {formatKilobytes(deleteResult.fileSizeFreed)} freed).
                 </>
-              ) : (
+              )}
+              {deleteResult.mode === "versions" && (
                 <>
                   Deleted {deleteResult.deletedCount} version
                   {deleteResult.deletedCount === 1 ? "" : "s"} (
                   {formatKilobytes(deleteResult.fileSizeFreed)} freed).
                 </>
               )}
-              {deleteResult.failedCount > 0 && (
+              {deleteResult.errors.length > 0 && (
                 <>
                   {" "}
-                  {deleteResult.failedCount} failed:{" "}
+                  Details:{" "}
                   {deleteResult.errors.join("; ")}
                 </>
               )}

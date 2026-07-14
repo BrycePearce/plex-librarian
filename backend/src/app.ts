@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/deno';
 import { logger } from 'hono/logger';
 import auth from './features/auth/route.ts';
+import arr from './features/arr/route.ts';
 import duplicates from './features/duplicates/route.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
@@ -27,6 +28,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.get('/health', (c) => c.json({ ok: true, time: new Date().toISOString() }));
 
   app.route('/api/auth', auth);
+  app.route('/api/integrations/arr', arr);
   app.route('/api/duplicates', duplicates);
   app.route('/api/events', events);
   app.route('/api/libraries', libraries);

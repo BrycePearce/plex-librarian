@@ -1,4 +1,5 @@
 import { and, lt, sql } from 'drizzle-orm';
+import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db, withTransaction } from '../../db/index.ts';
 import { episodeMediaVersions, seasons } from '../../db/schema.ts';
 import { episodeVersionsByLibrary, seasonsByLibrary } from '../../db/scope.ts';
@@ -9,9 +10,6 @@ import type {
 } from '../../integrations/plex/index.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
-
-// Max rows per seasons INSERT to avoid oversized statements on large TV libraries.
-const SEASON_UPSERT_BATCH = 500;
 
 // Streams all episodes for a TV library, aggregates file sizes by season in a
 // bounded map (entries ≈ shows × avg-seasons, not episode count), then upserts
@@ -75,8 +73,7 @@ export async function syncShowSizes(
   if (seasonMap.size === 0) return;
 
   const entries = [...seasonMap.entries()];
-  for (let i = 0; i < entries.length; i += SEASON_UPSERT_BATCH) {
-    const batch = entries.slice(i, i + SEASON_UPSERT_BATCH);
+  for (const batch of sqliteWriteBatches(entries)) {
     await db
       .insert(seasons)
       .values(
@@ -113,8 +110,7 @@ export async function syncShowSizes(
   // Only reached once the parent season rows above are guaranteed to exist (this
   // sync's episode stream is fully drained and every season upserted), satisfying
   // episodeMediaVersions.seasonRatingKey's FK — see episodeVersions' own comment above.
-  for (let i = 0; i < episodeVersions.length; i += SEASON_UPSERT_BATCH) {
-    const batch = episodeVersions.slice(i, i + SEASON_UPSERT_BATCH);
+  for (const batch of sqliteWriteBatches(episodeVersions)) {
     await db
       .insert(episodeMediaVersions)
       .values(
