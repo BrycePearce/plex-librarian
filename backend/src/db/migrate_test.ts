@@ -11,7 +11,7 @@ function runMigrationSql(sqlite: Database, sqlText: string): void {
   }
 }
 
-Deno.test('full migration chain creates Arr retry and provider-id indexes', async () => {
+Deno.test('full migration chain creates current tables, columns, and indexes', async () => {
   const directory = await Deno.makeTempDir();
   const path = resolve(directory, 'librarian.db');
   try {
@@ -23,7 +23,8 @@ Deno.test('full migration chain creates Arr retry and provider-id indexes', asyn
         'arr_delete_attempts',
         'arr_instances_server_type_url_unique',
         'items_server_tmdb_id_idx',
-        'items_server_tvdb_id_idx'
+        'items_server_tvdb_id_idx',
+        'user_play_observations_session_idx'
       ) ORDER BY name
     `);
     assertEquals(
@@ -33,6 +34,7 @@ Deno.test('full migration chain creates Arr retry and provider-id indexes', asyn
         'arr_instances_server_type_url_unique',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
+        'user_play_observations_session_idx',
       ],
     );
     objects.finalize();
@@ -41,6 +43,14 @@ Deno.test('full migration chain creates Arr retry and provider-id indexes', asyn
     // single-column Arr-instance foreign key.
     assertEquals(foreignKeys.values().length, 5);
     foreignKeys.finalize();
+    const observationColumns = sqlite.prepare("PRAGMA table_info('user_play_observations')");
+    assertEquals(
+      observationColumns.values().map((column) => column[1]).filter((name) =>
+        name === 'source' || name === 'session_key' || name === 'rating_key'
+      ),
+      ['source', 'session_key', 'rating_key'],
+    );
+    observationColumns.finalize();
     sqlite.close();
   } finally {
     // @db/sqlite's native Windows handle can outlive close() briefly; the OS temp

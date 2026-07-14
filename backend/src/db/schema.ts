@@ -322,6 +322,14 @@ export const userPlayObservations = sqliteTable(
     playerUuid: text('player_uuid'),
     playerTitle: text('player_title'),
     isLocal: integer('is_local', { mode: 'boolean' }),
+    // Webhooks remain an optional enrichment path alongside the automatic PMS session
+    // monitor. Source/session identity make their overlapping lifecycle events
+    // explainable and allow ingestion to merge them instead of inflating confidence.
+    source: text('source').notNull().default('webhook'),
+    sessionKey: text('session_key'),
+    // Present in both webhook metadata and active-session snapshots. Including it in
+    // merge identity prevents rapid episode/item changes on one player being collapsed.
+    ratingKey: text('rating_key'),
   },
   (table) => ({
     accountObservedIdx: index('user_play_observations_account_observed_idx').on(
@@ -340,6 +348,11 @@ export const userPlayObservations = sqliteTable(
       table.serverId,
       table.accountId,
       table.playerUuid,
+    ),
+    sessionIdx: index('user_play_observations_session_idx').on(
+      table.serverId,
+      table.sessionKey,
+      table.observedAt,
     ),
   }),
 );

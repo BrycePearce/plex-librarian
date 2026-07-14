@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { servers, settings } from '../../db/schema.ts';
 import type {
+  PlexActiveSession,
   PlexEpisode,
   PlexEpisodeMediaVersion,
   PlexHistoryEntry,
@@ -46,6 +47,73 @@ export function buildPlexHeaders(clientId?: string, token?: string): Record<stri
   if (clientId) headers['X-Plex-Client-Identifier'] = clientId;
   if (token) headers['X-Plex-Token'] = token;
   return headers;
+}
+
+type PlexRawSession = {
+  sessionKey?: string | number;
+  ratingKey?: string | number;
+  type?: string;
+  grandparentRatingKey?: string | number;
+  User?: { id?: number | string; title?: string };
+  Player?: {
+    address?: string;
+    publicAddress?: string;
+    machineIdentifier?: string;
+    uuid?: string;
+    title?: string;
+    local?: boolean | number | string;
+    state?: string;
+  };
+  Session?: { id?: string; location?: string };
+};
+
+function plexBoolean(value: boolean | number | string | undefined): boolean | null {
+  if (value === true || value === 1 || value === '1' || value === 'true') return true;
+  if (value === false || value === 0 || value === '0' || value === 'false') return false;
+  return null;
+}
+
+export function mapActiveSessions(raw: PlexRawSession[]): PlexActiveSession[] {
+  return raw.flatMap((session) => {
+    const playerUuid = session.Player?.machineIdentifier ?? session.Player?.uuid ?? null;
+    const ratingKey = session.ratingKey == null ? '' : String(session.ratingKey);
+    const sessionKey = session.sessionKey == null
+      ? session.Session?.id ??
+        `${playerUuid ?? `user-${session.User?.id ?? 'unknown'}`}:${ratingKey}`
+      : String(session.sessionKey);
+    if (!ratingKey) return [];
+
+    const rawState = session.Player?.state;
+    const state: PlexActiveSession['state'] = rawState === 'paused'
+      ? 'paused'
+      : rawState === 'buffering'
+      ? 'buffering'
+      : 'playing';
+    const explicitLocal = plexBoolean(session.Player?.local);
+    const isLocal = explicitLocal ??
+      (session.Session?.location === 'lan'
+        ? true
+        : session.Session?.location === 'wan'
+        ? false
+        : null);
+    const parsedAccountId = Number(session.User?.id);
+
+    return [{
+      sessionKey,
+      ratingKey,
+      type: session.type ?? '',
+      grandparentRatingKey: session.grandparentRatingKey == null
+        ? null
+        : String(session.grandparentRatingKey),
+      state,
+      accountId: Number.isSafeInteger(parsedAccountId) ? parsedAccountId : null,
+      username: session.User?.title ?? null,
+      playerUuid,
+      playerTitle: session.Player?.title ?? null,
+      ip: session.Player?.publicAddress ?? session.Player?.address ?? null,
+      isLocal,
+    }];
+  });
 }
 
 // Plex reports sizes as 32-bit signed integers. Values 2–4 GB wrap negative and are
@@ -269,6 +337,13 @@ export class PlexClient {
     );
     return (data.MediaContainer.Account ?? [])
       .filter((a): a is { id: number; name: string } => a.id !== 0 && !!a.name);
+  }
+
+  async activeSessions(): Promise<PlexActiveSession[]> {
+    const data = await this.get<{ MediaContainer: { Metadata?: PlexRawSession[] } }>(
+      '/status/sessions',
+    );
+    return mapActiveSessions(data.MediaContainer.Metadata ?? []);
   }
 
   // Deletes an item's media from Plex (metadata + underlying file(s) on disk).

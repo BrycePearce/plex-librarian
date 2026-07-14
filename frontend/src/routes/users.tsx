@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   ArrowDown,
   ArrowUp,
@@ -166,6 +167,7 @@ function UsersPage() {
     queryKey: ["users", { ...search, offset }],
     queryFn: () => api.users.list({ ...search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
+    refetchInterval: 30_000,
   });
 
   const [reviewUser, setReviewUser] = useState<PlexUser | null>(null);
@@ -321,6 +323,31 @@ function UsersPage() {
         />
       )}
 
+      {data?.monitor.status === "starting" && (
+        <div className="alert alert-info alert-soft py-2 text-sm">
+          <Activity className="w-4 h-4 animate-pulse" />
+          <span>Connecting to Plex live-session monitoring…</span>
+        </div>
+      )}
+      {data?.monitor.status === "polling" && (
+        <div className="alert alert-info alert-soft py-2 text-sm">
+          <Activity className="w-4 h-4" />
+          <span>
+            Session polling is active, but Plex live notifications are unavailable.
+            Very short plays may be missed.
+          </span>
+        </div>
+      )}
+      {data?.monitor.status === "disconnected" && (
+        <div className="alert alert-warning py-2 text-sm">
+          <AlertTriangle className="w-4 h-4" />
+          <span>
+            Sharing-risk monitoring cannot currently reach Plex
+            {data.monitor.message ? `: ${data.monitor.message}` : "."}
+          </span>
+        </div>
+      )}
+
       <PendingInvitationsPanel />
 
       {isError ? (
@@ -453,7 +480,10 @@ function UsersPage() {
                         )}
                       </td>
                       <td>
-                        <SharingRiskCell assessment={u.sharingRisk} />
+                        <SharingRiskCell
+                          assessment={u.sharingRisk}
+                          monitorStatus={data.monitor.status}
+                        />
                       </td>
                       <td className="text-right">
                         {!u.isOwner && (
@@ -944,8 +974,10 @@ function CustomInactiveDaysInput({
 
 function SharingRiskCell({
   assessment,
+  monitorStatus,
 }: {
   assessment: PlexUser["sharingRisk"];
+  monitorStatus: "starting" | "connected" | "polling" | "disconnected";
 }) {
   const label =
     assessment.riskLevel === "insufficient_data"
@@ -971,7 +1003,9 @@ function SharingRiskCell({
       : "No sharing signals observed";
   const title =
     assessment.dataConfidence === "none"
-      ? "No playback observations have been collected for this user yet."
+      ? monitorStatus === "disconnected"
+        ? "Playback monitoring is disconnected, so observations cannot currently be collected."
+        : "No playback observations have been collected for this user yet."
       : `${assessment.observationCount} observations across ${assessment.activeDays} active days. ${signalSummary}.`;
 
   return (

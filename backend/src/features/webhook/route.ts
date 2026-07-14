@@ -1,14 +1,11 @@
 import { Hono } from 'hono';
-import { db, withTransaction } from '../../db/index.ts';
-import { items, users } from '../../db/schema.ts';
-import { itemByRatingKey, userByLocalAccountId, userByUsername } from '../../db/scope.ts';
+import { db } from '../../db/index.ts';
+import { items } from '../../db/schema.ts';
+import { itemByRatingKey } from '../../db/scope.ts';
 import { getActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexWebhookPayload } from '../../integrations/plex/index.ts';
-import { UNKNOWN_USERNAME_PLACEHOLDER } from '../../integrations/plex/accounts.ts';
-import { networkKeyForIp } from '../users/network.ts';
+import { recordPlaybackObservation } from '../users/observationService.ts';
 
-// The full lifecycle lets sharing-risk analysis bound concurrent playback sessions.
-// Only play/resume/scrobble update item state; pause/stop are observation-only closers.
 const PLAYBACK_EVENTS = new Set([
   'media.play',
   'media.pause',
@@ -33,14 +30,13 @@ router.post('/plex', async (c) => {
   }
 
   const { Metadata } = payload;
-  if (!PLAYBACK_EVENTS.has(payload.event) || !Metadata?.ratingKey) return c.json({ ok: true });
+  if (!PLAYBACK_EVENTS.has(payload.event) || !Metadata?.ratingKey) {
+    return c.json({ ok: true });
+  }
 
-  // Webhooks fire per-server — only apply updates that belong to the currently active
-  // server, identified
-  // by Plex's stable per-install uuid (payload.Server.uuid === servers.machineIdentifier).
-  // A webhook from a server you've since disconnected/switched away from is ignored.
+  // A webhook can follow an account to servers other than the one currently selected
+  // in Plex Librarian. Only ingest events from the active server.
   const active = await getActiveServer();
-
   if (!active) {
     console.warn(
       `webhook ${payload.event}: no active server resolved yet — dropping update (server=${payload.Server?.uuid})`,
@@ -53,34 +49,26 @@ router.post('/plex', async (c) => {
     );
     return c.json({ ok: true });
   }
-  const serverId = active.serverId;
 
+  const serverId = active.serverId;
   const now = Math.floor(Date.now() / 1000);
   const isScrobble = payload.event === 'media.scrobble';
   const isEpisode = Metadata.type === 'episode';
 
   if (ITEM_ACTIVITY_EVENTS.has(payload.event)) {
-    // For episodes, update the parent show row. Episode ratingKeys are not stored
-    // in items — only show-level rows are, so we must use grandparentRatingKey.
     const itemKey = isEpisode ? Metadata.grandparentRatingKey : Metadata.ratingKey;
     if (!itemKey) {
       console.warn(
         `webhook ${payload.event}: episode missing grandparentRatingKey — skipping item update`,
       );
     } else {
-      const updated = await db
-        .update(items)
-        .set({
-          lastViewedAt: now,
-          updatedAt: now,
-          // viewCount on episodes reflects that episode only, not the show total — skip it.
-          ...(!isEpisode && isScrobble && Metadata.viewCount != null
-            ? { viewCount: Metadata.viewCount }
-            : {}),
-        })
-        .where(itemByRatingKey(serverId, itemKey))
-        .returning({ ratingKey: items.ratingKey });
-
+      const updated = await db.update(items).set({
+        lastViewedAt: now,
+        updatedAt: now,
+        ...(!isEpisode && isScrobble && Metadata.viewCount != null
+          ? { viewCount: Metadata.viewCount }
+          : {}),
+      }).where(itemByRatingKey(serverId, itemKey)).returning({ ratingKey: items.ratingKey });
       if (updated.length === 0) {
         console.warn(
           `webhook ${payload.event}: ${
@@ -91,139 +79,27 @@ router.post('/plex', async (c) => {
     }
   }
 
-  // payload.Account.id is the PMS-LOCAL account id, not the global plex.tv id that
-  // users.accountId (the roster's primary key) uses — see users.localAccountId in
-  // schema.ts. Try the direct local-id match first (the common case once a full sync
-  // has reconciled it); if that touches nothing, fall back to a username match and
-  // backfill localAccountId at the same time, self-healing the mapping for an account
-  // seen here before syncUsers() ever reconciled it. If neither matches, this account
-  // has no roster row yet at all (e.g. the very first webhook before any full sync) —
-  // skipped rather than inserted, since a webhook alone never carries the global id a
-  // new row's primary key would need; the next full sync creates it instead.
-  // id 0 is Plex's nameless/system placeholder (see PlexClient.localAccounts()'s same
-  // exclusion in plex.ts) and is never a real account worth tracking activity for.
-  //
-  // lastViewedAt/lastPlayer are written unconditionally on every matched event — they
-  // mean "most recent activity, from anywhere," independent of whether Plex counted
-  // this particular event as a real play. totalPlays/totalDuration are the opposite:
-  // scrobble-gated only, mirroring items.viewCount's existing scrobble-only gating
-  // above, so a play that's started but abandoned doesn't inflate either counter.
-  // IP handling is separate again: a genuine location change appends a history row,
-  // while another event from the current IP refreshes that transition's lastSeenAt.
-  // This retains recent evidence for a sharing detector without growing the table for
-  // every play. The last-IP change and history write are committed atomically below.
-  // Like the rest of the application, webhook ingestion assumes deployment on a
-  // trusted self-hosted network. A future authentication layer should protect every
-  // route coherently rather than creating a webhook-only security boundary.
-  if (payload.Account?.id != null && payload.Account.id !== 0) {
-    // Resolve to a single roster row by primary key before writing anything — neither
-    // local_account_id nor username is guaranteed unique in the schema (see
-    // users_local_account_idx and the missing username constraint), so an UPDATE scoped
-    // directly to either predicate risks silently touching more than one row if a
-    // collision ever occurs (e.g. two friends both falling back to plexUsers.ts's
-    // UNKNOWN_USERNAME_PLACEHOLDER). Ambiguous matches are skipped rather than guessed
-    // at. The placeholder itself is never used as a fallback match target — by
-    // definition it's not unique to one account, so an early single "match" against it
-    // (before a second placeholder-having account has even synced yet) would silently
-    // misattribute this account's activity with no way to unwind it once the collision
-    // becomes visible.
-    let candidates = await db.select({ accountId: users.accountId })
-      .from(users)
-      .where(userByLocalAccountId(serverId, payload.Account.id));
-
-    let backfillLocalId = false;
-    if (
-      candidates.length === 0 && payload.Account.title &&
-      payload.Account.title !== UNKNOWN_USERNAME_PLACEHOLDER
-    ) {
-      candidates = await db.select({ accountId: users.accountId })
-        .from(users)
-        .where(userByUsername(serverId, payload.Account.title));
-      backfillLocalId = true;
-    }
-
-    if (candidates.length === 1) {
-      const accountId = candidates[0].accountId;
-      const ip = payload.Player?.publicAddress || null;
-      withTransaction((client) => {
-        const current = client.prepare(
-          `SELECT last_ip, last_scrobbled_at FROM users
-           WHERE server_id = ? AND account_id = ?`,
-        ).get(serverId, accountId) as {
-          last_ip: string | null;
-          last_scrobbled_at: number | null;
-        } | undefined;
-        if (!current) return;
-
-        // A scrobble without Plex's stable timestamp cannot be made idempotent, so it
-        // still updates recent activity but does not alter lifetime aggregates.
-        const scrobbleAt = isScrobble ? Metadata.lastViewedAt ?? null : null;
-        const countScrobble = scrobbleAt !== null &&
-          (current.last_scrobbled_at === null || scrobbleAt > current.last_scrobbled_at);
-        client.prepare(
-          `UPDATE users SET
-             last_viewed_at = ?,
-             last_player = coalesce(?, last_player),
-             local_account_id = coalesce(?, local_account_id),
-             total_plays = total_plays + ?,
-             total_duration = total_duration + ?,
-             last_scrobbled_at = coalesce(?, last_scrobbled_at)
-           WHERE server_id = ? AND account_id = ?`,
-        ).run(
-          now,
-          payload.Player?.title ?? null,
-          backfillLocalId ? payload.Account.id : null,
-          countScrobble ? 1 : 0,
-          countScrobble ? Metadata.duration ?? 0 : 0,
-          countScrobble ? scrobbleAt : null,
-          serverId,
-          accountId,
-        );
-
-        client.prepare(
-          `INSERT INTO user_play_observations
-             (server_id, account_id, observed_at, event, ip, network_key, player_uuid,
-              player_title, is_local)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          serverId,
-          accountId,
-          now,
-          payload.event,
-          ip,
-          networkKeyForIp(ip),
-          payload.Player?.uuid ?? null,
-          payload.Player?.title ?? null,
-          payload.Player?.local == null ? null : Number(payload.Player.local),
-        );
-
-        if (ip !== null) {
-          if (current.last_ip !== ip) {
-            client.prepare(
-              'UPDATE users SET last_ip = ? WHERE server_id = ? AND account_id = ?',
-            ).run(ip, serverId, accountId);
-            client.prepare(
-              `INSERT INTO user_ip_history
-                 (server_id, account_id, ip, viewed_at, last_seen_at)
-               VALUES (?, ?, ?, ?, ?)`,
-            ).run(serverId, accountId, ip, now, now);
-          } else {
-            client.prepare(
-              `UPDATE user_ip_history SET last_seen_at = ?
-               WHERE id = (
-                 SELECT id FROM user_ip_history
-                 WHERE server_id = ? AND account_id = ? AND ip = ?
-                 ORDER BY viewed_at DESC, id DESC LIMIT 1
-               )`,
-            ).run(now, serverId, accountId, ip);
-          }
-        }
-      });
-    } else if (candidates.length > 1) {
-      console.warn(
-        `webhook ${payload.event}: ${candidates.length} accounts matched account=${payload.Account.id} title="${payload.Account.title}" — ambiguous, skipping activity update`,
-      );
-    }
+  const result = await recordPlaybackObservation({
+    serverId,
+    plexAccountId: payload.Account?.id ?? null,
+    accountIdKind: 'local',
+    username: payload.Account?.title ?? null,
+    observedAt: now,
+    event: payload.event,
+    ratingKey: Metadata.ratingKey,
+    ip: payload.Player?.publicAddress || null,
+    playerUuid: payload.Player?.uuid ?? null,
+    playerTitle: payload.Player?.title ?? null,
+    isLocal: payload.Player?.local ?? null,
+    source: 'webhook',
+    scrobble: isScrobble
+      ? { viewedAt: Metadata.lastViewedAt ?? null, duration: Metadata.duration ?? null }
+      : undefined,
+  });
+  if (result === 'ambiguous') {
+    console.warn(
+      `webhook ${payload.event}: account=${payload.Account?.id} title="${payload.Account?.title}" matched multiple users — skipping activity update`,
+    );
   }
 
   return c.json({ ok: true });

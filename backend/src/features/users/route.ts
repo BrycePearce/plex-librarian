@@ -15,6 +15,7 @@ import {
 import { logEvents } from '../events/service.ts';
 import { assessUserSharingRisk, type SharingObservationStats } from './sharingRisk.ts';
 import { sharingPlaybackPatterns } from './playbackPatterns.ts';
+import { getSessionMonitorHealth } from './sessionMonitor.ts';
 import type {
   CancelPendingInvitationResponse,
   PendingInvitationsResponse,
@@ -167,6 +168,7 @@ router.get('/', async (c) => {
         limit: 100,
         offset: 0,
         total: 0,
+        monitor: getSessionMonitorHealth(),
         users: [],
       } satisfies UsersResponse,
     );
@@ -327,6 +329,7 @@ router.get('/', async (c) => {
       limit,
       offset,
       total,
+      monitor: getSessionMonitorHealth(),
       users: page,
     } satisfies UsersResponse,
   );

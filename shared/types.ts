@@ -281,6 +281,14 @@ export interface SharingRiskAssessment {
   signals: SharingRiskSignal[];
 }
 
+export interface SessionMonitorHealth {
+  status: "starting" | "connected" | "polling" | "disconnected";
+  lastSnapshotAt: number | null;
+  lastObservationAt: number | null;
+  activeSessionCount: number;
+  message: string | null;
+}
+
 export interface UsersResponse {
   // Null until the roster has synced at least once for the current server — while
   // null, this list may be incomplete or stale, same contract as Library.historySyncedAt.
@@ -295,6 +303,7 @@ export interface UsersResponse {
   limit: number;
   offset: number;
   total: number;
+  monitor: SessionMonitorHealth;
   users: PlexUser[];
 }
 

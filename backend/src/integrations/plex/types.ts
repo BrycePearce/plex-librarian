@@ -143,3 +143,21 @@ export interface PlexLocalAccount {
   id: number;
   name: string;
 }
+
+// Current playback returned by /status/sessions. Plex's session response is less
+// formally documented than its webhook payload and has accumulated a few equivalent
+// field names across server/client versions, so the mapper in client.ts normalizes
+// those wire shapes into this deliberately small internal contract.
+export interface PlexActiveSession {
+  sessionKey: string;
+  ratingKey: string;
+  type: string;
+  grandparentRatingKey: string | null;
+  state: 'playing' | 'paused' | 'buffering';
+  accountId: number | null;
+  username: string | null;
+  playerUuid: string | null;
+  playerTitle: string | null;
+  ip: string | null;
+  isLocal: boolean | null;
+}
