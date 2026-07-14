@@ -61,4 +61,46 @@ router.get('/thumb', async (c) => {
   });
 });
 
+// Account avatars come from plex.tv (auth status, users page), not the media server.
+// Loading them directly in the browser makes a credentialed third-party request that
+// sets a plex.tv cookie; proxying keeps every page asset same-origin. The host
+// allowlist keeps this from being an open fetch-anything proxy.
+function normaliseAvatarUrl(raw: string): URL | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:') return null;
+    if (url.hostname === 'plex.tv' || url.hostname.endsWith('.plex.tv')) return url;
+  } catch { /* fall through */ }
+  return null;
+}
+
+router.get('/avatar', async (c) => {
+  const raw = c.req.query('url');
+  const url = raw ? normaliseAvatarUrl(raw) : null;
+  if (!url) return c.json({ error: 'invalid or missing url' }, 400);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  } catch {
+    return c.json({ error: 'failed to fetch avatar' }, 502);
+  }
+
+  if (!res.ok) {
+    res.body?.cancel();
+    return c.body(null, res.status as Parameters<typeof c.body>[1]);
+  }
+
+  const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+  return new Response(res.body, {
+    headers: {
+      'content-type': contentType,
+      // Avatars can change under the same URL (unlike /thumb's fingerprinted asset
+      // paths), so revalidate daily instead of caching forever.
+      'cache-control': 'public, max-age=86400',
+      'x-content-type-options': 'nosniff',
+    },
+  });
+});
+
 export default router;

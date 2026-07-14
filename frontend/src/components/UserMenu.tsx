@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api, invalidateServerScopedQueries } from "../lib/api";
 import type { AuthStatus } from "../lib/api";
+import { avatarUrl } from "../lib/avatar";
 import { useClickOutside } from "../lib/useClickOutside";
 
 export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
@@ -61,10 +62,9 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
         {user?.thumb
           ? (
             <img
-              src={user.thumb}
+              src={avatarUrl(user.thumb)}
               alt={user.username}
               className="w-6 h-6 rounded-full object-cover"
-              referrerPolicy="no-referrer"
             />
           )
           : <User className="w-4 h-4" />}

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/deno';
 import { logger } from 'hono/logger';
+import { secureHeaders } from 'hono/secure-headers';
 import auth from './features/auth/route.ts';
 import arr from './features/arr/route.ts';
 import duplicates from './features/duplicates/route.ts';
@@ -18,6 +19,18 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   const app = new Hono();
 
   app.use('*', logger());
+  app.use(
+    '*',
+    secureHeaders({
+      // The setup flow closes the cross-origin Plex OAuth popup programmatically
+      // (setup.tsx); the default `same-origin` severs that window reference.
+      crossOriginOpenerPolicy: 'same-origin-allow-popups',
+      // TLS (and therefore HSTS) is the fronting reverse proxy's decision — the app
+      // itself serves plain HTTP on a trusted LAN and must not commit a user's whole
+      // domain to HTTPS from here.
+      strictTransportSecurity: false,
+    }),
+  );
   app.use('*', bodyLimit({ maxSize: 1 * 1024 * 1024 }));
 
   app.onError((err, c) => {

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { PendingInvitation, PlexUser } from "../lib/api";
+import { avatarUrl } from "../lib/avatar";
 import { formatDate, formatRelativeTime } from "../lib/format";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
@@ -405,9 +406,8 @@ function UsersPage() {
                           {u.thumb ? (
                             <img
                               loading="lazy"
-                              src={u.thumb}
+                              src={avatarUrl(u.thumb)}
                               alt=""
-                              referrerPolicy="no-referrer"
                               className="w-8 h-8 rounded-full object-cover bg-base-300 shrink-0"
                             />
                           ) : (
@@ -777,9 +777,8 @@ function PendingInvitationRow({
           {invitation.thumb ? (
             <img
               loading="lazy"
-              src={invitation.thumb}
+              src={avatarUrl(invitation.thumb)}
               alt=""
-              referrerPolicy="no-referrer"
               className="h-8 w-8 shrink-0 rounded-full bg-base-300 object-cover"
             />
           ) : (
