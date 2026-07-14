@@ -1,21 +1,43 @@
 import { Hono } from 'hono';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { arrInstances, arrLibraryMappings, libraries } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { ArrClient, normalizeArrUrl } from '../../integrations/arr/client.ts';
-import { replaceArrLibraryMappings } from './mappings.ts';
+import { replaceArrInstanceMappings, replaceArrLibraryMappings } from './mappings.ts';
 import type {
   ArrIntegrationSettings,
   ArrType,
   SaveArrInstanceRequest,
   SaveArrLibraryMappingRequest,
+  UpdateArrInstanceRequest,
 } from '@plex-librarian/shared/types.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 
 const validType = (value: unknown): value is ArrType => value === 'radarr' || value === 'sonarr';
+
+async function validLibrariesForInstance(
+  serverId: number,
+  type: ArrType,
+  value: unknown,
+): Promise<string[] | null> {
+  if (!Array.isArray(value) || !value.every((key) => typeof key === 'string' && key.length > 0)) {
+    return null;
+  }
+  const keys = [...new Set(value)];
+  if (keys.length === 0) return keys;
+
+  const rows = await db.select({ key: libraries.key, type: libraries.type }).from(libraries).where(
+    and(eq(libraries.serverId, serverId), inArray(libraries.key, keys)),
+  );
+  const expectedType = type === 'radarr' ? 'movie' : 'show';
+  if (rows.length !== keys.length || rows.some((library) => library.type !== expectedType)) {
+    return null;
+  }
+  return keys;
+}
 
 router.get('/', async (c) => {
   const serverId = c.get('activeServerId');
@@ -50,9 +72,15 @@ router.post('/instances', async (c) => {
   const body = await c.req.json().catch(() => null) as SaveArrInstanceRequest | null;
   if (
     !body || !validType(body.type) || typeof body.name !== 'string' || !body.name.trim() ||
-    typeof body.url !== 'string' || typeof body.apiKey !== 'string' || !body.apiKey.trim()
+    typeof body.url !== 'string' || typeof body.apiKey !== 'string' || !body.apiKey.trim() ||
+    typeof body.addImportExclusion !== 'boolean'
   ) {
-    return c.json({ error: 'type, name, URL, and API key are required' }, 400);
+    return c.json({ error: 'type, name, URL, API key, and mapping options are required' }, 400);
+  }
+
+  const libraryKeys = await validLibrariesForInstance(serverId, body.type, body.libraryKeys);
+  if (libraryKeys === null) {
+    return c.json({ error: 'selected libraries are not valid for this connection' }, 400);
   }
 
   let url: string;
@@ -82,28 +110,45 @@ router.post('/instances', async (c) => {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const [created] = await db.insert(arrInstances).values({
-    serverId,
-    type: body.type,
-    name: body.name.trim(),
-    url,
-    apiKey: body.apiKey.trim(),
-    createdAt: now,
-    updatedAt: now,
-  }).onConflictDoNothing({
-    target: [arrInstances.serverId, arrInstances.type, arrInstances.url],
-  }).returning();
-  // The preflight above provides the normal friendly response; the unique index and
-  // conflict handling close the race if two identical requests arrive together.
-  if (!created) {
+  const createdId = withTransaction((sqliteClient) => {
+    const insert = sqliteClient.prepare(
+      'INSERT INTO arr_instances ' +
+        '(server_id, type, name, url, api_key, created_at, updated_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(server_id, type, url) DO NOTHING RETURNING id',
+    );
+    try {
+      const row = insert.value<[number]>(
+        serverId,
+        body.type,
+        body.name.trim(),
+        url,
+        body.apiKey.trim(),
+        now,
+        now,
+      );
+      if (!row) return null;
+      replaceArrInstanceMappings(
+        sqliteClient,
+        serverId,
+        row[0],
+        libraryKeys,
+        body.addImportExclusion,
+      );
+      return row[0];
+    } finally {
+      insert.finalize();
+    }
+  });
+  if (createdId === null) {
     return c.json({ error: 'this Sonarr or Radarr instance is already configured' }, 409);
   }
 
   return c.json({
-    id: created.id,
-    type: created.type,
-    name: created.name,
-    url: created.url,
+    id: createdId,
+    type: body.type,
+    name: body.name.trim(),
+    url,
     apiKeyConfigured: true,
   }, 201);
 });
@@ -128,6 +173,93 @@ router.post('/instances/:id/test', async (c) => {
       502,
     );
   }
+});
+
+router.patch('/instances/:id', async (c) => {
+  const serverId = c.get('activeServerId');
+  const id = Number(c.req.param('id'));
+  if (serverId === null || !Number.isInteger(id)) {
+    return c.json({ error: 'instance not found' }, 404);
+  }
+
+  const body = await c.req.json().catch(() => null) as UpdateArrInstanceRequest | null;
+  if (
+    !body || typeof body.name !== 'string' || !body.name.trim() ||
+    typeof body.url !== 'string' ||
+    (body.apiKey !== undefined && typeof body.apiKey !== 'string') ||
+    typeof body.addImportExclusion !== 'boolean'
+  ) {
+    return c.json({ error: 'name, URL, and mapping options are required' }, 400);
+  }
+
+  const [instance] = await db.select().from(arrInstances).where(
+    and(eq(arrInstances.serverId, serverId), eq(arrInstances.id, id)),
+  ).limit(1);
+  if (!instance) return c.json({ error: 'instance not found' }, 404);
+
+  const libraryKeys = await validLibrariesForInstance(
+    serverId,
+    instance.type,
+    body.libraryKeys,
+  );
+  if (libraryKeys === null) {
+    return c.json({ error: 'selected libraries are not valid for this connection' }, 400);
+  }
+
+  let url: string;
+  try {
+    url = normalizeArrUrl(body.url);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'invalid URL' }, 400);
+  }
+
+  const [duplicate] = await db.select({ id: arrInstances.id }).from(arrInstances).where(and(
+    eq(arrInstances.serverId, serverId),
+    eq(arrInstances.type, instance.type),
+    eq(arrInstances.url, url),
+    ne(arrInstances.id, id),
+  )).limit(1);
+  if (duplicate) {
+    return c.json({ error: 'this Sonarr or Radarr instance is already configured' }, 409);
+  }
+
+  const replacementApiKey = body.apiKey?.trim();
+  const apiKey = replacementApiKey || instance.apiKey;
+  try {
+    await new ArrClient(instance.type, url, apiKey).testConnection();
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'connection test failed' },
+      502,
+    );
+  }
+
+  withTransaction((sqliteClient) => {
+    const update = sqliteClient.prepare(
+      'UPDATE arr_instances SET name = ?, url = ?, api_key = ?, updated_at = ? ' +
+        'WHERE server_id = ? AND id = ?',
+    );
+    try {
+      update.run(body.name.trim(), url, apiKey, Math.floor(Date.now() / 1000), serverId, id);
+    } finally {
+      update.finalize();
+    }
+    replaceArrInstanceMappings(
+      sqliteClient,
+      serverId,
+      id,
+      libraryKeys,
+      body.addImportExclusion,
+    );
+  });
+
+  return c.json({
+    id,
+    type: instance.type,
+    name: body.name.trim(),
+    url,
+    apiKeyConfigured: apiKey.length > 0,
+  });
 });
 
 router.delete('/instances/:id', async (c) => {

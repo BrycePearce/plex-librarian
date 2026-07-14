@@ -50,3 +50,37 @@ html.theme-transitioning *::after {
     animation: none;
   }
 }
+
+@keyframes arr-test-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes arr-test-ring-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.arr-test-success-check {
+  stroke-dasharray: 14;
+  stroke-dashoffset: 14;
+  animation: arr-test-check-draw 0.28s ease-out forwards;
+}
+
+.arr-test-success-ring {
+  stroke-dasharray: 57;
+  stroke-dashoffset: 57;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  animation: arr-test-ring-draw 0.45s 0.18s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arr-test-success-check,
+  .arr-test-success-ring {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}

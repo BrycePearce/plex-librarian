@@ -27,3 +27,31 @@ export function replaceArrLibraryMappings(
     remove.finalize();
   }
 }
+
+export function replaceArrInstanceMappings(
+  client: SqliteClient,
+  serverId: number,
+  instanceId: number,
+  libraryKeys: readonly string[],
+  addImportExclusion: boolean,
+): void {
+  const remove = client.prepare(
+    'DELETE FROM arr_library_mappings WHERE server_id = ? AND arr_instance_id = ?',
+  );
+  let insert: ReturnType<SqliteClient['prepare']> | undefined;
+  try {
+    remove.run(serverId, instanceId);
+    if (libraryKeys.length === 0) return;
+
+    insert = client.prepare(
+      'INSERT INTO arr_library_mappings ' +
+        '(server_id, library_key, arr_instance_id, add_import_exclusion) VALUES (?, ?, ?, ?)',
+    );
+    for (const libraryKey of libraryKeys) {
+      insert.run(serverId, libraryKey, instanceId, addImportExclusion ? 1 : 0);
+    }
+  } finally {
+    insert?.finalize();
+    remove.finalize();
+  }
+}

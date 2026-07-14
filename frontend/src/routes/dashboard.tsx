@@ -17,9 +17,11 @@ import {
   Info,
   Library as LibraryGlyph,
   Music,
+  PlugZap,
   RefreshCw,
   Tv,
   Users,
+  X,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type {
@@ -40,6 +42,7 @@ import {
   useSyncHistory,
 } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
+import { useLocalStorage } from "../lib/useLocalStorage";
 import { requireAuth } from "../lib/requireAuth";
 import { DashboardSkeleton } from "../components/Skeletons";
 import "./dashboard.css";
@@ -83,6 +86,13 @@ const cardVariants: Variants = {
   },
 };
 
+const ARR_ONBOARDING_DISMISSED_KEY =
+  "plex-librarian:arr-onboarding-dismissed";
+const ARR_ONBOARDING_STORAGE = {
+  serialize: (value: boolean) => value ? "1" : "0",
+  deserialize: (value: string) => value === "1",
+};
+
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DashboardPage,
@@ -101,6 +111,11 @@ function DashboardPage() {
 // layout shift once data loads (see LibraryCardSkeleton usage further down).
 function DashboardInner() {
   const qc = useQueryClient();
+  const [arrOnboardingDismissed, setArrOnboardingDismissed] = useLocalStorage(
+    ARR_ONBOARDING_DISMISSED_KEY,
+    false,
+    ARR_ONBOARDING_STORAGE,
+  );
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
@@ -112,6 +127,10 @@ function DashboardInner() {
   } = useQuery({
     queryKey: ["libraries"],
     queryFn: () => api.libraries.list(),
+  });
+  const { data: arrSettings } = useQuery({
+    queryKey: ["arr-integrations"],
+    queryFn: api.arr.get,
   });
 
   const triggerSync = useMutation({
@@ -180,6 +199,9 @@ function DashboardInner() {
   // this stays accurate for the entire duration regardless of per-library speed.
   const hasEverSyncedSuccessfully =
     history?.some((h) => h.status === "success") ?? false;
+  const hasVideoLibraries = librariesData?.libraries.some((library) =>
+    library.type === "movie" || library.type === "show"
+  ) ?? false;
   // `history` is capped to the 10 most-recent sync_log rows, so a server that succeeded
   // long ago but has had 10+ consecutive recent failures would otherwise read as
   // "never synced" here. `hasAnyImportedItems` is cap-proof — real items in the DB are
@@ -190,6 +212,16 @@ function DashboardInner() {
     !hasAnyImportedItems &&
     !hasEverSyncedSuccessfully &&
     isAnySyncing;
+
+  const showArrOnboarding = !arrOnboardingDismissed &&
+    arrSettings !== undefined &&
+    arrSettings.instances.length === 0 &&
+    hasVideoLibraries &&
+    (hasEverSyncedSuccessfully || hasAnyImportedItems);
+
+  function dismissArrOnboarding() {
+    setArrOnboardingDismissed(true);
+  }
 
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
@@ -256,6 +288,42 @@ function DashboardInner() {
           initial="hidden"
           animate="show"
         >
+      {showArrOnboarding && (
+        <motion.aside
+          className="arr-onboarding-nudge"
+          variants={pageSectionVariants}
+          aria-label="Sonarr and Radarr setup"
+        >
+          <span className="arr-onboarding-icon">
+            <PlugZap className="size-4" />
+          </span>
+          <span className="arr-onboarding-copy">
+            <strong>Using Sonarr or Radarr?</strong>
+            <span>
+              Connect your media managers so whole-title deletion can be
+              coordinated safely.
+            </span>
+          </span>
+          <Link
+            to="/settings"
+            hash="sonarr-radarr"
+            className="btn btn-primary btn-sm arr-onboarding-setup"
+          >
+            Set up integrations
+          </Link>
+          <button
+            type="button"
+            className="arr-onboarding-dismiss"
+            onClick={dismissArrOnboarding}
+            aria-label="Don't show Sonarr and Radarr setup again"
+            title="Don't show again"
+          >
+            <X className="size-4" />
+            <span>Don&apos;t show again</span>
+          </button>
+        </motion.aside>
+      )}
+
       {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
         <StatsStrip libraries={librariesData.libraries} />
       )}

@@ -22,6 +22,7 @@ import type {
   SyncLog,
   SyncTriggerResponse,
   UsersResponse,
+  UpdateArrInstanceRequest,
 } from "@shared/types";
 
 export type {
@@ -250,6 +251,11 @@ export const api = {
     createInstance: (instance: SaveArrInstanceRequest) =>
       apiFetch<ArrInstance>("/integrations/arr/instances", {
         method: "POST",
+        body: JSON.stringify(instance),
+      }),
+    updateInstance: (id: number, instance: UpdateArrInstanceRequest) =>
+      apiFetch<ArrInstance>(`/integrations/arr/instances/${id}`, {
+        method: "PATCH",
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>

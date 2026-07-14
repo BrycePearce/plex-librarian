@@ -12,6 +12,15 @@
 .dashboard-health svg { filter: drop-shadow(0 0 4px color-mix(in oklab, var(--color-success) 38%, transparent)); animation: dashboard-health-breathe 3.2s ease-in-out infinite; }
 .dashboard-sync-button { min-width: 7.5rem; gap: .5rem; border: 1px solid color-mix(in oklab, var(--color-primary) 60%, white); box-shadow: 0 3px 10px rgb(0 0 0 / .12); }
 
+.arr-onboarding-nudge { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: .85rem; padding: .75rem .8rem .75rem 1rem; border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent); border-radius: 14px; background: linear-gradient(90deg, color-mix(in oklab, var(--color-primary) 8%, var(--color-base-200)), color-mix(in oklab, var(--color-base-200) 96%, transparent)); }
+.arr-onboarding-icon { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid color-mix(in oklab, var(--color-primary) 24%, transparent); border-radius: 10px; background: color-mix(in oklab, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+.arr-onboarding-copy { display: flex; min-width: 0; flex-direction: column; gap: .12rem; }
+.arr-onboarding-copy strong { font-size: .78rem; }
+.arr-onboarding-copy > span { color: color-mix(in oklab, var(--color-base-content) 48%, transparent); font-size: .68rem; line-height: 1.4; }
+.arr-onboarding-setup { min-height: 2rem; height: 2rem; font-size: .68rem; white-space: nowrap; }
+.arr-onboarding-dismiss { display: flex; height: 30px; align-items: center; gap: .3rem; padding: 0 .45rem; border-radius: 9px; color: color-mix(in oklab, var(--color-base-content) 38%, transparent); font-size: .62rem; white-space: nowrap; transition: color 140ms ease, background 140ms ease; }
+.arr-onboarding-dismiss:hover { background: color-mix(in oklab, var(--color-base-content) 7%, transparent); color: var(--color-base-content); }
+
 .dashboard-stat-card { --stat-color: var(--color-primary); position: relative; overflow: hidden; min-height: 96px; border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); border-radius: 16px; background: linear-gradient(145deg, color-mix(in oklab, var(--color-base-200) 97%, white 3%), color-mix(in oklab, var(--color-base-200) 95%, var(--stat-color) 5%)); transition: transform 190ms ease, border-color 190ms ease, box-shadow 190ms ease, background 190ms ease; }
 .dashboard-stat-secondary { --stat-color: var(--color-secondary); }
 .dashboard-stat-accent { --stat-color: var(--color-accent); }
@@ -140,6 +149,9 @@
   .dashboard-header { align-items: stretch; flex-direction: column; gap: 1.25rem; }
   .dashboard-header-actions { justify-content: flex-end; }
   .dashboard-health { display: none; }
+  .arr-onboarding-nudge { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .arr-onboarding-setup { grid-column: 2; justify-self: start; }
+  .arr-onboarding-dismiss { grid-column: 3; grid-row: 1; }
   .library-card-meta { flex-wrap: wrap; }
   .home-directory-section { grid-template-columns: 2.75rem minmax(0, 1fr) auto; padding: 1rem; }
   .home-directory-index { display: none; }

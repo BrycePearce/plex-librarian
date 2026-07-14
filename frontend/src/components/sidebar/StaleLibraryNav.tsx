@@ -6,11 +6,20 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArchiveRestore, ChevronRight, Film, Music, Search, Tv, X } from "lucide-react";
 import type { Library } from "../../lib/api";
 import { api } from "../../lib/api";
+import { useLocalStorage } from "../../lib/useLocalStorage";
 import "./StaleLibraryNav.css";
 
 const INLINE_LIMIT = 8;
 const RECENT_LIMIT = 3;
 const RECENT_STORAGE_KEY = "plex-librarian:recent-stale-libraries";
+const RECENT_STORAGE = {
+  deserialize: (value: string): string[] => {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((key): key is string => typeof key === "string")
+      : [];
+  },
+};
 
 export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -18,7 +27,11 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
   const [expanded, setExpanded] = useState(activeKey !== null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [recentKeys, setRecentKeys] = useState<string[]>(readRecentKeys);
+  const [recentKeys, setRecentKeys] = useLocalStorage<string[]>(
+    RECENT_STORAGE_KEY,
+    [],
+    RECENT_STORAGE,
+  );
   const { data } = useQuery({
     queryKey: ["libraries"],
     queryFn: () => api.libraries.list(),
@@ -49,13 +62,7 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
 
   function rememberLibrary(key: string) {
     setRecentKeys((current) => {
-      const next = [key, ...current.filter((value) => value !== key)].slice(0, RECENT_LIMIT);
-      try {
-        localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Navigation should still work when storage is disabled.
-      }
-      return next;
+      return [key, ...current.filter((value) => value !== key)].slice(0, RECENT_LIMIT);
     });
     setPickerOpen(false);
     setQuery("");
@@ -204,13 +211,4 @@ function StaleLibraryLink({
 function libraryKeyFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/libraries\/([^/]+)\/stale/);
   return match ? decodeURIComponent(match[1]) : null;
-}
-
-function readRecentKeys(): string[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(RECENT_STORAGE_KEY) ?? "[]");
-    return Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : [];
-  } catch {
-    return [];
-  }
 }

@@ -71,6 +71,16 @@ export interface SaveArrInstanceRequest {
   name: string;
   url: string;
   apiKey: string;
+  libraryKeys: string[];
+  addImportExclusion: boolean;
+}
+
+export interface UpdateArrInstanceRequest {
+  name: string;
+  url: string;
+  apiKey?: string;
+  libraryKeys: string[];
+  addImportExclusion: boolean;
 }
 
 export interface SaveArrLibraryMappingRequest {
