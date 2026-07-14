@@ -16,6 +16,7 @@ import { Route as DuplicatesRouteImport } from './routes/duplicates'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
 import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey'
@@ -55,6 +56,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsSonarrRadarrRoute = SettingsSonarrRadarrRouteImport.update({
+  id: '/sonarr-radarr',
+  path: '/sonarr-radarr',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   id: '/libraries/$key/stale',
   path: '/libraries/$key/stale',
@@ -78,9 +84,10 @@ export interface FileRoutesByFullPath {
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
-  '/settings': typeof SettingsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -90,9 +97,10 @@ export interface FileRoutesByTo {
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
-  '/settings': typeof SettingsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -103,9 +111,10 @@ export interface FileRoutesById {
   '/activity': typeof ActivityRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
-  '/settings': typeof SettingsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -120,6 +129,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -132,6 +142,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -144,6 +155,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -154,7 +166,7 @@ export interface RootRouteChildren {
   ActivityRoute: typeof ActivityRoute
   DashboardRoute: typeof DashboardRoute
   DuplicatesRoute: typeof DuplicatesRoute
-  SettingsRoute: typeof SettingsRoute
+  SettingsRoute: typeof SettingsRouteWithChildren
   SetupRoute: typeof SetupRoute
   UsersRoute: typeof UsersRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
@@ -213,6 +225,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/sonarr-radarr': {
+      id: '/settings/sonarr-radarr'
+      path: '/sonarr-radarr'
+      fullPath: '/settings/sonarr-radarr'
+      preLoaderRoute: typeof SettingsSonarrRadarrRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/libraries/$key/stale': {
       id: '/libraries/$key/stale'
       path: '/libraries/$key/stale'
@@ -237,12 +256,24 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface SettingsRouteChildren {
+  SettingsSonarrRadarrRoute: typeof SettingsSonarrRadarrRoute
+}
+
+const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsSonarrRadarrRoute: SettingsSonarrRadarrRoute,
+}
+
+const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
+  SettingsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   DashboardRoute: DashboardRoute,
   DuplicatesRoute: DuplicatesRoute,
-  SettingsRoute: SettingsRoute,
+  SettingsRoute: SettingsRouteWithChildren,
   SetupRoute: SetupRoute,
   UsersRoute: UsersRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,

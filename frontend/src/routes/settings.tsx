@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -13,7 +13,7 @@ import { api } from "../lib/api";
 import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
 import { PageHeader } from "../components/Workspace";
-import { ArrIntegrationManager } from "../features/arr/ArrIntegrationManager";
+import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger";
 
 const MAX_INACTIVITY_DAYS = 36_500;
 const MIN_USER_ACTIVITY_RETENTION_DAYS = 30;
@@ -36,8 +36,11 @@ function SettingsPage() {
         title="Settings"
         description="Tune library analysis, user activity, and media-manager integrations."
         icon={SettingsIcon}
-        actions={<ArrIntegrationManager />}
+        actions={<ArrIntegrationTrigger />}
       />
+      {/* Renders the Sonarr/Radarr dialog only while /settings/sonarr-radarr is active —
+          see that route and ArrIntegrationDialog. */}
+      <Outlet />
 
       <div className="settings-sections">
         <SettingsSection

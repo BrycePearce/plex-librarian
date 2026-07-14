@@ -305,8 +305,7 @@ function DashboardInner() {
             </span>
           </span>
           <Link
-            to="/settings"
-            hash="sonarr-radarr"
+            to="/settings/sonarr-radarr"
             className="btn btn-primary btn-sm arr-onboarding-setup"
           >
             Set up integrations
