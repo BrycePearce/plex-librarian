@@ -124,10 +124,23 @@ function DashboardInner() {
     data: librariesData,
     isLoading: libsLoading,
     error: libsError,
+    refetch: refetchLibraries,
+    isRefetching: isRefetchingLibraries,
   } = useQuery({
     queryKey: ["libraries"],
     queryFn: () => api.libraries.list(),
+    // The initial `retry: 1` (see main.tsx) exhausts almost immediately, so without this
+    // a dead backend (e.g. killed during local dev) leaves the error banner stuck until
+    // something else happens to trigger a refetch (window refocus, manual reload). Poll
+    // in the background while erroring so the banner clears itself once the server's back.
+    refetchInterval: (query) => query.state.status === "error" ? 5_000 : false,
   });
+  const [librariesBannerDismissed, setLibrariesBannerDismissed] = useState(
+    false,
+  );
+  useEffect(() => {
+    setLibrariesBannerDismissed(false);
+  }, [libsError === null]);
   const { data: arrSettings } = useQuery({
     queryKey: ["arr-integrations"],
     queryFn: api.arr.get,
@@ -280,6 +293,41 @@ function DashboardInner() {
         </div>
       </header>
 
+      {libsError && !librariesBannerDismissed && (
+        <div className="alert alert-error items-start">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p>Failed to load libraries</p>
+            <p className="text-xs opacity-70">
+              {libsError instanceof Error
+                ? libsError.message
+                : "Unknown error"}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => void refetchLibraries()}
+            disabled={isRefetchingLibraries}
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${
+                isRefetchingLibraries ? "animate-spin" : ""
+              }`}
+            />
+            Retry
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs btn-square"
+            onClick={() => setLibrariesBannerDismissed(true)}
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {isDashboardLoading && <DashboardSkeleton />}
       {!isDashboardLoading && (
         <motion.div
@@ -341,13 +389,6 @@ function DashboardInner() {
         <div className="alert alert-warning">
           <AlertCircle className="w-4 h-4" />
           <span>{triggerSync.error.message}</span>
-        </div>
-      )}
-
-      {libsError && (
-        <div className="alert alert-error">
-          <AlertCircle className="w-4 h-4" />
-          <span>Failed to load libraries</span>
         </div>
       )}
 
