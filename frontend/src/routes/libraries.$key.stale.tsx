@@ -577,15 +577,17 @@ function StalePage() {
 
       <DeleteConfirmDialog
         dialogRef={dialogRef}
+        libraryKey={key}
         items={confirmItems}
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
-        onConfirm={(mode) =>
+        onConfirm={(mode, deleteTorrents) =>
           deleteMutation.mutate(
             {
               libraryKey: key,
               ratingKeys: confirmItems.map((i) => i.ratingKey),
               mode,
+              deleteTorrents,
             },
             {
               onSuccess: (res) => {

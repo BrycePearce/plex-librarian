@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 import type { ArrInstance } from "../../lib/api";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
 import { ArrConnectionWizard } from "./ArrConnectionWizard";
+import { QbittorrentConnections } from "./QbittorrentConnections";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -35,17 +36,6 @@ export function ArrIntegrationDialog() {
   useEffect(() => {
     dialogRef.current?.showModal();
   }, []);
-
-  // Jumps straight to the connection wizard when there's nothing to manage yet, mirroring
-  // the trigger's old click-time check. A one-shot ref rather than reacting to every `data`
-  // change, so removing the last instance while the dialog is already open still lands on
-  // the (now empty) manager view instead of yanking the user into the wizard mid-session.
-  const skippedEmptyManager = useRef(false);
-  useEffect(() => {
-    if (skippedEmptyManager.current || !data) return;
-    skippedEmptyManager.current = true;
-    if (data.instances.length === 0) setView("connection");
-  }, [data]);
 
   const remove = useMutation({
     mutationFn: api.arr.deleteInstance,
@@ -93,8 +83,8 @@ export function ArrIntegrationDialog() {
           <div className="flex items-start gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Server className="size-5" /></span>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-bold">Media managers</h2>
-              <p className="mt-1 text-sm text-base-content/60">Connect Sonarr and Radarr, then choose which Plex libraries each instance manages.</p>
+              <h2 className="text-lg font-bold">Media connections</h2>
+              <p className="mt-1 text-sm text-base-content/60">Connect Sonarr and Radarr for managed deletion, plus qBittorrent for optional torrent cleanup.</p>
             </div>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => dialogRef.current?.close()}>Close</button>
           </div>
@@ -151,6 +141,7 @@ export function ArrIntegrationDialog() {
                 <div className="min-h-5">{test.isError && <p className="text-xs text-error">{test.error.message}</p>}</div>
               </div>
             )}
+            <QbittorrentConnections />
           </div>
         </div>
       )}

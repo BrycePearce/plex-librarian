@@ -168,6 +168,50 @@ export const arrDeleteAttempts = sqliteTable(
   }),
 );
 
+export const qbittorrentInstances = sqliteTable(
+  'qbittorrent_instances',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    username: text('username').notNull(),
+    password: text('password').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    serverIdx: index('qbittorrent_instances_server_idx').on(table.serverId),
+    serverUrlUnique: uniqueIndex('qbittorrent_instances_server_url_unique').on(
+      table.serverId,
+      table.url,
+    ),
+  }),
+);
+
+// Written immediately before asking qBittorrent to remove a torrent. Its instance key
+// supports both DB-backed connections (db:<id>) and the env override (env:<url>).
+// If the API response is lost, a retry can safely treat an absent hash as completed.
+export const torrentDeleteAttempts = sqliteTable(
+  'torrent_delete_attempts',
+  {
+    serverId: integer('server_id').notNull(),
+    ratingKey: text('rating_key').notNull(),
+    instanceKey: text('instance_key').notNull(),
+    torrentHash: text('torrent_hash').notNull(),
+    startedAt: integer('started_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.serverId, table.ratingKey, table.instanceKey, table.torrentHash],
+    }),
+    itemFk: foreignKey({
+      columns: [table.serverId, table.ratingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+  }),
+);
+
 // Singleton row (id = 1) — app-wide behavior settings and installation identity.
 // Per-server Plex credentials live on `servers`; activeServerId points at the one
 // currently synced/displayed. Env vars PLEX_URL + PLEX_TOKEN take precedence over

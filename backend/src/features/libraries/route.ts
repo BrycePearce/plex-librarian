@@ -23,6 +23,7 @@ import {
   libraries,
   seasons,
   settings,
+  torrentDeleteAttempts,
 } from '../../db/schema.ts';
 import {
   episodeVersionsByLibrary,
@@ -42,6 +43,8 @@ import {
   findAmbiguousExternalIds,
   getArrDeleteTargets,
 } from '../arr/delete.ts';
+import { getQbittorrentTargets } from '../qbittorrent/connections.ts';
+import { publicCleanupItem, resolveTorrentCleanup } from '../qbittorrent/cleanup.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
@@ -50,6 +53,7 @@ import type {
   MovieDetail,
   ShowDetail,
   StaleResponse,
+  TorrentCleanupPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
 import { staleCutoffs } from './staleFilters.ts';
 
@@ -66,6 +70,69 @@ const SORT_COLUMNS = {
 } as const;
 
 type SortKey = keyof typeof SORT_COLUMNS;
+
+interface TorrentResolvableItem {
+  ratingKey: string;
+  title: string;
+  type: string;
+  tmdbId: number | null;
+  tvdbId: number | null;
+}
+
+async function resolveTorrentCleanupBatch(
+  selectedItems: TorrentResolvableItem[],
+  arrTargets: Parameters<typeof resolveTorrentCleanup>[2],
+  qbitTargets: Parameters<typeof resolveTorrentCleanup>[3],
+  attemptedTorrentKeysByItem: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+): Promise<Array<Awaited<ReturnType<typeof resolveTorrentCleanup>>>> {
+  const results = new Array<Awaited<ReturnType<typeof resolveTorrentCleanup>>>(
+    selectedItems.length,
+  );
+  let nextIndex = 0;
+  // History and download-client lookups are network-bound, but a bulk selection can
+  // contain 200 items. A small worker pool avoids both a painfully serial preview and
+  // an unbounded burst against Arr/qBittorrent.
+  const workers = Array.from(
+    { length: Math.min(3, selectedItems.length) },
+    async () => {
+      while (nextIndex < selectedItems.length) {
+        const index = nextIndex++;
+        const item = selectedItems[index];
+        results[index] = await resolveTorrentCleanup(
+          item.ratingKey,
+          item,
+          arrTargets,
+          qbitTargets,
+          attemptedTorrentKeysByItem.get(item.ratingKey),
+        );
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+async function loadAttemptedTorrentKeysByItem(
+  serverId: number,
+  ratingKeys: string[],
+): Promise<Map<string, Set<string>>> {
+  const result = new Map<string, Set<string>>();
+  if (ratingKeys.length === 0) return result;
+  const attempts = await db.select({
+    ratingKey: torrentDeleteAttempts.ratingKey,
+    instanceKey: torrentDeleteAttempts.instanceKey,
+    torrentHash: torrentDeleteAttempts.torrentHash,
+  }).from(torrentDeleteAttempts).where(and(
+    eq(torrentDeleteAttempts.serverId, serverId),
+    inArray(torrentDeleteAttempts.ratingKey, ratingKeys),
+  ));
+  for (const attempt of attempts) {
+    const keys = result.get(attempt.ratingKey) ?? new Set<string>();
+    keys.add(`${attempt.instanceKey}:${attempt.torrentHash}`);
+    result.set(attempt.ratingKey, keys);
+  }
+  return result;
+}
 
 router.get('/', async (c) => {
   const rawLimit = parseInt(c.req.query('limit') ?? '100', 10);
@@ -365,6 +432,53 @@ router.patch('/:key', async (c) => {
   return c.json({ ...library, staleMinAgeDays: body.staleMinAgeDays });
 });
 
+// Resolves live qBittorrent jobs from retained Arr import history. This is deliberately
+// a POST: rating keys are validated as library-owned input and bulk selections do not
+// belong in a query string. It never mutates Arr, qBittorrent, Plex, or local rows.
+router.post('/:key/items/torrent-preview', async (c) => {
+  const key = c.req.param('key');
+  const body = await c.req.json().catch(() => null) as { ratingKeys?: unknown } | null;
+  if (
+    !body || !Array.isArray(body.ratingKeys) || body.ratingKeys.length === 0 ||
+    body.ratingKeys.length > 200 ||
+    !body.ratingKeys.every((ratingKey): ratingKey is string => typeof ratingKey === 'string')
+  ) return c.json({ error: 'ratingKeys must contain between 1 and 200 strings' }, 400);
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'library not found' }, 404);
+  const ratingKeys = [...new Set(body.ratingKeys)];
+  const owned = await db.select({
+    ratingKey: items.ratingKey,
+    title: items.title,
+    type: items.type,
+    tmdbId: items.tmdbId,
+    tvdbId: items.tvdbId,
+  }).from(items).where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
+  const [arrTargets, qbitTargets, attemptedKeys] = await Promise.all([
+    getArrDeleteTargets(serverId, key),
+    getQbittorrentTargets(serverId),
+    loadAttemptedTorrentKeysByItem(serverId, owned.map((item) => item.ratingKey)),
+  ]);
+  const previews = (
+    await resolveTorrentCleanupBatch(owned, arrTargets, qbitTargets, attemptedKeys)
+  ).map(publicCleanupItem);
+  for (const ratingKey of ratingKeys) {
+    if (owned.some((item) => item.ratingKey === ratingKey)) continue;
+    previews.push({
+      ratingKey,
+      status: 'unavailable' as const,
+      torrents: [],
+      reason: 'Item was not found in this library',
+    });
+  }
+  return c.json(
+    {
+      configured: qbitTargets.length > 0,
+      items: previews,
+    } satisfies TorrentCleanupPreviewResponse,
+  );
+});
+
 // Permanently deletes whole items and prunes the corresponding local rows. A mapped
 // movie/show library delegates file and record removal to Radarr/Sonarr, then refreshes
 // Plex; an unmapped library (or explicit plex-only request) uses Plex's destructive
@@ -375,6 +489,7 @@ router.delete('/:key/items', async (c) => {
   const body = await c.req.json().catch(() => null) as {
     ratingKeys?: unknown;
     mode?: unknown;
+    deleteTorrents?: unknown;
   } | null;
 
   if (!body || !Array.isArray(body.ratingKeys) || body.ratingKeys.length === 0) {
@@ -388,6 +503,12 @@ router.delete('/:key/items', async (c) => {
   }
   if (body.mode !== undefined && body.mode !== 'coordinated' && body.mode !== 'plex-only') {
     return c.json({ error: 'mode must be coordinated or plex-only' }, 400);
+  }
+  if (body.deleteTorrents !== undefined && typeof body.deleteTorrents !== 'boolean') {
+    return c.json({ error: 'deleteTorrents must be a boolean' }, 400);
+  }
+  if (body.deleteTorrents === true && body.mode === 'plex-only') {
+    return c.json({ error: 'torrent cleanup requires coordinated Arr deletion' }, 400);
   }
   // Deduped so a client sending the same ratingKey twice can't double-count it in the
   // response or the persisted items.deleted event's deletedCount/fileSizeFreed.
@@ -418,6 +539,39 @@ router.delete('/:key/items', async (c) => {
   const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
   const itemByKey = new Map(owned.map((item) => [item.ratingKey, item]));
   const arrTargets = body.mode === 'plex-only' ? [] : await getArrDeleteTargets(serverId, key);
+  const qbitTargets = body.deleteTorrents ? await getQbittorrentTargets(serverId) : [];
+  if (body.deleteTorrents && qbitTargets.length === 0) {
+    return c.json({ error: 'no qBittorrent connection is configured' }, 409);
+  }
+  const torrentCleanupByItem = new Map<string, Awaited<ReturnType<typeof resolveTorrentCleanup>>>();
+  if (body.deleteTorrents) {
+    // Resolve every selected item before the first destructive call, matching the Arr
+    // lookup-before-mutation guarantee below. qBittorrent failures therefore cannot
+    // leave earlier items deleted while later previews were never checked.
+    const attemptedKeys = await loadAttemptedTorrentKeysByItem(
+      serverId,
+      owned.map((item) => item.ratingKey),
+    );
+    for (
+      const cleanup of await resolveTorrentCleanupBatch(
+        owned,
+        arrTargets,
+        qbitTargets,
+        attemptedKeys,
+      )
+    ) {
+      torrentCleanupByItem.set(cleanup.ratingKey, cleanup);
+    }
+    const unresolved = [...torrentCleanupByItem.values()].filter(
+      (cleanup) => cleanup.status !== 'resolved',
+    );
+    if (unresolved.length > 0) {
+      return c.json({
+        error: 'torrent cleanup could not be verified for every selected item',
+        unavailable: unresolved.map(publicCleanupItem),
+      }, 409);
+    }
+  }
   const attemptedInstancesByItem = new Map<string, Set<number>>();
   if (arrTargets.length > 0 && owned.length > 0) {
     const attempts = await db.select({
@@ -446,14 +600,17 @@ router.delete('/:key/items', async (c) => {
   // risk deleting a different edition. Scope this across the whole active Plex server,
   // not just this library, to cover common HD/4K library splits.
   const ambiguousExternalIds = new Set<number>();
-  if (arrTargets.length > 0 && (library.type === 'movie' || library.type === 'show')) {
+  const coordinatedLibraryType = library.type === 'movie' || library.type === 'show'
+    ? library.type
+    : null;
+  if (arrTargets.length > 0 && coordinatedLibraryType) {
     const selectedExternalIds = owned
-      .map((item) => library.type === 'movie' ? item.tmdbId : item.tvdbId)
+      .map((item) => coordinatedLibraryType === 'movie' ? item.tmdbId : item.tvdbId)
       .filter((id): id is number => id !== null);
     if (selectedExternalIds.length > 0) {
       for (
         const externalId of withTransaction((client) =>
-          findAmbiguousExternalIds(client, serverId, library.type, selectedExternalIds)
+          findAmbiguousExternalIds(client, serverId, coordinatedLibraryType, selectedExternalIds)
         )
       ) ambiguousExternalIds.add(externalId);
     }
@@ -473,6 +630,7 @@ router.delete('/:key/items', async (c) => {
   const partial: DeleteItemsResponse['partial'] = [];
   const failed: { ratingKey: string; error: string }[] = [];
   let arrMutationOccurred = false;
+  const deletedTorrentKeys = new Set<string>();
   for (const ratingKey of ratingKeys) {
     if (!fileSizeByKey.has(ratingKey)) {
       failed.push({ ratingKey, error: 'not found in this library' });
@@ -480,8 +638,45 @@ router.delete('/:key/items', async (c) => {
     }
     try {
       const item = itemByKey.get(ratingKey)!;
+      // The Arr ID ambiguity guard must run before qBittorrent too: torrent history is
+      // resolved through that same title-level identifier, so it cannot prove which
+      // Plex edition owns the payload when multiple items share the ID.
       if (arrTargets.length > 0) {
         assertArrDeleteIsUnambiguous(item, ambiguousExternalIds);
+      }
+      const cleanup = torrentCleanupByItem.get(ratingKey);
+      for (const torrent of cleanup?.torrents ?? []) {
+        const torrentKey = `${torrent.instanceKey}:${torrent.hash}`;
+        if (deletedTorrentKeys.has(torrentKey)) continue;
+        // A single torrent (for example, a pack) can be associated with more than one
+        // selected item. Durably mark every association before the first destructive
+        // request so each item can independently resume if the process stops here.
+        for (const [associatedRatingKey, associatedCleanup] of torrentCleanupByItem) {
+          if (
+            !associatedCleanup.torrents.some((candidate) =>
+              `${candidate.instanceKey}:${candidate.hash}` === torrentKey
+            )
+          ) continue;
+          await db.insert(torrentDeleteAttempts).values({
+            serverId,
+            ratingKey: associatedRatingKey,
+            instanceKey: torrent.instanceKey,
+            torrentHash: torrent.hash,
+            startedAt: Math.floor(Date.now() / 1000),
+          }).onConflictDoUpdate({
+            target: [
+              torrentDeleteAttempts.serverId,
+              torrentDeleteAttempts.ratingKey,
+              torrentDeleteAttempts.instanceKey,
+              torrentDeleteAttempts.torrentHash,
+            ],
+            set: { startedAt: Math.floor(Date.now() / 1000) },
+          });
+        }
+        await torrent.target.client.deleteTorrent(torrent.hash);
+        deletedTorrentKeys.add(torrentKey);
+      }
+      if (arrTargets.length > 0) {
         const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;
         const result = await deleteThroughArr(item, arrTargets, {
           attemptedInstanceIds: attemptedInstancesByItem.get(ratingKey),

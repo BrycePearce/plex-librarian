@@ -10,14 +10,22 @@ export function ArrIntegrationTrigger() {
     queryKey: ["arr-integrations"],
     queryFn: api.arr.get,
   });
+  const { data: qbit } = useQuery({
+    queryKey: ["qbittorrent-integrations"],
+    queryFn: api.qbittorrent.get,
+  });
+  const connectionCount = (data?.instances.length ?? 0) +
+    (qbit?.envConfigured ? 1 : qbit?.instances.length ?? 0);
 
   return (
     <Link
       to="/settings/sonarr-radarr"
-      className={`btn btn-sm ${data?.instances.length ? "btn-ghost" : "btn-primary"}`}
+      className={`btn btn-sm ${connectionCount ? "btn-ghost" : "btn-primary"}`}
     >
-      <Server className="size-4" /> Sonarr &amp; Radarr
-      {!!data?.instances.length && <span className="badge badge-sm">{data.instances.length}</span>}
+      <Server className="size-4" /> Media connections
+      {!!connectionCount && (
+        <span className="badge badge-sm">{connectionCount}</span>
+      )}
     </Link>
   );
 }

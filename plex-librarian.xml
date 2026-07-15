@@ -2,27 +2,27 @@
 <Container version="2">
   <Name>PlexLibrarian</Name>
   <Repository>ghcr.io/brycepearce/plex-librarian:latest</Repository>
-  <Registry/>
+  <Registry />
   <Network>bridge</Network>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/BrycePearce/plex-librarian/issues</Support>
   <Project>https://github.com/BrycePearce/plex-librarian</Project>
-  <!-- Sonarr and Radarr connections and per-library mappings are configured in the web UI. -->
+  <!-- Sonarr, Radarr, and qBittorrent connections are normally configured in the web UI. -->
   <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and reclaim disk space. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely.</Overview>
   <Category>MediaApp:Other</Category>
   <Beta>true</Beta>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL/>
+  <TemplateURL />
   <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
   <!-- Docker init mode ensures proper signal handling and graceful shutdown. -->
   <ExtraParams>--init</ExtraParams>
-  <PostArgs/>
-  <CPUset/>
-  <DateInstalled/>
-  <DonateText/>
-  <DonateLink/>
-  <Requires/>
+  <PostArgs />
+  <CPUset />
+  <DateInstalled />
+  <DonateText />
+  <DonateLink />
+  <Requires />
 
   <Config
     Name="Web UI Port"
@@ -55,7 +55,7 @@
     Type="Variable"
     Display="always"
     Required="false"
-    Mask="false"/>
+    Mask="false" />
 
   <Config
     Name="Plex Token"
@@ -66,7 +66,7 @@
     Type="Variable"
     Display="always"
     Required="false"
-    Mask="true"/>
+    Mask="true" />
 
   <Config
     Name="Database Path"
@@ -78,6 +78,39 @@
     Display="advanced"
     Required="false"
     Mask="false">/data/librarian.db</Config>
+
+  <Config
+    Name="qBittorrent URL"
+    Target="QBITTORRENT_URL"
+    Default=""
+    Mode=""
+    Description="Optional power-user override. qBittorrent Web UI URL reachable from this container. Configure qBittorrent in the web UI instead for multiple instances."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false" />
+
+  <Config
+    Name="qBittorrent Username"
+    Target="QBITTORRENT_USERNAME"
+    Default=""
+    Mode=""
+    Description="qBittorrent Web UI username. Leave blank only when authentication bypass trusts this container."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="false" />
+
+  <Config
+    Name="qBittorrent Password"
+    Target="QBITTORRENT_PASSWORD"
+    Default=""
+    Mode=""
+    Description="qBittorrent Web UI password. Leave blank only when authentication bypass trusts this container."
+    Type="Variable"
+    Display="advanced"
+    Required="false"
+    Mask="true" />
 
   <Config
     Name="Library Sync Concurrency"
@@ -122,6 +155,4 @@
     Display="advanced"
     Required="false"
     Mask="false">180</Config>
-
-
 </Container>

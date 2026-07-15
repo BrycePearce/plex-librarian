@@ -1,14 +1,24 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, Copy, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Clock3,
+  Copy,
+  Download,
+  Radio,
+  Trash2,
+} from "lucide-react";
 import type { StaleItem } from "../../lib/api";
-import { formatKilobytes } from "../../lib/format";
+import { api } from "../../lib/api";
+import { formatDate, formatKilobytes } from "../../lib/format";
 import { versionLabel } from "../../lib/mediaVersion";
 import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({
   dialogRef,
+  libraryKey,
   items,
   pending,
   error,
@@ -16,15 +26,44 @@ export function DeleteConfirmDialog({
   onCancel,
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
+  libraryKey: string;
   items: StaleItem[];
   pending: boolean;
   error: unknown;
-  onConfirm: (mode: "coordinated" | "plex-only") => void;
+  onConfirm: (
+    mode: "coordinated" | "plex-only",
+    deleteTorrents: boolean,
+  ) => void;
   onCancel: () => void;
 }) {
   const [plexOnly, setPlexOnly] = useState(false);
+  const [deleteTorrents, setDeleteTorrents] = useState(false);
+  const ratingKeys = useMemo(
+    () => items.map((item) => item.ratingKey),
+    [items],
+  );
+  const preview = useQuery({
+    queryKey: ["torrent-cleanup-preview", libraryKey, ratingKeys],
+    queryFn: () => api.libraries.torrentCleanupPreview(libraryKey, ratingKeys),
+    enabled: ratingKeys.length > 0,
+    staleTime: 15_000,
+    retry: false,
+  });
+  const torrents = preview.data?.items.flatMap((item) => item.torrents) ?? [];
+  const cleanupHasErrors =
+    preview.data?.items.some((item) => item.status === "error") ?? false;
+  const cleanupUnavailable =
+    preview.data?.items.filter((item) => item.status === "unavailable") ?? [];
+  const cleanupFullyResolved =
+    preview.data?.items.every((item) => item.status === "resolved") ?? false;
+  const cleanupPreviouslyStarted = cleanupFullyResolved &&
+    torrents.length === 0;
+  useEffect(() => {
+    setDeleteTorrents(false);
+  }, [libraryKey, ratingKeys.join("|")]);
   const cancel = () => {
     setPlexOnly(false);
+    setDeleteTorrents(false);
     onCancel();
   };
   const totalSize = items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
@@ -34,13 +73,13 @@ export function DeleteConfirmDialog({
   // CLAUDE.md. Movies carry per-version detail via `versions`; shows only carry the
   // existence flag `hasDuplicateEpisodes` (episode_media_versions isn't rolled up
   // per-show) — same signal StaleItemRow's badge already uses.
-  const hasMultiVersionItems = items.some((i) =>
-    (i.versions?.length ?? 0) >= 2 || i.hasDuplicateEpisodes === true
+  const hasMultiVersionItems = items.some(
+    (i) => (i.versions?.length ?? 0) >= 2 || i.hasDuplicateEpisodes === true,
   );
 
   return (
     <dialog ref={dialogRef} className="modal" onClose={cancel}>
-      <div className="modal-box polished-modal">
+      <div className="modal-box polished-modal max-w-2xl">
         <h3 className="font-bold text-lg flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-error" /> Delete {items.length}
           {" "}
@@ -148,6 +187,144 @@ export function DeleteConfirmDialog({
             </span>
           </span>
         </label>
+        {!plexOnly && (
+          <div className="mt-3 rounded-lg border border-base-300 bg-base-200/40 p-3">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-sm mt-0.5"
+                checked={deleteTorrents}
+                onChange={(event) => setDeleteTorrents(event.target.checked)}
+                disabled={pending || preview.isLoading || !cleanupFullyResolved}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">
+                  Remove associated qBittorrent data
+                </span>
+                <span className="block text-xs text-base-content/55">
+                  Stop and remove verified torrents, delete their download
+                  payloads, then remove the library files through Sonarr or
+                  Radarr.
+                </span>
+              </span>
+            </label>
+
+            {preview.isLoading && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-base-content/50">
+                <span className="loading loading-spinner loading-xs" />{" "}
+                Looking up Arr import history and qBittorrent…
+              </div>
+            )}
+            {preview.isError && (
+              <p className="mt-2 text-xs text-error">{preview.error.message}</p>
+            )}
+            {preview.data && !preview.data.configured && (
+              <p className="mt-2 text-xs text-base-content/55">
+                Connect qBittorrent under{" "}
+                <Link
+                  to="/settings/sonarr-radarr"
+                  className="link link-primary"
+                >
+                  Settings → Media connections
+                </Link>{" "}
+                to enable download cleanup.
+              </p>
+            )}
+            {preview.data?.configured &&
+              torrents.length === 0 &&
+              !cleanupPreviouslyStarted &&
+              !cleanupHasErrors && (
+              <p className="mt-2 text-xs text-base-content/55">
+                No live qBittorrent torrent could be verified from retained Arr
+                import history. The library deletion is still available.
+              </p>
+            )}
+            {cleanupPreviouslyStarted && (
+              <p className="mt-2 text-xs text-info">
+                Torrent removal was previously started and the torrent is now
+                absent. Select this option again to finish the Sonarr or Radarr
+                deletion.
+              </p>
+            )}
+            {cleanupHasErrors && (
+              <p className="mt-2 text-xs text-error">
+                Torrent cleanup is unavailable because a configured service
+                could not be checked: {preview.data?.items
+                  .filter((item) => item.status === "error")
+                  .map((item) =>
+                    item.reason
+                  )
+                  .filter(Boolean)
+                  .join("; ")}
+              </p>
+            )}
+            {cleanupUnavailable.length > 0 && torrents.length > 0 && (
+              <div className="mt-2 text-xs text-warning">
+                <p>
+                  Torrent cleanup is disabled because it could not be verified
+                  for every selected item:
+                </p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                  {cleanupUnavailable.map((item) => (
+                    <li key={item.ratingKey}>
+                      {items.find(
+                        (candidate) => candidate.ratingKey === item.ratingKey,
+                      )?.title ?? item.ratingKey}
+                      : {item.reason ?? "association unavailable"}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {torrents.length > 0 && (
+              <div className="mt-3 max-h-44 space-y-2 overflow-y-auto">
+                {torrents.map((torrent) => (
+                  <div
+                    key={`${torrent.instanceKey}:${torrent.hash}`}
+                    className="rounded-md border border-base-300/70 bg-base-100/45 p-2.5 text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Download className="size-3.5 shrink-0 text-primary" />
+                      <strong className="min-w-0 flex-1 truncate">
+                        {torrent.name}
+                      </strong>
+                      <span className="badge badge-ghost badge-xs">
+                        {torrent.state}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 grid gap-x-4 gap-y-1 text-base-content/55 sm:grid-cols-2">
+                      <span>
+                        <Clock3 className="mr-1 inline size-3" />
+                        Seeded {formatSeedTime(torrent.seedingTime)}
+                      </span>
+                      <span>
+                        Ratio {torrent.ratio.toFixed(2)} ·{" "}
+                        {formatKilobytes(torrent.uploaded / 1000)} uploaded
+                      </span>
+                      <span>
+                        {formatKilobytes(torrent.size / 1000)} ·{" "}
+                        {torrent.fileCount} file
+                        {torrent.fileCount === 1 ? "" : "s"}
+                      </span>
+                      <span>
+                        {torrent.completedAt
+                          ? `Completed ${formatDate(torrent.completedAt)}`
+                          : "Completion date unavailable"}
+                      </span>
+                      <span className="truncate" title={torrent.contentPath}>
+                        {torrent.contentPath || torrent.savePath}
+                      </span>
+                      <span>
+                        <Radio className="mr-1 inline size-3" />
+                        {torrent.trackerHost ?? "Tracker unavailable"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="modal-action mt-3">
           <button
             type="button"
@@ -160,7 +337,10 @@ export function DeleteConfirmDialog({
           <button
             type="button"
             className="btn btn-sm btn-error gap-2"
-            onClick={() => onConfirm(plexOnly ? "plex-only" : "coordinated")}
+            onClick={() => onConfirm(
+              plexOnly ? "plex-only" : "coordinated",
+              !plexOnly && deleteTorrents,
+            )}
             disabled={pending}
           >
             {pending
@@ -177,4 +357,17 @@ export function DeleteConfirmDialog({
       </form>
     </dialog>
   );
+}
+
+function formatSeedTime(seconds: number): string {
+  const days = Math.floor(seconds / 86_400);
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    const remainingMonths = Math.floor((days % 365) / 30);
+    return `${years}y${remainingMonths > 0 ? ` ${remainingMonths}mo` : ""}`;
+  }
+  if (days >= 30) return `${Math.floor(days / 30)}mo ${days % 30}d`;
+  if (days > 0) return `${days}d`;
+  const hours = Math.floor(seconds / 3600);
+  return hours > 0 ? `${hours}h` : `${Math.floor(seconds / 60)}m`;
 }

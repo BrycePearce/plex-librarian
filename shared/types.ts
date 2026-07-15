@@ -88,6 +88,33 @@ export interface SaveArrLibraryMappingRequest {
   addImportExclusion: boolean;
 }
 
+export interface QbittorrentInstance {
+  id: number;
+  name: string;
+  url: string;
+  usernameConfigured: boolean;
+  passwordConfigured: boolean;
+}
+
+export interface QbittorrentIntegrationSettings {
+  envConfigured: boolean;
+  instances: QbittorrentInstance[];
+}
+
+export interface SaveQbittorrentInstanceRequest {
+  name: string;
+  url: string;
+  username: string;
+  password: string;
+}
+
+export interface UpdateQbittorrentInstanceRequest {
+  name: string;
+  url: string;
+  username?: string;
+  password?: string;
+}
+
 // --- Libraries ---
 
 export interface Library {
@@ -348,6 +375,37 @@ export interface CancelPendingInvitationResponse {
 export interface DeleteItemsRequest {
   ratingKeys: string[];
   mode?: "coordinated" | "plex-only";
+  deleteTorrents?: boolean;
+}
+
+export interface TorrentCleanupTorrent {
+  instanceKey: string;
+  instanceName: string;
+  hash: string;
+  name: string;
+  state: string;
+  size: number;
+  uploaded: number;
+  ratio: number;
+  seedingTime: number;
+  completedAt: number | null;
+  contentPath: string;
+  savePath: string;
+  trackerHost: string | null;
+  fileCount: number;
+  sourcePath: string | null;
+}
+
+export interface TorrentCleanupPreviewItem {
+  ratingKey: string;
+  status: "resolved" | "unavailable" | "error";
+  torrents: TorrentCleanupTorrent[];
+  reason?: string;
+}
+
+export interface TorrentCleanupPreviewResponse {
+  configured: boolean;
+  items: TorrentCleanupPreviewItem[];
 }
 
 export interface DeleteItemsResponse {

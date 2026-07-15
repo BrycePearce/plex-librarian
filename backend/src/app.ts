@@ -10,6 +10,7 @@ import duplicates from './features/duplicates/route.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
 import proxy from './features/proxy/route.ts';
+import qbittorrent from './features/qbittorrent/route.ts';
 import settings from './features/settings/route.ts';
 import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
@@ -46,6 +47,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/events', events);
   app.route('/api/libraries', libraries);
   app.route('/api/proxy', proxy);
+  app.route('/api/integrations/qbittorrent', qbittorrent);
   app.route('/api/settings', settings);
   app.route('/api/sync', sync);
   app.route('/api/users', users);

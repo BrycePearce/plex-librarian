@@ -5,6 +5,11 @@ export interface ArrMediaRecord {
   title: string;
 }
 
+export interface ArrTorrentAssociation {
+  hash: string;
+  sourcePath: string | null;
+}
+
 export class ArrApiError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message);
@@ -90,6 +95,32 @@ export class ArrClient {
     const records = await this.request<Array<{ id: number; title?: string }>>(path);
     const record = records[0];
     return record ? { id: record.id, title: record.title ?? String(record.id) } : null;
+  }
+
+  async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {
+    const path = this.type === 'radarr'
+      ? `/history/movie?movieId=${mediaId}&includeMovie=false`
+      : `/history/series?seriesId=${mediaId}&includeSeries=false&includeEpisode=false`;
+    const records = await this.request<
+      Array<{
+        eventType?: string;
+        downloadId?: string;
+        data?: { droppedPath?: string; sourcePath?: string };
+      }>
+    >(path);
+    const associations = new Map<string, ArrTorrentAssociation>();
+    for (const record of records) {
+      if (record.eventType?.toLowerCase() !== 'downloadfolderimported') continue;
+      const hash = record.downloadId?.trim().toLowerCase();
+      // BitTorrent v1 hashes are 40 hex characters; v2 hashes are 64. Anything else
+      // may be a Usenet download ID and must never be sent to qBittorrent.
+      if (!hash || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) continue;
+      associations.set(hash, {
+        hash,
+        sourcePath: record.data?.droppedPath ?? record.data?.sourcePath ?? null,
+      });
+    }
+    return [...associations.values()];
   }
 
   async deleteMedia(id: number, addImportExclusion: boolean): Promise<void> {

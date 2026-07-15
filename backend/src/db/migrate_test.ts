@@ -24,6 +24,9 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'arr_instances_server_type_url_unique',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
+        'qbittorrent_instances',
+        'qbittorrent_instances_server_url_unique',
+        'torrent_delete_attempts',
         'user_play_observations_session_idx'
       ) ORDER BY name
     `);
@@ -34,6 +37,9 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'arr_instances_server_type_url_unique',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
+        'qbittorrent_instances',
+        'qbittorrent_instances_server_url_unique',
+        'torrent_delete_attempts',
         'user_play_observations_session_idx',
       ],
     );

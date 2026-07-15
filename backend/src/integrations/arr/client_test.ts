@@ -51,6 +51,24 @@ Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', asyn
   ]);
 });
 
+Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json([
+      {
+        eventType: 'downloadFolderImported',
+        downloadId: 'A'.repeat(40),
+        data: { droppedPath: '/downloads/release/movie.mkv' },
+      },
+      { eventType: 'grabbed', downloadId: 'B'.repeat(40) },
+      { eventType: 'downloadFolderImported', downloadId: 'usenet-id' },
+    ]))) as typeof fetch;
+  const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
+  assertEquals(await client.torrentAssociations(42), [{
+    hash: 'a'.repeat(40),
+    sourcePath: '/downloads/release/movie.mkv',
+  }]);
+});
+
 Deno.test('ArrClient surfaces an HTTP failure', async () => {
   const mockFetch =
     (() => Promise.resolve(new Response('Unauthorized', { status: 401 }))) as typeof fetch;

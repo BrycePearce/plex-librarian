@@ -45,8 +45,8 @@ services:
     restart: unless-stopped
 ```
 
-Start the container, open `http://<docker-host>:8288`, and select **Sign in
-with Plex**:
+Start the container, open `http://<docker-host>:8288`, and select **Sign in with
+Plex**:
 
 ```bash
 docker compose up -d
@@ -58,13 +58,32 @@ Plex Librarian can coordinate whole-title deletion with Radarr for movie
 libraries and Sonarr for TV libraries. Arr removes the title and its files, then
 Plex Librarian asks Plex to refresh the affected library.
 
-Open **Settings → Sonarr & Radarr**, add an instance with its URL and API key
+Open **Settings → Media connections**, add an instance with its URL and API key
 (found in Sonarr/Radarr under **Settings → General → Security**), then map each
 library to an instance under **Library mappings**.
 
 Use a URL that is reachable from inside the Plex Librarian container, such as
 `http://192.168.1.20:8989` or `http://sonarr:8989` on a shared Docker network —
 not `localhost`, which points back at Plex Librarian itself.
+
+### Optional qBittorrent cleanup
+
+Add qBittorrent under **Settings → Media connections** to inspect live torrents
+associated with Sonarr/Radarr import history. The delete confirmation can then
+show the torrent name, payload path, tracker host, ratio, upload total, and
+cumulative seeding time. When explicitly selected, Plex Librarian removes the
+torrent and its downloaded payload before asking Arr to delete the remaining
+library hardlink. If the association cannot be verified, torrent cleanup stays
+disabled and the existing Arr-only deletion remains available.
+
+Use the qBittorrent Web UI URL as seen from the Plex Librarian container.
+Enter qBittorrent's Web UI username and password, or leave both blank when
+qBittorrent's authentication bypass explicitly trusts the Plex Librarian host or
+subnet. Desktop qBittorrent users must enable **Web User Interface (Remote
+control)** first. In Docker, `localhost` points to Plex Librarian rather than the
+qBittorrent container.
+Private tracker passkeys are never returned to the browser; only the tracker
+hostname is displayed.
 
 ## Configuration
 
@@ -77,6 +96,9 @@ available for Docker and advanced Unraid installations:
 | `PORT`                       | No       | Container HTTP port. Default: `8080`                                                                  |
 | `PLEX_URL`                   | No       | Direct Plex server URL; use with `PLEX_TOKEN` to skip the setup wizard                                |
 | `PLEX_TOKEN`                 | No       | Plex authentication token; use with `PLEX_URL`                                                        |
+| `QBITTORRENT_URL`            | No       | qBittorrent Web UI URL; overrides qBittorrent connections saved in the web UI                         |
+| `QBITTORRENT_USERNAME`       | No       | qBittorrent Web UI username; omit only when authentication bypass trusts this container               |
+| `QBITTORRENT_PASSWORD`       | No       | qBittorrent Web UI password; omit only when authentication bypass trusts this container               |
 | `LIBRARY_SYNC_CONCURRENCY`   | No       | Maximum libraries synced in parallel. Default: `3`                                                    |
 | `FETCH_CONCURRENCY`          | No       | Maximum concurrent Plex page requests per library. Default: `8`                                       |
 | `SYNC_STALL_TIMEOUT_MINUTES` | No       | Abort a sync after this many minutes without progress. Default: `15`                                  |
@@ -88,17 +110,17 @@ spare.
 
 Sonarr and Radarr connections are configured in the web UI rather than through
 environment variables so multiple instances can be managed independently.
+qBittorrent can also be configured there; the `QBITTORRENT_*` variables are a
+power-user override and take precedence over database-backed connections.
 
 ### Manual Plex configuration
 
 Set both `PLEX_URL` and `PLEX_TOKEN` to bypass the Plex authorization wizard.
-Environment variables take precedence over credentials saved through the web
-UI.
+Environment variables take precedence over credentials saved through the web UI.
 
-Use a direct local Plex URL when possible, such as
-`http://192.168.1.100:32400`. To locate a token in Plex Web, open an item's
-three-dot menu, select **Get Info → View XML**, and copy the `X-Plex-Token`
-parameter from the resulting URL.
+Use a direct local Plex URL when possible, such as `http://192.168.1.100:32400`.
+To locate a token in Plex Web, open an item's three-dot menu, select **Get Info
+→ View XML**, and copy the `X-Plex-Token` parameter from the resulting URL.
 
 ## Optional Plex webhooks
 
@@ -118,8 +140,8 @@ rest of the application.
 ## Backups and security
 
 All application data is stored under `/data`, including the SQLite database,
-Plex credentials, Sonarr/Radarr API keys, mappings, and activity history. Back up
-this directory and treat the backup as sensitive.
+Plex credentials, Sonarr/Radarr API keys, mappings, and activity history. Back
+up this directory and treat the backup as sensitive.
 
 Plex Librarian is intended for a trusted self-hosted network. If remote access
 is required, place it behind a reverse proxy that provides authentication and

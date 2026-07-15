@@ -14,15 +14,20 @@ import type {
   PendingInvitationsResponse,
   PinPollResult,
   PlexPin,
+  QbittorrentInstance,
+  QbittorrentIntegrationSettings,
   RemoveUserResponse,
   SaveArrInstanceRequest,
+  SaveQbittorrentInstanceRequest,
   Settings,
   ShowDetail,
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
-  UsersResponse,
+  TorrentCleanupPreviewResponse,
   UpdateArrInstanceRequest,
+  UpdateQbittorrentInstanceRequest,
+  UsersResponse,
 } from "@shared/types";
 
 export type {
@@ -54,6 +59,8 @@ export type {
   PlexPin,
   PlexServer,
   PlexUser,
+  QbittorrentInstance,
+  QbittorrentIntegrationSettings,
   RemoveUserResponse,
   Season,
   Settings,
@@ -62,6 +69,9 @@ export type {
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
+  TorrentCleanupPreviewItem,
+  TorrentCleanupPreviewResponse,
+  TorrentCleanupTorrent,
   UsersResponse,
 } from "@shared/types";
 
@@ -199,13 +209,19 @@ export const api = {
       key: string,
       ratingKeys: string[],
       mode: "coordinated" | "plex-only" = "coordinated",
+      deleteTorrents = false,
     ) =>
       apiFetch<DeleteItemsResponse>(
         `/libraries/${encodeURIComponent(key)}/items`,
         {
           method: "DELETE",
-          body: JSON.stringify({ ratingKeys, mode }),
+          body: JSON.stringify({ ratingKeys, mode, deleteTorrents }),
         },
+      ),
+    torrentCleanupPreview: (key: string, ratingKeys: string[]) =>
+      apiFetch<TorrentCleanupPreviewResponse>(
+        `/libraries/${encodeURIComponent(key)}/items/torrent-preview`,
+        { method: "POST", body: JSON.stringify({ ratingKeys }) },
       ),
   },
   duplicates: {
@@ -279,6 +295,34 @@ export const api = {
           body: JSON.stringify({ instanceIds, addImportExclusion }),
         },
       ),
+  },
+  qbittorrent: {
+    get: () =>
+      apiFetch<QbittorrentIntegrationSettings>(
+        "/integrations/qbittorrent",
+      ),
+    createInstance: (instance: SaveQbittorrentInstanceRequest) =>
+      apiFetch<QbittorrentInstance>("/integrations/qbittorrent/instances", {
+        method: "POST",
+        body: JSON.stringify(instance),
+      }),
+    updateInstance: (
+      id: number,
+      instance: UpdateQbittorrentInstanceRequest,
+    ) =>
+      apiFetch<QbittorrentInstance>(
+        `/integrations/qbittorrent/instances/${id}`,
+        { method: "PATCH", body: JSON.stringify(instance) },
+      ),
+    testInstance: (id: number) =>
+      apiFetch<{ version: string }>(
+        `/integrations/qbittorrent/instances/${id}/test`,
+        { method: "POST" },
+      ),
+    deleteInstance: (id: number) =>
+      apiFetch<{ ok: true }>(`/integrations/qbittorrent/instances/${id}`, {
+        method: "DELETE",
+      }),
   },
   users: {
     invitations: (
