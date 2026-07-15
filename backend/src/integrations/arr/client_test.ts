@@ -20,7 +20,7 @@ Deno.test('ArrClient looks up and deletes a Radarr movie by native id', async ()
   }) as typeof fetch;
   const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
 
-  assertEquals(await client.lookup(550), { id: 42, title: 'Fight Club' });
+  assertEquals(await client.lookup(550), { id: 42, title: 'Fight Club', path: null });
   await client.deleteMedia(42, true);
 
   assertEquals(requests, [
@@ -67,6 +67,60 @@ Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', asy
     hash: 'a'.repeat(40),
     sourcePath: '/downloads/release/movie.mkv',
   }]);
+});
+
+Deno.test('Radarr lookup and extra files expose its managed deletion boundary', async () => {
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes('/movie?tmdbId=')) {
+      return Promise.resolve(Response.json([{
+        id: 42,
+        title: 'Movie',
+        path: 'A:\\Movies\\Movie',
+      }]));
+    }
+    if (url.includes('/moviefile?movieId=')) {
+      return Promise.resolve(Response.json([
+        { relativePath: 'Movie.mov', size: 2000 },
+      ]));
+    }
+    return Promise.resolve(Response.json([
+      { relativePath: 'Movie.idx', type: 'subtitle' },
+      { relativePath: 'Movie.sub', type: 0 },
+      { relativePath: 'movie.nfo', type: 1 },
+      { relativePath: 'extras/trailer.mov', type: 2 },
+    ]));
+  }) as typeof fetch;
+  const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
+  assertEquals(await client.lookup(550), {
+    id: 42,
+    title: 'Movie',
+    path: 'A:\\Movies\\Movie',
+  });
+  assertEquals(await client.mediaFiles(42), [
+    { relativePath: 'Movie.mov', size: 2000 },
+  ]);
+  assertEquals(await client.extraFiles(42), [
+    { relativePath: 'Movie.idx', type: 'subtitle' },
+    { relativePath: 'Movie.sub', type: 'subtitle' },
+    { relativePath: 'movie.nfo', type: 'metadata' },
+    { relativePath: 'extras/trailer.mov', type: 'other' },
+  ]);
+});
+
+Deno.test('Sonarr deletion preview stays at the managed series root', async () => {
+  let requested = false;
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() => {
+      requested = true;
+      return Promise.resolve(Response.json([]));
+    }) as typeof fetch,
+  );
+  assertEquals(await client.mediaFiles(7), null);
+  assertEquals(requested, false);
 });
 
 Deno.test('ArrClient surfaces an HTTP failure', async () => {

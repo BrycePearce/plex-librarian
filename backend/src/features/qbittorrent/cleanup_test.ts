@@ -13,7 +13,22 @@ function arrTarget() {
     ((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/movie?tmdbId=')) {
-        return Promise.resolve(Response.json([{ id: 7, title: 'Movie' }]));
+        return Promise.resolve(Response.json([{
+          id: 7,
+          title: 'Movie',
+          path: 'A:\\Movies\\Movie',
+        }]));
+      }
+      if (url.includes('/extrafile?movieId=')) {
+        return Promise.resolve(Response.json([
+          { relativePath: 'Movie.idx', type: 'subtitle' },
+          { relativePath: 'Movie.sub', type: 'subtitle' },
+        ]));
+      }
+      if (url.includes('/moviefile?movieId=')) {
+        return Promise.resolve(Response.json([
+          { relativePath: 'Movie.mov', size: 100 },
+        ]));
       }
       return Promise.resolve(Response.json([{
         eventType: 'downloadFolderImported',
@@ -54,7 +69,7 @@ function qbitTarget(
           tracker: 'https://tracker.example/private-passkey',
         }]));
       }
-      return Promise.resolve(Response.json([{ name: 'movie.mkv' }]));
+      return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100 }]));
     }) as typeof fetch,
   );
   return {
@@ -76,6 +91,23 @@ Deno.test('torrent cleanup resolves Arr import history to live redacted qBittorr
   assertEquals(result.torrents[0]?.hash, hash);
   assertEquals(result.torrents[0]?.sourcePath, '/downloads/release/movie.mkv');
   assertEquals(result.torrents[0]?.trackerHost, 'tracker.example');
+  assertEquals(result.arrStatus, 'resolved');
+  assertEquals(result.arrTargets, [{
+    instanceName: 'Radarr',
+    type: 'radarr',
+    title: 'Movie',
+    path: 'A:\\Movies\\Movie',
+    mediaFiles: [{ relativePath: 'Movie.mov', size: 100 }],
+    extraFiles: [
+      { relativePath: 'Movie.idx', type: 'subtitle' },
+      { relativePath: 'Movie.sub', type: 'subtitle' },
+    ],
+  }]);
+  assertEquals(result.sources, [{
+    instanceName: 'Radarr',
+    hash,
+    path: '/downloads/release/movie.mkv',
+  }]);
 });
 
 Deno.test('torrent cleanup errors instead of silently skipping an unreachable client', async () => {
@@ -111,4 +143,39 @@ Deno.test('torrent cleanup resumes when a previously attempted torrent is now ab
   assertEquals(result.status, 'resolved');
   assertEquals(result.torrents, []);
   assertStringIncludes(result.reason ?? '', 'previously started');
+});
+
+Deno.test('optional history and extra-file failures do not block verified Arr deletion', async () => {
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr',
+    'key',
+    ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/movie?tmdbId=')) {
+        return Promise.resolve(Response.json([{
+          id: 7,
+          title: 'Movie',
+          path: '/movies/Movie',
+        }]));
+      }
+      return Promise.resolve(new Response('Unavailable', { status: 503 }));
+    }) as typeof fetch,
+  );
+  const result = await resolveTorrentCleanup(
+    'plex-1',
+    { title: 'Movie', type: 'movie', tmdbId: 10, tvdbId: null },
+    [{
+      instanceId: 1,
+      instanceName: 'Radarr',
+      client,
+      addImportExclusion: true,
+    }],
+    [],
+  );
+  assertEquals(result.arrStatus, 'resolved');
+  assertEquals(result.arrTargets[0]?.path, '/movies/Movie');
+  assertEquals(result.arrTargets[0]?.mediaFiles, null);
+  assertEquals(result.arrTargets[0]?.extraFiles, null);
+  assertEquals(result.status, 'unavailable');
 });

@@ -11,7 +11,11 @@ export interface QbittorrentTorrent {
   savePath: string;
   trackerHost: string | null;
   fileCount: number;
+  files: Array<{ path: string; size: number | null }>;
+  filesTruncated: boolean;
 }
+
+const PUBLIC_FILE_LIMIT = 100;
 
 export class QbittorrentApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -188,6 +192,13 @@ export class QbittorrentClient {
       savePath: String(record['save_path'] ?? ''),
       trackerHost: trackerHost(record['tracker']),
       fileCount: files.length,
+      files: files.slice(0, PUBLIC_FILE_LIMIT).flatMap((file) => {
+        const path = String(file['name'] ?? '').trim();
+        if (!path) return [];
+        const size = Number(file['size']);
+        return [{ path, size: Number.isFinite(size) && size >= 0 ? size : null }];
+      }),
+      filesTruncated: files.length > PUBLIC_FILE_LIMIT,
     };
   }
 

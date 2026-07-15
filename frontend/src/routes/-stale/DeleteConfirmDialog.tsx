@@ -2,15 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  AlertTriangle,
-  Clock3,
-  Copy,
-  Download,
-  Radio,
-  Trash2,
-} from "lucide-react";
-import type { StaleItem } from "../../lib/api";
+import { AlertTriangle, Copy, File, Folder, Info, Trash2 } from "lucide-react";
+import type {
+  ArrCleanupTarget,
+  StaleItem,
+  TorrentCleanupTorrent,
+} from "../../lib/api";
 import { api } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
 import { versionLabel } from "../../lib/mediaVersion";
@@ -58,6 +55,26 @@ export function DeleteConfirmDialog({
     preview.data?.items.every((item) => item.status === "resolved") ?? false;
   const cleanupPreviouslyStarted = cleanupFullyResolved &&
     torrents.length === 0;
+  const coordinatedReady = Boolean(
+    preview.data?.coordinatedConfigured &&
+      preview.data.items.every((item) => item.arrStatus === "resolved"),
+  );
+  const arrProblems =
+    preview.data?.items.filter((item) => item.arrStatus !== "resolved") ?? [];
+  const arrEntries =
+    preview.data?.items.flatMap((previewItem) =>
+      previewItem.arrTargets.map((target) => ({
+        ratingKey: previewItem.ratingKey,
+        target,
+      }))
+    ) ?? [];
+  const unmanagedSources =
+    preview.data?.items.flatMap((previewItem) =>
+      previewItem.status === "resolved" ? [] : previewItem.sources.filter(
+        (source) =>
+          !previewItem.torrents.some((torrent) => torrent.hash === source.hash),
+      ).map((source) => ({ ratingKey: previewItem.ratingKey, source }))
+    ) ?? [];
   useEffect(() => {
     setDeleteTorrents(false);
   }, [libraryKey, ratingKeys.join("|")]);
@@ -169,162 +186,76 @@ export function DeleteConfirmDialog({
             {error instanceof Error ? error.message : "Delete failed"}
           </p>
         )}
-        <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-lg border border-base-300 bg-base-200/40 p-3">
-          <input
-            type="checkbox"
-            className="checkbox checkbox-sm mt-0.5"
+        <div className="mt-3 space-y-2 rounded-lg border border-base-300 bg-base-200/35 p-2.5">
+          <CompactOption
+            label="Delete from Plex only"
+            info="Skips mapped Sonarr or Radarr instances. If the title is monitored, Arr may download it again."
             checked={plexOnly}
-            onChange={(event) => setPlexOnly(event.target.checked)}
             disabled={pending}
+            onChange={(checked) => {
+              setPlexOnly(checked);
+              if (checked) setDeleteTorrents(false);
+            }}
           />
-          <span>
-            <span className="block text-sm font-medium">
-              Delete from Plex only
-            </span>
-            <span className="block text-xs text-base-content/55">
-              Skip mapped Sonarr or Radarr instances. Monitored media may be
-              downloaded again.
-            </span>
-          </span>
-        </label>
-        {!plexOnly && (
-          <div className="mt-3 rounded-lg border border-base-300 bg-base-200/40 p-3">
-            <label className="flex cursor-pointer items-start gap-3">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm mt-0.5"
-                checked={deleteTorrents}
-                onChange={(event) => setDeleteTorrents(event.target.checked)}
-                disabled={pending || preview.isLoading || !cleanupFullyResolved}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">
-                  Remove associated qBittorrent data
-                </span>
-                <span className="block text-xs text-base-content/55">
-                  Stop and remove verified torrents, delete their download
-                  payloads, then remove the library files through Sonarr or
-                  Radarr.
-                </span>
-              </span>
-            </label>
+          {!plexOnly && (
+            <CompactOption
+              label="Remove from qBittorrent and delete downloaded files"
+              info="Removes the verified qBittorrent job and asks qBittorrent to delete its payload. Plex Librarian does not independently delete a saved .torrent file."
+              checked={deleteTorrents}
+              disabled={pending || preview.isLoading || !cleanupFullyResolved}
+              onChange={setDeleteTorrents}
+            />
+          )}
+        </div>
 
-            {preview.isLoading && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-base-content/50">
-                <span className="loading loading-spinner loading-xs" />{" "}
-                Looking up Arr import history and qBittorrent…
-              </div>
-            )}
-            {preview.isError && (
-              <p className="mt-2 text-xs text-error">{preview.error.message}</p>
-            )}
-            {preview.data && !preview.data.configured && (
-              <p className="mt-2 text-xs text-base-content/55">
-                Connect qBittorrent under{" "}
-                <Link
-                  to="/settings/sonarr-radarr"
-                  className="link link-primary"
-                >
-                  Settings → Media connections
-                </Link>{" "}
-                to enable download cleanup.
-              </p>
-            )}
-            {preview.data?.configured &&
-              torrents.length === 0 &&
-              !cleanupPreviouslyStarted &&
-              !cleanupHasErrors && (
-              <p className="mt-2 text-xs text-base-content/55">
-                No live qBittorrent torrent could be verified from retained Arr
-                import history. The library deletion is still available.
-              </p>
-            )}
-            {cleanupPreviouslyStarted && (
-              <p className="mt-2 text-xs text-info">
-                Torrent removal was previously started and the torrent is now
-                absent. Select this option again to finish the Sonarr or Radarr
-                deletion.
-              </p>
-            )}
-            {cleanupHasErrors && (
-              <p className="mt-2 text-xs text-error">
-                Torrent cleanup is unavailable because a configured service
-                could not be checked: {preview.data?.items
-                  .filter((item) => item.status === "error")
-                  .map((item) =>
-                    item.reason
-                  )
-                  .filter(Boolean)
-                  .join("; ")}
-              </p>
-            )}
-            {cleanupUnavailable.length > 0 && torrents.length > 0 && (
-              <div className="mt-2 text-xs text-warning">
-                <p>
-                  Torrent cleanup is disabled because it could not be verified
-                  for every selected item:
-                </p>
-                <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                  {cleanupUnavailable.map((item) => (
-                    <li key={item.ratingKey}>
-                      {items.find(
-                        (candidate) => candidate.ratingKey === item.ratingKey,
-                      )?.title ?? item.ratingKey}
-                      : {item.reason ?? "association unavailable"}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {torrents.length > 0 && (
-              <div className="mt-3 max-h-44 space-y-2 overflow-y-auto">
-                {torrents.map((torrent) => (
-                  <div
-                    key={`${torrent.instanceKey}:${torrent.hash}`}
-                    className="rounded-md border border-base-300/70 bg-base-100/45 p-2.5 text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Download className="size-3.5 shrink-0 text-primary" />
-                      <strong className="min-w-0 flex-1 truncate">
-                        {torrent.name}
-                      </strong>
-                      <span className="badge badge-ghost badge-xs">
-                        {torrent.state}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 grid gap-x-4 gap-y-1 text-base-content/55 sm:grid-cols-2">
-                      <span>
-                        <Clock3 className="mr-1 inline size-3" />
-                        Seeded {formatSeedTime(torrent.seedingTime)}
-                      </span>
-                      <span>
-                        Ratio {torrent.ratio.toFixed(2)} ·{" "}
-                        {formatKilobytes(torrent.uploaded / 1000)} uploaded
-                      </span>
-                      <span>
-                        {formatKilobytes(torrent.size / 1000)} ·{" "}
-                        {torrent.fileCount} file
-                        {torrent.fileCount === 1 ? "" : "s"}
-                      </span>
-                      <span>
-                        {torrent.completedAt
-                          ? `Completed ${formatDate(torrent.completedAt)}`
-                          : "Completion date unavailable"}
-                      </span>
-                      <span className="truncate" title={torrent.contentPath}>
-                        {torrent.contentPath || torrent.savePath}
-                      </span>
-                      <span>
-                        <Radio className="mr-1 inline size-3" />
-                        {torrent.trackerHost ?? "Tracker unavailable"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <PreviewStatus
+          loading={preview.isLoading}
+          error={preview.isError ? preview.error.message : null}
+          plexOnly={plexOnly}
+          coordinatedConfigured={preview.data?.coordinatedConfigured ?? false}
+          qbitConfigured={preview.data?.configured ?? false}
+          arrProblems={preview.data?.coordinatedConfigured
+            ? arrProblems.map((problem) => ({
+              title: items.find((item) => item.ratingKey === problem.ratingKey)
+                ?.title ?? problem.ratingKey,
+              reason: problem.arrReason ??
+                "managed deletion could not be verified",
+            }))
+            : []}
+          cleanupError={cleanupHasErrors
+            ? preview.data?.items
+              .filter((item) => item.status === "error")
+              .map((item) => item.reason)
+              .filter(Boolean)
+              .join("; ") ?? null
+            : null}
+          cleanupUnavailable={cleanupUnavailable.length > 0 &&
+              torrents.length > 0
+            ? cleanupUnavailable.map((item) =>
+              `${
+                items.find((candidate) =>
+                  candidate.ratingKey === item.ratingKey
+                )?.title ??
+                  item.ratingKey
+              }: ${item.reason ?? "association unavailable"}`
+            ).join("; ")
+            : null}
+          cleanupPreviouslyStarted={cleanupPreviouslyStarted}
+          noLiveTorrent={Boolean(
+            preview.data?.configured && torrents.length === 0 &&
+              !cleanupPreviouslyStarted && !cleanupHasErrors,
+          )}
+        />
+
+        <DeletionTree
+          items={items}
+          plexOnly={plexOnly}
+          arrEntries={arrEntries}
+          torrents={torrents}
+          deleteTorrents={deleteTorrents}
+          unmanagedSources={unmanagedSources}
+          loading={preview.isLoading}
+        />
         <div className="modal-action mt-3">
           <button
             type="button"
@@ -341,7 +272,7 @@ export function DeleteConfirmDialog({
               plexOnly ? "plex-only" : "coordinated",
               !plexOnly && deleteTorrents,
             )}
-            disabled={pending}
+            disabled={pending || (!plexOnly && !coordinatedReady)}
           >
             {pending
               ? <span className="loading loading-spinner loading-xs" />
@@ -356,6 +287,406 @@ export function DeleteConfirmDialog({
         </button>
       </form>
     </dialog>
+  );
+}
+
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span
+      className="tooltip tooltip-left inline-flex shrink-0 cursor-help text-base-content/45"
+      data-tip={text}
+      tabIndex={0}
+      aria-label={text}
+    >
+      <Info className="size-3.5" />
+    </span>
+  );
+}
+
+function CompactOption({
+  label,
+  info,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  info: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      className={`flex items-center gap-2 text-sm ${
+        disabled ? "opacity-55" : "cursor-pointer"
+      }`}
+    >
+      <input
+        type="checkbox"
+        className="checkbox checkbox-sm"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="font-medium">{label}</span>
+      <InfoTip text={info} />
+    </label>
+  );
+}
+
+function PreviewStatus({
+  loading,
+  error,
+  plexOnly,
+  coordinatedConfigured,
+  qbitConfigured,
+  arrProblems,
+  cleanupError,
+  cleanupUnavailable,
+  cleanupPreviouslyStarted,
+  noLiveTorrent,
+}: {
+  loading: boolean;
+  error: string | null;
+  plexOnly: boolean;
+  coordinatedConfigured: boolean;
+  qbitConfigured: boolean;
+  arrProblems: Array<{ title: string; reason: string }>;
+  cleanupError: string | null;
+  cleanupUnavailable: string | null;
+  cleanupPreviouslyStarted: boolean;
+  noLiveTorrent: boolean;
+}) {
+  if (plexOnly) return null;
+  return (
+    <div className="mt-2 space-y-1 text-xs">
+      {loading && (
+        <p className="flex items-center gap-2 text-base-content/50">
+          <span className="loading loading-spinner loading-xs" />{" "}
+          Verifying deletion paths…
+        </p>
+      )}
+      {error && (
+        <p className="text-error">Could not verify deletion paths: {error}</p>
+      )}
+      {!loading && !error && !coordinatedConfigured && (
+        <p className="text-warning">
+          No Sonarr or Radarr mapping. Select Plex-only deletion or configure
+          one first.
+        </p>
+      )}
+      {arrProblems.map((problem) => (
+        <p key={`${problem.title}:${problem.reason}`} className="text-error">
+          {problem.title}: {problem.reason}
+        </p>
+      ))}
+      {cleanupError && <p className="text-error">qBittorrent: {cleanupError}
+      </p>}
+      {cleanupUnavailable && (
+        <p className="text-warning">qBittorrent: {cleanupUnavailable}</p>
+      )}
+      {cleanupPreviouslyStarted && (
+        <p className="text-info">
+          qBittorrent removal was previously started; select it again to finish
+          Arr deletion.
+        </p>
+      )}
+      {noLiveTorrent && (
+        <p className="text-base-content/50">
+          No associated live qBittorrent job was found.
+        </p>
+      )}
+      {!loading && !error && !qbitConfigured && (
+        <p className="text-base-content/45">
+          qBittorrent cleanup is unavailable.{"  "}
+          <Link to="/settings/sonarr-radarr" className="link link-primary">
+            Media connections
+          </Link>
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface TreeFile {
+  path: string;
+  size: number | null;
+}
+
+interface TreeNode {
+  name: string;
+  size: number | null;
+  children: Map<string, TreeNode>;
+}
+
+const TREE_FILE_LIMIT = 20;
+
+function buildTree(files: TreeFile[]): TreeNode[] {
+  const roots = new Map<string, TreeNode>();
+  for (const file of files) {
+    const segments = file.path.split(/[\\/]+/).filter(Boolean);
+    if (segments.length === 0) continue;
+    let level = roots;
+    segments.forEach((name, index) => {
+      const key = name.toLocaleLowerCase();
+      let node = level.get(key);
+      if (!node) {
+        node = { name, size: null, children: new Map() };
+        level.set(key, node);
+      }
+      if (index === segments.length - 1) node.size = file.size;
+      level = node.children;
+    });
+  }
+  return [...roots.values()];
+}
+
+function TreeNodes(
+  { nodes, depth = 0 }: { nodes: TreeNode[]; depth?: number },
+) {
+  return (
+    <ul className={depth === 0 ? "ml-2 border-l border-base-300 pl-3" : "ml-4"}>
+      {nodes.map((node) => {
+        const children = [...node.children.values()];
+        const isFolder = children.length > 0;
+        return (
+          <li key={`${depth}:${node.name}`} className="py-0.5">
+            <div className="flex min-w-0 items-center gap-1.5 text-xs text-base-content/60">
+              {isFolder
+                ? <Folder className="size-3.5 shrink-0 text-warning/80" />
+                : <File className="size-3.5 shrink-0 text-base-content/40" />}
+              <span
+                className="min-w-0 flex-1 truncate font-mono"
+                title={node.name}
+              >
+                {node.name}
+              </span>
+              {node.size !== null && (
+                <span className="shrink-0 text-[11px] text-base-content/40">
+                  {formatKilobytes(node.size / 1000)}
+                </span>
+              )}
+            </div>
+            {children.length > 0 && (
+              <TreeNodes nodes={children} depth={depth + 1} />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function PathTreeRoot({
+  path,
+  source,
+  files,
+  totalFiles,
+  note,
+  info,
+  warning = false,
+}: {
+  path: string;
+  source: string;
+  files?: TreeFile[];
+  totalFiles?: number;
+  note?: string;
+  info?: string;
+  warning?: boolean;
+}) {
+  const visibleFiles = (files ?? []).slice(0, TREE_FILE_LIMIT);
+  const hiddenCount = Math.max(
+    0,
+    (totalFiles ?? files?.length ?? 0) - visibleFiles.length,
+  );
+  return (
+    <div className="py-1.5">
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        <Folder
+          className={`size-4 shrink-0 ${
+            warning ? "text-warning" : "text-primary"
+          }`}
+        />
+        <span className="min-w-0 flex-1 truncate font-mono" title={path}>
+          {path}
+        </span>
+        {info && <InfoTip text={info} />}
+        <span className="badge badge-ghost badge-xs shrink-0">{source}</span>
+      </div>
+      {visibleFiles.length > 0 && <TreeNodes nodes={buildTree(visibleFiles)} />}
+      {(note || hiddenCount > 0) && (
+        <p className="ml-6 mt-0.5 text-[11px] text-base-content/40">
+          {[note, hiddenCount > 0 ? `${hiddenCount} more files` : null].filter(
+            Boolean,
+          ).join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function managedFiles(target: ArrCleanupTarget): TreeFile[] {
+  const files = new Map<string, TreeFile>();
+  for (const file of target.mediaFiles ?? []) {
+    files.set(file.relativePath.toLocaleLowerCase(), {
+      path: file.relativePath,
+      size: file.size,
+    });
+  }
+  for (const file of target.extraFiles ?? []) {
+    const key = file.relativePath.toLocaleLowerCase();
+    if (!files.has(key)) {
+      files.set(key, { path: file.relativePath, size: null });
+    }
+  }
+  return [...files.values()];
+}
+
+function torrentInfo(torrent: TorrentCleanupTorrent): string {
+  return [
+    `${torrent.fileCount} file${torrent.fileCount === 1 ? "" : "s"}`,
+    formatKilobytes(torrent.size / 1000),
+    `seeded ${formatSeedTime(torrent.seedingTime)}`,
+    `ratio ${torrent.ratio.toFixed(2)}`,
+    torrent.trackerHost ?? "tracker unavailable",
+    torrent.completedAt ? `completed ${formatDate(torrent.completedAt)}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function torrentRoot(torrent: TorrentCleanupTorrent): string {
+  return torrent.fileCount === 1
+    ? torrent.savePath || torrent.contentPath
+    : torrent.contentPath ||
+      torrent.savePath;
+}
+
+function torrentFiles(torrent: TorrentCleanupTorrent): TreeFile[] {
+  const rootName = torrent.contentPath.split(/[\\/]+/).filter(Boolean).at(-1)
+    ?.toLocaleLowerCase();
+  return torrent.files.map((file) => {
+    const segments = file.path.split(/[\\/]+/).filter(Boolean);
+    const path =
+      torrent.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
+        ? segments.slice(1).join("/")
+        : file.path;
+    return { path: path || file.path, size: file.size };
+  });
+}
+
+function DeletionTree({
+  items,
+  plexOnly,
+  arrEntries,
+  torrents,
+  deleteTorrents,
+  unmanagedSources,
+  loading,
+}: {
+  items: StaleItem[];
+  plexOnly: boolean;
+  arrEntries: Array<{ ratingKey: string; target: ArrCleanupTarget }>;
+  torrents: TorrentCleanupTorrent[];
+  deleteTorrents: boolean;
+  unmanagedSources: Array<{
+    ratingKey: string;
+    source: { instanceName: string; hash: string; path: string };
+  }>;
+  loading: boolean;
+}) {
+  const remainingTorrents = plexOnly || !deleteTorrents ? torrents : [];
+  const hasRemaining = remainingTorrents.length > 0 ||
+    unmanagedSources.length > 0;
+  return (
+    <div className={`mt-3 grid gap-2 ${hasRemaining ? "sm:grid-cols-2" : ""}`}>
+      <section className="rounded-lg border border-base-300 bg-base-200/30 p-2.5">
+        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/55">
+          Files to be removed
+          <InfoTip text="Only verified managed roots and qBittorrent payloads selected above appear here." />
+        </div>
+        <div className="mt-1 max-h-56 divide-y divide-base-300/60 overflow-y-auto">
+          {plexOnly && items.map((item) => (
+            <PathTreeRoot
+              key={item.ratingKey}
+              path={item.title}
+              source="Plex"
+              note="Underlying media path is not available in this preview"
+            />
+          ))}
+          {!plexOnly && arrEntries.map(({ ratingKey, target }) => {
+            const files = managedFiles(target);
+            const note = target.type === "sonarr"
+              ? "Series contents are removed by Sonarr; the episode list is intentionally omitted"
+              : target.mediaFiles === null || target.extraFiles === null
+              ? "Some managed file details are unavailable"
+              : undefined;
+            return (
+              <PathTreeRoot
+                key={`${ratingKey}:${target.instanceName}:${target.path}`}
+                path={target.path ?? target.title}
+                source={target.instanceName}
+                files={files}
+                note={note}
+              />
+            );
+          })}
+          {!plexOnly && deleteTorrents &&
+            torrents.map((torrent) => (
+              <PathTreeRoot
+                key={`${torrent.instanceKey}:${torrent.hash}`}
+                path={torrentRoot(torrent) || torrent.name}
+                source={torrent.instanceName}
+                files={torrentFiles(torrent)}
+                totalFiles={torrent.fileCount}
+                info={torrentInfo(torrent)}
+              />
+            ))}
+          {loading && (
+            <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
+              <span className="loading loading-spinner loading-xs" />{" "}
+              Loading paths…
+            </p>
+          )}
+          {!loading && !plexOnly && arrEntries.length === 0 && (
+            <p className="py-3 text-xs text-base-content/40">
+              No verified managed path.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {hasRemaining && (
+        <section className="rounded-lg border border-warning/30 bg-warning/5 p-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-warning">
+            Will remain
+            <InfoTip text="These paths are not selected or cannot be proven safe to delete automatically." />
+          </div>
+          <div className="mt-1 max-h-56 divide-y divide-base-300/60 overflow-y-auto">
+            {remainingTorrents.map((torrent) => (
+              <PathTreeRoot
+                key={`${torrent.instanceKey}:${torrent.hash}:remaining`}
+                path={torrentRoot(torrent) || torrent.name}
+                source={torrent.instanceName}
+                note={`${torrent.fileCount} downloaded file${
+                  torrent.fileCount === 1 ? "" : "s"
+                }; select qBittorrent cleanup to remove`}
+                info={torrentInfo(torrent)}
+                warning
+              />
+            ))}
+            {unmanagedSources.map(({ ratingKey, source }) => (
+              <PathTreeRoot
+                key={`${ratingKey}:${source.instanceName}:${source.hash}:${source.path}`}
+                path={source.path}
+                source="Arr history"
+                note="No live qBittorrent job owns this path"
+                warning
+              />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 

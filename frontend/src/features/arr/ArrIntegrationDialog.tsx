@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { PlugZap, Plus, Server, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
-import type { ArrInstance } from "../../lib/api";
+import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
 import { ArrConnectionWizard } from "./ArrConnectionWizard";
 import { QbittorrentConnections } from "./QbittorrentConnections";
+import { QbittorrentConnectionWizard } from "./QbittorrentConnectionWizard";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -27,11 +28,28 @@ export function ArrIntegrationDialog() {
     queryFn: api.libraries.listAll,
   });
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [view, setView] = useState<"manager" | "connection" | "remove">("manager");
+  const [view, setView] = useState<
+    | "manager"
+    | "connection"
+    | "qbittorrent"
+    | "remove"
+    | "remove-qbittorrent"
+  >("manager");
   const [initialType, setInitialType] = useState<"radarr" | "sonarr">("radarr");
-  const [editingInstanceId, setEditingInstanceId] = useState<number | null>(null);
-  const [pendingRemoval, setPendingRemoval] = useState<ArrInstance | null>(null);
+  const [editingInstanceId, setEditingInstanceId] = useState<number | null>(
+    null,
+  );
+  const [pendingRemoval, setPendingRemoval] = useState<ArrInstance | null>(
+    null,
+  );
+  const [editingQbittorrent, setEditingQbittorrent] = useState<
+    QbittorrentInstance | null
+  >(null);
+  const [pendingQbittorrentRemoval, setPendingQbittorrentRemoval] = useState<
+    QbittorrentInstance | null
+  >(null);
   const [wizardKey, setWizardKey] = useState(0);
+  const [qbittorrentWizardKey, setQbittorrentWizardKey] = useState(0);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -46,6 +64,14 @@ export function ArrIntegrationDialog() {
     },
   });
   const test = useMutation({ mutationFn: api.arr.testInstance });
+  const removeQbittorrent = useMutation({
+    mutationFn: api.qbittorrent.deleteInstance,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["qbittorrent-integrations"] });
+      setPendingQbittorrentRemoval(null);
+      setView("manager");
+    },
+  });
 
   useEffect(() => {
     if (!test.isSuccess) return;
@@ -61,6 +87,12 @@ export function ArrIntegrationDialog() {
     setView("connection");
   }
 
+  function openQbittorrentWizard(instance?: QbittorrentInstance) {
+    setEditingQbittorrent(instance ?? null);
+    setQbittorrentWizardKey((key) => key + 1);
+    setView("qbittorrent");
+  }
+
   const removalMappingCount = data?.mappings.filter(
     (mapping) => mapping.instanceId === pendingRemoval?.id,
   ).length ?? 0;
@@ -70,8 +102,9 @@ export function ArrIntegrationDialog() {
       ref={dialogRef}
       className="modal"
       onCancel={(event) => {
-        if (remove.isPending) event.preventDefault();
-        else if (view === "remove") {
+        if (remove.isPending || removeQbittorrent.isPending) {
+          event.preventDefault();
+        } else if (view === "remove" || view === "remove-qbittorrent") {
           event.preventDefault();
           setView("manager");
         }
@@ -81,25 +114,50 @@ export function ArrIntegrationDialog() {
       {view === "manager" && (
         <div className="modal-box polished-modal max-w-3xl">
           <div className="flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Server className="size-5" /></span>
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+              <Server className="size-5" />
+            </span>
             <div className="min-w-0 flex-1">
               <h2 className="text-lg font-bold">Media connections</h2>
-              <p className="mt-1 text-sm text-base-content/60">Connect Sonarr and Radarr for managed deletion, plus qBittorrent for optional torrent cleanup.</p>
+              <p className="mt-1 text-sm text-base-content/60">
+                Connect Sonarr and Radarr for managed deletion, plus qBittorrent
+                for optional torrent cleanup.
+              </p>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => dialogRef.current?.close()}>Close</button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => dialogRef.current?.close()}
+            >
+              Close
+            </button>
           </div>
 
           <div className="mt-5 space-y-4">
-            {isLoading && <span className="loading loading-spinner loading-sm" />}
+            {isLoading && (
+              <span className="loading loading-spinner loading-sm" />
+            )}
             {error && <p className="text-sm text-error">{error.message}</p>}
             {data?.instances.length === 0 && (
               <div className="flex flex-wrap items-center gap-4 rounded-xl border border-dashed border-base-300 bg-base-200/25 p-4">
-                <span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><PlugZap className="size-5" /></span>
-                <span className="min-w-0 flex-1">
-                  <strong className="block text-sm">No media managers connected</strong>
-                  <span className="mt-0.5 block text-xs text-base-content/55">Configure Sonarr, Radarr, or both in one pass.</span>
+                <span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <PlugZap className="size-5" />
                 </span>
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => openWizard()}><Plus className="size-4" /> Add connections</button>
+                <span className="min-w-0 flex-1">
+                  <strong className="block text-sm">
+                    No media managers connected
+                  </strong>
+                  <span className="mt-0.5 block text-xs text-base-content/55">
+                    Configure Sonarr, Radarr, or both in one pass.
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => openWizard()}
+                >
+                  <Plus className="size-4" /> Add connections
+                </button>
               </div>
             )}
             {!!data?.instances.length && (
@@ -107,23 +165,62 @@ export function ArrIntegrationDialog() {
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <h3 className="font-medium">Connections</h3>
-                    <p className="text-xs text-base-content/55">API keys stay server-side and are never returned to the browser.</p>
+                    <p className="text-xs text-base-content/55">
+                      API keys stay server-side and are never returned to the
+                      browser.
+                    </p>
                   </div>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={() => openWizard()}><Plus className="size-4" /> Configure connections</button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => openWizard()}
+                  >
+                    <Plus className="size-4" /> Configure connections
+                  </button>
                 </div>
                 {data.instances.map((instance) => (
-                  <div key={instance.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3">
-                    <span className={`badge badge-sm ${instance.type === "radarr" ? "badge-primary" : "badge-secondary"}`}>{instance.type === "radarr" ? "Radarr" : "Sonarr"}</span>
+                  <div
+                    key={instance.id}
+                    className="flex flex-wrap items-center gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3"
+                  >
+                    <span
+                      className={`badge badge-sm ${
+                        instance.type === "radarr"
+                          ? "badge-primary"
+                          : "badge-secondary"
+                      }`}
+                    >
+                      {instance.type === "radarr" ? "Radarr" : "Sonarr"}
+                    </span>
                     <span className="font-medium">{instance.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">{instance.url}</span>
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => openWizard(instance)} disabled={test.isPending}>Edit</button>
+                    <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">
+                      {instance.url}
+                    </span>
                     <button
                       type="button"
-                      className={`btn btn-xs w-14 ${test.isSuccess && test.variables === instance.id ? "btn-ghost text-success" : "btn-ghost"}`}
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => openWizard(instance)}
+                      disabled={test.isPending}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-xs w-14 ${
+                        test.isSuccess && test.variables === instance.id
+                          ? "btn-ghost text-success"
+                          : "btn-ghost"
+                      }`}
                       onClick={() => test.mutate(instance.id)}
                       disabled={test.isPending}
                     >
-                      {test.isPending && test.variables === instance.id ? <span className="loading loading-spinner loading-xs" /> : test.isSuccess && test.variables === instance.id ? <AnimatedSuccessCheck /> : "Test"}
+                      {test.isPending && test.variables === instance.id
+                        ? (
+                          <span className="loading loading-spinner loading-xs" />
+                        )
+                        : test.isSuccess && test.variables === instance.id
+                        ? <AnimatedSuccessCheck />
+                        : "Test"}
                     </button>
                     <button
                       type="button"
@@ -135,13 +232,26 @@ export function ArrIntegrationDialog() {
                         setView("remove");
                       }}
                       disabled={remove.isPending || test.isPending}
-                    ><Trash2 className="size-4" /></button>
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
                   </div>
                 ))}
-                <div className="min-h-5">{test.isError && <p className="text-xs text-error">{test.error.message}</p>}</div>
+                <div className="min-h-5">
+                  {test.isError && (
+                    <p className="text-xs text-error">{test.error.message}</p>
+                  )}
+                </div>
               </div>
             )}
-            <QbittorrentConnections />
+            <QbittorrentConnections
+              onConfigure={openQbittorrentWizard}
+              onRemove={(instance) => {
+                removeQbittorrent.reset();
+                setPendingQbittorrentRemoval(instance);
+                setView("remove-qbittorrent");
+              }}
+            />
           </div>
         </div>
       )}
@@ -163,28 +273,117 @@ export function ArrIntegrationDialog() {
         />
       )}
 
+      {view === "qbittorrent" && data && (
+        <QbittorrentConnectionWizard
+          key={qbittorrentWizardKey}
+          instance={editingQbittorrent}
+          arrInstances={data.instances}
+          onCancel={() => dialogRef.current?.close()}
+          onSaved={() => {
+            void qc.invalidateQueries({
+              queryKey: ["qbittorrent-integrations"],
+            });
+            dialogRef.current?.close();
+          }}
+        />
+      )}
+
       {view === "remove" && (
         <div className="modal-box polished-modal">
-          <h3 className="flex items-center gap-2 text-lg font-bold"><Trash2 className="size-5 text-error" /> Remove connection?</h3>
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <Trash2 className="size-5 text-error" /> Remove connection?
+          </h3>
           <p className="py-3 text-sm text-base-content/70">
-            Remove <strong>{pendingRemoval?.name}</strong> from Plex Librarian? This also removes {removalMappingCount === 1 ? "1 library mapping" : `${removalMappingCount} library mappings`}. It does not delete anything from Sonarr, Radarr, Plex, or disk.
+            Remove <strong>{pendingRemoval?.name}</strong>{" "}
+            from Plex Librarian? This also removes {removalMappingCount === 1
+              ? "1 library mapping"
+              : `${removalMappingCount} library mappings`}. It does not delete
+            anything from Sonarr, Radarr, Plex, or disk.
           </p>
-          {remove.isError && <p className="text-sm text-error">{remove.error.message}</p>}
+          {remove.isError && (
+            <p className="text-sm text-error">{remove.error.message}</p>
+          )}
           <div className="modal-action">
-            <button type="button" className="btn btn-sm" onClick={() => setView("manager")} disabled={remove.isPending}>Cancel</button>
-            <button type="button" className="btn btn-error btn-sm" onClick={() => pendingRemoval && remove.mutate(pendingRemoval.id)} disabled={!pendingRemoval || remove.isPending}>
-              {remove.isPending ? <span className="loading loading-spinner loading-xs" /> : <Trash2 className="size-4" />} Remove connection
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setView("manager")}
+              disabled={remove.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-error btn-sm"
+              onClick={() => pendingRemoval && remove.mutate(pendingRemoval.id)}
+              disabled={!pendingRemoval || remove.isPending}
+            >
+              {remove.isPending
+                ? <span className="loading loading-spinner loading-xs" />
+                : <Trash2 className="size-4" />} Remove connection
             </button>
           </div>
         </div>
       )}
 
-      <form className="modal-backdrop" onSubmit={(event) => {
-        event.preventDefault();
-        if (remove.isPending) return;
-        if (view === "remove") setView("manager");
-        else dialogRef.current?.close();
-      }}><button type="submit" disabled={remove.isPending}>close</button></form>
+      {view === "remove-qbittorrent" && (
+        <div className="modal-box polished-modal">
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <Trash2 className="size-5 text-error" /> Remove connection?
+          </h3>
+          <p className="py-3 text-sm text-base-content/70">
+            Remove <strong>{pendingQbittorrentRemoval?.name}</strong>{" "}
+            from Plex Librarian? It does not remove torrents, downloaded
+            payloads, or anything from qBittorrent.
+          </p>
+          {removeQbittorrent.isError && (
+            <p className="text-sm text-error">
+              {removeQbittorrent.error.message}
+            </p>
+          )}
+          <div className="modal-action">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setView("manager")}
+              disabled={removeQbittorrent.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-error btn-sm"
+              onClick={() =>
+                pendingQbittorrentRemoval &&
+                removeQbittorrent.mutate(pendingQbittorrentRemoval.id)}
+              disabled={!pendingQbittorrentRemoval ||
+                removeQbittorrent.isPending}
+            >
+              {removeQbittorrent.isPending
+                ? <span className="loading loading-spinner loading-xs" />
+                : <Trash2 className="size-4" />} Remove connection
+            </button>
+          </div>
+        </div>
+      )}
+
+      <form
+        className="modal-backdrop"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (remove.isPending || removeQbittorrent.isPending) return;
+          if (view === "remove" || view === "remove-qbittorrent") {
+            setView("manager");
+          } else dialogRef.current?.close();
+        }}
+      >
+        <button
+          type="submit"
+          disabled={remove.isPending || removeQbittorrent.isPending}
+        >
+          close
+        </button>
+      </form>
     </dialog>
   );
 }

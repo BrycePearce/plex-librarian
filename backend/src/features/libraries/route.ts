@@ -469,11 +469,16 @@ router.post('/:key/items/torrent-preview', async (c) => {
       status: 'unavailable' as const,
       torrents: [],
       reason: 'Item was not found in this library',
+      arrStatus: 'unavailable' as const,
+      arrReason: 'Item was not found in this library',
+      arrTargets: [],
+      sources: [],
     });
   }
   return c.json(
     {
       configured: qbitTargets.length > 0,
+      coordinatedConfigured: arrTargets.length > 0,
       items: previews,
     } satisfies TorrentCleanupPreviewResponse,
   );
@@ -481,9 +486,10 @@ router.post('/:key/items/torrent-preview', async (c) => {
 
 // Permanently deletes whole items and prunes the corresponding local rows. A mapped
 // movie/show library delegates file and record removal to Radarr/Sonarr, then refreshes
-// Plex; an unmapped library (or explicit plex-only request) uses Plex's destructive
-// endpoint directly. TV items are synced at show granularity, so either path removes
-// the whole show; local seasons follow through the items -> seasons cascade.
+// Plex. Coordinated mode requires an explicit library mapping; only an explicit
+// plex-only request uses Plex's destructive endpoint directly. TV items are synced at
+// show granularity, so either path removes the whole show; local seasons follow through
+// the items -> seasons cascade.
 router.delete('/:key/items', async (c) => {
   const key = c.req.param('key');
   const body = await c.req.json().catch(() => null) as {
@@ -539,6 +545,11 @@ router.delete('/:key/items', async (c) => {
   const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
   const itemByKey = new Map(owned.map((item) => [item.ratingKey, item]));
   const arrTargets = body.mode === 'plex-only' ? [] : await getArrDeleteTargets(serverId, key);
+  if (body.mode !== 'plex-only' && arrTargets.length === 0) {
+    return c.json({
+      error: 'this library is not mapped to Sonarr or Radarr; choose Plex-only deletion explicitly',
+    }, 409);
+  }
   const qbitTargets = body.deleteTorrents ? await getQbittorrentTargets(serverId) : [];
   if (body.deleteTorrents && qbitTargets.length === 0) {
     return c.json({ error: 'no qBittorrent connection is configured' }, 409);

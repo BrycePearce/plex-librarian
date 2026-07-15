@@ -25,37 +25,122 @@ export async function resolveTorrentCleanup(
   attemptedTorrentKeys: ReadonlySet<string> = new Set(),
 ): Promise<ResolvedCleanupItem> {
   const id = externalId(item);
-  if (id === null || arrTargets.length === 0 || qbitTargets.length === 0) {
+  if (id === null || arrTargets.length === 0) {
     return {
       ratingKey,
       status: 'unavailable',
       torrents: [],
       reason: id === null
         ? 'No TMDB/TVDB ID is available for Arr history lookup'
-        : arrTargets.length === 0
-        ? 'This library is not mapped to Sonarr or Radarr'
-        : 'No qBittorrent connection is configured',
+        : 'This library is not mapped to Sonarr or Radarr',
+      arrStatus: 'unavailable',
+      arrReason: id === null
+        ? 'No TMDB/TVDB ID is available for managed deletion'
+        : 'This library is not mapped to Sonarr or Radarr',
+      arrTargets: [],
+      sources: [],
     };
   }
 
   const associations = new Map<string, string | null>();
-  const errors: string[] = [];
+  const sources = new Map<string, ResolvedCleanupItem['sources'][number]>();
+  const resolvedArrTargets: ResolvedCleanupItem['arrTargets'] = [];
+  const arrErrors: string[] = [];
+  const historyErrors: string[] = [];
   for (const arr of arrTargets) {
+    let record;
     try {
-      const record = await arr.client.lookup(id);
-      if (!record) continue;
-      for (const association of await arr.client.torrentAssociations(record.id)) {
+      record = await arr.client.lookup(id);
+    } catch (error) {
+      arrErrors.push(
+        `${arr.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
+      );
+      continue;
+    }
+    if (!record) continue;
+    const [mediaFiles, extraFiles] = await Promise.all([
+      arr.client.mediaFiles(record.id).catch(() => null),
+      arr.client.extraFiles(record.id).catch(() => null),
+    ]);
+    resolvedArrTargets.push({
+      instanceName: arr.instanceName,
+      type: arr.client.type,
+      title: record.title,
+      path: record.path,
+      mediaFiles,
+      extraFiles,
+    });
+    try {
+      const torrentAssociations = await arr.client.torrentAssociations(record.id);
+      for (const association of torrentAssociations) {
         associations.set(association.hash, association.sourcePath);
+        if (association.sourcePath) {
+          sources.set(`${arr.instanceId}:${association.hash}:${association.sourcePath}`, {
+            instanceName: arr.instanceName,
+            hash: association.hash,
+            path: association.sourcePath,
+          });
+        }
       }
     } catch (error) {
-      errors.push(
-        `${arr.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
+      historyErrors.push(
+        `${arr.instanceName}: ${error instanceof Error ? error.message : 'history lookup failed'}`,
       );
     }
   }
 
+  const publicSources = [...sources.values()];
+  if (arrErrors.length > 0) {
+    const reason = [...new Set(arrErrors)].join('; ');
+    return {
+      ratingKey,
+      status: 'error',
+      torrents: [],
+      reason,
+      arrStatus: 'error',
+      arrReason: reason,
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
+    };
+  }
+  if (resolvedArrTargets.length === 0) {
+    return {
+      ratingKey,
+      status: 'unavailable',
+      torrents: [],
+      reason: 'The item was not found in any mapped Sonarr or Radarr instance',
+      arrStatus: 'unavailable',
+      arrReason: 'The item was not found in any mapped Sonarr or Radarr instance',
+      arrTargets: [],
+      sources: [],
+    };
+  }
+  if (qbitTargets.length === 0) {
+    return {
+      ratingKey,
+      status: 'unavailable',
+      torrents: [],
+      reason: 'No qBittorrent connection is configured',
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
+    };
+  }
+  if (historyErrors.length > 0) {
+    return {
+      ratingKey,
+      status: 'error',
+      torrents: [],
+      reason: [...new Set(historyErrors)].join('; '),
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
+    };
+  }
+
   const torrents: ResolvedCleanupTorrent[] = [];
   let completedAttemptCount = 0;
+  const qbitErrors: string[] = [];
   for (const target of qbitTargets) {
     const instancePrefix = `${target.instanceKey}:`;
     const candidateHashes = new Set(associations.keys());
@@ -82,19 +167,22 @@ export async function resolveTorrentCleanup(
           target,
         });
       } catch (error) {
-        errors.push(
+        qbitErrors.push(
           `${target.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
         );
       }
     }
   }
 
-  if (errors.length > 0) {
+  if (qbitErrors.length > 0) {
     return {
       ratingKey,
       status: 'error',
       torrents,
-      reason: [...new Set(errors)].join('; '),
+      reason: [...new Set(qbitErrors)].join('; '),
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
     };
   }
   if (torrents.length > 0 || completedAttemptCount > 0) {
@@ -105,6 +193,9 @@ export async function resolveTorrentCleanup(
       ...(torrents.length === 0
         ? { reason: 'Torrent deletion was previously started and the torrent is now absent' }
         : {}),
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
     };
   }
   return {
@@ -114,6 +205,9 @@ export async function resolveTorrentCleanup(
     reason: associations.size === 0
       ? 'Arr has no retained torrent import history for this item'
       : 'The imported torrent is no longer present in configured qBittorrent instances',
+    arrStatus: 'resolved',
+    arrTargets: resolvedArrTargets,
+    sources: publicSources,
   };
 }
 
@@ -123,5 +217,9 @@ export function publicCleanupItem(item: ResolvedCleanupItem): TorrentCleanupPrev
     status: item.status,
     reason: item.reason,
     torrents: item.torrents.map(({ target: _target, ...torrent }) => torrent),
+    arrStatus: item.arrStatus,
+    arrReason: item.arrReason,
+    arrTargets: item.arrTargets,
+    sources: item.sources,
   };
 }

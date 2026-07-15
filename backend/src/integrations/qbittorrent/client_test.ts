@@ -42,11 +42,13 @@ Deno.test('client authenticates and maps torrent details without exposing tracke
         state: 'uploading',
       }]));
     }
-    return Promise.resolve(Response.json([{ name: 'movie.mkv' }]));
+    return Promise.resolve(Response.json([{ name: 'Release/movie.mkv', size: 12 }]));
   });
   const torrent = await client.torrent('abc');
   assertEquals(torrent?.trackerHost, 'tracker.example');
   assertEquals(torrent?.fileCount, 1);
+  assertEquals(torrent?.files, [{ path: 'Release/movie.mkv', size: 12 }]);
+  assertEquals(torrent?.filesTruncated, false);
   assertEquals(calls.length, 4);
 });
 
@@ -74,11 +76,12 @@ Deno.test('client rejects failed authentication', async () => {
     'http://qbit:8080',
     'bad',
     'bad',
-    (input) => Promise.resolve(
-      String(input).endsWith('/app/version')
-        ? new Response('Forbidden', { status: 403 })
-        : new Response('Fails.', { status: 200 }),
-    ),
+    (input) =>
+      Promise.resolve(
+        String(input).endsWith('/app/version')
+          ? new Response('Forbidden', { status: 403 })
+          : new Response('Fails.', { status: 200 }),
+      ),
   );
   await assertRejects(() => client.testConnection(), QbittorrentApiError);
 });

@@ -58,6 +58,13 @@ Plex Librarian can coordinate whole-title deletion with Radarr for movie
 libraries and Sonarr for TV libraries. Arr removes the title and its files, then
 Plex Librarian asks Plex to refresh the affected library.
 
+The confirmation dialog verifies the mapped Arr title before deletion and shows
+the folder Arr manages, plus any extra files Radarr reports for a movie. Arr's
+`deleteFiles` operation owns removal of that complete title folder and includes
+its built-in safeguards for shared or nested movie paths. If a library is not
+mapped, coordinated deletion is refused; **Delete from Plex only** must be
+selected explicitly.
+
 Open **Settings → Media connections**, add an instance with its URL and API key
 (found in Sonarr/Radarr under **Settings → General → Security**), then map each
 library to an instance under **Library mappings**.
@@ -70,20 +77,29 @@ not `localhost`, which points back at Plex Librarian itself.
 
 Add qBittorrent under **Settings → Media connections** to inspect live torrents
 associated with Sonarr/Radarr import history. The delete confirmation can then
-show the torrent name, payload path, tracker host, ratio, upload total, and
-cumulative seeding time. When explicitly selected, Plex Librarian removes the
-torrent and its downloaded payload before asking Arr to delete the remaining
-library hardlink. If the association cannot be verified, torrent cleanup stays
-disabled and the existing Arr-only deletion remains available.
+show a bounded payload file tree plus the job's tracker host, ratio, upload
+total, and cumulative seeding time. When explicitly selected, Plex Librarian
+removes the verified job from qBittorrent and asks qBittorrent to delete its
+downloaded payload before Arr deletes the remaining library hardlink. Plex
+Librarian does not locate or independently delete a saved `.torrent` file. If
+the association cannot be verified, qBittorrent cleanup stays disabled and the
+existing Arr-only deletion remains available.
 
-Use the qBittorrent Web UI URL as seen from the Plex Librarian container.
-Enter qBittorrent's Web UI username and password, or leave both blank when
+Retained Arr import history can point at an old download path even after its
+torrent has disappeared from qBittorrent. Plex Librarian shows those paths as
+unmanaged leftovers but never recursively deletes them: without a live torrent
+manifest or Arr ownership there is no safe proof that every neighboring file
+belongs to the selected title. Configure Radarr's **Import Extra Files** setting
+for sidecars such as `sub`, `idx`, and `srt` so Radarr can track them with the
+managed movie folder.
+
+Use the qBittorrent Web UI URL as seen from the Plex Librarian container. Enter
+qBittorrent's Web UI username and password, or leave both blank when
 qBittorrent's authentication bypass explicitly trusts the Plex Librarian host or
 subnet. Desktop qBittorrent users must enable **Web User Interface (Remote
-control)** first. In Docker, `localhost` points to Plex Librarian rather than the
-qBittorrent container.
-Private tracker passkeys are never returned to the browser; only the tracker
-hostname is displayed.
+control)** first. In Docker, `localhost` points to Plex Librarian rather than
+the qBittorrent container. Private tracker passkeys are never returned to the
+browser; only the tracker hostname is displayed.
 
 ## Configuration
 

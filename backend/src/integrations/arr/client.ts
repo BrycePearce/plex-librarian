@@ -3,11 +3,22 @@ import type { ArrType } from '@plex-librarian/shared/types.ts';
 export interface ArrMediaRecord {
   id: number;
   title: string;
+  path: string | null;
 }
 
 export interface ArrTorrentAssociation {
   hash: string;
   sourcePath: string | null;
+}
+
+export interface ArrExtraFile {
+  relativePath: string;
+  type: 'subtitle' | 'metadata' | 'other';
+}
+
+export interface ArrManagedFile {
+  relativePath: string;
+  size: number | null;
 }
 
 export class ArrApiError extends Error {
@@ -92,9 +103,57 @@ export class ArrClient {
     const path = this.type === 'radarr'
       ? `/movie?tmdbId=${externalId}`
       : `/series?tvdbId=${externalId}`;
-    const records = await this.request<Array<{ id: number; title?: string }>>(path);
+    const records = await this.request<Array<{ id: number; title?: string; path?: string }>>(path);
     const record = records[0];
-    return record ? { id: record.id, title: record.title ?? String(record.id) } : null;
+    return record
+      ? {
+        id: record.id,
+        title: record.title ?? String(record.id),
+        path: record.path?.trim() || null,
+      }
+      : null;
+  }
+
+  async extraFiles(mediaId: number): Promise<ArrExtraFile[]> {
+    if (this.type !== 'radarr') return [];
+    const records = await this.request<
+      Array<{ relativePath?: string; type?: number | string }>
+    >(`/extrafile?movieId=${mediaId}`);
+    return records.flatMap((record) => {
+      const relativePath = record.relativePath?.trim();
+      if (!relativePath) return [];
+      const rawType = String(record.type ?? '').toLowerCase();
+      const type = rawType === '0' || rawType === 'subtitle'
+        ? 'subtitle'
+        : rawType === '1' || rawType === 'metadata'
+        ? 'metadata'
+        : 'other';
+      return [{ relativePath, type } satisfies ArrExtraFile];
+    });
+  }
+
+  async mediaFiles(mediaId: number): Promise<ArrManagedFile[] | null> {
+    // A Sonarr series may contain tens of thousands of episodes, and this endpoint
+    // does not offer a bounded file-list response. The managed series root remains
+    // authoritative in the preview; avoid turning a confirmation dialog into a full
+    // series export. Radarr movie file lists are naturally small.
+    if (this.type !== 'radarr') return null;
+    const records = await this.request<
+      Array<{ relativePath?: string; path?: string; size?: number }>
+    >(`/moviefile?movieId=${mediaId}`);
+    return records.flatMap((record) => {
+      const absolutePath = record.path?.trim();
+      const relativePath = record.relativePath?.trim() ||
+        absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
+      if (!relativePath) return [];
+      const size = Number(record.size);
+      return [
+        {
+          relativePath,
+          size: Number.isFinite(size) && size >= 0 ? size : null,
+        } satisfies ArrManagedFile,
+      ];
+    });
   }
 
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {

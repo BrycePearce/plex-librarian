@@ -33,6 +33,7 @@ import type {
 export type {
   ActivityEvent,
   ActivityEventsResponse,
+  ArrCleanupTarget,
   ArrInstance,
   ArrIntegrationSettings,
   ArrLibraryMapping,

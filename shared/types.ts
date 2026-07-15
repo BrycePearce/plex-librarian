@@ -393,7 +393,39 @@ export interface TorrentCleanupTorrent {
   savePath: string;
   trackerHost: string | null;
   fileCount: number;
+  files: TorrentCleanupFile[];
+  filesTruncated: boolean;
   sourcePath: string | null;
+}
+
+export interface TorrentCleanupFile {
+  path: string;
+  size: number | null;
+}
+
+export interface ArrCleanupExtraFile {
+  relativePath: string;
+  type: "subtitle" | "metadata" | "other";
+}
+
+export interface ArrCleanupMediaFile {
+  relativePath: string;
+  size: number | null;
+}
+
+export interface ArrCleanupTarget {
+  instanceName: string;
+  type: ArrType;
+  title: string;
+  path: string | null;
+  mediaFiles: ArrCleanupMediaFile[] | null;
+  extraFiles: ArrCleanupExtraFile[] | null;
+}
+
+export interface ArrCleanupSource {
+  instanceName: string;
+  hash: string;
+  path: string;
 }
 
 export interface TorrentCleanupPreviewItem {
@@ -401,10 +433,15 @@ export interface TorrentCleanupPreviewItem {
   status: "resolved" | "unavailable" | "error";
   torrents: TorrentCleanupTorrent[];
   reason?: string;
+  arrStatus: "resolved" | "unavailable" | "error";
+  arrReason?: string;
+  arrTargets: ArrCleanupTarget[];
+  sources: ArrCleanupSource[];
 }
 
 export interface TorrentCleanupPreviewResponse {
   configured: boolean;
+  coordinatedConfigured: boolean;
   items: TorrentCleanupPreviewItem[];
 }
 

@@ -1599,6 +1599,7 @@
       },
       "frontend": {
         "dependencies": [
+          "jsr:@std/assert@1",
           "npm:@rolldown/plugin-babel@~0.2.3",
           "npm:@tailwindcss/vite@^4.3.1",
           "npm:@tanstack/react-query-devtools@^5.101.1",
