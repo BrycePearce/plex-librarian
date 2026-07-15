@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  ChevronRight,
   Mail,
   MailX,
   User,
@@ -22,6 +23,7 @@ import { HistorySyncWarning } from "../components/HistorySyncWarning";
 import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
+import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog";
 import { UsersTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
@@ -171,10 +173,12 @@ function UsersPage() {
   });
 
   const [reviewUser, setReviewUser] = useState<PlexUser | null>(null);
+  const [riskDetailsUser, setRiskDetailsUser] = useState<PlexUser | null>(null);
   const [removeResult, setRemoveResult] = useState<{ username: string } | null>(
     null,
   );
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const riskDialogRef = useRef<HTMLDialogElement>(null);
 
   const removeMutation = useMutation({
     mutationFn: (accountId: number) => api.users.remove(accountId),
@@ -196,6 +200,15 @@ function UsersPage() {
 
   function closeReview() {
     dialogRef.current?.close();
+  }
+
+  function openRiskDetails(user: PlexUser) {
+    setRiskDetailsUser(user);
+    riskDialogRef.current?.showModal();
+  }
+
+  function closeRiskDetails() {
+    riskDialogRef.current?.close();
   }
 
   const page = Math.floor(offset / PAGE_SIZE);
@@ -482,7 +495,8 @@ function UsersPage() {
                       <td>
                         <SharingRiskCell
                           assessment={u.sharingRisk}
-                          monitorStatus={data.monitor.status}
+                          monitorStatus={data!.monitor.status}
+                          onOpen={() => openRiskDetails(u)}
                         />
                       </td>
                       <td className="text-right">
@@ -522,6 +536,12 @@ function UsersPage() {
           reviewUser && removeMutation.mutate(reviewUser.accountId)
         }
         onCancel={closeReview}
+      />
+      <SharingRiskDetailsDialog
+        dialogRef={riskDialogRef}
+        user={riskDetailsUser}
+        monitorStatus={data?.monitor.status ?? "starting"}
+        onClose={closeRiskDetails}
       />
     </div>
   );
@@ -975,9 +995,11 @@ function CustomInactiveDaysInput({
 function SharingRiskCell({
   assessment,
   monitorStatus,
+  onOpen,
 }: {
   assessment: PlexUser["sharingRisk"];
   monitorStatus: "starting" | "connected" | "polling" | "disconnected";
+  onOpen: () => void;
 }) {
   const label =
     assessment.riskLevel === "insufficient_data"
@@ -997,34 +1019,39 @@ function SharingRiskCell({
         : assessment.riskLevel === "low"
           ? "badge-success"
           : "badge-ghost";
-  const signalSummary =
-    assessment.signals.length > 0
-      ? assessment.signals.map((signal) => signal.summary).join("; ")
-      : "No sharing signals observed";
-  const title =
+  const supportingText =
     assessment.dataConfidence === "none"
       ? monitorStatus === "disconnected"
-        ? "Playback monitoring is disconnected, so observations cannot currently be collected."
-        : "No playback observations have been collected for this user yet."
-      : `${assessment.observationCount} observations across ${assessment.activeDays} active days. ${signalSummary}.`;
+        ? "Monitoring disconnected"
+        : "No observations yet"
+      : `${assessment.dataConfidence} confidence · ${assessment.signals.length} ${
+          assessment.signals.length === 1 ? "signal" : "signals"
+        }`;
 
   return (
-    <div
-      className="inline-flex items-center gap-1.5"
-      title={`${title} Confidence: ${assessment.dataConfidence}.`}
+    <button
+      type="button"
+      className="group/risk flex min-w-44 items-center justify-between gap-3 rounded-lg px-2 py-1.5 -mx-2 text-left transition-colors hover:bg-base-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      onClick={onOpen}
+      aria-label={`View sharing risk details: ${label}, score ${assessment.riskScore} out of 100`}
     >
-      {assessment.riskLevel === "insufficient_data" ? (
-        <span className="text-xs text-base-content/40">{label}</span>
-      ) : (
-        <span className={`badge badge-sm badge-outline ${badgeClass}`}>
-          {label} · {assessment.riskScore}
+      <span className="min-w-0">
+        <span className="flex items-center gap-2">
+          <span className={`badge badge-sm badge-outline ${badgeClass}`}>
+            {label}
+          </span>
+          {assessment.riskLevel !== "insufficient_data" && (
+            <span className="text-xs font-semibold tabular-nums text-base-content/70">
+              {assessment.riskScore}
+              <span className="font-normal text-base-content/35">/100</span>
+            </span>
+          )}
         </span>
-      )}
-      {assessment.dataConfidence !== "none" && (
-        <span className="text-[10px] text-base-content/40 whitespace-nowrap">
-          {assessment.dataConfidence} confidence
+        <span className="mt-0.5 block text-[11px] capitalize text-base-content/45 whitespace-nowrap">
+          {supportingText}
         </span>
-      )}
-    </div>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-transform group-hover/risk:translate-x-0.5 group-hover/risk:text-base-content/60" />
+    </button>
   );
 }
