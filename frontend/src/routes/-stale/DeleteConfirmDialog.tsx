@@ -370,45 +370,6 @@ function PlannedServiceIcons({
 }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {plexOnly && (
-        <ServiceMark
-          label="P"
-          ariaLabel="Delete directly from Plex"
-          popover={
-            <>
-              <div className="font-semibold">Plex</div>
-              <div className="mt-0.5 text-base-content/65">
-                Delete this item directly from Plex.
-              </div>
-            </>
-          }
-          className="bg-warning/20 text-warning"
-        />
-      )}
-      {!plexOnly && arrTargets.map((target, index) => (
-        <ServiceMark
-          key={`${target.instanceName}:${target.type}:${index}`}
-          service={target.type}
-          ariaLabel={`Delete through ${target.instanceName}`}
-          popover={
-            <>
-              <div className="font-semibold">
-                {target.type === "radarr" ? "Radarr" : "Sonarr"}
-              </div>
-              <div className="mt-0.5 text-base-content/70">
-                {target.instanceName}
-              </div>
-              <div className="mt-1 text-base-content/55">
-                Deletes the managed title folder and removes the title from the
-                instance.
-              </div>
-            </>
-          }
-          className={target.type === "radarr"
-            ? "bg-primary/20 text-primary"
-            : "bg-info/20 text-info"}
-        />
-      ))}
       {!plexOnly && (qbitJobCount > 0 || qbitResuming) && (
         <ServiceMark
           service="qbittorrent"
@@ -432,6 +393,49 @@ function PlannedServiceIcons({
           className="bg-secondary/20 text-secondary"
         />
       )}
+      {!plexOnly && arrTargets.map((target, index) => (
+        <ServiceMark
+          key={`${target.instanceName}:${target.type}:${index}`}
+          service={target.type}
+          ariaLabel={`Delete through ${target.instanceName}`}
+          popover={
+            <>
+              <div className="font-semibold">
+                {target.type === "radarr" ? "Radarr" : "Sonarr"}
+              </div>
+              {target.instanceName.toLocaleLowerCase() !== target.type && (
+                <div className="mt-0.5 text-base-content/70">
+                  {target.instanceName}
+                </div>
+              )}
+              <div className="mt-1 text-base-content/55">
+                Deletes the managed title folder and removes the title from the
+                instance.
+              </div>
+            </>
+          }
+          className={target.type === "radarr"
+            ? "bg-primary/20 text-primary"
+            : "bg-info/20 text-info"}
+        />
+      ))}
+      <ServiceMark
+        service="plex"
+        ariaLabel={plexOnly
+          ? "Delete directly from Plex"
+          : "Remove from Plex after refresh"}
+        popover={
+          <>
+            <div className="font-semibold">Plex</div>
+            <div className="mt-1 text-base-content/55">
+              {plexOnly
+                ? "Deletes this item directly through Plex."
+                : "Refreshes the Plex library after Arr deletion so the removed item disappears from Plex."}
+            </div>
+          </>
+        }
+        className="bg-warning/20 text-warning"
+      />
     </span>
   );
 }
