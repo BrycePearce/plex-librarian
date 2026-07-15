@@ -44,7 +44,11 @@ import {
   getArrDeleteTargets,
 } from '../arr/delete.ts';
 import { getQbittorrentTargets } from '../qbittorrent/connections.ts';
-import { publicCleanupItem, resolveTorrentCleanup } from '../qbittorrent/cleanup.ts';
+import {
+  publicCleanupItem,
+  resolveTorrentCleanup,
+  selectVerifiedTorrentCleanups,
+} from '../qbittorrent/cleanup.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
@@ -563,24 +567,20 @@ router.delete('/:key/items', async (c) => {
       serverId,
       owned.map((item) => item.ratingKey),
     );
-    for (
-      const cleanup of await resolveTorrentCleanupBatch(
-        owned,
-        arrTargets,
-        qbitTargets,
-        attemptedKeys,
-      )
-    ) {
-      torrentCleanupByItem.set(cleanup.ratingKey, cleanup);
-    }
-    const unresolved = [...torrentCleanupByItem.values()].filter(
-      (cleanup) => cleanup.status !== 'resolved',
+    const cleanups = await resolveTorrentCleanupBatch(
+      owned,
+      arrTargets,
+      qbitTargets,
+      attemptedKeys,
     );
-    if (unresolved.length > 0) {
-      return c.json({
-        error: 'torrent cleanup could not be verified for every selected item',
-        unavailable: unresolved.map(publicCleanupItem),
-      }, 409);
+    // qBittorrent cleanup is optional per item. An unrelated item with no live
+    // torrent or unavailable history must not prevent verified jobs elsewhere in
+    // the batch from being removed.
+    for (const [ratingKey, cleanup] of selectVerifiedTorrentCleanups(cleanups)) {
+      torrentCleanupByItem.set(ratingKey, cleanup);
+    }
+    if (torrentCleanupByItem.size === 0) {
+      return c.json({ error: 'no verified qBittorrent cleanup is available for these items' }, 409);
     }
   }
   const attemptedInstancesByItem = new Map<string, Set<number>>();

@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, Copy, File, Folder, Info, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Copy,
+  File,
+  Folder,
+  Info,
+  Trash2,
+} from "lucide-react";
+import { HoverPopover } from "../../components/HoverPopover";
+import { ServiceIcon } from "../../components/ServiceIcons";
+import type { ServiceIconName } from "../../components/ServiceIcons";
 import type {
   ArrCleanupTarget,
   StaleItem,
@@ -10,7 +21,6 @@ import type {
 } from "../../lib/api";
 import { api } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
-import { versionLabel } from "../../lib/mediaVersion";
 import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({
@@ -46,15 +56,20 @@ export function DeleteConfirmDialog({
     staleTime: 15_000,
     retry: false,
   });
-  const torrents = preview.data?.items.flatMap((item) => item.torrents) ?? [];
-  const cleanupHasErrors =
-    preview.data?.items.some((item) => item.status === "error") ?? false;
-  const cleanupUnavailable =
-    preview.data?.items.filter((item) => item.status === "unavailable") ?? [];
-  const cleanupFullyResolved =
-    preview.data?.items.every((item) => item.status === "resolved") ?? false;
-  const cleanupPreviouslyStarted = cleanupFullyResolved &&
-    torrents.length === 0;
+  const previewByRatingKey = useMemo(
+    () =>
+      new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
+    [preview.data],
+  );
+  const qbitEligibleItems =
+    preview.data?.items.filter((item) => item.status === "resolved") ?? [];
+  const torrents = [...new Map(
+    qbitEligibleItems.flatMap((item) => item.torrents).map((torrent) => [
+      `${torrent.instanceKey}:${torrent.hash}`,
+      torrent,
+    ]),
+  ).values()];
+  const qbitEligibleCount = qbitEligibleItems.length;
   const coordinatedReady = Boolean(
     preview.data?.coordinatedConfigured &&
       preview.data.items.every((item) => item.arrStatus === "resolved"),
@@ -63,10 +78,12 @@ export function DeleteConfirmDialog({
     preview.data?.items.filter((item) => item.arrStatus !== "resolved") ?? [];
   const arrEntries =
     preview.data?.items.flatMap((previewItem) =>
-      previewItem.arrTargets.map((target) => ({
-        ratingKey: previewItem.ratingKey,
-        target,
-      }))
+      previewItem.arrStatus === "resolved"
+        ? previewItem.arrTargets.map((target) => ({
+          ratingKey: previewItem.ratingKey,
+          target,
+        }))
+        : []
     ) ?? [];
   const unmanagedSources =
     preview.data?.items.flatMap((previewItem) =>
@@ -78,18 +95,19 @@ export function DeleteConfirmDialog({
   useEffect(() => {
     setDeleteTorrents(false);
   }, [libraryKey, ratingKeys.join("|")]);
+  useEffect(() => {
+    if (qbitEligibleCount === 0) setDeleteTorrents(false);
+  }, [qbitEligibleCount]);
   const cancel = () => {
     setPlexOnly(false);
     setDeleteTorrents(false);
     onCancel();
   };
   const totalSize = items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
-  // Deleting here removes every synced Media version of an item, not just a redundant
-  // one — surfaced per-item below (a full version tree for movies, a lighter indicator
-  // for shows) rather than a separate warning callout. See Duplicate detection in
-  // CLAUDE.md. Movies carry per-version detail via `versions`; shows only carry the
-  // existence flag `hasDuplicateEpisodes` (episode_media_versions isn't rolled up
-  // per-show) — same signal StaleItemRow's badge already uses.
+  // Deleting here removes every synced Media version, not just one redundant copy.
+  // Movies carry an exact version count; shows only carry an existence flag because
+  // episode media versions are not rolled up per show. Keep both signals compact so a
+  // page-sized selection remains scannable.
   const hasMultiVersionItems = items.some(
     (i) => (i.versions?.length ?? 0) >= 2 || i.hasDuplicateEpisodes === true,
   );
@@ -104,73 +122,62 @@ export function DeleteConfirmDialog({
           {items.length === 1 ? "" : "s"}?
         </h3>
         <p className="py-2 text-sm text-base-content/70">
-          This permanently deletes the underlying media file
-          {items.length === 1 ? "" : "s"} from your Plex server (
           <span className="font-semibold text-base-content">
             {formatKilobytes(totalSize)}
           </span>{" "}
-          total). This cannot be undone.
+          will be permanently removed. This cannot be undone.
         </p>
         <ul className="mt-3 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
           {items.map((item) => {
             const versions = item.versions ?? [];
             const isMultiVersion = versions.length >= 2;
+            const previewItem = previewByRatingKey.get(item.ratingKey);
             return (
               <li key={item.ratingKey} className="px-3 py-1.5">
                 <div className="flex items-center justify-between gap-3">
                   <span className="truncate min-w-0 flex-1 flex items-center gap-1.5">
                     <span className="truncate">{item.title}</span>
+                    {isMultiVersion && (
+                      <span className="badge badge-warning badge-xs shrink-0">
+                        {versions.length} versions
+                      </span>
+                    )}
                     {!isMultiVersion && item.hasDuplicateEpisodes && (
                       <Copy
                         className="w-3 h-3 text-warning shrink-0"
                         aria-label="Has duplicate episodes"
+                        title="One or more episodes have multiple synced versions"
                       />
                     )}
                   </span>
+                  <PlannedServiceIcons
+                    plexOnly={plexOnly}
+                    arrTargets={previewItem?.arrStatus === "resolved"
+                      ? previewItem.arrTargets
+                      : []}
+                    qbitJobCount={deleteTorrents &&
+                        previewItem?.status === "resolved"
+                      ? previewItem.torrents.length
+                      : 0}
+                    qbitResuming={Boolean(
+                      deleteTorrents && previewItem?.status === "resolved" &&
+                        previewItem.torrents.length === 0,
+                    )}
+                  />
                   <span className="text-base-content/50 font-mono text-xs shrink-0">
                     {item.fileSize != null
                       ? formatKilobytes(item.fileSize)
                       : "—"}
                   </span>
                 </div>
-                {!isMultiVersion && item.hasDuplicateEpisodes && (
-                  <p className="mt-0.5 pl-0.5 text-xs text-base-content/40">
-                    One or more episodes have multiple synced versions.
-                  </p>
-                )}
-                {isMultiVersion && (
-                  <div className="mt-0.5 flex flex-col">
-                    {versions.map((v, i) => {
-                      const isLast = i === versions.length - 1;
-                      return (
-                        <div
-                          key={v.mediaId}
-                          className="relative flex items-center gap-2 pl-5 py-0.5 text-xs text-base-content/50"
-                        >
-                          <span className="absolute left-2 top-0 h-1/2 w-px bg-base-content/20" />
-                          {!isLast && (
-                            <span className="absolute left-2 top-1/2 h-1/2 w-px bg-base-content/20" />
-                          )}
-                          <span className="absolute left-2 top-1/2 w-3 h-px bg-base-content/20" />
-                          <span className="truncate">{versionLabel(v)}</span>
-                          <span className="ml-auto font-mono shrink-0">
-                            {v.fileSize != null
-                              ? formatKilobytes(v.fileSize)
-                              : "—"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </li>
             );
           })}
         </ul>
         {hasMultiVersionItems && (
           <p className="mt-1.5 text-xs text-base-content/40">
-            Items with multiple versions (shown above) lose all of them here. To
-            remove just one, use the{" "}
+            Items marked with multiple versions lose all of them here. To remove
+            just one, use the{" "}
             <Link
               to="/duplicates"
               search={{ type: "all" }}
@@ -199,10 +206,14 @@ export function DeleteConfirmDialog({
           />
           {!plexOnly && (
             <CompactOption
-              label="Remove from qBittorrent and delete downloaded files"
-              info="Removes the verified qBittorrent job and asks qBittorrent to delete its payload. Plex Librarian does not independently delete a saved .torrent file."
+              label={`Remove from qBittorrent (${qbitEligibleCount})`}
+              info={qbitEligibleCount > 0
+                ? `Applies only to the ${qbitEligibleCount} of ${items.length} selected items with verified qBittorrent cleanup. Removes those jobs and asks qBittorrent to delete their downloaded files; Plex Librarian does not independently delete saved .torrent files.`
+                : preview.data?.configured
+                ? "No selected items have a verified live qBittorrent job or resumable cleanup."
+                : "Connect qBittorrent under Media connections to enable downloaded-file cleanup."}
               checked={deleteTorrents}
-              disabled={pending || preview.isLoading || !cleanupFullyResolved}
+              disabled={pending || preview.isLoading || qbitEligibleCount === 0}
               onChange={setDeleteTorrents}
             />
           )}
@@ -213,7 +224,6 @@ export function DeleteConfirmDialog({
           error={preview.isError ? preview.error.message : null}
           plexOnly={plexOnly}
           coordinatedConfigured={preview.data?.coordinatedConfigured ?? false}
-          qbitConfigured={preview.data?.configured ?? false}
           arrProblems={preview.data?.coordinatedConfigured
             ? arrProblems.map((problem) => ({
               title: items.find((item) => item.ratingKey === problem.ratingKey)
@@ -222,29 +232,6 @@ export function DeleteConfirmDialog({
                 "managed deletion could not be verified",
             }))
             : []}
-          cleanupError={cleanupHasErrors
-            ? preview.data?.items
-              .filter((item) => item.status === "error")
-              .map((item) => item.reason)
-              .filter(Boolean)
-              .join("; ") ?? null
-            : null}
-          cleanupUnavailable={cleanupUnavailable.length > 0 &&
-              torrents.length > 0
-            ? cleanupUnavailable.map((item) =>
-              `${
-                items.find((candidate) =>
-                  candidate.ratingKey === item.ratingKey
-                )?.title ??
-                  item.ratingKey
-              }: ${item.reason ?? "association unavailable"}`
-            ).join("; ")
-            : null}
-          cleanupPreviouslyStarted={cleanupPreviouslyStarted}
-          noLiveTorrent={Boolean(
-            preview.data?.configured && torrents.length === 0 &&
-              !cleanupPreviouslyStarted && !cleanupHasErrors,
-          )}
         />
 
         <DeletionTree
@@ -268,10 +255,11 @@ export function DeleteConfirmDialog({
           <button
             type="button"
             className="btn btn-sm btn-error gap-2"
-            onClick={() => onConfirm(
-              plexOnly ? "plex-only" : "coordinated",
-              !plexOnly && deleteTorrents,
-            )}
+            onClick={() =>
+              onConfirm(
+                plexOnly ? "plex-only" : "coordinated",
+                !plexOnly && deleteTorrents,
+              )}
             disabled={pending || (!plexOnly && !coordinatedReady)}
           >
             {pending
@@ -292,14 +280,19 @@ export function DeleteConfirmDialog({
 
 function InfoTip({ text }: { text: string }) {
   return (
-    <span
-      className="tooltip tooltip-left inline-flex shrink-0 cursor-help text-base-content/45"
-      data-tip={text}
-      tabIndex={0}
-      aria-label={text}
-    >
-      <Info className="size-3.5" />
-    </span>
+    <HoverPopover content={text}>
+      <button
+        type="button"
+        className="inline-flex cursor-help text-base-content/45 transition-colors hover:text-base-content/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        aria-label={text}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <Info className="size-3.5" />
+      </button>
+    </HoverPopover>
   );
 }
 
@@ -335,28 +328,126 @@ function CompactOption({
   );
 }
 
+function ServiceMark({
+  service,
+  label,
+  ariaLabel,
+  popover,
+  className,
+}: {
+  service?: ServiceIconName;
+  label?: string;
+  ariaLabel: string;
+  popover: ReactNode;
+  className: string;
+}) {
+  return (
+    <HoverPopover content={popover}>
+      <span
+        className={`inline-flex size-5 cursor-help items-center justify-center rounded p-0.5 leading-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${className}`}
+        tabIndex={0}
+        role="img"
+        aria-label={ariaLabel}
+      >
+        {service
+          ? <ServiceIcon service={service} className="size-3.5" />
+          : <span className="text-[9px] font-bold">{label}</span>}
+      </span>
+    </HoverPopover>
+  );
+}
+
+function PlannedServiceIcons({
+  plexOnly,
+  arrTargets,
+  qbitJobCount,
+  qbitResuming,
+}: {
+  plexOnly: boolean;
+  arrTargets: ArrCleanupTarget[];
+  qbitJobCount: number;
+  qbitResuming: boolean;
+}) {
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {plexOnly && (
+        <ServiceMark
+          label="P"
+          ariaLabel="Delete directly from Plex"
+          popover={
+            <>
+              <div className="font-semibold">Plex</div>
+              <div className="mt-0.5 text-base-content/65">
+                Delete this item directly from Plex.
+              </div>
+            </>
+          }
+          className="bg-warning/20 text-warning"
+        />
+      )}
+      {!plexOnly && arrTargets.map((target, index) => (
+        <ServiceMark
+          key={`${target.instanceName}:${target.type}:${index}`}
+          service={target.type}
+          ariaLabel={`Delete through ${target.instanceName}`}
+          popover={
+            <>
+              <div className="font-semibold">
+                {target.type === "radarr" ? "Radarr" : "Sonarr"}
+              </div>
+              <div className="mt-0.5 text-base-content/70">
+                {target.instanceName}
+              </div>
+              <div className="mt-1 text-base-content/55">
+                Deletes the managed title folder and removes the title from the
+                instance.
+              </div>
+            </>
+          }
+          className={target.type === "radarr"
+            ? "bg-primary/20 text-primary"
+            : "bg-info/20 text-info"}
+        />
+      ))}
+      {!plexOnly && (qbitJobCount > 0 || qbitResuming) && (
+        <ServiceMark
+          service="qbittorrent"
+          ariaLabel={qbitJobCount > 0
+            ? `Remove ${qbitJobCount} verified qBittorrent job${
+              qbitJobCount === 1 ? "" : "s"
+            }`
+            : "Resume previously started qBittorrent cleanup"}
+          popover={
+            <>
+              <div className="font-semibold">qBittorrent</div>
+              <div className="mt-1 text-base-content/55">
+                {qbitJobCount > 0
+                  ? `Removes ${qbitJobCount} verified job${
+                    qbitJobCount === 1 ? "" : "s"
+                  } and asks qBittorrent to delete the downloaded files.`
+                  : "Resumes a previously started qBittorrent cleanup before Arr deletion."}
+              </div>
+            </>
+          }
+          className="bg-secondary/20 text-secondary"
+        />
+      )}
+    </span>
+  );
+}
+
 function PreviewStatus({
   loading,
   error,
   plexOnly,
   coordinatedConfigured,
-  qbitConfigured,
   arrProblems,
-  cleanupError,
-  cleanupUnavailable,
-  cleanupPreviouslyStarted,
-  noLiveTorrent,
 }: {
   loading: boolean;
   error: string | null;
   plexOnly: boolean;
   coordinatedConfigured: boolean;
-  qbitConfigured: boolean;
   arrProblems: Array<{ title: string; reason: string }>;
-  cleanupError: string | null;
-  cleanupUnavailable: string | null;
-  cleanupPreviouslyStarted: boolean;
-  noLiveTorrent: boolean;
 }) {
   if (plexOnly) return null;
   return (
@@ -381,30 +472,6 @@ function PreviewStatus({
           {problem.title}: {problem.reason}
         </p>
       ))}
-      {cleanupError && <p className="text-error">qBittorrent: {cleanupError}
-      </p>}
-      {cleanupUnavailable && (
-        <p className="text-warning">qBittorrent: {cleanupUnavailable}</p>
-      )}
-      {cleanupPreviouslyStarted && (
-        <p className="text-info">
-          qBittorrent removal was previously started; select it again to finish
-          Arr deletion.
-        </p>
-      )}
-      {noLiveTorrent && (
-        <p className="text-base-content/50">
-          No associated live qBittorrent job was found.
-        </p>
-      )}
-      {!loading && !error && !qbitConfigured && (
-        <p className="text-base-content/45">
-          qBittorrent cleanup is unavailable.{"  "}
-          <Link to="/settings/sonarr-radarr" className="link link-primary">
-            Media connections
-          </Link>
-        </p>
-      )}
     </div>
   );
 }
@@ -574,6 +641,50 @@ function torrentFiles(torrent: TorrentCleanupTorrent): TreeFile[] {
   });
 }
 
+function CollapsiblePathSection({
+  title,
+  count,
+  info,
+  warning = false,
+  children,
+}: {
+  title: string;
+  count: number | null;
+  info: string;
+  warning?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      className={`group rounded-lg border ${
+        warning
+          ? "border-warning/30 bg-warning/5"
+          : "border-base-300 bg-base-200/30"
+      }`}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-2.5 text-sm font-medium marker:hidden [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-3.5 shrink-0 text-base-content/40 transition-transform group-open:rotate-90" />
+        <span className={warning ? "text-warning" : "text-base-content/70"}>
+          {title}
+        </span>
+        <InfoTip text={info} />
+        {count === null
+          ? (
+            <span className="loading loading-spinner loading-xs ml-auto text-base-content/40" />
+          )
+          : (
+            <span className="ml-auto text-xs font-normal text-base-content/40">
+              {count} {count === 1 ? "path" : "paths"}
+            </span>
+          )}
+      </summary>
+      <div className="mx-2.5 max-h-56 divide-y divide-base-300/60 overflow-y-auto border-t border-base-300/60 pb-1">
+        {children}
+      </div>
+    </details>
+  );
+}
+
 function DeletionTree({
   items,
   plexOnly,
@@ -594,97 +705,83 @@ function DeletionTree({
   }>;
   loading: boolean;
 }) {
-  const remainingTorrents = plexOnly || !deleteTorrents ? torrents : [];
-  const hasRemaining = remainingTorrents.length > 0 ||
-    unmanagedSources.length > 0;
+  const hasRemaining = unmanagedSources.length > 0;
+  const removalPathCount = plexOnly
+    ? items.length
+    : arrEntries.length + (deleteTorrents ? torrents.length : 0);
   return (
-    <div className={`mt-3 grid gap-2 ${hasRemaining ? "sm:grid-cols-2" : ""}`}>
-      <section className="rounded-lg border border-base-300 bg-base-200/30 p-2.5">
-        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/55">
-          Files to be removed
-          <InfoTip text="Only verified managed roots and qBittorrent payloads selected above appear here." />
-        </div>
-        <div className="mt-1 max-h-56 divide-y divide-base-300/60 overflow-y-auto">
-          {plexOnly && items.map((item) => (
+    <div className="mt-3 space-y-2">
+      <CollapsiblePathSection
+        title="Files to be removed"
+        count={loading ? null : removalPathCount}
+        info="Only verified managed roots and qBittorrent payloads selected above appear here."
+      >
+        {plexOnly && items.map((item) => (
+          <PathTreeRoot
+            key={item.ratingKey}
+            path={item.title}
+            source="Plex"
+            note="Underlying media path is not available in this preview"
+          />
+        ))}
+        {!plexOnly && arrEntries.map(({ ratingKey, target }) => {
+          const files = managedFiles(target);
+          const note = target.type === "sonarr"
+            ? "Series contents are removed by Sonarr; the episode list is intentionally omitted"
+            : target.mediaFiles === null || target.extraFiles === null
+            ? "Some managed file details are unavailable"
+            : undefined;
+          return (
             <PathTreeRoot
-              key={item.ratingKey}
-              path={item.title}
-              source="Plex"
-              note="Underlying media path is not available in this preview"
+              key={`${ratingKey}:${target.instanceName}:${target.path}`}
+              path={target.path ?? target.title}
+              source={target.instanceName}
+              files={files}
+              note={note}
+            />
+          );
+        })}
+        {!plexOnly && deleteTorrents &&
+          torrents.map((torrent) => (
+            <PathTreeRoot
+              key={`${torrent.instanceKey}:${torrent.hash}`}
+              path={torrentRoot(torrent) || torrent.name}
+              source={torrent.instanceName}
+              files={torrentFiles(torrent)}
+              totalFiles={torrent.fileCount}
+              info={torrentInfo(torrent)}
             />
           ))}
-          {!plexOnly && arrEntries.map(({ ratingKey, target }) => {
-            const files = managedFiles(target);
-            const note = target.type === "sonarr"
-              ? "Series contents are removed by Sonarr; the episode list is intentionally omitted"
-              : target.mediaFiles === null || target.extraFiles === null
-              ? "Some managed file details are unavailable"
-              : undefined;
-            return (
-              <PathTreeRoot
-                key={`${ratingKey}:${target.instanceName}:${target.path}`}
-                path={target.path ?? target.title}
-                source={target.instanceName}
-                files={files}
-                note={note}
-              />
-            );
-          })}
-          {!plexOnly && deleteTorrents &&
-            torrents.map((torrent) => (
-              <PathTreeRoot
-                key={`${torrent.instanceKey}:${torrent.hash}`}
-                path={torrentRoot(torrent) || torrent.name}
-                source={torrent.instanceName}
-                files={torrentFiles(torrent)}
-                totalFiles={torrent.fileCount}
-                info={torrentInfo(torrent)}
-              />
-            ))}
-          {loading && (
-            <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
-              <span className="loading loading-spinner loading-xs" />{" "}
-              Loading paths…
-            </p>
-          )}
-          {!loading && !plexOnly && arrEntries.length === 0 && (
-            <p className="py-3 text-xs text-base-content/40">
-              No verified managed path.
-            </p>
-          )}
-        </div>
-      </section>
+        {loading && (
+          <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
+            <span className="loading loading-spinner loading-xs" />{" "}
+            Loading paths…
+          </p>
+        )}
+        {!loading && !plexOnly && arrEntries.length === 0 && (
+          <p className="py-3 text-xs text-base-content/40">
+            No verified managed path.
+          </p>
+        )}
+      </CollapsiblePathSection>
 
       {hasRemaining && (
-        <section className="rounded-lg border border-warning/30 bg-warning/5 p-2.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-warning">
-            Will remain
-            <InfoTip text="These paths are not selected or cannot be proven safe to delete automatically." />
-          </div>
-          <div className="mt-1 max-h-56 divide-y divide-base-300/60 overflow-y-auto">
-            {remainingTorrents.map((torrent) => (
-              <PathTreeRoot
-                key={`${torrent.instanceKey}:${torrent.hash}:remaining`}
-                path={torrentRoot(torrent) || torrent.name}
-                source={torrent.instanceName}
-                note={`${torrent.fileCount} downloaded file${
-                  torrent.fileCount === 1 ? "" : "s"
-                }; select qBittorrent cleanup to remove`}
-                info={torrentInfo(torrent)}
-                warning
-              />
-            ))}
-            {unmanagedSources.map(({ ratingKey, source }) => (
-              <PathTreeRoot
-                key={`${ratingKey}:${source.instanceName}:${source.hash}:${source.path}`}
-                path={source.path}
-                source="Arr history"
-                note="No live qBittorrent job owns this path"
-                warning
-              />
-            ))}
-          </div>
-        </section>
+        <CollapsiblePathSection
+          title="Not automatically removed"
+          count={unmanagedSources.length}
+          info="These historical paths are not automatically removed because ownership cannot be proven safely."
+          warning
+        >
+          {unmanagedSources.map(({ ratingKey, source }) => (
+            <PathTreeRoot
+              key={`${ratingKey}:${source.instanceName}:${source.hash}:${source.path}`}
+              path={source.path}
+              source="Arr history"
+              note="No live qBittorrent job owns this path"
+              warning
+            />
+          ))}
+        </CollapsiblePathSection>
       )}
     </div>
   );

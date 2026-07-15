@@ -1,7 +1,7 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ArrClient } from '../../integrations/arr/client.ts';
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
-import { resolveTorrentCleanup } from './cleanup.ts';
+import { resolveTorrentCleanup, selectVerifiedTorrentCleanups } from './cleanup.ts';
 
 const hash = 'a'.repeat(40);
 
@@ -119,6 +119,22 @@ Deno.test('torrent cleanup errors instead of silently skipping an unreachable cl
   );
   assertEquals(result.status, 'error');
   assertStringIncludes(result.reason ?? '', 'qBittorrent login failed');
+});
+
+Deno.test('partial batch selection keeps only fully verified qBittorrent cleanups', async () => {
+  const verified = await resolveTorrentCleanup(
+    'verified',
+    { title: 'Movie', type: 'movie', tmdbId: 10, tvdbId: null },
+    [arrTarget()],
+    [qbitTarget()],
+  );
+  const failed = await resolveTorrentCleanup(
+    'failed',
+    { title: 'Movie', type: 'movie', tmdbId: 10, tvdbId: null },
+    [arrTarget()],
+    [qbitTarget(new Response('Fails.'))],
+  );
+  assertEquals([...selectVerifiedTorrentCleanups([verified, failed]).keys()], ['verified']);
 });
 
 Deno.test('torrent cleanup resumes when a previously attempted torrent is now absent', async () => {

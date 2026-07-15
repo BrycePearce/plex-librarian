@@ -82,8 +82,11 @@ total, and cumulative seeding time. When explicitly selected, Plex Librarian
 removes the verified job from qBittorrent and asks qBittorrent to delete its
 downloaded payload before Arr deletes the remaining library hardlink. Plex
 Librarian does not locate or independently delete a saved `.torrent` file. If
-the association cannot be verified, qBittorrent cleanup stays disabled and the
-existing Arr-only deletion remains available.
+the association cannot be verified for an item, that row remains Arr-only. In a
+bulk selection, qBittorrent cleanup applies only to rows with a verified job;
+the confirmation list shows small Plex, Sonarr, Radarr, and qBittorrent action
+indicators for each item. The option stays disabled only when none of the
+selected items can be verified for qBittorrent cleanup.
 
 Retained Arr import history can point at an old download path even after its
 torrent has disappeared from qBittorrent. Plex Librarian shows those paths as

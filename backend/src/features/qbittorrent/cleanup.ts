@@ -13,6 +13,19 @@ export interface ResolvedCleanupItem extends TorrentCleanupPreviewItem {
   torrents: ResolvedCleanupTorrent[];
 }
 
+export function selectVerifiedTorrentCleanups(
+  cleanups: Iterable<ResolvedCleanupItem>,
+): Map<string, ResolvedCleanupItem> {
+  const verified = new Map<string, ResolvedCleanupItem>();
+  for (const cleanup of cleanups) {
+    // Error results may contain torrents observed before another configured client
+    // failed. They are deliberately excluded: only a completely resolved item is
+    // safe to include in an optional partial-batch mutation.
+    if (cleanup.status === 'resolved') verified.set(cleanup.ratingKey, cleanup);
+  }
+  return verified;
+}
+
 function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
 }
