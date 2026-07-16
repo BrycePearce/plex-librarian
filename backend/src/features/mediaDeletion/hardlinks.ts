@@ -5,7 +5,7 @@ import type {
   ArrPathMapping,
 } from '@plex-librarian/shared/types.ts';
 import type { ArrTorrentAssociation } from '../../integrations/arr/client.ts';
-import { pathMappingRootsAreDisjoint } from './mappings.ts';
+import { pathMappingRootsAreDisjoint } from '../arr/mappings.ts';
 
 interface NormalizedRemotePath {
   path: string;
@@ -250,7 +250,7 @@ function unavailable(
   return {
     source: {
       instanceName,
-      hash: association.hash,
+      downloadId: association.hash,
       path: association.sourcePath ?? '',
       importedPath: association.importedPath,
       verification: 'unverified',
@@ -384,7 +384,7 @@ export async function verifyOrphanHardlink(
     return {
       source: {
         instanceName,
-        hash: association.hash,
+        downloadId: association.hash,
         path: association.sourcePath,
         importedPath: association.importedPath,
         localPath: source.path,

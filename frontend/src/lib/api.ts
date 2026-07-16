@@ -7,6 +7,7 @@ import type {
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
+  DownloadCleanupPreviewResponse,
   DuplicatesResponse,
   LibrariesResponse,
   Library,
@@ -24,7 +25,6 @@ import type {
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
-  TorrentCleanupPreviewResponse,
   UpdateArrInstanceRequest,
   UpdateQbittorrentInstanceRequest,
   UsersResponse,
@@ -43,6 +43,9 @@ export type {
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
+  DownloadCleanupJob,
+  DownloadCleanupPreviewItem,
+  DownloadCleanupPreviewResponse,
   DuplicateEpisodeGroup,
   DuplicateGroup,
   DuplicateMovieGroup,
@@ -71,9 +74,6 @@ export type {
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
-  TorrentCleanupPreviewItem,
-  TorrentCleanupPreviewResponse,
-  TorrentCleanupTorrent,
   UsersResponse,
 } from "@shared/types";
 
@@ -211,18 +211,18 @@ export const api = {
       key: string,
       ratingKeys: string[],
       mode: "coordinated" | "plex-only" = "coordinated",
-      deleteTorrents = false,
+      cleanupDownloads = false,
     ) =>
       apiFetch<DeleteItemsResponse>(
         `/libraries/${encodeURIComponent(key)}/items`,
         {
           method: "DELETE",
-          body: JSON.stringify({ ratingKeys, mode, deleteTorrents }),
+          body: JSON.stringify({ ratingKeys, mode, cleanupDownloads }),
         },
       ),
-    torrentCleanupPreview: (key: string, ratingKeys: string[]) =>
-      apiFetch<TorrentCleanupPreviewResponse>(
-        `/libraries/${encodeURIComponent(key)}/items/torrent-preview`,
+    downloadCleanupPreview: (key: string, ratingKeys: string[]) =>
+      apiFetch<DownloadCleanupPreviewResponse>(
+        `/libraries/${encodeURIComponent(key)}/items/download-cleanup-preview`,
         { method: "POST", body: JSON.stringify({ ratingKeys }) },
       ),
   },

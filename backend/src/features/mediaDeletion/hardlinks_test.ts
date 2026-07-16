@@ -7,7 +7,7 @@ import {
   mapArrPath,
   verifyOrphanHardlink,
   verifyTrackedHardlinks,
-} from './orphanFiles.ts';
+} from './hardlinks.ts';
 
 Deno.test({
   name: 'orphan cleanup attempts resume only when the mounted-root path is absent',

@@ -384,30 +384,31 @@ export interface CancelPendingInvitationResponse {
 export interface DeleteItemsRequest {
   ratingKeys: string[];
   mode?: "coordinated" | "plex-only";
-  deleteTorrents?: boolean;
+  cleanupDownloads?: boolean;
 }
 
-export interface TorrentCleanupTorrent {
+export interface DownloadCleanupJob {
+  provider: string;
   instanceKey: string;
   instanceName: string;
-  hash: string;
+  jobId: string;
   name: string;
   state: string;
   size: number;
   uploaded: number;
-  ratio: number;
+  ratio: number | null;
   seedingTime: number;
   completedAt: number | null;
   contentPath: string;
   savePath: string;
   trackerHost: string | null;
   fileCount: number;
-  files: TorrentCleanupFile[];
+  files: DownloadCleanupJobFile[];
   filesTruncated: boolean;
   sourcePath: string | null;
 }
 
-export interface TorrentCleanupFile {
+export interface DownloadCleanupJobFile {
   path: string;
   size: number | null;
 }
@@ -433,7 +434,7 @@ export interface ArrCleanupTarget {
 
 export interface ArrCleanupSource {
   instanceName: string;
-  hash: string;
+  downloadId: string;
   path: string;
   importedPath: string | null;
   verification: "hardlink" | "unverified";
@@ -452,10 +453,10 @@ export interface ArrCleanupRetainedPath {
   reason: string;
 }
 
-export interface TorrentCleanupPreviewItem {
+export interface DownloadCleanupPreviewItem {
   ratingKey: string;
   status: "resolved" | "unavailable" | "error";
-  torrents: TorrentCleanupTorrent[];
+  downloadJobs: DownloadCleanupJob[];
   reason?: string;
   arrStatus: "resolved" | "unavailable" | "error";
   arrReason?: string;
@@ -465,10 +466,10 @@ export interface TorrentCleanupPreviewItem {
   retainedPaths: ArrCleanupRetainedPath[];
 }
 
-export interface TorrentCleanupPreviewResponse {
-  configured: boolean;
+export interface DownloadCleanupPreviewResponse {
+  downloadClientsConfigured: boolean;
   coordinatedConfigured: boolean;
-  items: TorrentCleanupPreviewItem[];
+  items: DownloadCleanupPreviewItem[];
 }
 
 export interface DeleteItemsResponse {

@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -38,7 +38,6 @@ import {
 import {
   LibrarySyncProvider,
   useAnyLibrarySyncing,
-  useLibrarySync,
   useSyncHistory,
 } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
@@ -86,8 +85,7 @@ const cardVariants: Variants = {
   },
 };
 
-const ARR_ONBOARDING_DISMISSED_KEY =
-  "plex-librarian:arr-onboarding-dismissed";
+const ARR_ONBOARDING_DISMISSED_KEY = "plex-librarian:arr-onboarding-dismissed";
 const ARR_ONBOARDING_STORAGE = {
   serialize: (value: boolean) => value ? "1" : "0",
   deserialize: (value: string) => value === "1",
@@ -212,9 +210,10 @@ function DashboardInner() {
   // this stays accurate for the entire duration regardless of per-library speed.
   const hasEverSyncedSuccessfully =
     history?.some((h) => h.status === "success") ?? false;
-  const hasVideoLibraries = librariesData?.libraries.some((library) =>
-    library.type === "movie" || library.type === "show"
-  ) ?? false;
+  const hasVideoLibraries =
+    librariesData?.libraries.some((library) =>
+      library.type === "movie" || library.type === "show"
+    ) ?? false;
   // `history` is capped to the 10 most-recent sync_log rows, so a server that succeeded
   // long ago but has had 10+ consecutive recent failures would otherwise read as
   // "never synced" here. `hasAnyImportedItems` is cap-proof — real items in the DB are
@@ -299,9 +298,7 @@ function DashboardInner() {
           <div className="flex-1">
             <p>Failed to load libraries</p>
             <p className="text-xs opacity-70">
-              {libsError instanceof Error
-                ? libsError.message
-                : "Unknown error"}
+              {libsError instanceof Error ? libsError.message : "Unknown error"}
             </p>
           </div>
           <button
@@ -336,147 +333,149 @@ function DashboardInner() {
           initial="hidden"
           animate="show"
         >
-      {showArrOnboarding && (
-        <motion.aside
-          className="arr-onboarding-nudge"
-          variants={pageSectionVariants}
-          aria-label="Sonarr and Radarr setup"
-        >
-          <span className="arr-onboarding-icon">
-            <PlugZap className="size-4" />
-          </span>
-          <span className="arr-onboarding-copy">
-            <strong>Using Sonarr or Radarr?</strong>
-            <span>
-              Connect your media managers so whole-title deletion can be
-              coordinated safely.
-            </span>
-          </span>
-          <Link
-            to="/settings/sonarr-radarr"
-            className="btn btn-primary btn-sm arr-onboarding-setup"
-          >
-            Set up integrations
-          </Link>
-          <button
-            type="button"
-            className="arr-onboarding-dismiss"
-            onClick={dismissArrOnboarding}
-            aria-label="Don't show Sonarr and Radarr setup again"
-            title="Don't show again"
-          >
-            <X className="size-4" />
-            <span>Don&apos;t show again</span>
-          </button>
-        </motion.aside>
-      )}
+          {showArrOnboarding && (
+            <motion.aside
+              className="arr-onboarding-nudge"
+              variants={pageSectionVariants}
+              aria-label="Sonarr and Radarr setup"
+            >
+              <span className="arr-onboarding-icon">
+                <PlugZap className="size-4" />
+              </span>
+              <span className="arr-onboarding-copy">
+                <strong>Using Sonarr or Radarr?</strong>
+                <span>
+                  Connect your media managers so whole-title deletion can be
+                  coordinated safely.
+                </span>
+              </span>
+              <Link
+                to="/settings/sonarr-radarr"
+                className="btn btn-primary btn-sm arr-onboarding-setup"
+              >
+                Set up integrations
+              </Link>
+              <button
+                type="button"
+                className="arr-onboarding-dismiss"
+                onClick={dismissArrOnboarding}
+                aria-label="Don't show Sonarr and Radarr setup again"
+                title="Don't show again"
+              >
+                <X className="size-4" />
+                <span>Don&apos;t show again</span>
+              </button>
+            </motion.aside>
+          )}
 
-      {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
-        <StatsStrip libraries={librariesData.libraries} />
-      )}
+          {!libsLoading && librariesData &&
+            librariesData.libraries.length > 0 && (
+            <StatsStrip libraries={librariesData.libraries} />
+          )}
 
-      {!libsLoading && librariesData && librariesData.libraries.length > 0 && (
-        <HomeDirectory libraries={librariesData.libraries} />
-      )}
+          {!libsLoading && librariesData &&
+            librariesData.libraries.length > 0 && (
+            <HomeDirectory libraries={librariesData.libraries} />
+          )}
 
-      {globalSyncError !== null && (
-        <div className="alert alert-error">
-          <AlertCircle className="w-4 h-4" />
-          <span>Sync failed: {globalSyncError}</span>
-        </div>
-      )}
-      {triggerSync.isError && (
-        <div className="alert alert-warning">
-          <AlertCircle className="w-4 h-4" />
-          <span>{triggerSync.error.message}</span>
-        </div>
-      )}
+          {globalSyncError !== null && (
+            <div className="alert alert-error">
+              <AlertCircle className="w-4 h-4" />
+              <span>Sync failed: {globalSyncError}</span>
+            </div>
+          )}
+          {triggerSync.isError && (
+            <div className="alert alert-warning">
+              <AlertCircle className="w-4 h-4" />
+              <span>{triggerSync.error.message}</span>
+            </div>
+          )}
 
-      {
-        /* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
+          {
+            /* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
           progress, so showing this panel too would be a duplicate. It stays visible
           while isCheckingFirstRun, since that state has no progress display of its own. */
-      }
-      {!isFirstRun && (
-        <AnimatePresence>
-          {(activeGlobalSyncId !== null || triggerSync.isPending) && (
-            <motion.div
-              key="sync-progress"
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ type: "spring", stiffness: 300, damping: 28 }}
-            >
-              <SyncProgressPanel
-                progress={globalSyncProgress ?? undefined}
-                done={globalSyncDone}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      )}
-
-      {!libsLoading && (isCheckingFirstRun
-        ? (
-          // Neutral spinner rather than a content-shaped skeleton: we already know
-          // there's nothing with items yet, just not yet whether that means "first sync
-          // in progress" or "genuinely empty" — a grid of card skeletons would wrongly
-          // imply libraries are about to appear right before it flips to the first-run
-          // hero instead.
-          <div className="flex justify-center py-16">
-            <span className="loading loading-ring w-10 text-primary" />
-          </div>
-        )
-        : isFirstRun
-        ? <FirstRunHero progress={globalSyncProgress ?? undefined} />
-        : (
-          <>
-            {history && history.length > 0 && (
-              <motion.section
-                className="dashboard-panel sync-history-panel"
-                variants={pageSectionVariants}
-              >
-                <div className="dashboard-panel-header">
-                  <SectionHeading
-                    eyebrow="Operations"
-                    title="Recent syncs"
-                    meta={
-                      <Link to="/activity" className="dashboard-panel-link">
-                        View activity <ArrowRight className="size-4" />
-                      </Link>
-                    }
+          }
+          {!isFirstRun && (
+            <AnimatePresence>
+              {(activeGlobalSyncId !== null || triggerSync.isPending) && (
+                <motion.div
+                  key="sync-progress"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                >
+                  <SyncProgressPanel
+                    progress={globalSyncProgress ?? undefined}
+                    done={globalSyncDone}
                   />
-                </div>
-                <div className="overflow-x-auto sync-history-table">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Status</th>
-                        <th>Library</th>
-                        <th>Started</th>
-                        <th>Duration</th>
-                        <th>Items</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {history.slice(0, 3).map((s) => (
-                        <SyncRow
-                          key={s.id}
-                          sync={s}
-                          libraryTitle={s.libraryKey
-                            ? (librariesData?.libraries.find(
-                              (l) => l.key === s.libraryKey,
-                            )?.title ?? s.libraryKey)
-                            : null}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </motion.section>
-            )}
-          </>
-        ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+
+          {!libsLoading && (isCheckingFirstRun
+            ? (
+              // Neutral spinner rather than a content-shaped skeleton: we already know
+              // there's nothing with items yet, just not yet whether that means "first sync
+              // in progress" or "genuinely empty" — a grid of card skeletons would wrongly
+              // imply libraries are about to appear right before it flips to the first-run
+              // hero instead.
+              <div className="flex justify-center py-16">
+                <span className="loading loading-ring w-10 text-primary" />
+              </div>
+            )
+            : isFirstRun
+            ? <FirstRunHero progress={globalSyncProgress ?? undefined} />
+            : (
+              <>
+                {history && history.length > 0 && (
+                  <motion.section
+                    className="dashboard-panel sync-history-panel"
+                    variants={pageSectionVariants}
+                  >
+                    <div className="dashboard-panel-header">
+                      <SectionHeading
+                        eyebrow="Operations"
+                        title="Recent syncs"
+                        meta={
+                          <Link to="/activity" className="dashboard-panel-link">
+                            View activity <ArrowRight className="size-4" />
+                          </Link>
+                        }
+                      />
+                    </div>
+                    <div className="overflow-x-auto sync-history-table">
+                      <table className="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Status</th>
+                            <th>Library</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                            <th>Items</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {history.slice(0, 3).map((s) => (
+                            <SyncRow
+                              key={s.id}
+                              sync={s}
+                              libraryTitle={s.libraryKey
+                                ? (librariesData?.libraries.find(
+                                  (l) => l.key === s.libraryKey,
+                                )?.title ?? s.libraryKey)
+                                : null}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </motion.section>
+                )}
+              </>
+            ))}
         </motion.div>
       )}
     </div>
@@ -603,16 +602,25 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
         className="home-directory-list"
         variants={containerVariants}
       >
-        <motion.div variants={cardVariants} className="home-stale-section home-collection-section">
+        <motion.div
+          variants={cardVariants}
+          className="home-stale-section home-collection-section"
+        >
           <div className="home-stale-heading">
             <span className="home-directory-index">01</span>
-            <span className="home-directory-icon"><LibraryGlyph className="size-5" /></span>
+            <span className="home-directory-icon">
+              <LibraryGlyph className="size-5" />
+            </span>
             <span className="home-directory-copy">
               <small>Collection</small>
               <strong>Libraries</strong>
-              <span>Select a library to review stale and unwatched content.</span>
+              <span>
+                Select a library to review stale and unwatched content.
+              </span>
             </span>
-            <span className="home-collection-count">{libraries.length} active</span>
+            <span className="home-collection-count">
+              {libraries.length} active
+            </span>
           </div>
           <div className="home-stale-libraries">
             {visibleLibraries.map((library) => (
@@ -625,9 +633,14 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
                 <LibraryIcon type={library.type} />
                 <span className="home-library-name">
                   <strong>{library.title}</strong>
-                  <small>{library.itemCount.toLocaleString()} items · {formatKilobytes(library.totalFileSize)}</small>
+                  <small>
+                    {library.itemCount.toLocaleString()} items ·{" "}
+                    {formatKilobytes(library.totalFileSize)}
+                  </small>
                 </span>
-                {library.historySyncedAt === null && <i title="Watch history is still syncing" />}
+                {library.historySyncedAt === null && (
+                  <i title="Watch history is still syncing" />
+                )}
                 <ArrowRight className="size-3.5" />
               </Link>
             ))}
@@ -637,8 +650,12 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
                 className="home-library-more"
                 onClick={() => setShowAllLibraries((value) => !value)}
               >
-                <ChevronDown className={`size-4 ${showAllLibraries ? "rotate-180" : ""}`} />
-                {showAllLibraries ? "Show fewer" : `Show ${libraries.length - 6} more`}
+                <ChevronDown
+                  className={`size-4 ${showAllLibraries ? "rotate-180" : ""}`}
+                />
+                {showAllLibraries
+                  ? "Show fewer"
+                  : `Show ${libraries.length - 6} more`}
               </button>
             )}
           </div>
@@ -653,13 +670,17 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
                 className={`home-directory-section home-directory-${section.tone}`}
               >
                 <span className="home-directory-index">{section.index}</span>
-                <span className="home-directory-icon"><Icon className="size-5" /></span>
+                <span className="home-directory-icon">
+                  <Icon className="size-5" />
+                </span>
                 <span className="home-directory-copy">
                   <small>{section.label}</small>
                   <strong>{section.title}</strong>
                   <span>{section.detail}</span>
                 </span>
-                <span className="home-directory-cta">{section.cta} <ArrowRight className="size-4" /></span>
+                <span className="home-directory-cta">
+                  {section.cta} <ArrowRight className="size-4" />
+                </span>
               </Link>
             </motion.div>
           );
@@ -853,67 +874,6 @@ function SyncProgressPanel(
         )}
       </div>
     </div>
-  );
-}
-
-function LibraryCard(
-  { lib, globalSyncing }: { lib: Library; globalSyncing: boolean },
-) {
-  const { isSyncing, trigger } = useLibrarySync(lib.key);
-  const navigate = useNavigate();
-  return (
-    <motion.div
-      variants={cardVariants}
-      whileHover={{ y: -4 }}
-      whileTap={{ scale: 0.98 }}
-      transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      className={`library-card library-card-${lib.type} card cursor-pointer`}
-      onClick={() =>
-        void navigate({
-          to: "/libraries/$key/stale",
-          params: { key: lib.key },
-        })}
-    >
-      <div className="card-body gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <LibraryIcon type={lib.type} />
-            <div className="min-w-0">
-              <h3 className="font-semibold truncate">{lib.title}</h3>
-              <p className="library-type capitalize">
-                {lib.type}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className={`btn btn-ghost btn-xs btn-square shrink-0 ${
-              isSyncing
-                ? "text-primary"
-                : "text-base-content/40 hover:text-base-content"
-            }`}
-            onClick={(e) => {
-              e.stopPropagation();
-              trigger();
-            }}
-            disabled={isSyncing || globalSyncing}
-            title="Sync this library"
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
-            />
-          </button>
-        </div>
-        <div className="library-card-meta text-xs flex items-center gap-1.5">
-          <span>{lib.itemCount.toLocaleString()} items</span>
-          <span>·</span>
-          <span>{formatKilobytes(lib.totalFileSize)}</span>
-          <span>·</span>
-          <span>Synced {formatRelativeTime(lib.syncedAt)}</span>
-        </div>
-        <div className="library-card-accent" />
-      </div>
-    </motion.div>
   );
 }
 

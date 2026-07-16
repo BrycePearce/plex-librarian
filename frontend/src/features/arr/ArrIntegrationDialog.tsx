@@ -6,8 +6,8 @@ import { api } from "../../lib/api";
 import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
 import { ArrConnectionWizard } from "./ArrConnectionWizard";
-import { QbittorrentConnections } from "./QbittorrentConnections";
-import { QbittorrentConnectionWizard } from "./QbittorrentConnectionWizard";
+import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections";
+import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so

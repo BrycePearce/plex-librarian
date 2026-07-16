@@ -20,8 +20,8 @@ export function DeleteResultAlert({
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setVisible(false), 5_000);
-    return () => window.clearTimeout(timeout);
+    const timeout = globalThis.setTimeout(() => setVisible(false), 5_000);
+    return () => globalThis.clearTimeout(timeout);
   }, []);
 
   const Icon = variant === "warning" ? TriangleAlert : CheckCircle;

@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { Download, Plus, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { QbittorrentInstance } from "../../lib/api";
-import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
+import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck";
 
 export function QbittorrentConnections({
   onConfigure,

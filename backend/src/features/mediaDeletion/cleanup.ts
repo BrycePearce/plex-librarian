@@ -1,40 +1,44 @@
 import type {
-  TorrentCleanupPreviewItem,
-  TorrentCleanupTorrent,
+  DownloadCleanupJob,
+  DownloadCleanupPreviewItem,
 } from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
-import type { QbittorrentTarget } from './connections.ts';
+import type { DownloadClientTarget } from './downloadClient.ts';
 import {
   type AttemptedOrphanFile,
   completedOrphanFileAttempt,
   deleteVerifiedOrphanFile,
   findRetainedSiblingPaths,
-  normalizeRemoteAbsolute,
   type PayloadScanBudget,
   type VerifiedOrphanFile,
   verifyOrphanHardlink,
   verifyTrackedHardlinks,
-} from '../arr/orphanFiles.ts';
+} from './hardlinks.ts';
+import {
+  appendRemotePath,
+  downloadJobOwnsPath,
+  downloadPayloadIsExclusivelyOwned,
+} from './ownership.ts';
 
-export interface ResolvedCleanupTorrent extends TorrentCleanupTorrent {
-  target: QbittorrentTarget;
+export interface ResolvedDownloadJob extends DownloadCleanupJob {
+  target: DownloadClientTarget;
   manifestFiles: Array<{ path: string; size: number | null }>;
   authorizedSourcePaths: string[];
 }
 
-export interface ResolvedCleanupItem extends TorrentCleanupPreviewItem {
-  torrents: ResolvedCleanupTorrent[];
+export interface ResolvedCleanupItem extends DownloadCleanupPreviewItem {
+  downloadJobs: ResolvedDownloadJob[];
   orphanFiles: VerifiedOrphanFile[];
-  /** Every live torrent whose manifest owned one of this title's historical paths. */
-  observedTorrentKeys?: Set<string>;
+  /** Every live job whose manifest owned one of this title's historical paths. */
+  observedDownloadJobKeys?: Set<string>;
 }
 
-export function reconcileSharedTorrentCleanups(
+export function reconcileSharedDownloadCleanups(
   cleanups: readonly ResolvedCleanupItem[],
 ): ResolvedCleanupItem[] {
   const observations = new Map<string, { eligible: Set<string>; observed: Set<string> }>();
   for (const cleanup of cleanups) {
-    for (const key of cleanup.observedTorrentKeys ?? []) {
+    for (const key of cleanup.observedDownloadJobKeys ?? []) {
       const state = observations.get(key) ?? {
         eligible: new Set<string>(),
         observed: new Set<string>(),
@@ -42,8 +46,8 @@ export function reconcileSharedTorrentCleanups(
       state.observed.add(cleanup.ratingKey);
       observations.set(key, state);
     }
-    for (const torrent of cleanup.torrents) {
-      const key = `${torrent.instanceKey}:${torrent.hash}`;
+    for (const job of cleanup.downloadJobs) {
+      const key = `${job.instanceKey}:${job.jobId}`;
       const state = observations.get(key) ?? {
         eligible: new Set<string>(),
         observed: new Set<string>(),
@@ -60,41 +64,41 @@ export function reconcileSharedTorrentCleanups(
   if (conflicted.size === 0) return [...cleanups];
 
   return cleanups.map((cleanup): ResolvedCleanupItem => {
-    const removed = cleanup.torrents.filter((torrent) =>
-      conflicted.has(`${torrent.instanceKey}:${torrent.hash}`)
+    const removed = cleanup.downloadJobs.filter((job) =>
+      conflicted.has(`${job.instanceKey}:${job.jobId}`)
     );
     if (removed.length === 0) return cleanup;
-    const torrents = cleanup.torrents.filter((torrent) =>
-      !conflicted.has(`${torrent.instanceKey}:${torrent.hash}`)
+    const downloadJobs = cleanup.downloadJobs.filter((job) =>
+      !conflicted.has(`${job.instanceKey}:${job.jobId}`)
     );
     const retainedPaths = [...new Map([
       ...cleanup.retainedPaths,
-      ...removed.map((torrent) => ({
-        path: torrent.contentPath || torrent.savePath,
+      ...removed.map((job) => ({
+        path: job.contentPath || job.savePath,
         reason:
-          'This torrent is also associated with a selected title that did not independently authorize its complete payload; the shared job and files are retained',
+          'This download job is also associated with a selected title that did not independently authorize its complete payload; the shared job and files are retained',
       })),
     ].map((entry) => [entry.path, entry])).values()];
-    if (torrents.length > 0 || cleanup.orphanFiles.length > 0) {
-      return { ...cleanup, torrents, retainedPaths };
+    if (downloadJobs.length > 0 || cleanup.orphanFiles.length > 0) {
+      return { ...cleanup, downloadJobs, retainedPaths };
     }
-    if (cleanup.status !== 'resolved') return { ...cleanup, torrents, retainedPaths };
+    if (cleanup.status !== 'resolved') return { ...cleanup, downloadJobs, retainedPaths };
     return {
       ...cleanup,
       status: 'unavailable',
-      torrents,
-      reason: 'A matching torrent is shared with another selected title and is retained',
+      downloadJobs,
+      reason: 'A matching download job is shared with another selected title and is retained',
       retainedPaths,
     };
   });
 }
 
-export function selectVerifiedTorrentCleanups(
+export function selectVerifiedDownloadCleanups(
   cleanups: Iterable<ResolvedCleanupItem>,
 ): Map<string, ResolvedCleanupItem> {
   const verified = new Map<string, ResolvedCleanupItem>();
   for (const cleanup of cleanups) {
-    // Error results may contain torrents observed before another configured client
+    // Error results may contain jobs observed before another configured client
     // failed. They are deliberately excluded: only a completely resolved item is
     // safe to include in an optional partial-batch mutation.
     if (cleanup.status === 'resolved') verified.set(cleanup.ratingKey, cleanup);
@@ -104,31 +108,31 @@ export function selectVerifiedTorrentCleanups(
 
 export async function executeDownloadedFileCleanup(
   cleanup: ResolvedCleanupItem,
-  deletedTorrentKeys: Set<string>,
+  deletedDownloadJobKeys: Set<string>,
   deletedOrphanPaths: Set<string>,
-  beforeTorrentDelete: (torrent: ResolvedCleanupTorrent, torrentKey: string) => Promise<void> =
-    () => Promise.resolve(),
+  beforeDownloadJobDelete: (job: ResolvedDownloadJob, jobKey: string) => Promise<void> = () =>
+    Promise.resolve(),
   deleteOrphanFile: (file: VerifiedOrphanFile) => Promise<void> = deleteVerifiedOrphanFile,
   beforeOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
 ): Promise<void> {
-  for (const torrent of cleanup.torrents) {
-    const torrentKey = `${torrent.instanceKey}:${torrent.hash}`;
-    if (deletedTorrentKeys.has(torrentKey)) continue;
-    const current = await torrent.target.client.torrent(torrent.hash);
-    const authorizedPaths = new Set(torrent.authorizedSourcePaths);
+  for (const job of cleanup.downloadJobs) {
+    const jobKey = `${job.instanceKey}:${job.jobId}`;
+    if (deletedDownloadJobKeys.has(jobKey)) continue;
+    const current = await job.target.client.findJob(job.jobId);
+    const authorizedPaths = new Set(job.authorizedSourcePaths);
     if (
-      !current || current.hash !== torrent.hash ||
+      !current || current.id !== job.jobId ||
       !authorizedPaths.size ||
-      ![...authorizedPaths].some((path) => torrentOwnsPath(current, path)) ||
-      !torrentPayloadIsExclusivelyOwned(current, authorizedPaths)
+      ![...authorizedPaths].some((path) => downloadJobOwnsPath(current, path)) ||
+      !downloadPayloadIsExclusivelyOwned(current, authorizedPaths)
     ) {
       throw new Error(
-        'qBittorrent torrent identity or manifest changed since verification; nothing was removed',
+        'Download job identity or manifest changed since verification; nothing was removed',
       );
     }
-    await beforeTorrentDelete(torrent, torrentKey);
-    await torrent.target.client.deleteTorrent(torrent.hash);
-    deletedTorrentKeys.add(torrentKey);
+    await beforeDownloadJobDelete(job, jobKey);
+    await job.target.client.deleteJob(job.jobId, { deleteData: true });
+    deletedDownloadJobKeys.add(jobKey);
   }
   for (const orphanFile of cleanup.orphanFiles) {
     if (deletedOrphanPaths.has(orphanFile.path)) continue;
@@ -142,12 +146,12 @@ function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
 }
 
-export async function resolveTorrentCleanup(
+export async function resolveDownloadCleanup(
   ratingKey: string,
   item: CoordinatedDeleteItem,
   arrTargets: ArrDeleteTarget[],
-  qbitTargets: QbittorrentTarget[],
-  attemptedTorrentKeys: ReadonlySet<string> = new Set(),
+  downloadTargets: DownloadClientTarget[],
+  attemptedDownloadJobKeys: ReadonlySet<string> = new Set(),
   attemptedOrphanFiles: readonly AttemptedOrphanFile[] = [],
   attemptedArrInstanceIds: ReadonlySet<number> = new Set(),
   payloadScanBudget?: PayloadScanBudget,
@@ -157,7 +161,7 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'unavailable',
-      torrents: [],
+      downloadJobs: [],
       reason: id === null
         ? 'No TMDB/TVDB ID is available for Arr history lookup'
         : 'This library is not mapped to Sonarr or Radarr',
@@ -244,7 +248,7 @@ export async function resolveTorrentCleanup(
             ...(extraFiles ?? []).map((file) => file.relativePath),
           ];
           const currentManagedPaths = trackedPaths.flatMap((relativePath) => {
-            const path = record.path ? appendRemote(record.path, relativePath) : null;
+            const path = record.path ? appendRemotePath(record.path, relativePath) : null;
             return path ? [path] : [];
           });
           const verification = await verifyOrphanHardlink(
@@ -277,7 +281,7 @@ export async function resolveTorrentCleanup(
     }
   }
 
-  if (qbitTargets.length > 0 && arrErrors.length === 0 && associationHashes.size > 0) {
+  if (downloadTargets.length > 0 && arrErrors.length === 0 && associationHashes.size > 0) {
     for (const arr of arrTargets) {
       for (const hash of associationHashes) {
         try {
@@ -303,7 +307,7 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'error',
-      torrents: [],
+      downloadJobs: [],
       reason,
       arrStatus: 'error',
       arrReason: reason,
@@ -317,7 +321,7 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'unavailable',
-      torrents: [],
+      downloadJobs: [],
       reason: 'The item was not found in any mapped Sonarr or Radarr instance',
       arrStatus: 'unavailable',
       arrReason: 'The item was not found in any mapped Sonarr or Radarr instance',
@@ -331,7 +335,7 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'error',
-      torrents: [],
+      downloadJobs: [],
       reason: [...new Set(orphanAttemptErrors)].join('; '),
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
@@ -341,14 +345,14 @@ export async function resolveTorrentCleanup(
     };
   }
   if (
-    qbitTargets.length === 0 && orphanFiles.length === 0 &&
+    downloadTargets.length === 0 && orphanFiles.length === 0 &&
     completedOrphanAttemptCount === 0
   ) {
     return {
       ratingKey,
       status: 'unavailable',
-      torrents: [],
-      reason: 'No qBittorrent connection is configured',
+      downloadJobs: [],
+      reason: 'No download client connection is configured',
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
       sources: publicSources,
@@ -360,7 +364,7 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'error',
-      torrents: [],
+      downloadJobs: [],
       reason: [...new Set(historyErrors)].join('; '),
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
@@ -370,17 +374,17 @@ export async function resolveTorrentCleanup(
     };
   }
 
-  const torrents: ResolvedCleanupTorrent[] = [];
-  const ownedLiveTorrents: ResolvedCleanupTorrent[] = [];
-  const observedTorrentKeys = new Set<string>();
+  const downloadJobs: ResolvedDownloadJob[] = [];
+  const ownedLiveJobs: ResolvedDownloadJob[] = [];
+  const observedDownloadJobKeys = new Set<string>();
   let completedAttemptCount = 0;
-  let unownedLiveTorrentCount = 0;
-  let nonExclusiveLiveTorrentCount = 0;
+  let unownedLiveJobCount = 0;
+  let nonExclusiveLiveJobCount = 0;
   const qbitErrors: string[] = [];
-  for (const target of qbitTargets) {
+  for (const target of downloadTargets) {
     const instancePrefix = `${target.instanceKey}:`;
     const candidateHashes = new Set(associationHashes);
-    for (const attemptedKey of attemptedTorrentKeys) {
+    for (const attemptedKey of attemptedDownloadJobKeys) {
       if (attemptedKey.startsWith(instancePrefix)) {
         candidateHashes.add(attemptedKey.slice(instancePrefix.length));
       }
@@ -389,49 +393,52 @@ export async function resolveTorrentCleanup(
       const sourcePaths = associationPaths.get(hash) ?? new Set<string>();
       const sourcePath = sourcePaths.values().next().value ?? null;
       try {
-        const torrent = await target.client.torrent(hash);
-        if (!torrent) {
-          if (attemptedTorrentKeys.has(`${target.instanceKey}:${hash}`)) {
+        const job = await target.client.findJob(hash);
+        if (!job) {
+          if (attemptedDownloadJobKeys.has(`${target.instanceKey}:${hash}`)) {
             completedAttemptCount++;
           }
           continue;
         }
-        if (![...sourcePaths].some((path) => torrentOwnsPath(torrent, path))) {
+        if (![...sourcePaths].some((path) => downloadJobOwnsPath(job, path))) {
           // A hash can be re-added at a different save path, or appear in another
-          // qBittorrent instance. It is not the historical payload unless its full
+          // client instance. It is not the historical payload unless its full
           // manifest owns at least one exact Arr source path.
-          unownedLiveTorrentCount++;
+          unownedLiveJobCount++;
           continue;
         }
-        const resolvedTorrent = {
-          ...torrent,
+        const { id: _id, ...publicJob } = job;
+        const resolvedJob = {
+          ...publicJob,
+          provider: target.provider,
+          jobId: hash,
           instanceKey: target.instanceKey,
           instanceName: target.instanceName,
           sourcePath,
           authorizedSourcePaths: [...sourcePaths],
           target,
         };
-        ownedLiveTorrents.push(resolvedTorrent);
-        observedTorrentKeys.add(`${target.instanceKey}:${hash}`);
+        ownedLiveJobs.push(resolvedJob);
+        observedDownloadJobKeys.add(`${target.instanceKey}:${hash}`);
         if (sharedAssociationHashes.has(hash)) {
-          nonExclusiveLiveTorrentCount++;
-          inspectionWarnings.set(torrent.contentPath || torrent.savePath, {
-            path: torrent.contentPath || torrent.savePath,
+          nonExclusiveLiveJobCount++;
+          inspectionWarnings.set(job.contentPath || job.savePath, {
+            path: job.contentPath || job.savePath,
             reason:
-              'Arr history associates this torrent with another title; the shared job and payload are retained',
+              'Arr history associates this download with another title; the shared job and payload are retained',
           });
           continue;
         }
-        if (!torrentPayloadIsExclusivelyOwned(torrent, sourcePaths)) {
-          nonExclusiveLiveTorrentCount++;
-          inspectionWarnings.set(torrent.contentPath || torrent.savePath, {
-            path: torrent.contentPath || torrent.savePath,
+        if (!downloadPayloadIsExclusivelyOwned(job, sourcePaths)) {
+          nonExclusiveLiveJobCount++;
+          inspectionWarnings.set(job.contentPath || job.savePath, {
+            path: job.contentPath || job.savePath,
             reason:
-              'Live torrent contains files that are not individually attributed to this selected Arr title; the job and payload are retained',
+              'Live download job contains files that are not individually attributed to this selected Arr title; the job and payload are retained',
           });
           continue;
         }
-        torrents.push(resolvedTorrent);
+        downloadJobs.push(resolvedJob);
       } catch (error) {
         qbitErrors.push(
           `${target.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
@@ -444,20 +451,20 @@ export async function resolveTorrentCleanup(
     return {
       ratingKey,
       status: 'error',
-      torrents,
+      downloadJobs,
       reason: [...new Set(qbitErrors)].join('; '),
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
       sources: publicSources,
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
-      observedTorrentKeys,
+      observedDownloadJobKeys,
     };
   }
   // Never unlink a file underneath a live job that was retained because its complete
-  // payload could not be attributed. qBittorrent could otherwise restore the file, and
+  // payload could not be attributed. A download client could otherwise restore the file, and
   // the user would still have an active job with a partially removed payload.
-  const directOrphanFiles = selectDirectOrphanFiles(orphanFiles, ownedLiveTorrents);
+  const directOrphanFiles = selectDirectOrphanFiles(orphanFiles, ownedLiveJobs);
   const retainedPaths = [...new Map([
     ...inspectionWarnings.values(),
     ...await findRetainedSiblingPaths(
@@ -467,18 +474,18 @@ export async function resolveTorrentCleanup(
     ),
   ].map((entry) => [entry.path, entry])).values()];
   if (
-    torrents.length > 0 || completedAttemptCount > 0 || directOrphanFiles.length > 0 ||
+    downloadJobs.length > 0 || completedAttemptCount > 0 || directOrphanFiles.length > 0 ||
     completedOrphanAttemptCount > 0
   ) {
     return {
       ratingKey,
       status: 'resolved',
-      torrents,
-      ...(torrents.length === 0 && directOrphanFiles.length === 0
+      downloadJobs,
+      ...(downloadJobs.length === 0 && directOrphanFiles.length === 0
         ? {
           reason: completedOrphanAttemptCount > 0
             ? 'Downloaded-file cleanup was previously started and the verified path is now absent'
-            : 'Torrent deletion was previously started and the torrent is now absent',
+            : 'Download cleanup was previously started and the job is now absent',
         }
         : {}),
       arrStatus: 'resolved',
@@ -486,55 +493,53 @@ export async function resolveTorrentCleanup(
       sources: publicSources,
       orphanFiles: directOrphanFiles,
       retainedPaths,
-      observedTorrentKeys,
+      observedDownloadJobKeys,
     };
   }
   return {
     ratingKey,
     status: 'unavailable',
-    torrents: [],
+    downloadJobs: [],
     reason: associationHashes.size === 0
-      ? 'Arr has no retained torrent import history for this item'
-      : nonExclusiveLiveTorrentCount > 0
-      ? 'A matching live torrent contains files that are not all attributable to this Arr title'
-      : unownedLiveTorrentCount > 0
-      ? 'A matching torrent hash exists, but its manifest does not own the historical source path'
-      : 'The imported torrent is no longer present in configured qBittorrent instances',
+      ? 'Arr has no retained download import history for this item'
+      : nonExclusiveLiveJobCount > 0
+      ? 'A matching live download contains files that are not all attributable to this Arr title'
+      : unownedLiveJobCount > 0
+      ? 'A matching download ID exists, but its manifest does not own the historical source path'
+      : 'The imported download is no longer present in configured download clients',
     arrStatus: 'resolved',
     arrTargets: resolvedArrTargets,
     sources: publicSources,
     orphanFiles: [],
     retainedPaths,
-    observedTorrentKeys,
+    observedDownloadJobKeys,
   };
 }
 
 export function selectDirectOrphanFiles(
   files: readonly VerifiedOrphanFile[],
-  torrents: readonly ResolvedCleanupTorrent[],
+  jobs: readonly ResolvedDownloadJob[],
 ): VerifiedOrphanFile[] {
   return [
     ...new Map(
       files.filter((file) =>
-        !torrents.some((torrent) =>
-          torrent.hash === file.hash && torrentOwnsPath(torrent, file.remotePath)
-        )
+        !jobs.some((job) => job.jobId === file.hash && downloadJobOwnsPath(job, file.remotePath))
       ).map((file) => [file.path, file]),
     ).values(),
   ];
 }
 
-export function publicCleanupItem(item: ResolvedCleanupItem): TorrentCleanupPreviewItem {
+export function publicCleanupItem(item: ResolvedCleanupItem): DownloadCleanupPreviewItem {
   return {
     ratingKey: item.ratingKey,
     status: item.status,
     reason: item.reason,
-    torrents: item.torrents.map(({
+    downloadJobs: item.downloadJobs.map(({
       target: _target,
       manifestFiles: _manifestFiles,
       authorizedSourcePaths: _authorizedSourcePaths,
-      ...torrent
-    }) => torrent),
+      ...job
+    }) => job),
     arrStatus: item.arrStatus,
     arrReason: item.arrReason,
     arrTargets: item.arrTargets,
@@ -554,54 +559,4 @@ export function publicCleanupItem(item: ResolvedCleanupItem): TorrentCleanupPrev
     ) => file),
     retainedPaths: item.retainedPaths,
   };
-}
-
-function appendRemote(root: string, relative: string): string | null {
-  const normalizedRoot = normalizeRemoteAbsolute(root);
-  if (!normalizedRoot) return null;
-  const absoluteRelative = normalizeRemoteAbsolute(relative);
-  if (absoluteRelative) return null;
-  const parts = relative.split(/[\\/]+/).filter((part) => part && part !== '.');
-  if (parts.length === 0 || parts.includes('..')) return null;
-  return `${normalizedRoot.path}${normalizedRoot.separator}${parts.join(normalizedRoot.separator)}`;
-}
-
-export function torrentOwnsPath(
-  torrent: Pick<ResolvedCleanupTorrent, 'contentPath' | 'savePath' | 'manifestFiles'>,
-  sourcePath: string,
-): boolean {
-  const source = normalizeRemoteAbsolute(sourcePath);
-  if (!source) return false;
-  const candidates = new Set<string>();
-  const content = normalizeRemoteAbsolute(torrent.contentPath);
-  if (content) candidates.add(content.comparison);
-  for (const file of torrent.manifestFiles) {
-    for (const root of [torrent.savePath, torrent.contentPath]) {
-      const candidate = appendRemote(root, file.path);
-      const normalized = candidate ? normalizeRemoteAbsolute(candidate) : null;
-      if (normalized) candidates.add(normalized.comparison);
-    }
-  }
-  return candidates.has(source.comparison);
-}
-
-export function torrentPayloadIsExclusivelyOwned(
-  torrent: Pick<ResolvedCleanupTorrent, 'contentPath' | 'savePath' | 'manifestFiles'>,
-  sourcePaths: ReadonlySet<string>,
-): boolean {
-  if (torrent.manifestFiles.length === 0 || sourcePaths.size === 0) return false;
-  const owned = new Set(
-    [...sourcePaths].flatMap((path) => {
-      const normalized = normalizeRemoteAbsolute(path);
-      return normalized ? [normalized.comparison] : [];
-    }),
-  );
-  return torrent.manifestFiles.every((file) => {
-    for (const root of [torrent.savePath, torrent.contentPath]) {
-      const candidate = appendRemote(root, file.path);
-      const normalized = candidate ? normalizeRemoteAbsolute(candidate) : null;
-      if (normalized && owned.has(normalized.comparison)) return true;
-    }
-    return false;
-  });
 }

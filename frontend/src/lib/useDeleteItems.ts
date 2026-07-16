@@ -14,14 +14,14 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
 
   return useMutation({
     mutationFn: (
-      { libraryKey, ratingKeys, mode, deleteTorrents }: {
+      { libraryKey, ratingKeys, mode, cleanupDownloads }: {
         libraryKey: string;
         ratingKeys: string[];
         mode?: "coordinated" | "plex-only";
-        deleteTorrents?: boolean;
+        cleanupDownloads?: boolean;
       },
     ) =>
-      api.libraries.deleteItems(libraryKey, ratingKeys, mode, deleteTorrents),
+      api.libraries.deleteItems(libraryKey, ratingKeys, mode, cleanupDownloads),
     onSuccess: () => {
       for (const queryKey of invalidateQueryKeys) {
         void qc.invalidateQueries({ queryKey });

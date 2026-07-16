@@ -5,30 +5,28 @@ import {
   normalizeQbittorrentUrl,
   QbittorrentClient,
 } from '../../integrations/qbittorrent/client.ts';
-
-export interface QbittorrentTarget {
-  instanceKey: string;
-  instanceId: number | null;
-  instanceName: string;
-  client: QbittorrentClient;
-}
+import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
+import type { DownloadClientTarget } from '../mediaDeletion/downloadClient.ts';
 
 export function envQbittorrentConfigured(): boolean {
   return Boolean(Deno.env.get('QBITTORRENT_URL')?.trim());
 }
 
-export async function getQbittorrentTargets(serverId: number): Promise<QbittorrentTarget[]> {
+export async function getQbittorrentTargets(serverId: number): Promise<DownloadClientTarget[]> {
   const envUrl = Deno.env.get('QBITTORRENT_URL')?.trim();
   if (envUrl) {
     const normalized = normalizeQbittorrentUrl(envUrl);
     return [{
+      provider: 'qbittorrent',
       instanceKey: `env:${normalized}`,
       instanceId: null,
       instanceName: 'qBittorrent (environment)',
-      client: new QbittorrentClient(
-        normalized,
-        Deno.env.get('QBITTORRENT_USERNAME') ?? '',
-        Deno.env.get('QBITTORRENT_PASSWORD') ?? '',
+      client: new QbittorrentDownloadClient(
+        new QbittorrentClient(
+          normalized,
+          Deno.env.get('QBITTORRENT_USERNAME') ?? '',
+          Deno.env.get('QBITTORRENT_PASSWORD') ?? '',
+        ),
       ),
     }];
   }
@@ -37,9 +35,12 @@ export async function getQbittorrentTargets(serverId: number): Promise<Qbittorre
     eq(qbittorrentInstances.serverId, serverId),
   );
   return rows.map((row) => ({
+    provider: 'qbittorrent',
     instanceKey: `db:${row.id}`,
     instanceId: row.id,
     instanceName: row.name,
-    client: new QbittorrentClient(row.url, row.username, row.password),
+    client: new QbittorrentDownloadClient(
+      new QbittorrentClient(row.url, row.username, row.password),
+    ),
   }));
 }

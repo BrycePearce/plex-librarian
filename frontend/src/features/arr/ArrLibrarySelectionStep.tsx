@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { api } from "../../lib/api";
-
+import type { api } from "../../lib/api";
 
 export function ArrLibrarySelectionStep({
   type,
@@ -39,8 +38,9 @@ export function ArrLibrarySelectionStep({
       <div>
         <h4 className="font-semibold">Select Plex libraries</h4>
         <p className="mt-1 text-sm text-base-content/60">
-          Choose the libraries managed by {appName}. Compatible libraries are
-          selected automatically for new connections.
+          Choose the libraries managed by{" "}
+          {appName}. Compatible libraries are selected automatically for new
+          connections.
         </p>
       </div>
 
@@ -62,12 +62,16 @@ export function ArrLibrarySelectionStep({
           <strong className="block text-sm">
             {libraryData?.total === 0
               ? "Sync Plex before selecting libraries"
-              : `No compatible ${expectedType === "movie" ? "movie" : "TV"} libraries found`}
+              : `No compatible ${
+                expectedType === "movie" ? "movie" : "TV"
+              } libraries found`}
           </strong>
           <p className="mt-1 text-xs text-base-content/55">
             {libraryData?.total === 0
               ? "Run a Plex sync to discover your libraries, then return to finish this connection."
-              : `${appName} can only be mapped to ${expectedType === "movie" ? "movie" : "TV show"} libraries.`}
+              : `${appName} can only be mapped to ${
+                expectedType === "movie" ? "movie" : "TV show"
+              } libraries.`}
           </p>
           {libraryData?.total === 0 && (
             <Link to="/dashboard" className="btn btn-sm mt-3">

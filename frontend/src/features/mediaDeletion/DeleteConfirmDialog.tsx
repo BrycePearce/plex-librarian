@@ -18,8 +18,8 @@ import type { ServiceIconName } from "../../components/ServiceIcons";
 import type {
   ArrCleanupFile,
   ArrCleanupTarget,
+  DownloadCleanupJob,
   StaleItem,
-  TorrentCleanupTorrent,
 } from "../../lib/api";
 import { api } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
@@ -41,19 +41,19 @@ export function DeleteConfirmDialog({
   error: unknown;
   onConfirm: (
     mode: "coordinated" | "plex-only",
-    deleteTorrents: boolean,
+    cleanupDownloads: boolean,
   ) => void;
   onCancel: () => void;
 }) {
   const [plexOnly, setPlexOnly] = useState(false);
-  const [deleteTorrents, setDeleteTorrents] = useState(false);
+  const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
     [items],
   );
   const preview = useQuery({
-    queryKey: ["torrent-cleanup-preview", libraryKey, ratingKeys],
-    queryFn: () => api.libraries.torrentCleanupPreview(libraryKey, ratingKeys),
+    queryKey: ["download-cleanup-preview", libraryKey, ratingKeys],
+    queryFn: () => api.libraries.downloadCleanupPreview(libraryKey, ratingKeys),
     enabled: ratingKeys.length > 0,
     staleTime: 15_000,
     retry: false,
@@ -63,20 +63,20 @@ export function DeleteConfirmDialog({
       new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
   );
-  const qbitEligibleItems =
+  const cleanupEligibleItems =
     preview.data?.items.filter((item) => item.status === "resolved") ?? [];
-  const torrents = [...new Map(
-    qbitEligibleItems.flatMap((item) => item.torrents).map((torrent) => [
-      `${torrent.instanceKey}:${torrent.hash}`,
-      torrent,
+  const downloadJobs = [...new Map(
+    cleanupEligibleItems.flatMap((item) => item.downloadJobs).map((job) => [
+      `${job.instanceKey}:${job.jobId}`,
+      job,
     ]),
   ).values()];
   const orphanFiles = [...new Map(
-    qbitEligibleItems.flatMap((item) => item.orphanFiles).map((
+    cleanupEligibleItems.flatMap((item) => item.orphanFiles).map((
       file,
     ) => [file.path, file]),
   ).values()];
-  const qbitEligibleCount = qbitEligibleItems.length;
+  const cleanupEligibleCount = cleanupEligibleItems.length;
   const coordinatedReady = Boolean(
     preview.data?.coordinatedConfigured &&
       preview.data.items.every((item) => item.arrStatus === "resolved"),
@@ -104,14 +104,14 @@ export function DeleteConfirmDialog({
     ) => [path.path, path]),
   ).values()];
   useEffect(() => {
-    setDeleteTorrents(false);
+    setCleanupDownloads(false);
   }, [libraryKey, ratingKeys.join("|")]);
   useEffect(() => {
-    if (qbitEligibleCount === 0) setDeleteTorrents(false);
-  }, [qbitEligibleCount]);
+    if (cleanupEligibleCount === 0) setCleanupDownloads(false);
+  }, [cleanupEligibleCount]);
   const cancel = () => {
     setPlexOnly(false);
-    setDeleteTorrents(false);
+    setCleanupDownloads(false);
     onCancel();
   };
   const totalSize = items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
@@ -166,17 +166,17 @@ export function DeleteConfirmDialog({
                     arrTargets={previewItem?.arrStatus === "resolved"
                       ? previewItem.arrTargets
                       : []}
-                    qbitJobCount={deleteTorrents &&
+                    downloadJobCount={cleanupDownloads &&
                         previewItem?.status === "resolved"
-                      ? previewItem.torrents.length
+                      ? previewItem.downloadJobs.length
                       : 0}
-                    hardlinkFileCount={deleteTorrents &&
+                    hardlinkFileCount={cleanupDownloads &&
                         previewItem?.status === "resolved"
                       ? previewItem.orphanFiles.length
                       : 0}
-                    qbitResuming={Boolean(
-                      deleteTorrents && previewItem?.status === "resolved" &&
-                        previewItem.torrents.length === 0 &&
+                    downloadCleanupResuming={Boolean(
+                      cleanupDownloads && previewItem?.status === "resolved" &&
+                        previewItem.downloadJobs.length === 0 &&
                         previewItem.orphanFiles.length === 0,
                     )}
                   />
@@ -217,20 +217,21 @@ export function DeleteConfirmDialog({
             disabled={pending}
             onChange={(checked) => {
               setPlexOnly(checked);
-              if (checked) setDeleteTorrents(false);
+              if (checked) setCleanupDownloads(false);
             }}
           />
           {!plexOnly && (
             <CompactOption
-              label={`Remove downloaded files (${qbitEligibleCount})`}
-              info={qbitEligibleCount > 0
-                ? `Applies only to the ${qbitEligibleCount} of ${items.length} selected items with a verified live torrent or hardlinked source file. Live jobs are removed through qBittorrent; orphaned hardlinks are reverified and unlinked directly.`
-                : preview.data?.configured
+              label={`Remove downloaded files (${cleanupEligibleCount})`}
+              info={cleanupEligibleCount > 0
+                ? `Applies only to the ${cleanupEligibleCount} of ${items.length} selected items with a verified live download job or hardlinked source file. Live jobs are removed through their download client; orphaned hardlinks are reverified and unlinked directly.`
+                : preview.data?.downloadClientsConfigured
                 ? "No selected items have a verified live qBittorrent job or resumable cleanup."
                 : "Connect qBittorrent or configure orphan cleanup path mappings under Media connections."}
-              checked={deleteTorrents}
-              disabled={pending || preview.isLoading || qbitEligibleCount === 0}
-              onChange={setDeleteTorrents}
+              checked={cleanupDownloads}
+              disabled={pending || preview.isLoading ||
+                cleanupEligibleCount === 0}
+              onChange={setCleanupDownloads}
             />
           )}
         </div>
@@ -254,9 +255,9 @@ export function DeleteConfirmDialog({
           items={items}
           plexOnly={plexOnly}
           arrEntries={arrEntries}
-          torrents={torrents}
+          downloadJobs={downloadJobs}
           orphanFiles={orphanFiles}
-          deleteTorrents={deleteTorrents}
+          cleanupDownloads={cleanupDownloads}
           unmanagedSources={unmanagedSources}
           retainedPaths={retainedPaths}
           loading={preview.isLoading}
@@ -276,7 +277,7 @@ export function DeleteConfirmDialog({
             onClick={() =>
               onConfirm(
                 plexOnly ? "plex-only" : "coordinated",
-                !plexOnly && deleteTorrents,
+                !plexOnly && cleanupDownloads,
               )}
             disabled={pending || (!plexOnly && !coordinatedReady)}
           >
@@ -378,33 +379,33 @@ function ServiceMark({
 function PlannedServiceIcons({
   plexOnly,
   arrTargets,
-  qbitJobCount,
+  downloadJobCount,
   hardlinkFileCount,
-  qbitResuming,
+  downloadCleanupResuming,
 }: {
   plexOnly: boolean;
   arrTargets: ArrCleanupTarget[];
-  qbitJobCount: number;
+  downloadJobCount: number;
   hardlinkFileCount: number;
-  qbitResuming: boolean;
+  downloadCleanupResuming: boolean;
 }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {!plexOnly && (qbitJobCount > 0 || qbitResuming) && (
+      {!plexOnly && (downloadJobCount > 0 || downloadCleanupResuming) && (
         <ServiceMark
           service="qbittorrent"
-          ariaLabel={qbitJobCount > 0
-            ? `Remove ${qbitJobCount} verified qBittorrent job${
-              qbitJobCount === 1 ? "" : "s"
+          ariaLabel={downloadJobCount > 0
+            ? `Remove ${downloadJobCount} verified qBittorrent job${
+              downloadJobCount === 1 ? "" : "s"
             }`
             : "Resume previously started qBittorrent cleanup"}
           popover={
             <>
               <div className="font-semibold">qBittorrent</div>
               <div className="mt-1 text-base-content/55">
-                {qbitJobCount > 0
-                  ? `Removes ${qbitJobCount} verified job${
-                    qbitJobCount === 1 ? "" : "s"
+                {downloadJobCount > 0
+                  ? `Removes ${downloadJobCount} verified job${
+                    downloadJobCount === 1 ? "" : "s"
                   } and asks qBittorrent to delete the downloaded files.`
                   : "Resumes a previously started qBittorrent cleanup before Arr deletion."}
               </div>
@@ -691,31 +692,31 @@ function managedFiles(target: ArrCleanupTarget): TreeFile[] {
   return [...files.values()];
 }
 
-function torrentInfo(torrent: TorrentCleanupTorrent): string {
+function downloadJobInfo(job: DownloadCleanupJob): string {
   return [
-    `${torrent.fileCount} file${torrent.fileCount === 1 ? "" : "s"}`,
-    formatKilobytes(torrent.size / 1000),
-    `seeded ${formatSeedTime(torrent.seedingTime)}`,
-    `ratio ${torrent.ratio.toFixed(2)}`,
-    torrent.trackerHost ?? "tracker unavailable",
-    torrent.completedAt ? `completed ${formatDate(torrent.completedAt)}` : null,
+    `${job.fileCount} file${job.fileCount === 1 ? "" : "s"}`,
+    formatKilobytes(job.size / 1000),
+    `seeded ${formatSeedTime(job.seedingTime)}`,
+    job.ratio === null ? "ratio unavailable" : `ratio ${job.ratio.toFixed(2)}`,
+    job.trackerHost ?? "tracker unavailable",
+    job.completedAt ? `completed ${formatDate(job.completedAt)}` : null,
   ].filter(Boolean).join(" · ");
 }
 
-function torrentRoot(torrent: TorrentCleanupTorrent): string {
-  return torrent.fileCount === 1
-    ? torrent.savePath || torrent.contentPath
-    : torrent.contentPath ||
-      torrent.savePath;
+function downloadJobRoot(job: DownloadCleanupJob): string {
+  return job.fileCount === 1
+    ? job.savePath || job.contentPath
+    : job.contentPath ||
+      job.savePath;
 }
 
-function torrentFiles(torrent: TorrentCleanupTorrent): TreeFile[] {
-  const rootName = torrent.contentPath.split(/[\\/]+/).filter(Boolean).at(-1)
+function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
+  const rootName = job.contentPath.split(/[\\/]+/).filter(Boolean).at(-1)
     ?.toLocaleLowerCase();
-  return torrent.files.map((file) => {
+  return job.files.map((file) => {
     const segments = file.path.split(/[\\/]+/).filter(Boolean);
     const path =
-      torrent.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
+      job.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
         ? segments.slice(1).join("/")
         : file.path;
     return { path: path || file.path, size: file.size };
@@ -770,9 +771,9 @@ function DeletionTree({
   items,
   plexOnly,
   arrEntries,
-  torrents,
+  downloadJobs,
   orphanFiles,
-  deleteTorrents,
+  cleanupDownloads,
   unmanagedSources,
   retainedPaths,
   loading,
@@ -780,14 +781,14 @@ function DeletionTree({
   items: StaleItem[];
   plexOnly: boolean;
   arrEntries: Array<{ ratingKey: string; target: ArrCleanupTarget }>;
-  torrents: TorrentCleanupTorrent[];
+  downloadJobs: DownloadCleanupJob[];
   orphanFiles: ArrCleanupFile[];
-  deleteTorrents: boolean;
+  cleanupDownloads: boolean;
   unmanagedSources: Array<{
     ratingKey: string;
     source: {
       instanceName: string;
-      hash: string;
+      downloadId: string;
       path: string;
       reason?: string;
     };
@@ -797,7 +798,7 @@ function DeletionTree({
 }) {
   const hasRemaining = unmanagedSources.length > 0 || retainedPaths.length > 0;
   const removalPathCount = plexOnly ? items.length : arrEntries.length +
-    (deleteTorrents ? torrents.length + orphanFiles.length : 0);
+    (cleanupDownloads ? downloadJobs.length + orphanFiles.length : 0);
   return (
     <div className="mt-3 space-y-2">
       <CollapsiblePathSection
@@ -830,29 +831,30 @@ function DeletionTree({
             />
           );
         })}
-        {!plexOnly && deleteTorrents &&
-          torrents.map((torrent) => (
+        {!plexOnly && cleanupDownloads &&
+          downloadJobs.map((job) => (
             <PathTreeRoot
-              key={`${torrent.instanceKey}:${torrent.hash}`}
-              path={torrentRoot(torrent) || torrent.name}
-              source={torrent.instanceName}
-              files={torrentFiles(torrent)}
-              totalFiles={torrent.fileCount}
-              info={torrentInfo(torrent)}
+              key={`${job.instanceKey}:${job.jobId}`}
+              path={downloadJobRoot(job) || job.name}
+              source={job.instanceName}
+              files={downloadJobFiles(job)}
+              totalFiles={job.fileCount}
+              info={downloadJobInfo(job)}
             />
           ))}
-        {!plexOnly && deleteTorrents && orphanFiles.map((file) => (
-          <PathTreeRoot
-            key={`hardlink:${file.path}`}
-            path={file.path}
-            source="Verified hardlink"
-            files={[{
-              path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
-              size: file.size,
-            }]}
-            note="Reverified immediately before removal"
-          />
-        ))}
+        {!plexOnly && cleanupDownloads &&
+          orphanFiles.map((file) => (
+            <PathTreeRoot
+              key={`hardlink:${file.path}`}
+              path={file.path}
+              source="Verified hardlink"
+              files={[{
+                path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
+                size: file.size,
+              }]}
+              note="Reverified immediately before removal"
+            />
+          ))}
         {loading && (
           <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
             <span className="loading loading-spinner loading-xs" />{" "}
@@ -875,7 +877,7 @@ function DeletionTree({
         >
           {unmanagedSources.map(({ ratingKey, source }) => (
             <PathTreeRoot
-              key={`${ratingKey}:${source.instanceName}:${source.hash}:${source.path}`}
+              key={`${ratingKey}:${source.instanceName}:${source.downloadId}:${source.path}`}
               path={source.path}
               source="Arr history"
               note={source.reason ?? "Ownership could not be verified"}
