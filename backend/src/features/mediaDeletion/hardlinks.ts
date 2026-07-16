@@ -318,32 +318,36 @@ export async function verifyOrphanHardlink(
       'Library and download path mappings overlap',
     );
   }
-  if (!association.importedPath) {
-    return unavailable(instanceName, association, 'Arr history has no imported file path');
-  }
-  const importedRemote = normalizeRemoteAbsolute(association.importedPath);
-  const isCurrentlyManaged = importedRemote !== null && currentManagedPaths.some((path) => {
-    const current = normalizeRemoteAbsolute(path);
-    return current?.separator === importedRemote.separator &&
-      current.comparison === importedRemote.comparison;
-  });
-  if (!isCurrentlyManaged) {
+  if (currentManagedPaths.length === 0) {
     return unavailable(
       instanceName,
       association,
-      'The historical imported file is not currently managed by Arr',
+      'Arr reports no current managed files that can verify this source',
     );
   }
   const source = mapArrPath(association.sourcePath, 'download', mappings);
   if (!source) {
     return unavailable(instanceName, association, 'No download path mapping covers this path');
   }
-  const imported = mapArrPath(association.importedPath, 'library', mappings);
-  if (!imported) {
+  const historicalImported = association.importedPath
+    ? normalizeRemoteAbsolute(association.importedPath)
+    : null;
+  const managedCandidates = currentManagedPaths.flatMap((remotePath) => {
+    const normalized = normalizeRemoteAbsolute(remotePath);
+    const mapped = mapArrPath(remotePath, 'library', mappings);
+    return normalized && mapped ? [{ remotePath, normalized, mapped }] : [];
+  }).sort((left, right) => {
+    const leftHistorical = historicalImported?.separator === left.normalized.separator &&
+      historicalImported.comparison === left.normalized.comparison;
+    const rightHistorical = historicalImported?.separator === right.normalized.separator &&
+      historicalImported.comparison === right.normalized.comparison;
+    return Number(rightHistorical) - Number(leftHistorical);
+  });
+  if (managedCandidates.length === 0) {
     return unavailable(
       instanceName,
       association,
-      'No library path mapping covers the imported file',
+      'No library path mapping covers a current Arr-managed file',
       source.path,
     );
   }
@@ -355,43 +359,35 @@ export async function verifyOrphanHardlink(
       source.path,
     );
   }
-  if (source.path === imported.path) {
+  try {
+    const boundary = await payloadBoundary(association, source);
+    for (const candidate of managedCandidates) {
+      const file = await verifiedFile(
+        association.hash,
+        association.sourcePath,
+        source,
+        candidate.mapped,
+        boundary,
+      ).catch(() => null);
+      if (!file) continue;
+      return {
+        source: {
+          instanceName,
+          downloadId: association.hash,
+          path: association.sourcePath,
+          importedPath: candidate.remotePath,
+          localPath: source.path,
+          verification: 'hardlink',
+        },
+        file,
+      };
+    }
     return unavailable(
       instanceName,
       association,
-      'Source and imported paths resolve to the same file name',
+      'Source is not the same hardlinked file as any current Arr-managed file',
       source.path,
     );
-  }
-
-  try {
-    const boundary = await payloadBoundary(association, source);
-    const file = await verifiedFile(
-      association.hash,
-      association.sourcePath,
-      source,
-      imported,
-      boundary,
-    );
-    if (!file) {
-      return unavailable(
-        instanceName,
-        association,
-        'Source is not the same hardlinked file',
-        source.path,
-      );
-    }
-    return {
-      source: {
-        instanceName,
-        downloadId: association.hash,
-        path: association.sourcePath,
-        importedPath: association.importedPath,
-        localPath: source.path,
-        verification: 'hardlink',
-      },
-      file,
-    };
   } catch (error) {
     const reason = error instanceof Deno.errors.NotFound
       ? 'Source or imported file is not mounted or no longer exists'

@@ -73,7 +73,7 @@ Deno.test({
         { kind: 'library', arrPath: '/arr/media', localPath: library },
       ], []);
       assertEquals(stale?.file, null);
-      assertStringIncludes(stale?.source.reason ?? '', 'not currently managed');
+      assertStringIncludes(stale?.source.reason ?? '', 'no current managed files');
 
       const result = await verifyOrphanHardlink('Radarr', association, [
         { kind: 'download', arrPath: '/arr/downloads', localPath: downloads },
@@ -88,6 +88,41 @@ Deno.test({
       assertEquals(await Deno.readTextFile(imported), 'media');
       await assertRejects(() => Deno.lstat(`${downloads}/release`), Deno.errors.NotFound);
       assertExists(await Deno.lstat(downloads));
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'orphan cleanup accepts a current Radarr hardlink after the imported file was renamed',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const downloads = `${root}/downloads`;
+      const library = `${root}/library`;
+      await Deno.mkdir(`${downloads}/release`, { recursive: true });
+      await Deno.mkdir(`${library}/Movie`, { recursive: true });
+      const source = `${downloads}/release/movie.mkv`;
+      const currentImported = `${library}/Movie/Movie (2024).mkv`;
+      await Deno.writeTextFile(source, 'media');
+      await Deno.link(source, currentImported);
+
+      const result = await verifyOrphanHardlink('Radarr', association, [
+        { kind: 'download', arrPath: '/arr/downloads', localPath: downloads },
+        { kind: 'library', arrPath: '/arr/media', localPath: library },
+      ], ['/arr/media/Movie/Movie (2024).mkv']);
+
+      assertExists(result?.file);
+      assertEquals(result.source.verification, 'hardlink');
+      assertEquals(result.source.importedPath, '/arr/media/Movie/Movie (2024).mkv');
+      assertEquals(result.file.importedPath, currentImported);
+      assertEquals(await findRetainedSiblingPaths([result.file]), []);
+
+      await deleteVerifiedOrphanFile(result.file);
+      await assertRejects(() => Deno.lstat(source), Deno.errors.NotFound);
+      assertEquals(await Deno.readTextFile(currentImported), 'media');
     } finally {
       await Deno.remove(root, { recursive: true });
     }
@@ -351,7 +386,10 @@ Deno.test({
         { kind: 'library', arrPath: '/arr/media', localPath: library },
       ], [association.importedPath!]);
       assertEquals(result?.file, null);
-      assertEquals(result?.source.reason, 'Source is not the same hardlinked file');
+      assertEquals(
+        result?.source.reason,
+        'Source is not the same hardlinked file as any current Arr-managed file',
+      );
     } finally {
       await Deno.remove(root, { recursive: true });
     }

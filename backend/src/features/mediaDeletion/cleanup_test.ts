@@ -298,7 +298,7 @@ Deno.test('torrent cleanup resolves Arr import history to live redacted qBittorr
     path: '/downloads/release/movie.mkv',
     importedPath: null,
     verification: 'unverified',
-    reason: 'Arr history has no imported file path',
+    reason: 'No download path mapping covers this path',
   }]);
 });
 
