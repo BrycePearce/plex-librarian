@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Folder, X } from "lucide-react";
+import { AlertTriangle, Check, Folder, X } from "lucide-react";
 import { HoverPopover } from "../../components/HoverPopover";
 import { ServiceIcon } from "../../components/ServiceIcons";
 import type { ServiceIconName } from "../../components/ServiceIcons";
-import type { ArrCleanupTarget } from "../../lib/api";
 import { InfoTip } from "./InfoTip";
 
 function DestinationOption({
@@ -25,13 +24,24 @@ function DestinationOption({
 }) {
   return (
     <label
-      className={`inline-flex items-center gap-1.5 text-sm transition-colors ${
-        warning ? "text-warning" : "text-base-content/75"
-      } ${disabled ? warning ? "opacity-80" : "opacity-45" : "cursor-pointer"}`}
+      title={info}
+      className={`relative inline-flex min-h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-[color,background-color,border-color,box-shadow] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary ${
+        checked
+          ? warning
+            ? "border-warning/40 bg-warning/10 text-warning"
+            : "border-primary/35 bg-primary/10 text-base-content"
+          : warning
+          ? "border-warning/30 bg-base-200/55 text-warning"
+          : "border-base-300 bg-base-200/55 text-base-content/60"
+      } ${
+        disabled
+          ? warning ? "opacity-75" : "opacity-40"
+          : "cursor-pointer hover:border-base-content/25 hover:bg-base-200"
+      }`}
     >
       <input
         type="checkbox"
-        className="checkbox checkbox-sm mr-0.5"
+        className="sr-only"
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
@@ -41,7 +51,12 @@ function DestinationOption({
         : <Folder className="size-4 shrink-0" />}
       <span className="whitespace-nowrap font-medium">{label}</span>
       {warning && <AlertTriangle className="size-3.5 shrink-0" />}
-      <InfoTip text={info} />
+      {checked && !warning && (
+        <Check
+          className="size-3.5 shrink-0 text-primary"
+          strokeWidth={2.5}
+        />
+      )}
     </label>
   );
 }
@@ -79,8 +94,19 @@ export function DestinationOptions({
   cleanupDisabled: boolean;
   onCleanupChange: (checked: boolean) => void;
 }) {
+  const destinationHelp = [
+    `${arrLabel}: ${arrInfo}`,
+    cleanupVisible
+      ? `${cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files"}: ${cleanupInfo}`
+      : null,
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-2">
+    <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+      <span className="mr-0.5 inline-flex items-center gap-1.5 text-xs text-base-content/45">
+        Also clean up in
+        <InfoTip text={destinationHelp} />
+      </span>
       {arrVisible && (
         <DestinationOption
           service={arrService ?? "radarr"}
@@ -109,14 +135,12 @@ export function DestinationOptions({
 
 function ServiceMark({
   service,
-  label,
   ariaLabel,
   popover,
   className,
   unavailable = false,
 }: {
-  service?: ServiceIconName;
-  label?: string;
+  service: ServiceIconName;
   ariaLabel: string;
   popover: ReactNode;
   className: string;
@@ -130,9 +154,7 @@ function ServiceMark({
         role="img"
         aria-label={ariaLabel}
       >
-        {service
-          ? <ServiceIcon service={service} className="size-3.5" />
-          : <span className="text-[9px] font-bold">{label}</span>}
+        <ServiceIcon service={service} className="size-3.5" />
         {unavailable && (
           <span className="absolute -right-1 -top-1 flex size-3 items-center justify-center rounded-full bg-error text-error-content ring-1 ring-base-200">
             <X className="size-2.5" strokeWidth={3} />
@@ -143,12 +165,11 @@ function ServiceMark({
   );
 }
 
-export function PlannedServiceIcons({
+export function PlannedServiceExceptions({
   deleteFromArr,
   arrService,
   arrStatus,
   arrReason,
-  arrTargets,
   downloadJobCount,
   hardlinkFileCount,
   downloadCleanupResuming,
@@ -160,7 +181,6 @@ export function PlannedServiceIcons({
   arrService: "radarr" | "sonarr";
   arrStatus?: "resolved" | "unavailable" | "error";
   arrReason?: string;
-  arrTargets: ArrCleanupTarget[];
   downloadJobCount: number;
   hardlinkFileCount: number;
   downloadCleanupResuming: boolean;
@@ -172,21 +192,12 @@ export function PlannedServiceIcons({
     arrStatus !== "resolved";
   const cleanupAvailable = downloadJobCount > 0 || hardlinkFileCount > 0 ||
     downloadCleanupResuming;
+  const cleanupUnavailable = cleanupDownloads && !cleanupAvailable;
+
+  if (!arrUnavailable && !cleanupUnavailable) return null;
+
   return (
     <span className="flex shrink-0 items-center gap-1">
-      <ServiceMark
-        service="plex"
-        ariaLabel="Delete the files indexed by Plex"
-        popover={
-          <>
-            <div className="font-semibold">Plex</div>
-            <div className="mt-1 text-base-content/55">
-              Deletes the media files at the locations Plex has indexed for this item.
-            </div>
-          </>
-        }
-        className="bg-warning/20 text-warning"
-      />
       {deleteFromArr && arrUnavailable && (
         <ServiceMark
           service={arrService}
@@ -207,30 +218,7 @@ export function PlannedServiceIcons({
           unavailable
         />
       )}
-      {deleteFromArr && arrTargets.map((target, index) => (
-        <ServiceMark
-          key={`${target.instanceName}:${target.type}:${index}`}
-          service={target.type}
-          ariaLabel={`Delete through ${target.instanceName}`}
-          popover={
-            <>
-              <div className="font-semibold">
-                {target.type === "radarr" ? "Radarr" : "Sonarr"}
-              </div>
-              {target.instanceName.toLocaleLowerCase() !== target.type && (
-                <div className="mt-0.5 text-base-content/70">{target.instanceName}</div>
-              )}
-              <div className="mt-1 text-base-content/55">
-                Deletes the managed title and its files from this instance.
-              </div>
-            </>
-          }
-          className={target.type === "radarr"
-            ? "bg-primary/20 text-primary"
-            : "bg-info/20 text-info"}
-        />
-      ))}
-      {cleanupDownloads && !cleanupAvailable && (
+      {cleanupUnavailable && (
         <ServiceMark
           service="qbittorrent"
           ariaLabel={`Downloaded-file cleanup unavailable: ${
@@ -249,48 +237,6 @@ export function PlannedServiceIcons({
           }
           className="bg-base-300/70 text-base-content/35"
           unavailable
-        />
-      )}
-      {cleanupDownloads && (downloadJobCount > 0 || downloadCleanupResuming) && (
-        <ServiceMark
-          service="qbittorrent"
-          ariaLabel={downloadJobCount > 0
-            ? `Remove ${downloadJobCount} verified qBittorrent job${
-              downloadJobCount === 1 ? "" : "s"
-            }`
-            : "Resume previously started qBittorrent cleanup"}
-          popover={
-            <>
-              <div className="font-semibold">qBittorrent</div>
-              <div className="mt-1 text-base-content/55">
-                {downloadJobCount > 0
-                  ? `Removes ${downloadJobCount} verified job${
-                    downloadJobCount === 1 ? "" : "s"
-                  } and asks qBittorrent to delete the downloaded files.`
-                  : "Resumes a previously started qBittorrent cleanup before Arr deletion."}
-              </div>
-            </>
-          }
-          className="bg-secondary/20 text-secondary"
-        />
-      )}
-      {cleanupDownloads && hardlinkFileCount > 0 && (
-        <ServiceMark
-          label="HL"
-          ariaLabel={`Remove ${hardlinkFileCount} verified orphaned hardlink${
-            hardlinkFileCount === 1 ? "" : "s"
-          }`}
-          popover={
-            <>
-              <div className="font-semibold">Verified hardlinks</div>
-              <div className="mt-1 text-base-content/55">
-                Unlinks {hardlinkFileCount} orphaned download file{
-                  hardlinkFileCount === 1 ? "" : "s"
-                } after rechecking filesystem identity.
-              </div>
-            </>
-          }
-          className="bg-success/20 text-success"
         />
       )}
     </span>

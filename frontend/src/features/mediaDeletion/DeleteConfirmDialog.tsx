@@ -12,7 +12,7 @@ import { api } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import {
   DestinationOptions,
-  PlannedServiceIcons,
+  PlannedServiceExceptions,
   PreviewStatus,
 } from "./DeletionPlanSummary";
 import { DeletionTree } from "./DeletionTree";
@@ -177,14 +177,11 @@ export function DeleteConfirmDialog({
                       />
                     )}
                   </span>
-                  <PlannedServiceIcons
+                  <PlannedServiceExceptions
                     deleteFromArr={deleteFromArr}
                     arrService={arrService}
                     arrStatus={previewItem?.arrStatus}
                     arrReason={previewItem?.arrReason}
-                    arrTargets={previewItem?.arrStatus === "resolved"
-                      ? previewItem.arrTargets
-                      : []}
                     downloadJobCount={cleanupDownloads &&
                         previewItem?.status === "resolved"
                       ? previewItem.downloadJobs.length
