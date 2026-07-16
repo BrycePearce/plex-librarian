@@ -455,6 +455,10 @@ export interface ArrCleanupRetainedPath {
 
 export interface DownloadCleanupPreviewItem {
   ratingKey: string;
+  plexPaths: string[];
+  plexPathStatus: "resolved" | "unavailable" | "error";
+  plexPathReason?: string;
+  plexPathsTruncated: boolean;
   status: "resolved" | "unavailable" | "error";
   downloadJobs: DownloadCleanupJob[];
   reason?: string;

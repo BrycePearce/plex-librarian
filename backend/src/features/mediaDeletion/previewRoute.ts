@@ -13,6 +13,7 @@ import {
   loadAttemptedOrphanFilesByItem,
   resolveDownloadCleanupBatch,
 } from './planning.ts';
+import { loadPlexPathPreviews } from './plexPathPreview.ts';
 import { getDownloadClientTargets } from './targets.ts';
 
 type PreviewApp = { Variables: ActiveServerVariables };
@@ -45,6 +46,10 @@ export function createDownloadCleanupPreviewRouter(
       tmdbId: items.tmdbId,
       tvdbId: items.tvdbId,
     }).from(items).where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
+    // This live, bounded lookup is intentionally separate from Arr/download cleanup
+    // resolution. Plex paths are confirmation text only and never flow into hardlink,
+    // download-payload, or local-filesystem authorization.
+    const plexPathsPromise = loadPlexPathPreviews(owned);
     const [arrTargets, downloadTargets] = await Promise.all([
       getArrDeleteTargets(serverId, key),
       getDownloadClientTargets(serverId),
@@ -70,6 +75,7 @@ export function createDownloadCleanupPreviewRouter(
         withTransaction((client) => findAmbiguousExternalIds(client, serverId, type, ids)),
       );
     }
+    const plexPaths = await plexPathsPromise;
     const previews = reconcileSharedDownloadCleanups(
       await resolveDownloadCleanupBatch(
         owned,
@@ -81,28 +87,36 @@ export function createDownloadCleanupPreviewRouter(
       ),
     ).map((resolved) => {
       const item = owned.find((candidate) => candidate.ratingKey === resolved.ratingKey)!;
+      const pathPreview = plexPaths.get(resolved.ratingKey)!;
       const externalId = item.type === 'movie' ? item.tmdbId : item.tvdbId;
       if (externalId !== null && ambiguousByType.get(item.type)?.has(externalId)) {
         const reason = `${item.title} shares its ${
           item.type === 'movie' ? 'TMDB' : 'TVDB'
         } ID with another Plex item`;
-        return publicCleanupItem({
-          ...resolved,
-          status: 'error',
-          reason,
-          arrStatus: 'error',
-          arrReason: `${reason}; use Plex-only deletion or resolve the duplicate first`,
-          downloadJobs: [],
-          orphanFiles: [],
-          retainedPaths: [],
-        });
+        return {
+          ...publicCleanupItem({
+            ...resolved,
+            status: 'error',
+            reason,
+            arrStatus: 'error',
+            arrReason: `${reason}; use Plex-only deletion or resolve the duplicate first`,
+            downloadJobs: [],
+            orphanFiles: [],
+            retainedPaths: [],
+          }),
+          ...pathPreview,
+        };
       }
-      return publicCleanupItem(resolved);
+      return { ...publicCleanupItem(resolved), ...pathPreview };
     });
     for (const ratingKey of ratingKeys) {
       if (owned.some((item) => item.ratingKey === ratingKey)) continue;
       previews.push({
         ratingKey,
+        plexPaths: [],
+        plexPathStatus: 'unavailable' as const,
+        plexPathReason: 'Item was not found in this library',
+        plexPathsTruncated: false,
         status: 'unavailable' as const,
         downloadJobs: [],
         reason: 'Item was not found in this library',

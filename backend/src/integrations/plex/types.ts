@@ -62,7 +62,7 @@ export interface PlexRawMetadata {
     bitrate?: number;
     videoCodec?: string;
     container?: string;
-    Part?: Array<{ size?: number }>;
+    Part?: Array<{ size?: number; file?: string }>;
   }>;
 }
 
@@ -101,6 +101,15 @@ export interface PlexMediaVersion {
   videoCodec: string | null;
   container: string | null;
   fileSize: number | null;
+}
+
+// Absolute paths reported by Plex for a deletion confirmation preview. These are
+// deliberately ephemeral and informational: callers must never treat them as local
+// filesystem authority because they may name a remote host path, a container path, or
+// a path that changed after this lookup.
+export interface PlexMediaPathPreview {
+  paths: string[];
+  truncated: boolean;
 }
 
 // One row per Plex `Media` entry on an episode — but only ever produced by

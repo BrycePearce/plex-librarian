@@ -26,7 +26,12 @@ export interface ResolvedDownloadJob extends DownloadCleanupJob {
   authorizedSourcePaths: string[];
 }
 
-export interface ResolvedCleanupItem extends DownloadCleanupPreviewItem {
+type CleanupItemWithoutPlexPaths = Omit<
+  DownloadCleanupPreviewItem,
+  'plexPaths' | 'plexPathStatus' | 'plexPathReason' | 'plexPathsTruncated'
+>;
+
+export interface ResolvedCleanupItem extends CleanupItemWithoutPlexPaths {
   downloadJobs: ResolvedDownloadJob[];
   orphanFiles: VerifiedOrphanFile[];
   /** Every live job whose manifest owned one of this title's historical paths. */
@@ -529,7 +534,7 @@ export function selectDirectOrphanFiles(
   ];
 }
 
-export function publicCleanupItem(item: ResolvedCleanupItem): DownloadCleanupPreviewItem {
+export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithoutPlexPaths {
   return {
     ratingKey: item.ratingKey,
     status: item.status,

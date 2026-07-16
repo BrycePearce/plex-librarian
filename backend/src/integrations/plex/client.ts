@@ -9,12 +9,14 @@ import type {
   PlexItem,
   PlexLibrary,
   PlexLocalAccount,
+  PlexMediaPathPreview,
   PlexMediaVersion,
   PlexRawMetadata,
   PlexTrack,
 } from './types.ts';
 
 const ITEMS_PAGE_SIZE = 300;
+export const MAX_PREVIEW_MEDIA_PATHS = 2_000;
 // Max concurrent page-fetch requests per library. Override via FETCH_CONCURRENCY env var.
 const FETCH_CONCURRENCY = Math.max(1, parseInt(Deno.env.get('FETCH_CONCURRENCY') ?? '', 10) || 8);
 
@@ -71,6 +73,22 @@ function plexBoolean(value: boolean | number | string | undefined): boolean | nu
   if (value === true || value === 1 || value === '1' || value === 'true') return true;
   if (value === false || value === 0 || value === '0' || value === 'false') return false;
   return null;
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export function mapActiveSessions(raw: PlexRawSession[]): PlexActiveSession[] {
@@ -136,6 +154,29 @@ function extractFileSize(item: PlexRawMetadata): number | null {
   if (parts.length === 0) return null;
   const bytes = parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0);
   return Math.round(bytes / 1000);
+}
+
+function appendMediaPaths(
+  metadata: PlexRawMetadata[],
+  paths: string[],
+  seen: Set<string>,
+  limit: number,
+): boolean {
+  for (const item of metadata) {
+    for (const media of item.Media ?? []) {
+      for (const part of media.Part ?? []) {
+        // Keep Plex's path byte-for-byte. Normalizing separators or case would corrupt
+        // valid Windows/UNC paths and can also merge distinct Linux paths.
+        if (typeof part.file !== 'string' || part.file.length === 0 || seen.has(part.file)) {
+          continue;
+        }
+        if (paths.length >= limit) return true;
+        seen.add(part.file);
+        paths.push(part.file);
+      }
+    }
+  }
+  return false;
 }
 
 export function extractExternalIds(
@@ -270,22 +311,35 @@ export class PlexClient {
     this.url = url.replace(/\/$/, '');
   }
 
-  private async get<T>(path: string, extraHeaders?: Record<string, string>): Promise<T> {
+  private async get<T>(
+    path: string,
+    extraHeaders?: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const url = `${this.url}${path}`;
     const headers = { ...extraHeaders, ...buildPlexHeaders(this.clientId, this.token) };
 
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
+      signal?.throwIfAborted();
       if (attempt > 0) {
         // Exponential backoff with 50% jitter: ~1s, ~2s
         const base = 1000 * 2 ** (attempt - 1);
-        await new Promise((r) => setTimeout(r, base + Math.random() * base * 0.5));
+        await abortableDelay(base + Math.random() * base * 0.5, signal);
       }
 
       let res: Response;
       try {
-        res = await this.fetchImpl(url, { headers, signal: AbortSignal.timeout(30_000) });
+        res = await this.fetchImpl(url, {
+          headers,
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+            : AbortSignal.timeout(30_000),
+        });
       } catch (err) {
+        // A caller-provided deadline is authoritative. Retrying after it expires would
+        // leave informational preview requests running after the modal has moved on.
+        signal?.throwIfAborted();
         // Timeouts mean the server is already struggling — don't compound it with retries.
         if (err instanceof DOMException && err.name === 'TimeoutError') throw err;
         lastError = err;
@@ -344,6 +398,63 @@ export class PlexClient {
       '/status/sessions',
     );
     return mapActiveSessions(data.MediaContainer.Metadata ?? []);
+  }
+
+  // Fetches current Plex-reported Part paths solely for confirmation UI. Movies and
+  // other leaf items expose Media directly; shows and artists require allLeaves because
+  // this app intentionally does not persist every episode/track. The cap prevents a
+  // bulk preview from accumulating an unbounded TV/music library in memory.
+  async mediaPathPreview(
+    ratingKey: string,
+    itemType: string,
+    limit = MAX_PREVIEW_MEDIA_PATHS,
+    signal?: AbortSignal,
+  ): Promise<PlexMediaPathPreview> {
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    const encodedKey = encodeURIComponent(ratingKey);
+    if (itemType !== 'show' && itemType !== 'artist') {
+      const data = await this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[] } }>(
+        `/library/metadata/${encodedKey}`,
+        undefined,
+        signal,
+      );
+      const truncated = appendMediaPaths(
+        data.MediaContainer.Metadata ?? [],
+        paths,
+        seen,
+        limit,
+      );
+      return { paths, truncated };
+    }
+
+    const basePath = `/library/metadata/${encodedKey}/allLeaves`;
+    let start = 0;
+    // Bound leaf inspection as well as returned paths. A malformed or restricted Plex
+    // response might contain millions of leaves but omit Part.file on every one.
+    const leafLimit = Math.max(ITEMS_PAGE_SIZE, limit);
+    while (true) {
+      const data = await this.get<{
+        MediaContainer: { Metadata?: PlexRawMetadata[]; totalSize?: number };
+      }>(basePath, {
+        'X-Plex-Container-Start': String(start),
+        'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
+      }, signal);
+      const metadata = data.MediaContainer.Metadata ?? [];
+      if (appendMediaPaths(metadata, paths, seen, limit)) {
+        return { paths, truncated: true };
+      }
+      start += metadata.length;
+      const total = data.MediaContainer.totalSize;
+      if (
+        metadata.length === 0 ||
+        (total !== undefined ? start >= total : metadata.length < ITEMS_PAGE_SIZE)
+      ) {
+        return { paths, truncated: false };
+      }
+      if (start >= leafLimit) return { paths, truncated: true };
+      if (paths.length >= limit) return { paths, truncated: true };
+    }
   }
 
   // Deletes an item's media from Plex (metadata + underlying file(s) on disk).
