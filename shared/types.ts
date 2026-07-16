@@ -53,6 +53,13 @@ export interface ArrInstance {
   name: string;
   url: string;
   apiKeyConfigured: boolean;
+  pathMappings: ArrPathMapping[];
+}
+
+export interface ArrPathMapping {
+  kind: "library" | "download";
+  arrPath: string;
+  localPath: string;
 }
 
 export interface ArrLibraryMapping {
@@ -73,6 +80,7 @@ export interface SaveArrInstanceRequest {
   apiKey: string;
   libraryKeys: string[];
   addImportExclusion: boolean;
+  pathMappings: ArrPathMapping[];
 }
 
 export interface UpdateArrInstanceRequest {
@@ -81,6 +89,7 @@ export interface UpdateArrInstanceRequest {
   apiKey?: string;
   libraryKeys: string[];
   addImportExclusion: boolean;
+  pathMappings: ArrPathMapping[];
 }
 
 export interface SaveArrLibraryMappingRequest {
@@ -426,6 +435,21 @@ export interface ArrCleanupSource {
   instanceName: string;
   hash: string;
   path: string;
+  importedPath: string | null;
+  verification: "hardlink" | "unverified";
+  localPath?: string;
+  reason?: string;
+}
+
+export interface ArrCleanupFile {
+  path: string;
+  size: number;
+  method: "hardlink";
+}
+
+export interface ArrCleanupRetainedPath {
+  path: string;
+  reason: string;
 }
 
 export interface TorrentCleanupPreviewItem {
@@ -437,6 +461,8 @@ export interface TorrentCleanupPreviewItem {
   arrReason?: string;
   arrTargets: ArrCleanupTarget[];
   sources: ArrCleanupSource[];
+  orphanFiles: ArrCleanupFile[];
+  retainedPaths: ArrCleanupRetainedPath[];
 }
 
 export interface TorrentCleanupPreviewResponse {

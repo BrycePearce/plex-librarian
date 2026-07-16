@@ -137,6 +137,30 @@ export const arrLibraryMappings = sqliteTable(
   }),
 );
 
+// Explicit container path translations for direct orphan-download cleanup. Library
+// mappings are read-only evidence locations; download mappings define the only roots
+// beneath which Plex Librarian may unlink verified hardlinks.
+export const arrPathMappings = sqliteTable(
+  'arr_path_mappings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    arrInstanceId: integer('arr_instance_id').notNull().references(() => arrInstances.id, {
+      onDelete: 'cascade',
+    }),
+    kind: text('kind', { enum: ['library', 'download'] }).notNull(),
+    arrPath: text('arr_path').notNull(),
+    localPath: text('local_path').notNull(),
+  },
+  (table) => ({
+    instanceIdx: index('arr_path_mappings_instance_idx').on(table.arrInstanceId),
+    uniqueMapping: uniqueIndex('arr_path_mappings_unique').on(
+      table.arrInstanceId,
+      table.kind,
+      table.arrPath,
+    ),
+  }),
+);
+
 // Durable marker written after every Arr lookup succeeds but immediately before the
 // first destructive request. If the response is lost after Arr commits the deletion,
 // a later retry can distinguish "already absent after our attempt" from "never found".
@@ -212,7 +236,30 @@ export const torrentDeleteAttempts = sqliteTable(
   }),
 );
 
-// Singleton row (id = 1) — app-wide behavior settings and installation identity.
+// Intent recorded immediately before directly unlinking a verified download hardlink.
+// A retry only considers the unlink complete when the configured root is still mounted
+// and the exact path is absent; an existing or unreadable path is never assumed safe.
+export const downloadFileDeleteAttempts = sqliteTable(
+  'download_file_delete_attempts',
+  {
+    serverId: integer('server_id').notNull(),
+    ratingKey: text('rating_key').notNull(),
+    localPath: text('local_path').notNull(),
+    rootPath: text('root_path').notNull(),
+    rootDevice: text('root_device').notNull(),
+    rootInode: text('root_inode').notNull(),
+    startedAt: integer('started_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.ratingKey, table.localPath] }),
+    itemFk: foreignKey({
+      columns: [table.serverId, table.ratingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+  }),
+);
+
+// Singleton row (id = 1): app-wide behavior settings and installation identity.
 // Per-server Plex credentials live on `servers`; activeServerId points at the one
 // currently synced/displayed. Env vars PLEX_URL + PLEX_TOKEN take precedence over
 // the active server's stored credentials at runtime.

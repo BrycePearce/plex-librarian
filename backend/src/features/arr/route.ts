@@ -1,10 +1,15 @@
 import { Hono } from 'hono';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
-import { arrInstances, arrLibraryMappings, libraries } from '../../db/schema.ts';
+import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { ArrClient, normalizeArrUrl } from '../../integrations/arr/client.ts';
-import { replaceArrInstanceMappings, replaceArrLibraryMappings } from './mappings.ts';
+import {
+  replaceArrInstanceMappings,
+  replaceArrLibraryMappings,
+  replaceArrPathMappings,
+  validPathMappings,
+} from './mappings.ts';
 import type {
   ArrIntegrationSettings,
   ArrType,
@@ -43,9 +48,18 @@ router.get('/', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
 
-  const [instances, mappings] = await Promise.all([
+  const [instances, mappings, paths] = await Promise.all([
     db.select().from(arrInstances).where(eq(arrInstances.serverId, serverId)),
     db.select().from(arrLibraryMappings).where(eq(arrLibraryMappings.serverId, serverId)),
+    db.select({
+      arrInstanceId: arrPathMappings.arrInstanceId,
+      kind: arrPathMappings.kind,
+      arrPath: arrPathMappings.arrPath,
+      localPath: arrPathMappings.localPath,
+    }).from(arrPathMappings).innerJoin(
+      arrInstances,
+      eq(arrPathMappings.arrInstanceId, arrInstances.id),
+    ).where(eq(arrInstances.serverId, serverId)),
   ]);
 
   return c.json(
@@ -56,6 +70,11 @@ router.get('/', async (c) => {
         name: instance.name,
         url: instance.url,
         apiKeyConfigured: instance.apiKey.length > 0,
+        pathMappings: paths.filter((path) => path.arrInstanceId === instance.id).map((path) => ({
+          kind: path.kind,
+          arrPath: path.arrPath,
+          localPath: path.localPath,
+        })),
       })),
       mappings: mappings.map((mapping) => ({
         libraryKey: mapping.libraryKey,
@@ -70,12 +89,19 @@ router.post('/instances', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
   const body = await c.req.json().catch(() => null) as SaveArrInstanceRequest | null;
+  const pathMappings = validPathMappings(body?.pathMappings);
   if (
     !body || !validType(body.type) || typeof body.name !== 'string' || !body.name.trim() ||
     typeof body.url !== 'string' || typeof body.apiKey !== 'string' || !body.apiKey.trim() ||
-    typeof body.addImportExclusion !== 'boolean'
+    typeof body.addImportExclusion !== 'boolean' || pathMappings === null
   ) {
     return c.json({ error: 'type, name, URL, API key, and mapping options are required' }, 400);
+  }
+  if (body.type === 'sonarr' && pathMappings.length > 0) {
+    return c.json({
+      error:
+        'direct orphan-hardlink cleanup currently supports Radarr only; Sonarr path mappings must be empty',
+    }, 400);
   }
 
   const libraryKeys = await validLibrariesForInstance(serverId, body.type, body.libraryKeys);
@@ -135,6 +161,7 @@ router.post('/instances', async (c) => {
         libraryKeys,
         body.addImportExclusion,
       );
+      replaceArrPathMappings(sqliteClient, row[0], pathMappings);
       return row[0];
     } finally {
       insert.finalize();
@@ -150,6 +177,7 @@ router.post('/instances', async (c) => {
     name: body.name.trim(),
     url,
     apiKeyConfigured: true,
+    pathMappings,
   }, 201);
 });
 
@@ -183,11 +211,12 @@ router.patch('/instances/:id', async (c) => {
   }
 
   const body = await c.req.json().catch(() => null) as UpdateArrInstanceRequest | null;
+  const pathMappings = validPathMappings(body?.pathMappings);
   if (
     !body || typeof body.name !== 'string' || !body.name.trim() ||
     typeof body.url !== 'string' ||
     (body.apiKey !== undefined && typeof body.apiKey !== 'string') ||
-    typeof body.addImportExclusion !== 'boolean'
+    typeof body.addImportExclusion !== 'boolean' || pathMappings === null
   ) {
     return c.json({ error: 'name, URL, and mapping options are required' }, 400);
   }
@@ -196,6 +225,12 @@ router.patch('/instances/:id', async (c) => {
     and(eq(arrInstances.serverId, serverId), eq(arrInstances.id, id)),
   ).limit(1);
   if (!instance) return c.json({ error: 'instance not found' }, 404);
+  if (instance.type === 'sonarr' && pathMappings.length > 0) {
+    return c.json({
+      error:
+        'direct orphan-hardlink cleanup currently supports Radarr only; Sonarr path mappings must be empty',
+    }, 400);
+  }
 
   const libraryKeys = await validLibrariesForInstance(
     serverId,
@@ -251,6 +286,7 @@ router.patch('/instances/:id', async (c) => {
       libraryKeys,
       body.addImportExclusion,
     );
+    replaceArrPathMappings(sqliteClient, id, pathMappings);
   });
 
   return c.json({
@@ -259,6 +295,7 @@ router.patch('/instances/:id', async (c) => {
     name: body.name.trim(),
     url,
     apiKeyConfigured: apiKey.length > 0,
+    pathMappings,
   });
 });
 

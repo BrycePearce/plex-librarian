@@ -13,6 +13,8 @@ export interface QbittorrentTorrent {
   fileCount: number;
   files: Array<{ path: string; size: number | null }>;
   filesTruncated: boolean;
+  /** Complete manifest used internally for path ownership checks. */
+  manifestFiles: Array<{ path: string; size: number | null }>;
 }
 
 const PUBLIC_FILE_LIMIT = 100;
@@ -179,6 +181,12 @@ export class QbittorrentClient {
       `/torrents/files?hash=${encodeURIComponent(hash)}`,
     );
     const completed = Number(record['completion_on']);
+    const manifestFiles = files.flatMap((file) => {
+      const path = String(file['name'] ?? '').trim();
+      if (!path) return [];
+      const size = Number(file['size']);
+      return [{ path, size: Number.isFinite(size) && size >= 0 ? size : null }];
+    });
     return {
       hash: String(record['hash'] ?? hash).toLowerCase(),
       name: String(record['name'] ?? hash),
@@ -192,13 +200,9 @@ export class QbittorrentClient {
       savePath: String(record['save_path'] ?? ''),
       trackerHost: trackerHost(record['tracker']),
       fileCount: files.length,
-      files: files.slice(0, PUBLIC_FILE_LIMIT).flatMap((file) => {
-        const path = String(file['name'] ?? '').trim();
-        if (!path) return [];
-        const size = Number(file['size']);
-        return [{ path, size: Number.isFinite(size) && size >= 0 ? size : null }];
-      }),
+      files: manifestFiles.slice(0, PUBLIC_FILE_LIMIT),
       filesTruncated: files.length > PUBLIC_FILE_LIMIT,
+      manifestFiles,
     };
   }
 

@@ -17,6 +17,7 @@ import {
 import { db, withTransaction } from '../../db/index.ts';
 import {
   arrDeleteAttempts,
+  downloadFileDeleteAttempts,
   episodeMediaVersions,
   itemMediaVersions,
   items,
@@ -45,10 +46,13 @@ import {
 } from '../arr/delete.ts';
 import { getQbittorrentTargets } from '../qbittorrent/connections.ts';
 import {
+  executeDownloadedFileCleanup,
   publicCleanupItem,
+  reconcileSharedTorrentCleanups,
   resolveTorrentCleanup,
   selectVerifiedTorrentCleanups,
 } from '../qbittorrent/cleanup.ts';
+import { DEFAULT_PAYLOAD_SCAN_LIMITS, orphanRootIdentity } from '../arr/orphanFiles.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DeleteItemsResponse,
@@ -88,10 +92,18 @@ async function resolveTorrentCleanupBatch(
   arrTargets: Parameters<typeof resolveTorrentCleanup>[2],
   qbitTargets: Parameters<typeof resolveTorrentCleanup>[3],
   attemptedTorrentKeysByItem: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  attemptedOrphanFilesByItem: ReadonlyMap<
+    string,
+    ReadonlyArray<{ path: string; root: string; rootDevice: string; rootInode: string }>
+  > = new Map(),
+  attemptedArrInstancesByItem: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
 ): Promise<Array<Awaited<ReturnType<typeof resolveTorrentCleanup>>>> {
   const results = new Array<Awaited<ReturnType<typeof resolveTorrentCleanup>>>(
     selectedItems.length,
   );
+  const payloadScanBudget = {
+    remainingEntries: DEFAULT_PAYLOAD_SCAN_LIMITS.maxEntries,
+  };
   let nextIndex = 0;
   // History and download-client lookups are network-bound, but a bulk selection can
   // contain 200 items. A small worker pool avoids both a painfully serial preview and
@@ -108,12 +120,72 @@ async function resolveTorrentCleanupBatch(
           arrTargets,
           qbitTargets,
           attemptedTorrentKeysByItem.get(item.ratingKey),
+          attemptedOrphanFilesByItem.get(item.ratingKey),
+          attemptedArrInstancesByItem.get(item.ratingKey),
+          payloadScanBudget,
         );
       }
     },
   );
   await Promise.all(workers);
   return results;
+}
+
+async function loadAttemptedArrInstancesByItem(
+  serverId: number,
+  selectedItems: readonly TorrentResolvableItem[],
+  instanceIds: readonly number[],
+): Promise<Map<string, Set<number>>> {
+  const result = new Map<string, Set<number>>();
+  if (selectedItems.length === 0 || instanceIds.length === 0) return result;
+  const itemByKey = new Map(selectedItems.map((item) => [item.ratingKey, item]));
+  const attempts = await db.select({
+    ratingKey: arrDeleteAttempts.ratingKey,
+    instanceId: arrDeleteAttempts.arrInstanceId,
+    externalId: arrDeleteAttempts.externalId,
+  }).from(arrDeleteAttempts).where(and(
+    eq(arrDeleteAttempts.serverId, serverId),
+    inArray(arrDeleteAttempts.ratingKey, selectedItems.map((item) => item.ratingKey)),
+    inArray(arrDeleteAttempts.arrInstanceId, [...instanceIds]),
+  ));
+  for (const attempt of attempts) {
+    const item = itemByKey.get(attempt.ratingKey);
+    const currentExternalId = item?.type === 'movie' ? item.tmdbId : item?.tvdbId;
+    if (currentExternalId !== attempt.externalId) continue;
+    const attemptedInstances = result.get(attempt.ratingKey) ?? new Set<number>();
+    attemptedInstances.add(attempt.instanceId);
+    result.set(attempt.ratingKey, attemptedInstances);
+  }
+  return result;
+}
+
+async function loadAttemptedOrphanFilesByItem(
+  serverId: number,
+  ratingKeys: string[],
+): Promise<
+  Map<string, Array<{ path: string; root: string; rootDevice: string; rootInode: string }>>
+> {
+  const result = new Map<
+    string,
+    Array<{ path: string; root: string; rootDevice: string; rootInode: string }>
+  >();
+  if (ratingKeys.length === 0) return result;
+  const attempts = await db.select({
+    ratingKey: downloadFileDeleteAttempts.ratingKey,
+    path: downloadFileDeleteAttempts.localPath,
+    root: downloadFileDeleteAttempts.rootPath,
+    rootDevice: downloadFileDeleteAttempts.rootDevice,
+    rootInode: downloadFileDeleteAttempts.rootInode,
+  }).from(downloadFileDeleteAttempts).where(and(
+    eq(downloadFileDeleteAttempts.serverId, serverId),
+    inArray(downloadFileDeleteAttempts.ratingKey, ratingKeys),
+  ));
+  for (const attempt of attempts) {
+    const files = result.get(attempt.ratingKey) ?? [];
+    files.push(attempt);
+    result.set(attempt.ratingKey, files);
+  }
+  return result;
 }
 
 async function loadAttemptedTorrentKeysByItem(
@@ -458,14 +530,60 @@ router.post('/:key/items/torrent-preview', async (c) => {
     tmdbId: items.tmdbId,
     tvdbId: items.tvdbId,
   }).from(items).where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
-  const [arrTargets, qbitTargets, attemptedKeys] = await Promise.all([
+  const [arrTargets, qbitTargets] = await Promise.all([
     getArrDeleteTargets(serverId, key),
     getQbittorrentTargets(serverId),
-    loadAttemptedTorrentKeysByItem(serverId, owned.map((item) => item.ratingKey)),
   ]);
-  const previews = (
-    await resolveTorrentCleanupBatch(owned, arrTargets, qbitTargets, attemptedKeys)
-  ).map(publicCleanupItem);
+  const [attemptedKeys, attemptedOrphans, attemptedArrInstances] = await Promise.all([
+    loadAttemptedTorrentKeysByItem(serverId, owned.map((item) => item.ratingKey)),
+    loadAttemptedOrphanFilesByItem(serverId, owned.map((item) => item.ratingKey)),
+    loadAttemptedArrInstancesByItem(
+      serverId,
+      owned,
+      arrTargets.map((target) => target.instanceId),
+    ),
+  ]);
+  const ambiguousByType = new Map<string, Set<number>>();
+  for (const type of ['movie', 'show'] as const) {
+    const ids = owned.flatMap((item) => {
+      if (item.type !== type) return [];
+      const id = type === 'movie' ? item.tmdbId : item.tvdbId;
+      return id === null ? [] : [id];
+    });
+    ambiguousByType.set(
+      type,
+      withTransaction((client) => findAmbiguousExternalIds(client, serverId, type, ids)),
+    );
+  }
+  const previews = reconcileSharedTorrentCleanups(
+    await resolveTorrentCleanupBatch(
+      owned,
+      arrTargets,
+      qbitTargets,
+      attemptedKeys,
+      attemptedOrphans,
+      attemptedArrInstances,
+    ),
+  ).map((resolved) => {
+    const item = owned.find((candidate) => candidate.ratingKey === resolved.ratingKey)!;
+    const externalId = item.type === 'movie' ? item.tmdbId : item.tvdbId;
+    if (externalId !== null && ambiguousByType.get(item.type)?.has(externalId)) {
+      const reason = `${item.title} shares its ${
+        item.type === 'movie' ? 'TMDB' : 'TVDB'
+      } ID with another Plex item`;
+      return publicCleanupItem({
+        ...resolved,
+        status: 'error',
+        reason,
+        arrStatus: 'error',
+        arrReason: `${reason}; use Plex-only deletion or resolve the duplicate first`,
+        torrents: [],
+        orphanFiles: [],
+        retainedPaths: [],
+      });
+    }
+    return publicCleanupItem(resolved);
+  });
   for (const ratingKey of ratingKeys) {
     if (owned.some((item) => item.ratingKey === ratingKey)) continue;
     previews.push({
@@ -477,6 +595,8 @@ router.post('/:key/items/torrent-preview', async (c) => {
       arrReason: 'Item was not found in this library',
       arrTargets: [],
       sources: [],
+      orphanFiles: [],
+      retainedPaths: [],
     });
   }
   return c.json(
@@ -555,9 +675,11 @@ router.delete('/:key/items', async (c) => {
     }, 409);
   }
   const qbitTargets = body.deleteTorrents ? await getQbittorrentTargets(serverId) : [];
-  if (body.deleteTorrents && qbitTargets.length === 0) {
-    return c.json({ error: 'no qBittorrent connection is configured' }, 409);
-  }
+  const attemptedInstancesByItem = await loadAttemptedArrInstancesByItem(
+    serverId,
+    owned,
+    arrTargets.map((target) => target.instanceId),
+  );
   const torrentCleanupByItem = new Map<string, Awaited<ReturnType<typeof resolveTorrentCleanup>>>();
   if (body.deleteTorrents) {
     // Resolve every selected item before the first destructive call, matching the Arr
@@ -567,11 +689,19 @@ router.delete('/:key/items', async (c) => {
       serverId,
       owned.map((item) => item.ratingKey),
     );
-    const cleanups = await resolveTorrentCleanupBatch(
-      owned,
-      arrTargets,
-      qbitTargets,
-      attemptedKeys,
+    const attemptedOrphans = await loadAttemptedOrphanFilesByItem(
+      serverId,
+      owned.map((item) => item.ratingKey),
+    );
+    const cleanups = reconcileSharedTorrentCleanups(
+      await resolveTorrentCleanupBatch(
+        owned,
+        arrTargets,
+        qbitTargets,
+        attemptedKeys,
+        attemptedOrphans,
+        attemptedInstancesByItem,
+      ),
     );
     // qBittorrent cleanup is optional per item. An unrelated item with no live
     // torrent or unavailable history must not prevent verified jobs elsewhere in
@@ -580,30 +710,12 @@ router.delete('/:key/items', async (c) => {
       torrentCleanupByItem.set(ratingKey, cleanup);
     }
     if (torrentCleanupByItem.size === 0) {
-      return c.json({ error: 'no verified qBittorrent cleanup is available for these items' }, 409);
+      return c.json(
+        { error: 'no verified downloaded-file cleanup is available for these items' },
+        409,
+      );
     }
   }
-  const attemptedInstancesByItem = new Map<string, Set<number>>();
-  if (arrTargets.length > 0 && owned.length > 0) {
-    const attempts = await db.select({
-      ratingKey: arrDeleteAttempts.ratingKey,
-      instanceId: arrDeleteAttempts.arrInstanceId,
-      externalId: arrDeleteAttempts.externalId,
-    }).from(arrDeleteAttempts).where(and(
-      eq(arrDeleteAttempts.serverId, serverId),
-      inArray(arrDeleteAttempts.ratingKey, owned.map((item) => item.ratingKey)),
-      inArray(arrDeleteAttempts.arrInstanceId, arrTargets.map((target) => target.instanceId)),
-    ));
-    for (const attempt of attempts) {
-      const item = itemByKey.get(attempt.ratingKey);
-      const currentExternalId = item?.type === 'movie' ? item.tmdbId : item?.tvdbId;
-      if (currentExternalId !== attempt.externalId) continue;
-      const instanceIds = attemptedInstancesByItem.get(attempt.ratingKey) ?? new Set<number>();
-      instanceIds.add(attempt.instanceId);
-      attemptedInstancesByItem.set(attempt.ratingKey, instanceIds);
-    }
-  }
-
   // A provider ID identifies a title, not a particular Plex item. Separate Plex
   // editions, split duplicates, and resolution-specific libraries can therefore have
   // multiple ratingKeys with the same TMDB/TVDB ID. In that case an Arr lookup cannot
@@ -642,6 +754,7 @@ router.delete('/:key/items', async (c) => {
   const failed: { ratingKey: string; error: string }[] = [];
   let arrMutationOccurred = false;
   const deletedTorrentKeys = new Set<string>();
+  const deletedOrphanPaths = new Set<string>();
   for (const ratingKey of ratingKeys) {
     if (!fileSizeByKey.has(ratingKey)) {
       failed.push({ ratingKey, error: 'not found in this library' });
@@ -656,36 +769,71 @@ router.delete('/:key/items', async (c) => {
         assertArrDeleteIsUnambiguous(item, ambiguousExternalIds);
       }
       const cleanup = torrentCleanupByItem.get(ratingKey);
-      for (const torrent of cleanup?.torrents ?? []) {
-        const torrentKey = `${torrent.instanceKey}:${torrent.hash}`;
-        if (deletedTorrentKeys.has(torrentKey)) continue;
-        // A single torrent (for example, a pack) can be associated with more than one
-        // selected item. Durably mark every association before the first destructive
-        // request so each item can independently resume if the process stops here.
-        for (const [associatedRatingKey, associatedCleanup] of torrentCleanupByItem) {
-          if (
-            !associatedCleanup.torrents.some((candidate) =>
-              `${candidate.instanceKey}:${candidate.hash}` === torrentKey
-            )
-          ) continue;
-          await db.insert(torrentDeleteAttempts).values({
-            serverId,
-            ratingKey: associatedRatingKey,
-            instanceKey: torrent.instanceKey,
-            torrentHash: torrent.hash,
-            startedAt: Math.floor(Date.now() / 1000),
-          }).onConflictDoUpdate({
-            target: [
-              torrentDeleteAttempts.serverId,
-              torrentDeleteAttempts.ratingKey,
-              torrentDeleteAttempts.instanceKey,
-              torrentDeleteAttempts.torrentHash,
-            ],
-            set: { startedAt: Math.floor(Date.now() / 1000) },
-          });
-        }
-        await torrent.target.client.deleteTorrent(torrent.hash);
-        deletedTorrentKeys.add(torrentKey);
+      if (cleanup) {
+        await executeDownloadedFileCleanup(
+          cleanup,
+          deletedTorrentKeys,
+          deletedOrphanPaths,
+          async (torrent, torrentKey) => {
+            // A single torrent (for example, a pack) can be associated with more than
+            // one selected item. Durably mark every association before the first
+            // destructive request so each can independently resume after a stop.
+            for (const [associatedRatingKey, associatedCleanup] of torrentCleanupByItem) {
+              if (
+                !associatedCleanup.torrents.some((candidate) =>
+                  `${candidate.instanceKey}:${candidate.hash}` === torrentKey
+                )
+              ) continue;
+              await db.insert(torrentDeleteAttempts).values({
+                serverId,
+                ratingKey: associatedRatingKey,
+                instanceKey: torrent.instanceKey,
+                torrentHash: torrent.hash,
+                startedAt: Math.floor(Date.now() / 1000),
+              }).onConflictDoUpdate({
+                target: [
+                  torrentDeleteAttempts.serverId,
+                  torrentDeleteAttempts.ratingKey,
+                  torrentDeleteAttempts.instanceKey,
+                  torrentDeleteAttempts.torrentHash,
+                ],
+                set: { startedAt: Math.floor(Date.now() / 1000) },
+              });
+            }
+          },
+          undefined,
+          async (orphanFile) => {
+            // Mark every selected item whose plan references this path before unlinking.
+            // This also lets a duplicate path be skipped safely within the current batch.
+            const rootIdentity = await orphanRootIdentity(orphanFile.root);
+            for (const [associatedRatingKey, associatedCleanup] of torrentCleanupByItem) {
+              if (!associatedCleanup.orphanFiles.some((file) => file.path === orphanFile.path)) {
+                continue;
+              }
+              await db.insert(downloadFileDeleteAttempts).values({
+                serverId,
+                ratingKey: associatedRatingKey,
+                localPath: orphanFile.path,
+                rootPath: orphanFile.root,
+                rootDevice: rootIdentity.rootDevice,
+                rootInode: rootIdentity.rootInode,
+                startedAt: Math.floor(Date.now() / 1000),
+              }).onConflictDoUpdate({
+                target: [
+                  downloadFileDeleteAttempts.serverId,
+                  downloadFileDeleteAttempts.ratingKey,
+                  downloadFileDeleteAttempts.localPath,
+                ],
+                set: {
+                  rootPath: orphanFile.root,
+                  rootDevice: rootIdentity.rootDevice,
+                  rootInode: rootIdentity.rootInode,
+                  startedAt: Math.floor(Date.now() / 1000),
+                },
+              });
+            }
+          },
+        );
       }
       if (arrTargets.length > 0) {
         const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;

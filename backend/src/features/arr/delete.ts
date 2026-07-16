@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import type { SqliteClient } from '../../db/index.ts';
-import { arrInstances, arrLibraryMappings } from '../../db/schema.ts';
+import { arrInstances, arrLibraryMappings, arrPathMappings } from '../../db/schema.ts';
 import { ArrApiError, ArrClient } from '../../integrations/arr/client.ts';
+import type { ArrPathMapping } from '@plex-librarian/shared/types.ts';
 
 export interface CoordinatedDeleteItem {
   title: string;
@@ -16,6 +17,7 @@ export interface ArrDeleteTarget {
   instanceName: string;
   client: ArrClient;
   addImportExclusion: boolean;
+  pathMappings: ArrPathMapping[];
 }
 
 export interface ArrDeleteResult {
@@ -101,11 +103,21 @@ export async function getArrDeleteTargets(
     eq(arrInstances.serverId, serverId),
   ));
 
+  const mappings = rows.length === 0 ? [] : await db.select().from(arrPathMappings).where(
+    inArray(arrPathMappings.arrInstanceId, rows.map((row) => row.instanceId)),
+  );
   return rows.map((row) => ({
     instanceId: row.instanceId,
     instanceName: row.instanceName,
     client: new ArrClient(row.type, row.url, row.apiKey),
     addImportExclusion: row.addImportExclusion,
+    pathMappings: mappings.filter((mapping) => mapping.arrInstanceId === row.instanceId).map(
+      (mapping) => ({
+        kind: mapping.kind,
+        arrPath: mapping.arrPath,
+        localPath: mapping.localPath,
+      }),
+    ),
   }));
 }
 

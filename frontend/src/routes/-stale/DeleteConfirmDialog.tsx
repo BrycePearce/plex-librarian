@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
+  Check,
   ChevronRight,
   Copy,
   File,
@@ -15,6 +16,7 @@ import { HoverPopover } from "../../components/HoverPopover";
 import { ServiceIcon } from "../../components/ServiceIcons";
 import type { ServiceIconName } from "../../components/ServiceIcons";
 import type {
+  ArrCleanupFile,
   ArrCleanupTarget,
   StaleItem,
   TorrentCleanupTorrent,
@@ -69,6 +71,11 @@ export function DeleteConfirmDialog({
       torrent,
     ]),
   ).values()];
+  const orphanFiles = [...new Map(
+    qbitEligibleItems.flatMap((item) => item.orphanFiles).map((
+      file,
+    ) => [file.path, file]),
+  ).values()];
   const qbitEligibleCount = qbitEligibleItems.length;
   const coordinatedReady = Boolean(
     preview.data?.coordinatedConfigured &&
@@ -87,11 +94,15 @@ export function DeleteConfirmDialog({
     ) ?? [];
   const unmanagedSources =
     preview.data?.items.flatMap((previewItem) =>
-      previewItem.status === "resolved" ? [] : previewItem.sources.filter(
-        (source) =>
-          !previewItem.torrents.some((torrent) => torrent.hash === source.hash),
+      previewItem.sources.filter(
+        (source) => source.verification === "unverified",
       ).map((source) => ({ ratingKey: previewItem.ratingKey, source }))
     ) ?? [];
+  const retainedPaths = [...new Map(
+    (preview.data?.items ?? []).flatMap((item) => item.retainedPaths).map((
+      path,
+    ) => [path.path, path]),
+  ).values()];
   useEffect(() => {
     setDeleteTorrents(false);
   }, [libraryKey, ratingKeys.join("|")]);
@@ -159,9 +170,14 @@ export function DeleteConfirmDialog({
                         previewItem?.status === "resolved"
                       ? previewItem.torrents.length
                       : 0}
+                    hardlinkFileCount={deleteTorrents &&
+                        previewItem?.status === "resolved"
+                      ? previewItem.orphanFiles.length
+                      : 0}
                     qbitResuming={Boolean(
                       deleteTorrents && previewItem?.status === "resolved" &&
-                        previewItem.torrents.length === 0,
+                        previewItem.torrents.length === 0 &&
+                        previewItem.orphanFiles.length === 0,
                     )}
                   />
                   <span className="text-base-content/50 font-mono text-xs shrink-0">
@@ -206,12 +222,12 @@ export function DeleteConfirmDialog({
           />
           {!plexOnly && (
             <CompactOption
-              label={`Remove from qBittorrent (${qbitEligibleCount})`}
+              label={`Remove downloaded files (${qbitEligibleCount})`}
               info={qbitEligibleCount > 0
-                ? `Applies only to the ${qbitEligibleCount} of ${items.length} selected items with verified qBittorrent cleanup. Removes those jobs and asks qBittorrent to delete their downloaded files; Plex Librarian does not independently delete saved .torrent files.`
+                ? `Applies only to the ${qbitEligibleCount} of ${items.length} selected items with a verified live torrent or hardlinked source file. Live jobs are removed through qBittorrent; orphaned hardlinks are reverified and unlinked directly.`
                 : preview.data?.configured
                 ? "No selected items have a verified live qBittorrent job or resumable cleanup."
-                : "Connect qBittorrent under Media connections to enable downloaded-file cleanup."}
+                : "Connect qBittorrent or configure orphan cleanup path mappings under Media connections."}
               checked={deleteTorrents}
               disabled={pending || preview.isLoading || qbitEligibleCount === 0}
               onChange={setDeleteTorrents}
@@ -239,8 +255,10 @@ export function DeleteConfirmDialog({
           plexOnly={plexOnly}
           arrEntries={arrEntries}
           torrents={torrents}
+          orphanFiles={orphanFiles}
           deleteTorrents={deleteTorrents}
           unmanagedSources={unmanagedSources}
+          retainedPaths={retainedPaths}
           loading={preview.isLoading}
         />
         <div className="modal-action mt-3">
@@ -361,11 +379,13 @@ function PlannedServiceIcons({
   plexOnly,
   arrTargets,
   qbitJobCount,
+  hardlinkFileCount,
   qbitResuming,
 }: {
   plexOnly: boolean;
   arrTargets: ArrCleanupTarget[];
   qbitJobCount: number;
+  hardlinkFileCount: number;
   qbitResuming: boolean;
 }) {
   return (
@@ -391,6 +411,25 @@ function PlannedServiceIcons({
             </>
           }
           className="bg-secondary/20 text-secondary"
+        />
+      )}
+      {!plexOnly && hardlinkFileCount > 0 && (
+        <ServiceMark
+          label="HL"
+          ariaLabel={`Remove ${hardlinkFileCount} verified orphaned hardlink${
+            hardlinkFileCount === 1 ? "" : "s"
+          }`}
+          popover={
+            <>
+              <div className="font-semibold">Verified hardlinks</div>
+              <div className="mt-1 text-base-content/55">
+                Unlinks {hardlinkFileCount}{" "}
+                orphaned download file{hardlinkFileCount === 1 ? "" : "s"}{" "}
+                after rechecking filesystem identity.
+              </div>
+            </>
+          }
+          className="bg-success/20 text-success"
         />
       )}
       {!plexOnly && arrTargets.map((target, index) => (
@@ -566,6 +605,7 @@ function PathTreeRoot({
   info?: string;
   warning?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
   const visibleFiles = (files ?? []).slice(0, TREE_FILE_LIMIT);
   const hiddenCount = Math.max(
     0,
@@ -582,6 +622,22 @@ function PathTreeRoot({
         <span className="min-w-0 flex-1 truncate font-mono" title={path}>
           {path}
         </span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs size-6 shrink-0 p-0"
+          aria-label={copied ? "Path copied" : `Copy path ${path}`}
+          title={copied ? "Copied" : "Copy path"}
+          onClick={() => {
+            void copyText(path).then(() => {
+              setCopied(true);
+              globalThis.setTimeout(() => setCopied(false), 1_500);
+            });
+          }}
+        >
+          {copied
+            ? <Check className="size-3.5 text-success" />
+            : <Copy className="size-3.5 text-base-content/50" />}
+        </button>
         {info && <InfoTip text={info} />}
         <span className="badge badge-ghost badge-xs shrink-0">{source}</span>
       </div>
@@ -595,6 +651,27 @@ function PathTreeRoot({
       )}
     </div>
   );
+}
+
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Clipboard access can be unavailable when the app is served over HTTP.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 function managedFiles(target: ArrCleanupTarget): TreeFile[] {
@@ -694,25 +771,33 @@ function DeletionTree({
   plexOnly,
   arrEntries,
   torrents,
+  orphanFiles,
   deleteTorrents,
   unmanagedSources,
+  retainedPaths,
   loading,
 }: {
   items: StaleItem[];
   plexOnly: boolean;
   arrEntries: Array<{ ratingKey: string; target: ArrCleanupTarget }>;
   torrents: TorrentCleanupTorrent[];
+  orphanFiles: ArrCleanupFile[];
   deleteTorrents: boolean;
   unmanagedSources: Array<{
     ratingKey: string;
-    source: { instanceName: string; hash: string; path: string };
+    source: {
+      instanceName: string;
+      hash: string;
+      path: string;
+      reason?: string;
+    };
   }>;
+  retainedPaths: Array<{ path: string; reason: string }>;
   loading: boolean;
 }) {
-  const hasRemaining = unmanagedSources.length > 0;
-  const removalPathCount = plexOnly
-    ? items.length
-    : arrEntries.length + (deleteTorrents ? torrents.length : 0);
+  const hasRemaining = unmanagedSources.length > 0 || retainedPaths.length > 0;
+  const removalPathCount = plexOnly ? items.length : arrEntries.length +
+    (deleteTorrents ? torrents.length + orphanFiles.length : 0);
   return (
     <div className="mt-3 space-y-2">
       <CollapsiblePathSection
@@ -756,6 +841,18 @@ function DeletionTree({
               info={torrentInfo(torrent)}
             />
           ))}
+        {!plexOnly && deleteTorrents && orphanFiles.map((file) => (
+          <PathTreeRoot
+            key={`hardlink:${file.path}`}
+            path={file.path}
+            source="Verified hardlink"
+            files={[{
+              path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
+              size: file.size,
+            }]}
+            note="Reverified immediately before removal"
+          />
+        ))}
         {loading && (
           <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
             <span className="loading loading-spinner loading-xs" />{" "}
@@ -772,7 +869,7 @@ function DeletionTree({
       {hasRemaining && (
         <CollapsiblePathSection
           title="Not automatically removed"
-          count={unmanagedSources.length}
+          count={unmanagedSources.length + retainedPaths.length}
           info="These historical paths are not automatically removed because ownership cannot be proven safely."
           warning
         >
@@ -781,7 +878,16 @@ function DeletionTree({
               key={`${ratingKey}:${source.instanceName}:${source.hash}:${source.path}`}
               path={source.path}
               source="Arr history"
-              note="No live qBittorrent job owns this path"
+              note={source.reason ?? "Ownership could not be verified"}
+              warning
+            />
+          ))}
+          {retainedPaths.map((path) => (
+            <PathTreeRoot
+              key={`retained:${path.path}`}
+              path={path.path}
+              source="Filesystem"
+              note={path.reason}
               warning
             />
           ))}

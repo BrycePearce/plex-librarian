@@ -26,8 +26,10 @@ Install **Plex Librarian** from Community Applications (the **Apps** tab). Map
 Open the web UI from the Docker page and select **Sign in with Plex** — the app
 walks you through the rest.
 
-Plex Librarian does not need access to your media shares. Sonarr, Radarr, or
-Plex performs file deletion using its own existing mounts and permissions.
+Plex Librarian does not need access to your media shares for normal operation.
+Sonarr, Radarr, or Plex performs managed deletion using its own mounts and
+permissions. Optional orphan-download cleanup requires the additional read-only
+library and read/write download mounts described below.
 
 ## Install with Docker
 
@@ -42,6 +44,9 @@ services:
       - "8288:8080"
     volumes:
       - /path/to/appdata/plex-librarian:/data
+      # Optional: required only for verified orphan-hardlink cleanup.
+      # - /path/to/library:/media:ro
+      # - /path/to/downloads:/downloads:rw
     restart: unless-stopped
 ```
 
@@ -88,12 +93,39 @@ the confirmation list shows small Plex, Sonarr, Radarr, and qBittorrent action
 indicators for each item. The option stays disabled only when none of the
 selected items can be verified for qBittorrent cleanup.
 
-Retained Arr import history can point at an old download path even after its
+Retained Radarr import history can point at an old download path even after its
 torrent has disappeared from qBittorrent. Plex Librarian shows those paths as
-unmanaged leftovers but never recursively deletes them: without a live torrent
-manifest or Arr ownership there is no safe proof that every neighboring file
-belongs to the selected title. Configure Radarr's **Import Extra Files** setting
-for sidecars such as `sub`, `idx`, and `srt` so Radarr can track them with the
+unmanaged leftovers by default. To clean up the common hardlink case, edit the
+Radarr connection and expand **Orphan download cleanup**. Configure:
+
+- the library root as reported by Radarr and its read-only Plex Librarian mount;
+- the download root as reported by Radarr and its read/write Plex Librarian mount.
+
+For example, Radarr paths under `/data/media` and `/data/torrents` could map to
+Plex Librarian mounts `/media` and `/downloads`. Radarr roots may also be Windows
+drive or UNC paths (for example, `D:\Media`); the Plex Librarian mount is always
+the absolute Linux path visible inside its container. Plex Librarian removes an
+orphaned source file only when the source and current Radarr-managed destination
+are regular files with the same filesystem device and inode. It rechecks that
+identity immediately before unlinking, rejects symbolic links and paths outside
+the configured download root, and prunes only empty directories. Radarr-tracked
+media, subtitle, and metadata sidecars inside the same historical payload are
+eligible under that exact inode rule. Untracked sidecars, samples, metadata, and
+mixed directory contents are retained and explained in the confirmation
+preview. Nested payloads are inspected only when Radarr history provides a
+defensible payload root. Inspection stops after a shared 5,000-entry budget per
+preview or 12 directory levels and reports the unverified remainder;
+directories are never recursively deleted.
+
+Multi-file torrents are removed with their payload only when every manifest file is
+individually attributable to the selected Arr title. Mixed or partially attributed
+packs remain untouched and are called out in the confirmation preview.
+
+The two mounts are optional and must refer to the same underlying filesystems
+that Radarr sees. Container paths do not need to match Radarr paths because the web UI
+stores the translation, but the local library and download roots must be separate,
+non-overlapping paths. Configure Radarr's **Import Extra Files** setting for
+sidecars such as `sub`, `idx`, and `srt` so Radarr can track them with the
 managed movie folder.
 
 Use the qBittorrent Web UI URL as seen from the Plex Librarian container. Enter

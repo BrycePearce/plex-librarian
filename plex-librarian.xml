@@ -47,6 +47,28 @@
     Mask="false">/mnt/user/appdata/plex-librarian</Config>
 
   <Config
+    Name="Library Inspection Path"
+    Target="/media"
+    Default=""
+    Mode="ro"
+    Description="Optional. Read-only library mount used to verify Radarr orphan-download hardlinks. After adding it, configure the matching Radarr and local roots under Settings > Media connections."
+    Type="Path"
+    Display="advanced"
+    Required="false"
+    Mask="false" />
+
+  <Config
+    Name="Download Cleanup Path"
+    Target="/downloads"
+    Default=""
+    Mode="rw"
+    Description="Optional. Download mount beneath which Plex Librarian may unlink files proven to be hardlinks of current Arr-managed media. Never map a broader root than necessary."
+    Type="Path"
+    Display="advanced"
+    Required="false"
+    Mask="false" />
+
+  <Config
     Name="Plex URL"
     Target="PLEX_URL"
     Default=""

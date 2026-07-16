@@ -239,6 +239,13 @@
       "when": 1784086117971,
       "tag": "0034_aspiring_frank_castle",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1784153977488,
+      "tag": "0035_lonely_kabuki",
+      "breakpoints": true
     }
   ]
 }

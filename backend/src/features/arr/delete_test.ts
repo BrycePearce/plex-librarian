@@ -18,6 +18,7 @@ function target(
     instanceName,
     client: new ArrClient('radarr', `http://${instanceName}`, 'key', fetchImpl),
     addImportExclusion: true,
+    pathMappings: [],
   };
 }
 

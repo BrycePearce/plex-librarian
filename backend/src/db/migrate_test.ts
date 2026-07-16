@@ -22,6 +22,9 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       WHERE type IN ('table', 'index') AND name IN (
         'arr_delete_attempts',
         'arr_instances_server_type_url_unique',
+        'arr_path_mappings',
+        'arr_path_mappings_unique',
+        'download_file_delete_attempts',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'qbittorrent_instances',
@@ -35,6 +38,9 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       [
         'arr_delete_attempts',
         'arr_instances_server_type_url_unique',
+        'arr_path_mappings',
+        'arr_path_mappings_unique',
+        'download_file_delete_attempts',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'qbittorrent_instances',

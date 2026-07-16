@@ -57,7 +57,13 @@ Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', asy
       {
         eventType: 'downloadFolderImported',
         downloadId: 'A'.repeat(40),
-        data: { droppedPath: '/downloads/release/movie.mkv' },
+        id: 9,
+        date: '2026-01-01T00:00:00Z',
+        data: {
+          droppedPath: '/downloads/release/movie.mkv',
+          sourcePath: '/downloads/release',
+          importedPath: '/movies/Movie/movie.mkv',
+        },
       },
       { eventType: 'grabbed', downloadId: 'B'.repeat(40) },
       { eventType: 'downloadFolderImported', downloadId: 'usenet-id' },
@@ -66,7 +72,37 @@ Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', asy
   assertEquals(await client.torrentAssociations(42), [{
     hash: 'a'.repeat(40),
     sourcePath: '/downloads/release/movie.mkv',
+    payloadPath: '/downloads/release',
+    importedPath: '/movies/Movie/movie.mkv',
+    historyId: 9,
+    date: '2026-01-01T00:00:00Z',
   }]);
+});
+
+Deno.test('download history detects a hash associated with another Arr title', async () => {
+  const exclusive = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json({
+        totalRecords: 2,
+        records: [{ movieId: 42 }, { movieId: 42 }],
+      }))) as typeof fetch,
+  );
+  assertEquals(await exclusive.downloadIdIsExclusiveTo(42, 'a'.repeat(40)), true);
+
+  const shared = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json({
+        totalRecords: 2,
+        records: [{ seriesId: 7 }, { seriesId: 9 }],
+      }))) as typeof fetch,
+  );
+  assertEquals(await shared.downloadIdIsExclusiveTo(7, 'a'.repeat(40)), false);
 });
 
 Deno.test('Radarr lookup and extra files expose its managed deletion boundary', async () => {

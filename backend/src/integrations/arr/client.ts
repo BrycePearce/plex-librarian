@@ -9,6 +9,10 @@ export interface ArrMediaRecord {
 export interface ArrTorrentAssociation {
   hash: string;
   sourcePath: string | null;
+  payloadPath: string | null;
+  importedPath: string | null;
+  historyId: number | null;
+  date: string | null;
 }
 
 export interface ArrExtraFile {
@@ -162,9 +166,11 @@ export class ArrClient {
       : `/history/series?seriesId=${mediaId}&includeSeries=false&includeEpisode=false`;
     const records = await this.request<
       Array<{
+        id?: number;
+        date?: string;
         eventType?: string;
         downloadId?: string;
-        data?: { droppedPath?: string; sourcePath?: string };
+        data?: { droppedPath?: string; sourcePath?: string; importedPath?: string };
       }>
     >(path);
     const associations = new Map<string, ArrTorrentAssociation>();
@@ -174,12 +180,57 @@ export class ArrClient {
       // BitTorrent v1 hashes are 40 hex characters; v2 hashes are 64. Anything else
       // may be a Usenet download ID and must never be sent to qBittorrent.
       if (!hash || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) continue;
-      associations.set(hash, {
+      const droppedPath = record.data?.droppedPath?.trim() || null;
+      const historySourcePath = record.data?.sourcePath?.trim() || null;
+      const sourcePath = droppedPath || historySourcePath;
+      // downloadFolderImported commonly exposes the exact imported file as
+      // droppedPath and the release/payload root as sourcePath. Keep both: the file
+      // proves the primary hardlink while the root bounds recursive sidecar checks.
+      const payloadPath = droppedPath && historySourcePath ? historySourcePath : null;
+      const importedPath = record.data?.importedPath?.trim() || null;
+      associations.set(`${hash}:${sourcePath ?? ''}:${payloadPath ?? ''}:${importedPath ?? ''}`, {
         hash,
-        sourcePath: record.data?.droppedPath ?? record.data?.sourcePath ?? null,
+        sourcePath,
+        payloadPath,
+        importedPath,
+        historyId: Number.isInteger(record.id) ? record.id! : null,
+        date: record.date?.trim() || null,
       });
     }
     return [...associations.values()];
+  }
+
+  async downloadIdIsExclusiveTo(mediaId: number | null, hash: string): Promise<boolean> {
+    const pageSize = 100;
+    const maxRecords = 1_000;
+    for (let page = 1; page <= Math.ceil(maxRecords / pageSize); page++) {
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+        sortKey: 'date',
+        sortDirection: 'descending',
+        downloadId: hash,
+      });
+      const response = await this.request<{
+        totalRecords?: number;
+        records?: Array<{ movieId?: number; seriesId?: number }>;
+      }>(`/history?${params}`);
+      if (
+        !Array.isArray(response.records) || !Number.isInteger(response.totalRecords) ||
+        response.totalRecords! < 0
+      ) {
+        throw new ArrApiError('Arr returned an invalid download history response');
+      }
+      if (response.totalRecords! > maxRecords) return false;
+      for (const record of response.records) {
+        const recordMediaId = this.type === 'radarr' ? record.movieId : record.seriesId;
+        if (!Number.isInteger(recordMediaId) || mediaId === null || recordMediaId !== mediaId) {
+          return false;
+        }
+      }
+      if (page * pageSize >= response.totalRecords!) return true;
+    }
+    return false;
   }
 
   async deleteMedia(id: number, addImportExclusion: boolean): Promise<void> {
