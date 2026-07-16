@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { BadgeCheck, Copy } from "lucide-react";
@@ -14,7 +14,13 @@ import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import { requireAuth } from "../lib/requireAuth";
-import { DataSurface, PageHeader } from "../components/Workspace";
+import {
+  CollectionToolbar,
+  DataSurface,
+  PageHeader,
+} from "../components/Workspace";
+import { ExpandableSearch } from "../components/ExpandableSearch";
+import { normalizeSearchQuery } from "@shared/search";
 
 const PAGE_SIZE = 50;
 
@@ -22,19 +28,26 @@ type TypeFilter = "all" | "movie" | "tv";
 
 function validateDuplicatesSearch(search: Record<string, unknown>): {
   type: TypeFilter;
+  search?: string;
 } {
   const type = search.type;
-  return { type: type === "movie" || type === "tv" ? type : "all" };
+  return {
+    type: type === "movie" || type === "tv" ? type : "all",
+    search: normalizeSearchQuery(search.search),
+  };
 }
 
 export const Route = createFileRoute("/duplicates")({
   validateSearch: validateDuplicatesSearch,
+  search: {
+    middlewares: [stripSearchParams({ type: "all", search: "" })],
+  },
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DuplicatesPage,
 });
 
 function DuplicatesPage() {
-  const { type } = Route.useSearch();
+  const { type, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
   const qc = useQueryClient();
 
@@ -42,25 +55,33 @@ function DuplicatesPage() {
 
   function setType(newType: TypeFilter) {
     setOffset(0);
-    void navigate({ search: { type: newType }, replace: true });
+    void navigate({ search: { type: newType, search }, replace: true });
   }
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["duplicates", { type, offset }],
-    queryFn: () => api.duplicates.list({ type, limit: PAGE_SIZE, offset }),
+  function setSearch(newSearch: string) {
+    setOffset(0);
+    void navigate({ search: { type, search: newSearch }, replace: true });
+  }
+
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ["duplicates", { type, search, offset }],
+    queryFn: () =>
+      api.duplicates.list({ type, search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
-  const [deleteResult, setDeleteResult] = useState<{
-    mode: "versions" | "whole-item";
-    title?: string;
-    deletedCount: number;
-    partialCount: number;
-    failedCount: number;
-    fileSizeFreed: number;
-    errors: string[];
-  } | null>(null);
+  const [deleteResult, setDeleteResult] = useState<
+    {
+      mode: "versions" | "whole-item";
+      title?: string;
+      deletedCount: number;
+      partialCount: number;
+      failedCount: number;
+      fileSizeFreed: number;
+      errors: string[];
+    } | null
+  >(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
@@ -89,16 +110,15 @@ function DuplicatesPage() {
       const errors: string[] = [];
       for (const mediaId of mediaIds) {
         try {
-          const res =
-            group.mediaType === "movie"
-              ? await api.duplicates.deleteMovieMediaVersion(
-                  group.ratingKey,
-                  mediaId,
-                )
-              : await api.duplicates.deleteEpisodeMediaVersion(
-                  group.episodeRatingKey,
-                  mediaId,
-                );
+          const res = group.mediaType === "movie"
+            ? await api.duplicates.deleteMovieMediaVersion(
+              group.ratingKey,
+              mediaId,
+            )
+            : await api.duplicates.deleteEpisodeMediaVersion(
+              group.episodeRatingKey,
+              mediaId,
+            );
           deletedCount++;
           fileSizeFreed += res.fileSizeFreed;
         } catch (err) {
@@ -147,8 +167,9 @@ function DuplicatesPage() {
               failedCount: res.failed.length,
               // deleteItems doesn't return freed size per item; the group's own
               // combined size already reflects every version being removed.
-              fileSizeFreed:
-                res.deleted.length > 0 ? (group.combinedFileSize ?? 0) : 0,
+              fileSizeFreed: res.deleted.length > 0
+                ? (group.combinedFileSize ?? 0)
+                : 0,
               errors: [
                 ...res.partial.flatMap((item) =>
                   item.failedInstances.map((instance) =>
@@ -189,135 +210,157 @@ function DuplicatesPage() {
           title="Duplicate versions"
           icon={Copy}
           tone="accent"
-          description={
-            data ? (
+          description={data
+            ? (
               `${data.total.toLocaleString()} with multiple synced versions`
-            ) : (
-              <span className="skeleton inline-block h-3 w-40 align-middle" />
             )
-          }
-          actions={
-            <select
-              className="select select-bordered select-sm"
-              value={type}
-              onChange={(e) => setType(e.target.value as TypeFilter)}
-              aria-label="Filter by media type"
-            >
-              <option value="all">All</option>
-              <option value="movie">Movies</option>
-              <option value="tv">TV</option>
-            </select>
-          }
+            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
         />
       </div>
 
-      {isError ? (
-        <ErrorAlert
-          message={
-            error instanceof Error ? error.message : "Failed to load duplicates"
-          }
-          onRetry={() => void refetch()}
-        />
-      ) : (
-        <>
-          {deleteResult && (
-            <DeleteResultAlert
-              variant={deleteResult.failedCount > 0 ||
-                  deleteResult.partialCount > 0
-                ? "warning"
-                : "success"}
-              onDismiss={() => setDeleteResult(null)}
-            >
-              {deleteResult.mode === "whole-item" &&
-                deleteResult.partialCount > 0 && (
-                <>
-                  Partially deleted "{deleteResult.title}" from its mapped media
-                  managers. Retry to reconcile the remaining instances.
-                </>
-              )}
-              {deleteResult.mode === "whole-item" &&
-                deleteResult.partialCount === 0 &&
-                deleteResult.deletedCount === 0 && (
-                <>Could not delete "{deleteResult.title}".</>
-              )}
-              {deleteResult.mode === "whole-item" &&
-                deleteResult.deletedCount > 0 && (
-                <>
-                  Deleted "{deleteResult.title}" from Plex (
-                  {formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                </>
-              )}
-              {deleteResult.mode === "versions" && (
-                <>
-                  Deleted {deleteResult.deletedCount} version
-                  {deleteResult.deletedCount === 1 ? "" : "s"} (
-                  {formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                </>
-              )}
-              {deleteResult.errors.length > 0 && (
-                <>
-                  {" "}
-                  Details:{" "}
-                  {deleteResult.errors.join("; ")}
-                </>
-              )}
-            </DeleteResultAlert>
-          )}
-
-          {isLoading ? (
-            <DuplicatesTableSkeleton />
-          ) : data && data.groups.length === 0 ? (
-            <EmptyState
-              icon={BadgeCheck}
-              title="No duplicate versions"
-              description="Your library is tidy—there are no redundant synced versions in this view."
-            />
-          ) : (
-            <DataSurface className="overflow-x-auto">
-              <table className="table table-sm">
-                <thead>
-                  <tr>
-                    <th>Title</th>
-                    <th>Versions</th>
-                    <th>Combined size</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data?.groups.map((item) => (
-                    <DuplicateGroupRow
-                      key={
-                        item.mediaType === "movie"
-                          ? item.ratingKey
-                          : item.episodeRatingKey
-                      }
-                      item={item}
-                      onReview={() => openReview(item)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </DataSurface>
-          )}
-
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+      {isError
+        ? (
+          <ErrorAlert
+            message={error instanceof Error
+              ? error.message
+              : "Failed to load duplicates"}
+            onRetry={() => void refetch()}
           />
-        </>
-      )}
+        )
+        : (
+          <>
+            {deleteResult && (
+              <DeleteResultAlert
+                variant={deleteResult.failedCount > 0 ||
+                    deleteResult.partialCount > 0
+                  ? "warning"
+                  : "success"}
+                onDismiss={() => setDeleteResult(null)}
+              >
+                {deleteResult.mode === "whole-item" &&
+                  deleteResult.partialCount > 0 && (
+                  <>
+                    Partially deleted "{deleteResult.title}" from its mapped
+                    media managers. Retry to reconcile the remaining instances.
+                  </>
+                )}
+                {deleteResult.mode === "whole-item" &&
+                  deleteResult.partialCount === 0 &&
+                  deleteResult.deletedCount === 0 && (
+                  <>Could not delete "{deleteResult.title}".</>
+                )}
+                {deleteResult.mode === "whole-item" &&
+                  deleteResult.deletedCount > 0 && (
+                  <>
+                    Deleted "{deleteResult.title}" from Plex (
+                    {formatKilobytes(deleteResult.fileSizeFreed)} freed).
+                  </>
+                )}
+                {deleteResult.mode === "versions" && (
+                  <>
+                    Deleted {deleteResult.deletedCount} version
+                    {deleteResult.deletedCount === 1 ? "" : "s"} (
+                    {formatKilobytes(deleteResult.fileSizeFreed)} freed).
+                  </>
+                )}
+                {deleteResult.errors.length > 0 && (
+                  <>
+                    {" "}
+                    Details: {deleteResult.errors.join("; ")}
+                  </>
+                )}
+              </DeleteResultAlert>
+            )}
+
+            <CollectionToolbar
+              eyebrow="Content review"
+              title="Duplicate groups"
+              actions={
+                <>
+                  <ExpandableSearch
+                    search={search}
+                    pending={isFetching}
+                    onSearchChange={setSearch}
+                    label="Search duplicate titles"
+                    placeholder="Search movies, shows, or episodes..."
+                  />
+                  <select
+                    className="select select-bordered select-sm"
+                    value={type}
+                    onChange={(e) => setType(e.target.value as TypeFilter)}
+                    aria-label="Filter by media type"
+                  >
+                    <option value="all">All media</option>
+                    <option value="movie">Movies</option>
+                    <option value="tv">TV</option>
+                  </select>
+                </>
+              }
+              meta={data
+                ? search
+                  ? `${data.total.toLocaleString()} match${
+                    data.total === 1 ? "" : "es"
+                  }`
+                  : `${data.total.toLocaleString()} groups`
+                : undefined}
+            />
+
+            {isLoading
+              ? <DuplicatesTableSkeleton />
+              : data && data.groups.length === 0
+              ? (
+                <EmptyState
+                  icon={BadgeCheck}
+                  title={search
+                    ? "No matching duplicate titles"
+                    : "No duplicate versions"}
+                  description={search
+                    ? `No duplicate movies, shows, or episodes match “${search}”.`
+                    : "Your library is tidy—there are no redundant synced versions in this view."}
+                />
+              )
+              : (
+                <DataSurface className="overflow-x-auto">
+                  <table className="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Title</th>
+                        <th>Versions</th>
+                        <th>Combined size</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data?.groups.map((item) => (
+                        <DuplicateGroupRow
+                          key={item.mediaType === "movie"
+                            ? item.ratingKey
+                            : item.episodeRatingKey}
+                          item={item}
+                          onReview={() => openReview(item)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </DataSurface>
+              )}
+
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={(p) => setOffset(p * PAGE_SIZE)}
+            />
+          </>
+        )}
 
       <VersionPickerDialog
         dialogRef={dialogRef}
         item={reviewItem}
-        pending={
-          deleteWholeItemMutation.isPending || deleteVersionsMutation.isPending
-        }
+        pending={deleteWholeItemMutation.isPending ||
+          deleteVersionsMutation.isPending}
         error={deleteWholeItemMutation.error ?? deleteVersionsMutation.error}
         onConfirm={(mediaIds, deleteWholeItem) =>
-          reviewItem && handleConfirm(reviewItem, mediaIds, deleteWholeItem)
-        }
+          reviewItem && handleConfirm(reviewItem, mediaIds, deleteWholeItem)}
         onCancel={closeReview}
       />
     </div>

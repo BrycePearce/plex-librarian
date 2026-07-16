@@ -36,10 +36,12 @@ import { Pagination } from "../components/Pagination";
 import { useItemSelection } from "./-stale/useItemSelection";
 import { useScrollToOffset } from "./-stale/useScrollToOffset";
 import { StaleFilters } from "./-stale/StaleFilters";
+import { ExpandableSearch } from "../components/ExpandableSearch";
+import { normalizeSearchQuery } from "@shared/search";
 import { StaleItemsTable } from "./-stale/StaleItemsTable";
 import { SelectionActionBar } from "./-stale/SelectionActionBar";
 import { DeleteConfirmDialog } from "../features/mediaDeletion/DeleteConfirmDialog";
-import { SectionHeading } from "../components/Workspace";
+import { CollectionToolbar } from "../components/Workspace";
 import "./libraries.$key.stale.css";
 
 const PAGE_SIZE = 50;
@@ -62,6 +64,7 @@ const FILTERS = ["all", "watched", "unwatched"] as const;
 const staleSearchDefaults = {
   days: 365,
   filter: "all",
+  search: "",
   duplicatesOnly: false,
   sort: "fileSize",
   order: "desc",
@@ -77,7 +80,7 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
   const offset = Number(search.offset);
   const minAgeDays = Number(search.minAgeDays);
   return {
-    days: Number.isInteger(days) && days > 0 ? days : staleSearchDefaults.days,
+    days: Number.isInteger(days) && days >= 0 ? days : staleSearchDefaults.days,
     filter: (FILTERS as readonly string[]).includes(search.filter as string)
       ? (search.filter as StaleParams["filter"])
       : staleSearchDefaults.filter,
@@ -90,10 +93,10 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
     // serialization doesn't guarantee which shape survives a round trip.
     duplicatesOnly: search.duplicatesOnly === true ||
       search.duplicatesOnly === "true",
+    search: normalizeSearchQuery(search.search),
     offset: Number.isFinite(offset) && offset >= 0
       ? Math.floor(offset)
       : staleSearchDefaults.offset,
-    limit: PAGE_SIZE,
     ...(Number.isInteger(minAgeDays) && minAgeDays >= 0 ? { minAgeDays } : {}),
   };
 }
@@ -192,7 +195,7 @@ function StalePage() {
     refetch: refetchStale,
   } = useQuery({
     queryKey: ["stale", key, params],
-    queryFn: () => api.libraries.stale(key, params),
+    queryFn: () => api.libraries.stale(key, { ...params, limit: PAGE_SIZE }),
     placeholderData: (prev) => prev,
     // A 404 here means this library hasn't been synced even once yet (still queued
     // behind others in the current sync) — retrying won't make the row appear any
@@ -213,7 +216,7 @@ function StalePage() {
       void qc.prefetchQuery({
         queryKey: ["stale", key, { ...params, offset: nextOffset }],
         queryFn: () =>
-          api.libraries.stale(key, { ...params, offset: nextOffset }),
+          api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: nextOffset }),
       });
     }
     const prevOffset = offset - PAGE_SIZE;
@@ -221,7 +224,7 @@ function StalePage() {
       void qc.prefetchQuery({
         queryKey: ["stale", key, { ...params, offset: prevOffset }],
         queryFn: () =>
-          api.libraries.stale(key, { ...params, offset: prevOffset }),
+          api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: prevOffset }),
       });
     }
   }, [data, params, key, qc]);
@@ -444,7 +447,9 @@ function StalePage() {
           <LibraryInsight
             icon={<Clock3 />}
             label="Inactive for"
-            value={`${params.days ?? staleSearchDefaults.days}+ days`}
+            value={(params.days ?? staleSearchDefaults.days) === 0
+              ? "Everything"
+              : `${params.days ?? staleSearchDefaults.days}+ days`}
           />
         </div>
       )}
@@ -536,11 +541,25 @@ function StalePage() {
               </DeleteResultAlert>
             )}
 
-            <SectionHeading
+            <CollectionToolbar
               eyebrow="Content review"
               title="Stale items"
+              actions={
+                <ExpandableSearch
+                  search={params.search ?? staleSearchDefaults.search}
+                  pending={isFetching}
+                  label="Search stale titles"
+                  placeholder="Search all matching titles..."
+                  onSearchChange={(search) =>
+                    setParams((p) => ({ ...p, search, offset: 0 }))}
+                />
+              }
               meta={data
-                ? `Showing ${pageItems.length.toLocaleString()} of ${data.total.toLocaleString()}`
+                ? params.search
+                  ? `${data.total.toLocaleString()} match${
+                    data.total === 1 ? "" : "es"
+                  }`
+                  : `Showing ${pageItems.length.toLocaleString()} of ${data.total.toLocaleString()}`
                 : undefined}
             />
 

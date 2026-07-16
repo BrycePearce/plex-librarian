@@ -92,6 +92,7 @@ export interface StaleParams {
   days?: number;
   maxDays?: number;
   minAgeDays?: number;
+  search?: string;
   filter?: "all" | "watched" | "unwatched";
   duplicatesOnly?: boolean;
   sort?: SortKey;
@@ -232,6 +233,7 @@ export const api = {
     list: (
       params: {
         type?: "movie" | "tv" | "all";
+        search?: string;
         limit?: number;
         offset?: number;
       } = {},
@@ -358,6 +360,7 @@ export const api = {
     list: (
       params: {
         inactiveDays?: number;
+        search?: string;
         filter?: "all" | "inactive" | "never" | "unknown";
         risk?:
           | "all"

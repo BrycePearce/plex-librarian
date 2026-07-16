@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
 import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
+import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DuplicateEpisodeGroup,
@@ -48,10 +49,35 @@ router.get('/', async (c) => {
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 50 : Math.min(rawLimit, 200);
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+  const parsedSearch = parseSearchQuery(c.req.query('search'));
+  if ('error' in parsedSearch) return c.json({ error: parsedSearch.error }, 400);
+  const { search } = parsedSearch;
+
+  const movieSearchCond = search.length >= 2
+    ? sql`exists (
+        select 1 from ${items}
+        where ${items.serverId} = ${itemMediaVersions.serverId}
+          and ${items.ratingKey} = ${itemMediaVersions.itemRatingKey}
+          and instr(lower(${items.title}), lower(${search})) > 0
+      )`
+    : undefined;
+  // Episode searches include both the episode title and its parent show title, matching
+  // the two pieces of identity displayed in the duplicate-groups table.
+  const episodeSearchCond = search.length >= 2
+    ? or(
+      sql`instr(lower(${episodeMediaVersions.episodeTitle}), lower(${search})) > 0`,
+      sql`exists (
+        select 1 from ${items}
+        where ${items.serverId} = ${episodeMediaVersions.serverId}
+          and ${items.ratingKey} = ${episodeMediaVersions.showRatingKey}
+          and instr(lower(${items.title}), lower(${search})) > 0
+      )`,
+    )
+    : undefined;
 
   const serverId = c.get('activeServerId');
   if (serverId === null) {
-    return c.json({ limit, offset, total: 0, groups: [] } satisfies DuplicatesResponse);
+    return c.json({ search, limit, offset, total: 0, groups: [] } satisfies DuplicatesResponse);
   }
 
   // Any group ranked beyond position (offset + limit) can never appear on this page,
@@ -74,7 +100,7 @@ router.get('/', async (c) => {
         totalGroups: sql<number>`count(*) over ()`,
       })
         .from(itemMediaVersions)
-        .where(eq(itemMediaVersions.serverId, serverId))
+        .where(and(eq(itemMediaVersions.serverId, serverId), movieSearchCond))
         .groupBy(itemMediaVersions.itemRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${itemMediaVersions.fileSize})`))
@@ -87,7 +113,7 @@ router.get('/', async (c) => {
         totalGroups: sql<number>`count(*) over ()`,
       })
         .from(episodeMediaVersions)
-        .where(eq(episodeMediaVersions.serverId, serverId))
+        .where(and(eq(episodeMediaVersions.serverId, serverId), episodeSearchCond))
         .groupBy(episodeMediaVersions.episodeRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${episodeMediaVersions.fileSize})`))
@@ -195,7 +221,7 @@ router.get('/', async (c) => {
     })
     .filter((g): g is DuplicateGroup => g !== null);
 
-  return c.json({ limit, offset, total, groups } satisfies DuplicatesResponse);
+  return c.json({ search, limit, offset, total, groups } satisfies DuplicatesResponse);
 });
 
 function groupVersions<

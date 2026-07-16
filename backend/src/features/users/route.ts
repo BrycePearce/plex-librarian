@@ -3,6 +3,7 @@ import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { libraries, servers, settings, userPlayObservations, users } from '../../db/schema.ts';
 import { userByAccountId, usersByServer } from '../../db/scope.ts';
+import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { getActiveServer } from '../../integrations/plex/index.ts';
 import {
@@ -162,6 +163,7 @@ router.get('/', async (c) => {
         historyComplete: false,
         inactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
         defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
+        search: '',
         risk: 'all',
         sort: 'username',
         order: 'asc',
@@ -235,6 +237,10 @@ router.get('/', async (c) => {
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 100 : Math.min(rawLimit, 500);
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+  const parsedSearch = parseSearchQuery(c.req.query('search'));
+  if ('error' in parsedSearch) return c.json({ error: parsedSearch.error }, 400);
+  const { search } = parsedSearch;
+  const normalizedSearch = search.toLocaleLowerCase();
 
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - inactiveDays * 86400;
@@ -252,7 +258,11 @@ router.get('/', async (c) => {
     localAccountId: users.localAccountId,
   }).from(users).where(usersByServer(serverId));
 
-  const activityFiltered = rows.map((row) => ({
+  const activityFiltered = rows.filter((user) =>
+    !normalizedSearch ||
+    user.username.toLocaleLowerCase().includes(normalizedSearch) ||
+    user.email?.toLocaleLowerCase().includes(normalizedSearch)
+  ).map((row) => ({
     ...row,
     activityStatus: userActivityStatus(row.lastViewedAt, row.localAccountId, historyComplete),
   })).filter((user) =>
@@ -323,6 +333,7 @@ router.get('/', async (c) => {
       historyComplete,
       inactiveDays,
       defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
+      search,
       risk,
       sort,
       order: orderStr,

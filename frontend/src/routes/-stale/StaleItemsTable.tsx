@@ -1,5 +1,5 @@
 import { AnimatePresence } from "motion/react";
-import { ArrowDown, ArrowUp, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, SearchX, Sparkles } from "lucide-react";
 import type { SortKey, StaleItem, StaleParams } from "../../lib/api";
 import { StaleItemRow } from "./StaleItemRow";
 import { DataSurface } from "../../components/Workspace";
@@ -155,14 +155,16 @@ export function StaleItemsTable({
           </tr>
         </thead>
         <tbody>
-          {// Plain keyed array by default, only wrapped in AnimatePresence right before a
-          // same-page deletion — see `animateRowRemoval` in the stale page for why: even
-          // with a zero-duration exit variant, AnimatePresence keeps an outgoing element
-          // mounted until its exit animation's completion callback fires (a tick later,
-          // not synchronously) while incoming elements mount immediately, so old and new
-          // rows would briefly coexist in the tbody on every page/sort/filter change. A
-          // plain array lets React swap keys in one synchronous commit instead.
-          animateRowRemoval ? <AnimatePresence>{rows}</AnimatePresence> : rows}
+          {
+            // Plain keyed array by default, only wrapped in AnimatePresence right before a
+            // same-page deletion — see `animateRowRemoval` in the stale page for why: even
+            // with a zero-duration exit variant, AnimatePresence keeps an outgoing element
+            // mounted until its exit animation's completion callback fires (a tick later,
+            // not synchronously) while incoming elements mount immediately, so old and new
+            // rows would briefly coexist in the tbody on every page/sort/filter change. A
+            // plain array lets React swap keys in one synchronous commit instead.
+            animateRowRemoval ? <AnimatePresence>{rows}</AnimatePresence> : rows
+          }
         </tbody>
       </table>
       {items.length === 0 && (
@@ -181,12 +183,16 @@ export function StaleItemsTable({
             )
             : (
               <>
-                <Sparkles className="w-8 h-8" />
+                {params.search
+                  ? <SearchX className="w-8 h-8" />
+                  : <Sparkles className="w-8 h-8" />}
                 <p className="font-medium text-base-content/60">
-                  All caught up
+                  {params.search ? "No matching titles" : "All caught up"}
                 </p>
                 <p className="text-sm">
-                  No stale items match these filters.
+                  {params.search
+                    ? `Nothing in this stale result set matches “${params.search}”.`
+                    : "No stale items match these filters."}
                 </p>
               </>
             )}

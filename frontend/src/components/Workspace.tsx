@@ -32,7 +32,11 @@ export function PageHeader({
         >
           <ArrowLeft className="size-4" />
         </Link>
-        {Icon && <span className="workspace-page-icon"><Icon className="size-5" /></span>}
+        {Icon && (
+          <span className="workspace-page-icon">
+            <Icon className="size-5" />
+          </span>
+        )}
         <div className="workspace-page-copy">
           <span className="workspace-eyebrow">{eyebrow}</span>
           <h1>{title}</h1>
@@ -64,6 +68,31 @@ export function SectionHeading({
   );
 }
 
+export function CollectionToolbar({
+  eyebrow,
+  title,
+  actions,
+  meta,
+}: {
+  eyebrow: string;
+  title: ReactNode;
+  actions?: ReactNode;
+  meta?: ReactNode;
+}) {
+  return (
+    <div className="workspace-collection-toolbar">
+      <div className="workspace-collection-title">
+        <span className="workspace-eyebrow">{eyebrow}</span>
+        <h2>{title}</h2>
+      </div>
+      <div className="workspace-collection-actions">
+        {actions}
+        {meta && <div className="workspace-collection-meta">{meta}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function DataSurface({
   children,
   className = "",
@@ -71,7 +100,9 @@ export function DataSurface({
   children: ReactNode;
   className?: string;
 }) {
-  return <section className={`workspace-surface ${className}`}>{children}</section>;
+  return (
+    <section className={`workspace-surface ${className}`}>{children}</section>
+  );
 }
 
 export function FilterSurface({ children }: { children: ReactNode }) {

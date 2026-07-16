@@ -12,6 +12,15 @@ Deno.test('minimum item age can make never-watched eligibility stricter', () => 
   assertEquals(staleCutoffs(NOW, 90, null, 365).unwatchedAddedBefore, NOW - 365 * DAY);
 });
 
+Deno.test('zero days produces an unbounded current-time cutoff', () => {
+  assertEquals(staleCutoffs(NOW, 0, null, 90), {
+    viewedBefore: NOW,
+    viewedOnOrAfter: null,
+    unwatchedAddedBefore: NOW - 90 * DAY,
+    unwatchedAddedOnOrAfter: null,
+  });
+});
+
 Deno.test('range boundaries retain the requested bucket', () => {
   assertEquals(staleCutoffs(NOW, 365, 730, 90), {
     viewedBefore: NOW - 365 * DAY,

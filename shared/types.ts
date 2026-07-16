@@ -181,6 +181,7 @@ export interface StaleResponse {
   minAgeDays: number;
   libraryStaleMinAgeDays: number | null;
   historySyncedAt: number | null;
+  search: string;
   filter: string;
   sort: string;
   order: string;
@@ -262,6 +263,7 @@ export interface DuplicateEpisodeGroup {
 export type DuplicateGroup = DuplicateMovieGroup | DuplicateEpisodeGroup;
 
 export interface DuplicatesResponse {
+  search: string;
   limit: number;
   offset: number;
   total: number;
@@ -333,6 +335,7 @@ export interface UsersResponse {
   historyComplete: boolean;
   inactiveDays: number;
   defaultInactiveDays: number;
+  search: string;
   risk: "all" | "attention" | SharingRiskLevel;
   sort: "username" | "lastViewedAt" | "sharingRisk";
   order: "asc" | "desc";

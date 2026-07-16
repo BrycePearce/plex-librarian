@@ -15,6 +15,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
+import { parseSearchQuery } from '../../http/searchQuery.ts';
 import {
   arrDeleteAttempts,
   downloadFileDeleteAttempts,
@@ -149,9 +150,9 @@ router.get('/:key/stale', async (c) => {
   // Minimum inactivity: time since last view for watched items, or time since added for
   // never-watched items (default 365).
   const rawDays = Number(c.req.query('days') ?? '365');
-  if (!Number.isInteger(rawDays) || rawDays < 1) {
+  if (!Number.isInteger(rawDays) || rawDays < 0) {
     return c.json({
-      error: 'days must be a positive integer',
+      error: 'days must be a non-negative integer',
     }, 400);
   }
   const days = rawDays;
@@ -206,6 +207,16 @@ router.get('/:key/stale', async (c) => {
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
 
+  // Literal substring search across the full filtered result set. `instr` deliberately
+  // avoids treating user-entered `%` and `_` as LIKE wildcards. SQLite's built-in lower()
+  // supplies ASCII case folding; non-ASCII text still matches exactly.
+  const parsedSearch = parseSearchQuery(c.req.query('search'));
+  if ('error' in parsedSearch) return c.json({ error: parsedSearch.error }, 400);
+  const { search } = parsedSearch;
+  const titleSearchCond = search.length >= 2
+    ? sql`instr(lower(${items.title}), lower(${search})) > 0`
+    : undefined;
+
   const now = Math.floor(Date.now() / 1000);
   const {
     viewedBefore,
@@ -221,24 +232,29 @@ router.get('/:key/stale', async (c) => {
 
   // Watched but stale: viewed before the minimum boundary and, for range queries,
   // on or after the maximum boundary.
-  const watchedStaleCond = and(
-    isNotNull(items.lastViewedAt),
-    viewedOnOrAfter !== null
-      ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
-      : lt(items.lastViewedAt, viewedBefore),
-  );
+  const showEverything = days === 0 && maxDays === null;
+  const watchedStaleCond = showEverything
+    ? isNotNull(items.lastViewedAt)
+    : and(
+      isNotNull(items.lastViewedAt),
+      viewedOnOrAfter !== null
+        ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
+        : lt(items.lastViewedAt, viewedBefore),
+    );
 
   // Unwatched: null lastViewedAt AND old enough for both the selected inactivity
   // duration and the minimum-item-age safety floor (the stricter boundary wins).
   // Unknown add dates are excluded: they cannot prove that the item has met the selected
   // threshold, which matters when this list informs destructive cleanup decisions.
-  const unwatchedCond = and(
-    isNull(items.lastViewedAt),
-    isNotNull(items.addedAt),
-    unwatchedAddedOnOrAfter !== null
-      ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
-      : lt(items.addedAt, unwatchedAddedBefore),
-  );
+  const unwatchedCond = showEverything
+    ? isNull(items.lastViewedAt)
+    : and(
+      isNull(items.lastViewedAt),
+      isNotNull(items.addedAt),
+      unwatchedAddedOnOrAfter !== null
+        ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
+        : lt(items.addedAt, unwatchedAddedBefore),
+    );
 
   const staleCond = filter === 'unwatched'
     ? unwatchedCond
@@ -272,9 +288,12 @@ router.get('/:key/stale', async (c) => {
   // support, so a request for them is silently a no-op and must not claim otherwise.
   const duplicatesOnly = duplicatesCond !== undefined;
 
-  const staleWhere = duplicatesCond
-    ? and(itemsByLibrary(serverId, key), staleCond, duplicatesCond)
-    : and(itemsByLibrary(serverId, key), staleCond);
+  const staleWhere = and(
+    itemsByLibrary(serverId, key),
+    staleCond,
+    duplicatesCond,
+    titleSearchCond,
+  );
 
   const [[{ total }], staleItems] = await Promise.all([
     db.select({ total: count() }).from(items).where(staleWhere),
@@ -334,6 +353,7 @@ router.get('/:key/stale', async (c) => {
       minAgeDays,
       libraryStaleMinAgeDays: library.staleMinAgeDays,
       historySyncedAt: library.historySyncedAt,
+      search,
       filter,
       sort,
       order: orderStr,
