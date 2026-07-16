@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { api } from "./api";
+import type { DeleteItemsResponse } from "./api";
+import { partitionDeletionRatingKeys } from "./deletionPlan.ts";
 
 // Shared between the stale page's bulk whole-item delete and the duplicates page's
 // "delete this movie entirely" escalation (see VersionPickerDialog) — both ultimately
@@ -13,15 +15,50 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
   const qc = useQueryClient();
 
   return useMutation({
-    mutationFn: (
-      { libraryKey, ratingKeys, mode, cleanupDownloads }: {
+    mutationFn: async (
+      { libraryKey, ratingKeys, mode, cleanupDownloads, coordinatedRatingKeys }: {
         libraryKey: string;
         ratingKeys: string[];
         mode?: "coordinated" | "plex-only";
         cleanupDownloads?: boolean;
+        coordinatedRatingKeys?: string[];
       },
-    ) =>
-      api.libraries.deleteItems(libraryKey, ratingKeys, mode, cleanupDownloads),
+    ) => {
+      if (coordinatedRatingKeys === undefined) {
+        return await api.libraries.deleteItems(
+          libraryKey,
+          ratingKeys,
+          mode,
+          cleanupDownloads,
+        );
+      }
+
+      const { coordinated, plexOnly } = partitionDeletionRatingKeys(
+        ratingKeys,
+        coordinatedRatingKeys,
+      );
+      const results: DeleteItemsResponse[] = [];
+      if (coordinated.length > 0) {
+        results.push(
+          await api.libraries.deleteItems(
+            libraryKey,
+            coordinated,
+            "coordinated",
+            cleanupDownloads,
+          ),
+        );
+      }
+      if (plexOnly.length > 0) {
+        results.push(
+          await api.libraries.deleteItems(libraryKey, plexOnly, "plex-only"),
+        );
+      }
+      return {
+        deleted: results.flatMap((result) => result.deleted),
+        partial: results.flatMap((result) => result.partial),
+        failed: results.flatMap((result) => result.failed),
+      } satisfies DeleteItemsResponse;
+    },
     onSuccess: () => {
       for (const queryKey of invalidateQueryKeys) {
         void qc.invalidateQueries({ queryKey });

@@ -11,6 +11,7 @@ import {
   Folder,
   Info,
   Trash2,
+  X,
 } from "lucide-react";
 import { HoverPopover } from "../../components/HoverPopover";
 import { ServiceIcon } from "../../components/ServiceIcons";
@@ -39,13 +40,13 @@ export function DeleteConfirmDialog({
   items: StaleItem[];
   pending: boolean;
   error: unknown;
-  onConfirm: (
-    mode: "coordinated" | "plex-only",
-    cleanupDownloads: boolean,
-  ) => void;
+  onConfirm: (plan: {
+    coordinatedRatingKeys: string[];
+    cleanupDownloads: boolean;
+  }) => void;
   onCancel: () => void;
 }) {
-  const [plexOnly, setPlexOnly] = useState(false);
+  const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
@@ -77,10 +78,11 @@ export function DeleteConfirmDialog({
     ) => [file.path, file]),
   ).values()];
   const cleanupEligibleCount = cleanupEligibleItems.length;
-  const coordinatedReady = Boolean(
-    preview.data?.coordinatedConfigured &&
-      preview.data.items.every((item) => item.arrStatus === "resolved"),
-  );
+  const coordinatedRatingKeys = preview.data?.coordinatedConfigured
+    ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((item) =>
+      item.ratingKey
+    )
+    : [];
   const arrProblems =
     preview.data?.items.filter((item) => item.arrStatus !== "resolved") ?? [];
   const arrEntries =
@@ -92,6 +94,8 @@ export function DeleteConfirmDialog({
         }))
         : []
     ) ?? [];
+  const arrService = items[0]?.type === "show" ? "sonarr" : "radarr";
+  const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   const unmanagedSources =
     preview.data?.items.flatMap((previewItem) =>
       previewItem.sources.filter(
@@ -104,13 +108,19 @@ export function DeleteConfirmDialog({
     ) => [path.path, path]),
   ).values()];
   useEffect(() => {
+    setDeleteFromArr(true);
     setCleanupDownloads(false);
   }, [libraryKey, ratingKeys.join("|")]);
+  useEffect(() => {
+    if (preview.data && !preview.data.coordinatedConfigured) {
+      setDeleteFromArr(false);
+    }
+  }, [preview.data]);
   useEffect(() => {
     if (cleanupEligibleCount === 0) setCleanupDownloads(false);
   }, [cleanupEligibleCount]);
   const cancel = () => {
-    setPlexOnly(false);
+    setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
     setCleanupDownloads(false);
     onCancel();
   };
@@ -162,7 +172,10 @@ export function DeleteConfirmDialog({
                     )}
                   </span>
                   <PlannedServiceIcons
-                    plexOnly={plexOnly}
+                    deleteFromArr={deleteFromArr}
+                    arrService={arrService}
+                    arrStatus={previewItem?.arrStatus}
+                    arrReason={previewItem?.arrReason}
                     arrTargets={previewItem?.arrStatus === "resolved"
                       ? previewItem.arrTargets
                       : []}
@@ -179,6 +192,9 @@ export function DeleteConfirmDialog({
                         previewItem.downloadJobs.length === 0 &&
                         previewItem.orphanFiles.length === 0,
                     )}
+                    cleanupDownloads={cleanupDownloads}
+                    cleanupStatus={previewItem?.status}
+                    cleanupReason={previewItem?.reason}
                   />
                   <span className="text-base-content/50 font-mono text-xs shrink-0">
                     {item.fileSize != null
@@ -209,37 +225,34 @@ export function DeleteConfirmDialog({
             {error instanceof Error ? error.message : "Delete failed"}
           </p>
         )}
-        <div className="mt-3 space-y-2 rounded-lg border border-base-300 bg-base-200/35 p-2.5">
-          <CompactOption
-            label="Delete from Plex only"
-            info="Skips mapped Sonarr or Radarr instances. If the title is monitored, Arr may download it again."
-            checked={plexOnly}
-            disabled={pending}
-            onChange={(checked) => {
-              setPlexOnly(checked);
-              if (checked) setCleanupDownloads(false);
-            }}
-          />
-          {!plexOnly && (
-            <CompactOption
-              label={`Remove downloaded files (${cleanupEligibleCount})`}
-              info={cleanupEligibleCount > 0
-                ? `Applies only to the ${cleanupEligibleCount} of ${items.length} selected items with a verified live download job or hardlinked source file. Live jobs are removed through their download client; orphaned hardlinks are reverified and unlinked directly.`
-                : preview.data?.downloadClientsConfigured
-                ? "No selected items have a verified live qBittorrent job or resumable cleanup."
-                : "Connect qBittorrent or configure orphan cleanup path mappings under Media connections."}
-              checked={cleanupDownloads}
-              disabled={pending || preview.isLoading ||
-                cleanupEligibleCount === 0}
-              onChange={setCleanupDownloads}
-            />
-          )}
-        </div>
+        <DestinationOptions
+          arrService={arrService}
+          arrLabel={arrLabel}
+          arrCount={coordinatedRatingKeys.length}
+          totalCount={items.length}
+          deleteFromArr={deleteFromArr}
+          arrDisabled={pending || preview.isLoading ||
+            !preview.data?.coordinatedConfigured}
+          onArrChange={(checked) => {
+            setDeleteFromArr(checked);
+            if (!checked) setCleanupDownloads(false);
+          }}
+          cleanupDownloads={cleanupDownloads}
+          cleanupCount={cleanupEligibleCount}
+          cleanupInfo={cleanupEligibleCount > 0
+            ? `Applies to ${cleanupEligibleCount} of ${items.length} selected items with a verified live download job or hardlinked source file.`
+            : preview.data?.downloadClientsConfigured
+            ? "No selected items have a verified live qBittorrent job or hardlinked source file."
+            : "Connect qBittorrent or configure orphan cleanup path mappings under Media connections."}
+          cleanupDisabled={pending || preview.isLoading || !deleteFromArr ||
+            cleanupEligibleCount === 0}
+          onCleanupChange={setCleanupDownloads}
+        />
 
         <PreviewStatus
           loading={preview.isLoading}
           error={preview.isError ? preview.error.message : null}
-          plexOnly={plexOnly}
+          deleteFromArr={deleteFromArr}
           coordinatedConfigured={preview.data?.coordinatedConfigured ?? false}
           arrProblems={preview.data?.coordinatedConfigured
             ? arrProblems.map((problem) => ({
@@ -253,7 +266,7 @@ export function DeleteConfirmDialog({
 
         <DeletionTree
           items={items}
-          plexOnly={plexOnly}
+          deleteFromArr={deleteFromArr}
           arrEntries={arrEntries}
           downloadJobs={downloadJobs}
           orphanFiles={orphanFiles}
@@ -275,11 +288,11 @@ export function DeleteConfirmDialog({
             type="button"
             className="btn btn-sm btn-error gap-2"
             onClick={() =>
-              onConfirm(
-                plexOnly ? "plex-only" : "coordinated",
-                !plexOnly && cleanupDownloads,
-              )}
-            disabled={pending || (!plexOnly && !coordinatedReady)}
+              onConfirm({
+                coordinatedRatingKeys: deleteFromArr ? coordinatedRatingKeys : [],
+                cleanupDownloads: deleteFromArr && cleanupDownloads,
+              })}
+            disabled={pending || (deleteFromArr && preview.isLoading)}
           >
             {pending
               ? <span className="loading loading-spinner loading-xs" />
@@ -315,14 +328,18 @@ function InfoTip({ text }: { text: string }) {
   );
 }
 
-function CompactOption({
+function DestinationOption({
+  service,
   label,
+  count,
   info,
   checked,
   disabled,
   onChange,
 }: {
+  service: ServiceIconName;
   label: string;
+  count: number;
   info: string;
   checked: boolean;
   disabled: boolean;
@@ -330,20 +347,95 @@ function CompactOption({
 }) {
   return (
     <label
-      className={`flex items-center gap-2 text-sm ${
-        disabled ? "opacity-55" : "cursor-pointer"
-      }`}
+      className={`flex min-h-9 items-center gap-2 rounded-md border px-2.5 text-sm transition-colors ${
+        checked
+          ? "border-primary/35 bg-primary/10 text-base-content"
+          : "border-base-300 bg-base-100/35 text-base-content/65"
+      } ${disabled ? "opacity-45" : "cursor-pointer hover:border-base-content/25"}`}
     >
+      <ServiceIcon service={service} className="size-4 shrink-0" />
+      <span className="whitespace-nowrap font-medium">{label}</span>
+      <span className="text-[11px] tabular-nums text-base-content/45">
+        {count}
+      </span>
       <input
         type="checkbox"
-        className="checkbox checkbox-sm"
+        className="checkbox checkbox-sm ml-1"
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
       />
-      <span className="font-medium">{label}</span>
       <InfoTip text={info} />
     </label>
+  );
+}
+
+function DestinationOptions({
+  arrService,
+  arrLabel,
+  arrCount,
+  totalCount,
+  deleteFromArr,
+  arrDisabled,
+  onArrChange,
+  cleanupDownloads,
+  cleanupCount,
+  cleanupInfo,
+  cleanupDisabled,
+  onCleanupChange,
+}: {
+  arrService?: "radarr" | "sonarr";
+  arrLabel: string;
+  arrCount: number;
+  totalCount: number;
+  deleteFromArr: boolean;
+  arrDisabled: boolean;
+  onArrChange: (checked: boolean) => void;
+  cleanupDownloads: boolean;
+  cleanupCount: number;
+  cleanupInfo: string;
+  cleanupDisabled: boolean;
+  onCleanupChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-base-300 bg-base-200/35 p-2.5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          Delete destinations
+          <InfoTip text="Plex is always included. Optional destinations apply only to items that can be verified safely." />
+        </div>
+        <p className="mt-0.5 text-xs text-base-content/45">
+          Plex is always included
+          {deleteFromArr && arrCount < totalCount
+            ? ` · ${totalCount - arrCount} ${
+              totalCount - arrCount === 1 ? "item" : "items"
+            } will use Plex only`
+            : ""}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+        <DestinationOption
+          service={arrService ?? "radarr"}
+          label={arrLabel}
+          count={arrCount}
+          info={arrCount > 0
+            ? `Deletes through ${arrLabel} for ${arrCount} of ${totalCount} selected items. Items without a verified match remain Plex-only.`
+            : `No selected items can currently be deleted through ${arrLabel}.`}
+          checked={deleteFromArr}
+          disabled={arrDisabled}
+          onChange={onArrChange}
+        />
+        <DestinationOption
+          service="qbittorrent"
+          label="Downloads"
+          count={cleanupCount}
+          info={`${cleanupInfo} Download cleanup requires Arr deletion so managed library files are removed coherently.`}
+          checked={cleanupDownloads}
+          disabled={cleanupDisabled}
+          onChange={onCleanupChange}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -353,17 +445,19 @@ function ServiceMark({
   ariaLabel,
   popover,
   className,
+  unavailable = false,
 }: {
   service?: ServiceIconName;
   label?: string;
   ariaLabel: string;
   popover: ReactNode;
   className: string;
+  unavailable?: boolean;
 }) {
   return (
     <HoverPopover content={popover}>
       <span
-        className={`inline-flex size-5 cursor-help items-center justify-center rounded p-0.5 leading-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${className}`}
+        className={`relative inline-flex size-5 cursor-help items-center justify-center rounded p-0.5 leading-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${className}`}
         tabIndex={0}
         role="img"
         aria-label={ariaLabel}
@@ -371,27 +465,123 @@ function ServiceMark({
         {service
           ? <ServiceIcon service={service} className="size-3.5" />
           : <span className="text-[9px] font-bold">{label}</span>}
+        {unavailable && (
+          <span className="absolute -right-1 -top-1 flex size-3 items-center justify-center rounded-full bg-error text-error-content ring-1 ring-base-200">
+            <X className="size-2.5" strokeWidth={3} />
+          </span>
+        )}
       </span>
     </HoverPopover>
   );
 }
 
 function PlannedServiceIcons({
-  plexOnly,
+  deleteFromArr,
+  arrService,
+  arrStatus,
+  arrReason,
   arrTargets,
   downloadJobCount,
   hardlinkFileCount,
   downloadCleanupResuming,
+  cleanupDownloads,
+  cleanupStatus,
+  cleanupReason,
 }: {
-  plexOnly: boolean;
+  deleteFromArr: boolean;
+  arrService: "radarr" | "sonarr";
+  arrStatus?: "resolved" | "unavailable" | "error";
+  arrReason?: string;
   arrTargets: ArrCleanupTarget[];
   downloadJobCount: number;
   hardlinkFileCount: number;
   downloadCleanupResuming: boolean;
+  cleanupDownloads: boolean;
+  cleanupStatus?: "resolved" | "unavailable" | "error";
+  cleanupReason?: string;
 }) {
+  const arrUnavailable = deleteFromArr && arrStatus !== undefined && arrStatus !== "resolved";
+  const cleanupAvailable = downloadJobCount > 0 || hardlinkFileCount > 0 ||
+    downloadCleanupResuming;
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {!plexOnly && (downloadJobCount > 0 || downloadCleanupResuming) && (
+      <ServiceMark
+        service="plex"
+        ariaLabel="Delete from Plex"
+        popover={
+          <>
+            <div className="font-semibold">Plex</div>
+            <div className="mt-1 text-base-content/55">
+              This item is always removed from Plex.
+            </div>
+          </>
+        }
+        className="bg-warning/20 text-warning"
+      />
+      {deleteFromArr && arrUnavailable && (
+        <ServiceMark
+          service={arrService}
+          ariaLabel={`Arr deletion unavailable: ${arrReason ?? "no verified match"}`}
+          popover={
+            <>
+              <div className="font-semibold text-error">Arr unavailable</div>
+              <div className="mt-1 text-base-content/60">
+                {arrReason ?? "No verified Sonarr or Radarr match is available."}
+              </div>
+              <div className="mt-1 text-base-content/45">
+                This item will be deleted from Plex only and may be downloaded again if it remains monitored.
+              </div>
+            </>
+          }
+          className="bg-base-300/70 text-base-content/35"
+          unavailable
+        />
+      )}
+      {deleteFromArr && arrTargets.map((target, index) => (
+        <ServiceMark
+          key={`${target.instanceName}:${target.type}:${index}`}
+          service={target.type}
+          ariaLabel={`Delete through ${target.instanceName}`}
+          popover={
+            <>
+              <div className="font-semibold">
+                {target.type === "radarr" ? "Radarr" : "Sonarr"}
+              </div>
+              {target.instanceName.toLocaleLowerCase() !== target.type && (
+                <div className="mt-0.5 text-base-content/70">
+                  {target.instanceName}
+                </div>
+              )}
+              <div className="mt-1 text-base-content/55">
+                Deletes the managed title and its files from this instance.
+              </div>
+            </>
+          }
+          className={target.type === "radarr"
+            ? "bg-primary/20 text-primary"
+            : "bg-info/20 text-info"}
+        />
+      ))}
+      {cleanupDownloads && !cleanupAvailable && (
+        <ServiceMark
+          service="qbittorrent"
+          ariaLabel={`Downloaded-file cleanup unavailable: ${cleanupReason ?? "no verified files"}`}
+          popover={
+            <>
+              <div className="font-semibold text-error">Download cleanup unavailable</div>
+              <div className="mt-1 text-base-content/60">
+                {cleanupReason ??
+                  (cleanupStatus === "error"
+                    ? "Cleanup verification failed."
+                    : "No verified download job or hardlink was found.")}
+              </div>
+            </>
+          }
+          className="bg-base-300/70 text-base-content/35"
+          unavailable
+        />
+      )}
+      {cleanupDownloads && (downloadJobCount > 0 || downloadCleanupResuming) && (
         <ServiceMark
           service="qbittorrent"
           ariaLabel={downloadJobCount > 0
@@ -414,7 +604,7 @@ function PlannedServiceIcons({
           className="bg-secondary/20 text-secondary"
         />
       )}
-      {!plexOnly && hardlinkFileCount > 0 && (
+      {cleanupDownloads && hardlinkFileCount > 0 && (
         <ServiceMark
           label="HL"
           ariaLabel={`Remove ${hardlinkFileCount} verified orphaned hardlink${
@@ -433,49 +623,6 @@ function PlannedServiceIcons({
           className="bg-success/20 text-success"
         />
       )}
-      {!plexOnly && arrTargets.map((target, index) => (
-        <ServiceMark
-          key={`${target.instanceName}:${target.type}:${index}`}
-          service={target.type}
-          ariaLabel={`Delete through ${target.instanceName}`}
-          popover={
-            <>
-              <div className="font-semibold">
-                {target.type === "radarr" ? "Radarr" : "Sonarr"}
-              </div>
-              {target.instanceName.toLocaleLowerCase() !== target.type && (
-                <div className="mt-0.5 text-base-content/70">
-                  {target.instanceName}
-                </div>
-              )}
-              <div className="mt-1 text-base-content/55">
-                Deletes the managed title folder and removes the title from the
-                instance.
-              </div>
-            </>
-          }
-          className={target.type === "radarr"
-            ? "bg-primary/20 text-primary"
-            : "bg-info/20 text-info"}
-        />
-      ))}
-      <ServiceMark
-        service="plex"
-        ariaLabel={plexOnly
-          ? "Delete directly from Plex"
-          : "Remove from Plex after refresh"}
-        popover={
-          <>
-            <div className="font-semibold">Plex</div>
-            <div className="mt-1 text-base-content/55">
-              {plexOnly
-                ? "Deletes this item directly through Plex."
-                : "Refreshes the Plex library after Arr deletion so the removed item disappears from Plex."}
-            </div>
-          </>
-        }
-        className="bg-warning/20 text-warning"
-      />
     </span>
   );
 }
@@ -483,17 +630,17 @@ function PlannedServiceIcons({
 function PreviewStatus({
   loading,
   error,
-  plexOnly,
+  deleteFromArr,
   coordinatedConfigured,
   arrProblems,
 }: {
   loading: boolean;
   error: string | null;
-  plexOnly: boolean;
+  deleteFromArr: boolean;
   coordinatedConfigured: boolean;
   arrProblems: Array<{ title: string; reason: string }>;
 }) {
-  if (plexOnly) return null;
+  if (!deleteFromArr) return null;
   return (
     <div className="mt-2 space-y-1 text-xs">
       {loading && (
@@ -507,15 +654,15 @@ function PreviewStatus({
       )}
       {!loading && !error && !coordinatedConfigured && (
         <p className="text-warning">
-          No Sonarr or Radarr mapping. Select Plex-only deletion or configure
-          one first.
+          No Sonarr or Radarr mapping. These items will be deleted from Plex only.
         </p>
       )}
-      {arrProblems.map((problem) => (
-        <p key={`${problem.title}:${problem.reason}`} className="text-error">
-          {problem.title}: {problem.reason}
+      {!loading && !error && arrProblems.length > 0 && (
+        <p className="text-warning">
+          {arrProblems.length} {arrProblems.length === 1 ? "item has" : "items have"}{" "}
+          no verified Arr destination and will use Plex only. Hover its crossed icon for details.
         </p>
-      ))}
+      )}
     </div>
   );
 }
@@ -769,7 +916,7 @@ function CollapsiblePathSection({
 
 function DeletionTree({
   items,
-  plexOnly,
+  deleteFromArr,
   arrEntries,
   downloadJobs,
   orphanFiles,
@@ -779,7 +926,7 @@ function DeletionTree({
   loading,
 }: {
   items: StaleItem[];
-  plexOnly: boolean;
+  deleteFromArr: boolean;
   arrEntries: Array<{ ratingKey: string; target: ArrCleanupTarget }>;
   downloadJobs: DownloadCleanupJob[];
   orphanFiles: ArrCleanupFile[];
@@ -796,9 +943,16 @@ function DeletionTree({
   retainedPaths: Array<{ path: string; reason: string }>;
   loading: boolean;
 }) {
-  const hasRemaining = unmanagedSources.length > 0 || retainedPaths.length > 0;
-  const removalPathCount = plexOnly ? items.length : arrEntries.length +
-    (cleanupDownloads ? downloadJobs.length + orphanFiles.length : 0);
+  const arrRatingKeys = new Set(arrEntries.map((entry) => entry.ratingKey));
+  const plexFallbackItems = deleteFromArr
+    ? items.filter((item) => !arrRatingKeys.has(item.ratingKey))
+    : items;
+  const hasRemaining = cleanupDownloads &&
+    (unmanagedSources.length > 0 || retainedPaths.length > 0);
+  const removalPathCount = deleteFromArr
+    ? arrEntries.length + plexFallbackItems.length +
+      (cleanupDownloads ? downloadJobs.length + orphanFiles.length : 0)
+    : items.length;
   return (
     <div className="mt-3 space-y-2">
       <CollapsiblePathSection
@@ -806,15 +960,17 @@ function DeletionTree({
         count={loading ? null : removalPathCount}
         info="Only verified managed roots and qBittorrent payloads selected above appear here."
       >
-        {plexOnly && items.map((item) => (
+        {plexFallbackItems.map((item) => (
           <PathTreeRoot
             key={item.ratingKey}
             path={item.title}
             source="Plex"
-            note="Underlying media path is not available in this preview"
+            note={deleteFromArr
+              ? "No verified Arr destination; this item uses Plex-only deletion"
+              : "Underlying media path is not available in this preview"}
           />
         ))}
-        {!plexOnly && arrEntries.map(({ ratingKey, target }) => {
+        {deleteFromArr && arrEntries.map(({ ratingKey, target }) => {
           const files = managedFiles(target);
           const note = target.type === "sonarr"
             ? "Series contents are removed by Sonarr; the episode list is intentionally omitted"
@@ -831,7 +987,7 @@ function DeletionTree({
             />
           );
         })}
-        {!plexOnly && cleanupDownloads &&
+        {deleteFromArr && cleanupDownloads &&
           downloadJobs.map((job) => (
             <PathTreeRoot
               key={`${job.instanceKey}:${job.jobId}`}
@@ -842,7 +998,7 @@ function DeletionTree({
               info={downloadJobInfo(job)}
             />
           ))}
-        {!plexOnly && cleanupDownloads &&
+        {deleteFromArr && cleanupDownloads &&
           orphanFiles.map((file) => (
             <PathTreeRoot
               key={`hardlink:${file.path}`}
@@ -859,11 +1015,6 @@ function DeletionTree({
           <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
             <span className="loading loading-spinner loading-xs" />{" "}
             Loading paths…
-          </p>
-        )}
-        {!loading && !plexOnly && arrEntries.length === 0 && (
-          <p className="py-3 text-xs text-base-content/40">
-            No verified managed path.
           </p>
         )}
       </CollapsiblePathSection>

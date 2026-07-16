@@ -361,14 +361,30 @@ export async function verifyOrphanHardlink(
   }
   try {
     const boundary = await payloadBoundary(association, source);
+    let inspectedCandidate = false;
+    let missingCandidateError: Deno.errors.NotFound | null = null;
     for (const candidate of managedCandidates) {
-      const file = await verifiedFile(
-        association.hash,
-        association.sourcePath,
-        source,
-        candidate.mapped,
-        boundary,
-      ).catch(() => null);
+      let file: VerifiedOrphanFile | null;
+      try {
+        file = await verifiedFile(
+          association.hash,
+          association.sourcePath,
+          source,
+          candidate.mapped,
+          boundary,
+        );
+        inspectedCandidate = true;
+      } catch (error) {
+        // Radarr can briefly report a stale managed filename while a rename is in
+        // progress. Continue to its other current candidates only for that benign
+        // absence. Symlinks, permission failures, and every other verification error
+        // must retain their precise fail-closed diagnostic.
+        if (error instanceof Deno.errors.NotFound) {
+          missingCandidateError = error;
+          continue;
+        }
+        throw error;
+      }
       if (!file) continue;
       return {
         source: {
@@ -382,6 +398,7 @@ export async function verifyOrphanHardlink(
         file,
       };
     }
+    if (!inspectedCandidate && missingCandidateError) throw missingCandidateError;
     return unavailable(
       instanceName,
       association,

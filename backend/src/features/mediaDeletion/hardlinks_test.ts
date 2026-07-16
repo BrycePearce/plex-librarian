@@ -112,7 +112,7 @@ Deno.test({
       const result = await verifyOrphanHardlink('Radarr', association, [
         { kind: 'download', arrPath: '/arr/downloads', localPath: downloads },
         { kind: 'library', arrPath: '/arr/media', localPath: library },
-      ], ['/arr/media/Movie/Movie (2024).mkv']);
+      ], [association.importedPath!, '/arr/media/Movie/Movie (2024).mkv']);
 
       assertExists(result?.file);
       assertEquals(result.source.verification, 'hardlink');
