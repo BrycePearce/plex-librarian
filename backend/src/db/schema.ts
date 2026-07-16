@@ -617,3 +617,36 @@ export const events = sqliteTable(
     createdAtIdx: index('events_created_at_idx').on(table.createdAt),
   }),
 );
+
+// Permanent accounting for logical Plex media removed through this app. Unlike the
+// activity feed, these rows are never pruned: their aggregate is the lifetime
+// "Media removed" metric. This deliberately measures the synced media payload, not
+// filesystem blocks freed (which hardlinks, snapshots, and remote Plex hosts make
+// impossible to determine reliably from the container).
+export const mediaRemovals = sqliteTable(
+  'media_removals',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, {
+      onDelete: 'cascade',
+    }),
+    operationId: text('operation_id').notNull(),
+    targetKind: text('target_kind', {
+      enum: ['item', 'movie_version', 'episode_version'],
+    }).notNull(),
+    targetKey: text('target_key').notNull(),
+    // Decimal KB, matching items.fileSize. Null preserves the distinction between a
+    // genuinely zero-byte payload and a removal whose size Plex did not report.
+    mediaSize: integer('media_size'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    serverIdIdx: index('media_removals_server_id_idx').on(table.serverId, table.id),
+    operationTargetUnique: uniqueIndex('media_removals_operation_target_unique').on(
+      table.serverId,
+      table.operationId,
+      table.targetKind,
+      table.targetKey,
+    ),
+  }),
+);

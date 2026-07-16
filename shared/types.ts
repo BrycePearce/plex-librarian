@@ -615,3 +615,10 @@ export interface ActivityEventsResponse {
   // Pass as `before` on the next request to page further back; null once there's no more history.
   nextCursor: number | null;
 }
+
+export interface MediaRemovalSummary {
+  // Lifetime logical size of media removed through Plex Librarian, in decimal KB.
+  mediaSizeRemoved: number;
+  removalCount: number;
+  unknownSizeCount: number;
+}

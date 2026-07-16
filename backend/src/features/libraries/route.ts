@@ -37,6 +37,7 @@ import {
 } from '../../db/scope.ts';
 import { createPlexClient, PlexDeleteError } from '../../integrations/plex/index.ts';
 import { logEvents } from '../events/service.ts';
+import { recordMediaRemovals } from '../mediaRemovals/service.ts';
 import {
   arrDeleteDisposition,
   assertArrDeleteIsUnambiguous,
@@ -388,6 +389,7 @@ router.patch('/:key', async (c) => {
 // show granularity, so either path removes the whole show; local seasons follow through
 // the items -> seasons cascade.
 router.delete('/:key/items', async (c) => {
+  const removalOperationId = crypto.randomUUID();
   const key = c.req.param('key');
   const body = await c.req.json().catch(() => null) as {
     ratingKeys?: unknown;
@@ -523,6 +525,10 @@ router.delete('/:key/items', async (c) => {
   // per-item result needs to be attributable — worth the extra latency for a
   // user-triggered, page-sized (<=200) action.
   const deleted: string[] = [];
+  // Unlike `deleted`, this excludes Plex 404s that merely reconcile content removed
+  // outside this app. Coordinated Arr retries still count because their durable
+  // attempt markers prove Plex Librarian initiated the removal.
+  const removedByApp: string[] = [];
   const partial: DeleteItemsResponse['partial'] = [];
   const failed: { ratingKey: string; error: string }[] = [];
   let arrMutationOccurred = false;
@@ -654,6 +660,7 @@ router.delete('/:key/items', async (c) => {
       }
       await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
       deleted.push(ratingKey);
+      removedByApp.push(ratingKey);
     } catch (err) {
       // A 404 means Plex already has no record of this item — most likely it was
       // deleted directly in Plex outside this app. Treat that as success and drop the
@@ -671,6 +678,19 @@ router.delete('/:key/items', async (c) => {
   // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
   // in frontend/src/lib/format.ts.
   const fileSizeFreed = deleted.reduce((sum, rk) => sum + (fileSizeByKey.get(rk) ?? 0), 0);
+  await recordMediaRemovals(
+    removedByApp.map((ratingKey) => ({
+      serverId,
+      operationId: removalOperationId,
+      targetKind: 'item' as const,
+      targetKey: ratingKey,
+      mediaSize: itemByKey.get(ratingKey)?.fileSize ?? null,
+    })),
+  ).catch((error) => {
+    // The destructive result is already final. Keep the user-facing deletion result
+    // truthful even if lifetime-accounting persistence encounters a transient failure.
+    console.error('Failed to record removed media:', error);
+  });
   if (arrMutationOccurred) {
     // Arr removed the files, so Plex needs a scan instead of a second destructive
     // delete request. Refresh is best-effort: the local/Arr outcome is already final.

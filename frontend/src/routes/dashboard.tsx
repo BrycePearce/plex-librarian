@@ -19,6 +19,7 @@ import {
   Music,
   PlugZap,
   RefreshCw,
+  Trash2,
   Tv,
   Users,
   X,
@@ -143,6 +144,13 @@ function DashboardInner() {
     queryKey: ["arr-integrations"],
     queryFn: api.arr.get,
   });
+  const {
+    data: mediaRemovalSummary,
+    isLoading: isMediaRemovalSummaryLoading,
+  } = useQuery({
+    queryKey: ["media-removals", "summary"],
+    queryFn: api.mediaRemovals.summary,
+  });
 
   const triggerSync = useMutation({
     mutationFn: () => api.sync.trigger(),
@@ -155,7 +163,8 @@ function DashboardInner() {
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
   const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
-  const isDashboardLoading = libsLoading || isHistoryLoading;
+  const isDashboardLoading = libsLoading || isHistoryLoading ||
+    isMediaRemovalSummaryLoading;
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -370,7 +379,10 @@ function DashboardInner() {
 
           {!libsLoading && librariesData &&
             librariesData.libraries.length > 0 && (
-            <StatsStrip libraries={librariesData.libraries} />
+            <StatsStrip
+              libraries={librariesData.libraries}
+              mediaSizeRemoved={mediaRemovalSummary?.mediaSizeRemoved ?? 0}
+            />
           )}
 
           {!libsLoading && librariesData &&
@@ -520,7 +532,13 @@ function useCountUp(target: number, duration = 800, skipAnimation = false) {
   return display;
 }
 
-function StatsStrip({ libraries }: { libraries: Library[] }) {
+function StatsStrip({
+  libraries,
+  mediaSizeRemoved,
+}: {
+  libraries: Library[];
+  mediaSizeRemoved: number;
+}) {
   const totals = libraries.reduce(
     (acc, lib) => {
       acc.items += lib.itemCount;
@@ -533,11 +551,12 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
 
   const animatedItems = useCountUp(totals.items, 900);
   const animatedSize = useCountUp(totals.size, 900);
+  const animatedRemovedSize = useCountUp(mediaSizeRemoved, 900);
 
   return (
     <motion.div
       variants={containerVariants}
-      className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+      className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
     >
       <StatTile
         icon={<Database className="w-5 h-5" />}
@@ -552,6 +571,13 @@ function StatsStrip({ libraries }: { libraries: Library[] }) {
         tone="secondary"
         label="Library size"
         value={formatKilobytes(animatedSize)}
+      />
+      <StatTile
+        icon={<Trash2 className="w-5 h-5" />}
+        iconClass="bg-primary/20 text-primary"
+        tone="primary"
+        label="Media removed"
+        value={formatKilobytes(animatedRemovedSize)}
       />
       <StatTile
         icon={<Clock className="w-5 h-5" />}

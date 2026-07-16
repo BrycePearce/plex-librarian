@@ -264,7 +264,11 @@ function StalePage() {
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  const deleteMutation = useDeleteItems([["stale", key], ["events"]]);
+  const deleteMutation = useDeleteItems([
+    ["stale", key],
+    ["events"],
+    ["media-removals"],
+  ]);
 
   const goToOffset = useScrollToOffset(
     params.offset ?? 0,

@@ -4,6 +4,7 @@ import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.
 import { episodeVersionsByEpisode, itemByRatingKey, mediaVersionsByItem } from '../../db/scope.ts';
 import { createPlexClient, PlexDeleteError } from '../../integrations/plex/index.ts';
 import { logEvents } from '../events/service.ts';
+import { recordMediaRemovals } from '../mediaRemovals/service.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import listRoute from './listRoute.ts';
 import type { DeleteMediaVersionResponse } from '@plex-librarian/shared/types.ts';
@@ -23,11 +24,13 @@ async function deletePlexMediaTolerating404(
   client: Awaited<ReturnType<typeof createPlexClient>>,
   ratingKey: string,
   mediaId: number,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await client.deleteMedia(ratingKey, mediaId);
+    return true;
   } catch (err) {
-    if (!(err instanceof PlexDeleteError && err.status === 404)) throw err;
+    if (err instanceof PlexDeleteError && err.status === 404) return false;
+    throw err;
   }
 }
 
@@ -175,8 +178,9 @@ router.delete('/movies/:ratingKey/media/:mediaId', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
   }
 
+  let removedByApp: boolean;
   try {
-    await deletePlexMediaTolerating404(client, ratingKey, mediaId);
+    removedByApp = await deletePlexMediaTolerating404(client, ratingKey, mediaId);
   } catch (err) {
     // The reservation above already removed this version's local row — since Plex
     // never actually deleted the file (a real failure, not "already gone"), undo that
@@ -187,6 +191,15 @@ router.delete('/movies/:ratingKey/media/:mediaId', async (c) => {
   }
 
   const fileSizeFreed = target.fileSize ?? 0;
+  if (removedByApp) {
+    await recordMediaRemovals([{
+      serverId,
+      operationId: crypto.randomUUID(),
+      targetKind: 'movie_version',
+      targetKey: `${ratingKey}:${mediaId}`,
+      mediaSize: target.fileSize,
+    }]).catch((error) => console.error('Failed to record removed media:', error));
+  }
   await logEvents([{
     serverId,
     type: 'media.deleted',
@@ -264,8 +277,9 @@ router.delete('/episodes/:ratingKey/media/:mediaId', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
   }
 
+  let removedByApp: boolean;
   try {
-    await deletePlexMediaTolerating404(client, ratingKey, mediaId);
+    removedByApp = await deletePlexMediaTolerating404(client, ratingKey, mediaId);
   } catch (err) {
     withTransaction((sqliteClient) => restoreEpisodeMediaVersion(sqliteClient, target));
     return c.json({ error: err instanceof Error ? err.message : 'delete failed' }, 502);
@@ -276,6 +290,16 @@ router.delete('/episodes/:ratingKey/media/:mediaId', async (c) => {
   const title = `${
     show?.title ?? 'Unknown show'
   } — S${target.seasonIndex}E${target.episodeIndex} "${target.episodeTitle}"`;
+
+  if (removedByApp) {
+    await recordMediaRemovals([{
+      serverId,
+      operationId: crypto.randomUUID(),
+      targetKind: 'episode_version',
+      targetKey: `${ratingKey}:${mediaId}`,
+      mediaSize: target.fileSize,
+    }]).catch((error) => console.error('Failed to record removed media:', error));
+  }
 
   await logEvents([{
     serverId,

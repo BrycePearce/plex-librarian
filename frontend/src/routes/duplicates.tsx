@@ -71,6 +71,7 @@ function DuplicatesPage() {
     ["stale"],
     ["libraries"],
     ["events"],
+    ["media-removals"],
   ]);
 
   // Sequential, not concurrent — same "destructive and must stay attributable"
@@ -121,6 +122,7 @@ function DuplicatesPage() {
       void qc.invalidateQueries({ queryKey: ["stale"] });
       void qc.invalidateQueries({ queryKey: ["libraries"] });
       void qc.invalidateQueries({ queryKey: ["events"] });
+      void qc.invalidateQueries({ queryKey: ["media-removals"] });
     },
   });
 

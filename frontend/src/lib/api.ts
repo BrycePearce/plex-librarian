@@ -11,6 +11,7 @@ import type {
   DuplicatesResponse,
   LibrariesResponse,
   Library,
+  MediaRemovalSummary,
   MovieDetail,
   PendingInvitationsResponse,
   PinPollResult,
@@ -55,6 +56,7 @@ export type {
   Library,
   LibraryPhase,
   LibrarySyncProgress,
+  MediaRemovalSummary,
   MediaVersion,
   MovieDetail,
   PendingInvitation,
@@ -399,6 +401,9 @@ export const api = {
       return apiFetch<ActivityEventsResponse>(`/events?${q}`);
     },
   },
+  mediaRemovals: {
+    summary: () => apiFetch<MediaRemovalSummary>("/media-removals/summary"),
+  },
 };
 
 // Connecting, switching, or disconnecting the active server points every server-scoped
@@ -421,6 +426,7 @@ const SERVER_SCOPED_QUERY_ROOTS = [
   "show",
   "duplicates",
   "events",
+  "media-removals",
   "users",
   "arr-integrations",
 ];
