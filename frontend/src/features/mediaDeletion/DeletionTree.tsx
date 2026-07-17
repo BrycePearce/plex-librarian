@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Check, ChevronRight, Copy, File, Folder } from "lucide-react";
+import { Check, ChevronRight, Copy, File, Folder, X } from "lucide-react";
 import type {
   ArrCleanupFile,
   ArrCleanupTarget,
@@ -18,11 +18,15 @@ import { plexPreviewPathEntries } from "./plexPreviewPaths";
 interface TreeFile {
   path: string;
   size: number | null;
+  detail?: string;
+  folder?: boolean;
 }
 
 interface TreeNode {
   name: string;
   size: number | null;
+  detail?: string;
+  folder?: boolean;
   children: Map<string, TreeNode>;
 }
 
@@ -41,7 +45,11 @@ function buildTree(files: TreeFile[]): TreeNode[] {
         node = { name, size: null, children: new Map() };
         level.set(key, node);
       }
-      if (index === segments.length - 1) node.size = file.size;
+      if (index === segments.length - 1) {
+        node.size = file.size;
+        node.detail = file.detail;
+        node.folder = file.folder;
+      }
       level = node.children;
     });
   }
@@ -55,7 +63,7 @@ function TreeNodes(
     <ul className="ml-1.5">
       {nodes.map((node) => {
         const children = [...node.children.values()];
-        const isFolder = children.length > 0;
+        const isFolder = node.folder === true || children.length > 0;
         return (
           <li
             key={`${depth}:${node.name}`}
@@ -71,6 +79,11 @@ function TreeNodes(
               >
                 {node.name}
               </span>
+              {node.detail && (
+                <span className="shrink-0 text-[10px] text-base-content/35">
+                  {node.detail}
+                </span>
+              )}
               {node.size !== null && (
                 <span className="shrink-0 text-[10px] text-base-content/35">
                   {formatKilobytes(node.size / 1000)}
@@ -94,6 +107,7 @@ function PathTreeRoot({
   totalFiles,
   note,
   info,
+  itemName = "file",
   warning = false,
 }: {
   path: string;
@@ -102,9 +116,12 @@ function PathTreeRoot({
   totalFiles?: number;
   note?: string;
   info?: string;
+  itemName?: string;
   warning?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const visibleFiles = (files ?? []).slice(0, TREE_FILE_LIMIT);
   const hiddenCount = Math.max(
     0,
@@ -124,17 +141,31 @@ function PathTreeRoot({
         <button
           type="button"
           className="btn btn-ghost btn-xs size-5 min-h-0 shrink-0 p-0"
-          aria-label={copied ? "Path copied" : `Copy path ${path}`}
-          title={copied ? "Copied" : "Copy path"}
-          onClick={() => {
-            void copyText(path).then(() => {
-              setCopied(true);
-              globalThis.setTimeout(() => setCopied(false), 1_500);
+          aria-label={copyStatus === "copied"
+            ? "Path copied"
+            : copyStatus === "failed"
+            ? "Could not copy path"
+            : `Copy path ${path}`}
+          title={copyStatus === "copied"
+            ? "Copied"
+            : copyStatus === "failed"
+            ? "Copy failed"
+            : "Copy path"}
+          onClick={(event) => {
+            const trigger = event.currentTarget;
+            void copyText(path, trigger).then(() => {
+              setCopyStatus("copied");
+              globalThis.setTimeout(() => setCopyStatus("idle"), 1_500);
+            }).catch(() => {
+              setCopyStatus("failed");
+              globalThis.setTimeout(() => setCopyStatus("idle"), 2_000);
             });
           }}
         >
-          {copied
+          {copyStatus === "copied"
             ? <Check className="size-3 text-success" />
+            : copyStatus === "failed"
+            ? <X className="size-3 text-error" />
             : <Copy className="size-3 text-base-content/45" />}
         </button>
         {info && <InfoTip text={info} />}
@@ -143,7 +174,12 @@ function PathTreeRoot({
       {visibleFiles.length > 0 && <TreeNodes nodes={buildTree(visibleFiles)} />}
       {(note || hiddenCount > 0) && (
         <p className="ml-5 text-[10px] leading-4 text-base-content/35">
-          {[note, hiddenCount > 0 ? `${hiddenCount} more files` : null].filter(
+          {[
+            note,
+            hiddenCount > 0
+              ? `${hiddenCount} more ${itemName}${hiddenCount === 1 ? "" : "s"}`
+              : null,
+          ].filter(
             Boolean,
           ).join(" · ")}
         </p>
@@ -152,7 +188,10 @@ function PathTreeRoot({
   );
 }
 
-async function copyText(value: string): Promise<void> {
+async function copyText(
+  value: string,
+  trigger: HTMLButtonElement,
+): Promise<void> {
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(value);
@@ -166,14 +205,42 @@ async function copyText(value: string): Promise<void> {
   textarea.value = value;
   textarea.setAttribute("readonly", "");
   textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
   textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  // A modal <dialog> makes nodes outside itself inert. Keep the fallback
+  // selection inside the dialog so copying still works on insecure HTTP
+  // origins where navigator.clipboard is unavailable (common on Unraid).
+  const container = trigger.closest("dialog[open]") ?? document.body;
+  container.appendChild(textarea);
+  let copied = false;
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    copied = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+    trigger.focus({ preventScroll: true });
+  }
+  if (!copied) throw new Error("Browser rejected the copy command");
 }
 
 function managedFiles(target: ArrCleanupTarget): TreeFile[] {
+  if (target.type === "sonarr") {
+    return (target.seasons ?? []).map((season) => ({
+      path: season.seasonNumber === 0
+        ? "Specials"
+        : `Season ${season.seasonNumber}`,
+      size: season.size,
+      detail: season.episodeFileCount === null
+        ? undefined
+        : `${season.episodeFileCount} file${
+          season.episodeFileCount === 1 ? "" : "s"
+        }`,
+      folder: true,
+    }));
+  }
   const files = new Map<string, TreeFile>();
   for (const file of target.mediaFiles ?? []) {
     files.set(file.relativePath.toLocaleLowerCase(), {
@@ -395,7 +462,7 @@ export function AdvancedDeletionTree({
                 ))}
                 {plan.arrTargets.map((target) => {
                   const note = target.type === "sonarr"
-                    ? "Series contents removed by Sonarr; episodes omitted"
+                    ? "Season summaries reported by Sonarr; individual episodes omitted"
                     : target.mediaFiles === null || target.extraFiles === null
                     ? "Some managed file details are unavailable"
                     : undefined;
@@ -405,6 +472,7 @@ export function AdvancedDeletionTree({
                       path={target.path ?? target.title}
                       source={target.instanceName}
                       files={managedFiles(target)}
+                      itemName={target.type === "sonarr" ? "season" : "file"}
                       note={note}
                     />
                   );
@@ -561,7 +629,7 @@ export function DeletionTree({
         {deleteFromArr && arrEntries.map(({ ratingKey, target }) => {
           const files = managedFiles(target);
           const note = target.type === "sonarr"
-            ? "Series contents are removed by Sonarr; the episode list is intentionally omitted"
+            ? "Season summaries reported by Sonarr; individual episodes omitted"
             : target.mediaFiles === null || target.extraFiles === null
             ? "Some managed file details are unavailable"
             : undefined;
@@ -571,6 +639,7 @@ export function DeletionTree({
               path={target.path ?? target.title}
               source={target.instanceName}
               files={files}
+              itemName={target.type === "sonarr" ? "season" : "file"}
               note={note}
             />
           );

@@ -237,6 +237,7 @@ export async function resolveDownloadCleanup(
       type: arr.client.type,
       title: record.title,
       path: record.path,
+      seasons: record.seasons,
       mediaFiles,
       extraFiles,
     });

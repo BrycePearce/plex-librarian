@@ -4,6 +4,13 @@ export interface ArrMediaRecord {
   id: number;
   title: string;
   path: string | null;
+  seasons: ArrSeasonSummary[] | null;
+}
+
+export interface ArrSeasonSummary {
+  seasonNumber: number;
+  episodeFileCount: number | null;
+  size: number | null;
 }
 
 export interface ArrTorrentAssociation {
@@ -107,13 +114,39 @@ export class ArrClient {
     const path = this.type === 'radarr'
       ? `/movie?tmdbId=${externalId}`
       : `/series?tvdbId=${externalId}`;
-    const records = await this.request<Array<{ id: number; title?: string; path?: string }>>(path);
+    const records = await this.request<
+      Array<{
+        id: number;
+        title?: string;
+        path?: string;
+        seasons?: Array<{
+          seasonNumber?: number;
+          statistics?: { episodeFileCount?: number; sizeOnDisk?: number };
+        }>;
+      }>
+    >(path);
     const record = records[0];
     return record
       ? {
         id: record.id,
         title: record.title ?? String(record.id),
         path: record.path?.trim() || null,
+        seasons: this.type === 'sonarr'
+          ? (record.seasons ?? []).flatMap((season) => {
+            const seasonNumber = Number(season.seasonNumber);
+            if (!Number.isInteger(seasonNumber) || seasonNumber < 0) return [];
+            const rawFileCount = Number(season.statistics?.episodeFileCount);
+            const episodeFileCount = Number.isInteger(rawFileCount) && rawFileCount >= 0
+              ? rawFileCount
+              : null;
+            const rawSize = Number(season.statistics?.sizeOnDisk);
+            const size = Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null;
+            // Sonarr also returns future/empty season metadata. Only show seasons with
+            // managed files so the deletion tree describes disk contents being removed.
+            if (episodeFileCount === 0 && (size === null || size === 0)) return [];
+            return [{ seasonNumber, episodeFileCount, size } satisfies ArrSeasonSummary];
+          }).sort((a, b) => a.seasonNumber - b.seasonNumber)
+          : null,
       }
       : null;
   }

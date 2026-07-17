@@ -20,7 +20,12 @@ Deno.test('ArrClient looks up and deletes a Radarr movie by native id', async ()
   }) as typeof fetch;
   const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
 
-  assertEquals(await client.lookup(550), { id: 42, title: 'Fight Club', path: null });
+  assertEquals(await client.lookup(550), {
+    id: 42,
+    title: 'Fight Club',
+    path: null,
+    seasons: null,
+  });
   await client.deleteMedia(42, true);
 
   assertEquals(requests, [
@@ -49,6 +54,37 @@ Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', asyn
     'http://sonarr:8989/api/v3/series?tvdbId=123',
     'http://sonarr:8989/api/v3/series/7?deleteFiles=true&addImportListExclusion=false',
   ]);
+});
+
+Deno.test('Sonarr lookup exposes bounded season summaries with managed files', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([{
+        id: 7,
+        title: 'Example',
+        path: '/tv/Example',
+        seasons: [
+          { seasonNumber: 2, statistics: { episodeFileCount: 8, sizeOnDisk: 8000 } },
+          { seasonNumber: 0, statistics: { episodeFileCount: 1, sizeOnDisk: 1000 } },
+          { seasonNumber: 3, statistics: { episodeFileCount: 0, sizeOnDisk: 0 } },
+          { seasonNumber: 1, statistics: { episodeFileCount: 10, sizeOnDisk: 10000 } },
+        ],
+      }]))) as typeof fetch,
+  );
+
+  assertEquals(await client.lookup(123), {
+    id: 7,
+    title: 'Example',
+    path: '/tv/Example',
+    seasons: [
+      { seasonNumber: 0, episodeFileCount: 1, size: 1000 },
+      { seasonNumber: 1, episodeFileCount: 10, size: 10000 },
+      { seasonNumber: 2, episodeFileCount: 8, size: 8000 },
+    ],
+  });
 });
 
 Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', async () => {
@@ -132,6 +168,7 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
     id: 42,
     title: 'Movie',
     path: 'A:\\Movies\\Movie',
+    seasons: null,
   });
   assertEquals(await client.mediaFiles(42), [
     { relativePath: 'Movie.mov', size: 2000 },

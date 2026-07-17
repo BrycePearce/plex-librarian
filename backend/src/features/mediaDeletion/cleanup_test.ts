@@ -286,6 +286,7 @@ Deno.test('torrent cleanup resolves Arr import history to live redacted qBittorr
     type: 'radarr',
     title: 'Movie',
     path: 'A:\\Movies\\Movie',
+    seasons: null,
     mediaFiles: [{ relativePath: 'Movie.mov', size: 100 }],
     extraFiles: [
       { relativePath: 'Movie.idx', type: 'subtitle' },

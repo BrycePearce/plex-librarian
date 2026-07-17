@@ -426,11 +426,18 @@ export interface ArrCleanupMediaFile {
   size: number | null;
 }
 
+export interface ArrCleanupSeason {
+  seasonNumber: number;
+  episodeFileCount: number | null;
+  size: number | null;
+}
+
 export interface ArrCleanupTarget {
   instanceName: string;
   type: ArrType;
   title: string;
   path: string | null;
+  seasons: ArrCleanupSeason[] | null;
   mediaFiles: ArrCleanupMediaFile[] | null;
   extraFiles: ArrCleanupExtraFile[] | null;
 }
