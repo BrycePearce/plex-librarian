@@ -112,6 +112,10 @@ export interface PlexMediaPathPreview {
   truncated: boolean;
 }
 
+export interface PlexMediaVersionPathPreview extends PlexMediaPathPreview {
+  mediaId: number;
+}
+
 // One row per Plex `Media` entry on an episode — but only ever produced by
 // mapEpisodeMediaVersions for episodes that already have 2+ valid Media entries (see
 // episodeMediaVersions in db/schema.ts for why this is filtered at write time, unlike

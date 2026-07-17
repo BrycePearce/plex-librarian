@@ -117,6 +117,35 @@ Deno.test('media path preview preserves and deduplicates multi-version movie Par
   assertEquals(urls, ['http://plex:32400/library/metadata/movie%2Fkey']);
 });
 
+Deno.test('media version path preview preserves Media id boundaries', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [
+            { id: 11, Part: [{ file: '/movies/Example-1080p.mkv' }] },
+            {
+              id: 12,
+              Part: [
+                { file: '/movies/Example-4k.mkv' },
+                { file: '/movies/Example-4k.mkv' },
+              ],
+            },
+          ],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  assertEquals(await client.mediaVersionPathPreviews('10'), [
+    { mediaId: 11, paths: ['/movies/Example-1080p.mkv'], truncated: false },
+    { mediaId: 12, paths: ['/movies/Example-4k.mkv'], truncated: false },
+  ]);
+});
+
 Deno.test('show media path preview pages through live allLeaves metadata', async () => {
   const starts: string[] = [];
   const mockFetch = ((_input: string | URL | Request, init?: RequestInit) => {

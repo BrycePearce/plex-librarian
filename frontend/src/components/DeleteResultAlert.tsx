@@ -9,10 +9,12 @@ import { motion, useReducedMotion } from "motion/react";
 // copy-pasted `<div className="alert">` blocks.
 export function DeleteResultAlert({
   variant,
+  autoDismiss = true,
   onDismiss,
   children,
 }: {
   variant: "success" | "warning";
+  autoDismiss?: boolean;
   onDismiss: () => void;
   children: ReactNode;
 }) {
@@ -20,9 +22,10 @@ export function DeleteResultAlert({
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    if (!autoDismiss) return;
     const timeout = globalThis.setTimeout(() => setVisible(false), 5_000);
     return () => globalThis.clearTimeout(timeout);
-  }, []);
+  }, [autoDismiss]);
 
   const Icon = variant === "warning" ? TriangleAlert : CheckCircle;
 

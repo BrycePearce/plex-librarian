@@ -1,16 +1,14 @@
-import type {
-  DownloadCleanupPreviewItem,
-  StaleItem,
-} from "../../../../shared/types.ts";
+import type { DownloadCleanupPreviewItem } from "../../../../shared/types.ts";
+import type { WholeItemDeletionCandidate } from "./types.ts";
 
 export interface PlexPreviewPathEntry {
-  item: StaleItem;
+  item: WholeItemDeletionCandidate;
   path: string;
   note?: string;
 }
 
 export function plexPreviewPathEntries(
-  items: StaleItem[],
+  items: WholeItemDeletionCandidate[],
   previews: ReadonlyMap<string, DownloadCleanupPreviewItem>,
 ): PlexPreviewPathEntry[] {
   return items.flatMap((item) => {

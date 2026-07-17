@@ -3,6 +3,7 @@ import { ArrClient } from '../../integrations/arr/client.ts';
 import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
+  DownloadedFileCleanupError,
   executeDownloadedFileCleanup,
   reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
@@ -126,7 +127,7 @@ Deno.test('complete downloaded-file execution marks and deletes torrents before 
     }],
     orphanFiles: [{ path: '/downloads/release/movie.idx' }],
   } as unknown as ResolvedCleanupItem;
-  await executeDownloadedFileCleanup(
+  const result = await executeDownloadedFileCleanup(
     cleanup,
     new Set(),
     new Set(),
@@ -144,6 +145,56 @@ Deno.test('complete downloaded-file execution marks and deletes torrents before 
     `torrent:${hash}`,
     'orphan:/downloads/release/movie.idx',
   ]);
+  assertEquals(result.deletedJobs.map((job) => job.jobId), [hash]);
+  assertEquals(result.deletedOrphanFiles, ['/downloads/release/movie.idx']);
+});
+
+Deno.test('cleanup errors retain mutations completed by earlier stages', async () => {
+  const cleanup = {
+    downloadJobs: [{
+      provider: 'qbittorrent',
+      instanceKey: 'db:1',
+      instanceName: 'qBittorrent',
+      jobId: hash,
+      name: 'release',
+      contentPath: '/downloads/release',
+      savePath: '/downloads',
+      manifestFiles: [{ path: 'release/movie.mkv', size: 100 }],
+      authorizedSourcePaths: ['/downloads/release/movie.mkv'],
+      target: {
+        client: {
+          findJob: () =>
+            Promise.resolve({
+              id: hash,
+              contentPath: '/downloads/release',
+              savePath: '/downloads',
+              manifestFiles: [{ path: 'release/movie.mkv', size: 100 }],
+            }),
+          deleteJob: () => Promise.resolve(),
+        },
+      },
+    }],
+    orphanFiles: [{ path: '/downloads/release/movie.idx' }],
+  } as unknown as ResolvedCleanupItem;
+
+  let caught: unknown;
+  try {
+    await executeDownloadedFileCleanup(
+      cleanup,
+      new Set(),
+      new Set(),
+      undefined,
+      () => Promise.reject(new Error('unlink failed')),
+    );
+  } catch (error) {
+    caught = error;
+  }
+
+  assertEquals(caught instanceof DownloadedFileCleanupError, true);
+  const cleanupError = caught as DownloadedFileCleanupError;
+  assertEquals(cleanupError.result.deletedJobs.map((job) => job.jobId), [hash]);
+  assertEquals(cleanupError.system, 'filesystem');
+  assertEquals(cleanupError.target, '/downloads/release/movie.idx');
 });
 
 Deno.test('execution refuses a hash re-added with a different manifest', async () => {

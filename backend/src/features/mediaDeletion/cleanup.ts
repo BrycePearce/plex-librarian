@@ -38,6 +38,27 @@ export interface ResolvedCleanupItem extends CleanupItemWithoutPlexPaths {
   observedDownloadJobKeys?: Set<string>;
 }
 
+export interface DownloadedFileCleanupResult {
+  deletedJobs: Array<{ provider: string; instanceName: string; jobId: string; name: string }>;
+  alreadyRemovedJobs: Array<
+    { provider: string; instanceName: string; jobId: string; name: string }
+  >;
+  deletedOrphanFiles: string[];
+  alreadyRemovedOrphanFiles: string[];
+}
+
+export class DownloadedFileCleanupError extends Error {
+  constructor(
+    message: string,
+    readonly result: DownloadedFileCleanupResult,
+    readonly system: string,
+    readonly target: string,
+  ) {
+    super(message);
+    this.name = 'DownloadedFileCleanupError';
+  }
+}
+
 export function reconcileSharedDownloadCleanups(
   cleanups: readonly ResolvedCleanupItem[],
 ): ResolvedCleanupItem[] {
@@ -119,32 +140,71 @@ export async function executeDownloadedFileCleanup(
     Promise.resolve(),
   deleteOrphanFile: (file: VerifiedOrphanFile) => Promise<void> = deleteVerifiedOrphanFile,
   beforeOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
-): Promise<void> {
+): Promise<DownloadedFileCleanupResult> {
+  const result: DownloadedFileCleanupResult = {
+    deletedJobs: [],
+    alreadyRemovedJobs: [],
+    deletedOrphanFiles: [],
+    alreadyRemovedOrphanFiles: [],
+  };
   for (const job of cleanup.downloadJobs) {
     const jobKey = `${job.instanceKey}:${job.jobId}`;
-    if (deletedDownloadJobKeys.has(jobKey)) continue;
-    const current = await job.target.client.findJob(job.jobId);
-    const authorizedPaths = new Set(job.authorizedSourcePaths);
-    if (
-      !current || current.id !== job.jobId ||
-      !authorizedPaths.size ||
-      ![...authorizedPaths].some((path) => downloadJobOwnsPath(current, path)) ||
-      !downloadPayloadIsExclusivelyOwned(current, authorizedPaths)
-    ) {
-      throw new Error(
-        'Download job identity or manifest changed since verification; nothing was removed',
+    const publicJob = {
+      provider: job.provider,
+      instanceName: job.instanceName,
+      jobId: job.jobId,
+      name: job.name,
+    };
+    if (deletedDownloadJobKeys.has(jobKey)) {
+      result.alreadyRemovedJobs.push(publicJob);
+      continue;
+    }
+    try {
+      const current = await job.target.client.findJob(job.jobId);
+      const authorizedPaths = new Set(job.authorizedSourcePaths);
+      if (
+        !current || current.id !== job.jobId ||
+        !authorizedPaths.size ||
+        ![...authorizedPaths].some((path) => downloadJobOwnsPath(current, path)) ||
+        !downloadPayloadIsExclusivelyOwned(current, authorizedPaths)
+      ) {
+        throw new Error(
+          'Download job identity or manifest changed since verification; nothing was removed',
+        );
+      }
+      await beforeDownloadJobDelete(job, jobKey);
+      await job.target.client.deleteJob(job.jobId, { deleteData: true });
+      deletedDownloadJobKeys.add(jobKey);
+      result.deletedJobs.push(publicJob);
+    } catch (error) {
+      throw new DownloadedFileCleanupError(
+        error instanceof Error ? error.message : 'download cleanup failed',
+        result,
+        job.provider,
+        `${job.instanceName}: ${job.name}`,
       );
     }
-    await beforeDownloadJobDelete(job, jobKey);
-    await job.target.client.deleteJob(job.jobId, { deleteData: true });
-    deletedDownloadJobKeys.add(jobKey);
   }
   for (const orphanFile of cleanup.orphanFiles) {
-    if (deletedOrphanPaths.has(orphanFile.path)) continue;
-    await beforeOrphanDelete(orphanFile);
-    await deleteOrphanFile(orphanFile);
-    deletedOrphanPaths.add(orphanFile.path);
+    if (deletedOrphanPaths.has(orphanFile.path)) {
+      result.alreadyRemovedOrphanFiles.push(orphanFile.path);
+      continue;
+    }
+    try {
+      await beforeOrphanDelete(orphanFile);
+      await deleteOrphanFile(orphanFile);
+      deletedOrphanPaths.add(orphanFile.path);
+      result.deletedOrphanFiles.push(orphanFile.path);
+    } catch (error) {
+      throw new DownloadedFileCleanupError(
+        error instanceof Error ? error.message : 'orphan hardlink cleanup failed',
+        result,
+        'filesystem',
+        orphanFile.path,
+      );
+    }
   }
+  return result;
 }
 
 function externalId(item: CoordinatedDeleteItem): number | null {

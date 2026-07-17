@@ -1,11 +1,15 @@
 import { assertEquals } from "@std/assert";
-import type {
-  DownloadCleanupPreviewItem,
-  StaleItem,
-} from "../../../../shared/types.ts";
+import type { DownloadCleanupPreviewItem } from "../../../../shared/types.ts";
+import type { WholeItemDeletionCandidate } from "./types.ts";
 import { plexPreviewPathEntries } from "./plexPreviewPaths.ts";
 
-const item = { ratingKey: "1", title: "Movie" } as StaleItem;
+const item = {
+  ratingKey: "1",
+  libraryKey: "movies",
+  title: "Movie",
+  type: "movie",
+  fileSize: null,
+} satisfies WholeItemDeletionCandidate;
 const basePreview = {
   ratingKey: "1",
   plexPaths: [],

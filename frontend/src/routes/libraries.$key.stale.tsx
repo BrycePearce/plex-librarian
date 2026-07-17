@@ -273,6 +273,12 @@ function StalePage() {
   );
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const completedExternalStages = deleteResult?.outcomes.flatMap((outcome) =>
+    outcome.stages.filter((stage) =>
+      stage.system !== "local" &&
+      (stage.status === "deleted" || stage.status === "already-absent")
+    )
+  ) ?? [];
 
   const deleteMutation = useDeleteItems([
     queryKeys.stale.library(key),
@@ -511,6 +517,8 @@ function StalePage() {
                     deleteResult.partial.length > 0
                   ? "warning"
                   : "success"}
+                autoDismiss={deleteResult.failed.length === 0 &&
+                  deleteResult.partial.length === 0}
                 onDismiss={() => setDeleteResult(null)}
               >
                 Deleted {deleteResult.deleted.length} item
@@ -543,6 +551,15 @@ function StalePage() {
                     {" "}
                     {deleteResult.failed.length} failed:{" "}
                     {deleteResult.failed.map((f) => f.error).join("; ")}
+                  </>
+                )}
+                {completedExternalStages.length > 0 &&
+                  (deleteResult.failed.length > 0 || deleteResult.partial.length > 0) && (
+                  <>
+                    {" "}
+                    Already completed: {completedExternalStages.map((stage) =>
+                      `${stage.system} (${stage.target})`
+                    ).join(", ")}.
                   </>
                 )}
               </DeleteResultAlert>

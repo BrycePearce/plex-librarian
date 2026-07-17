@@ -11,6 +11,7 @@ import type {
   PlexLocalAccount,
   PlexMediaPathPreview,
   PlexMediaVersion,
+  PlexMediaVersionPathPreview,
   PlexRawMetadata,
   PlexTrack,
 } from './types.ts';
@@ -437,6 +438,41 @@ export class PlexClient {
       if (start >= leafLimit) return { paths, truncated: true };
       if (paths.length >= limit) return { paths, truncated: true };
     }
+  }
+
+  // Resolves Part paths for each live Media entry under one movie or episode. Unlike
+  // mediaPathPreview(), this preserves the Media id boundary so a duplicate-version
+  // confirmation never attributes another version's file to the selected one.
+  async mediaVersionPathPreviews(
+    ratingKey: string,
+    limitPerVersion = 100,
+    signal?: AbortSignal,
+  ): Promise<PlexMediaVersionPathPreview[]> {
+    const data = await this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[] } }>(
+      `/library/metadata/${encodeURIComponent(ratingKey)}`,
+      undefined,
+      signal,
+    );
+    return (data.MediaContainer.Metadata ?? []).flatMap((metadata) =>
+      (metadata.Media ?? []).flatMap((media) => {
+        if (media.id == null) return [];
+        const paths: string[] = [];
+        const seen = new Set<string>();
+        let truncated = false;
+        for (const part of media.Part ?? []) {
+          if (typeof part.file !== 'string' || part.file.length === 0 || seen.has(part.file)) {
+            continue;
+          }
+          if (paths.length >= limitPerVersion) {
+            truncated = true;
+            break;
+          }
+          seen.add(part.file);
+          paths.push(part.file);
+        }
+        return [{ mediaId: media.id, paths, truncated }];
+      })
+    );
   }
 
   // Deletes an item's media from Plex (metadata + underlying file(s) on disk).

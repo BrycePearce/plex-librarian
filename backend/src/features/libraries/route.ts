@@ -47,6 +47,8 @@ import {
   getArrDeleteTargets,
 } from '../arr/delete.ts';
 import {
+  DownloadedFileCleanupError,
+  type DownloadedFileCleanupResult,
   executeDownloadedFileCleanup,
   reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
@@ -60,9 +62,12 @@ import {
   resolveDownloadCleanupBatch,
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
+import { tryAcquireLibraryOperation } from '../../services/libraryOperations.ts';
 import type {
   DeleteItemsResponse,
+  DeleteItemOutcome,
   LibrariesResponse,
   MediaVersion,
   MovieDetail,
@@ -70,6 +75,33 @@ import type {
   StaleResponse,
 } from '@plex-librarian/shared/types.ts';
 import { staleCutoffs } from './staleFilters.ts';
+import { isDeletionMode } from './deleteRequest.ts';
+
+function appendDownloadCleanupStages(
+  outcome: DeleteItemOutcome,
+  result: DownloadedFileCleanupResult,
+): void {
+  for (const job of result.deletedJobs) {
+    outcome.stages.push({
+      system: job.provider,
+      target: `${job.instanceName}: ${job.name}`,
+      status: 'deleted',
+    });
+  }
+  for (const job of result.alreadyRemovedJobs) {
+    outcome.stages.push({
+      system: job.provider,
+      target: `${job.instanceName}: ${job.name}`,
+      status: 'already-absent',
+    });
+  }
+  for (const path of result.deletedOrphanFiles) {
+    outcome.stages.push({ system: 'filesystem', target: path, status: 'deleted' });
+  }
+  for (const path of result.alreadyRemovedOrphanFiles) {
+    outcome.stages.push({ system: 'filesystem', target: path, status: 'already-absent' });
+  }
+}
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -422,7 +454,7 @@ router.delete('/:key/items', async (c) => {
   if (!body.ratingKeys.every((k): k is string => typeof k === 'string')) {
     return c.json({ error: 'ratingKeys must be strings' }, 400);
   }
-  if (body.mode !== undefined && body.mode !== 'coordinated' && body.mode !== 'plex-only') {
+  if (!isDeletionMode(body.mode)) {
     return c.json({ error: 'mode must be coordinated or plex-only' }, 400);
   }
   if (body.cleanupDownloads !== undefined && typeof body.cleanupDownloads !== 'boolean') {
@@ -441,6 +473,12 @@ router.delete('/:key/items', async (c) => {
   const [library] = await db.select({ key: libraries.key, type: libraries.type }).from(libraries)
     .where(libraryByKey(serverId, key)).limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
+
+  const releaseLibrary = tryAcquireLibraryOperation(serverId, key, 'deletion');
+  if (!releaseLibrary) {
+    return c.json({ error: 'this library is currently syncing or being modified' }, 409);
+  }
+  try {
 
   // Only ever act on items that actually belong to this library/server — guards
   // against a client passing ratingKeys scraped from a different library or server.
@@ -537,6 +575,31 @@ router.delete('/:key/items', async (c) => {
     return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
   }
 
+  // Do not remove a movie, show, or artist while Plex reports it (or one of its
+  // children) in an active session. This check runs after all read-only planning but
+  // before qBittorrent, filesystem, Arr, or Plex receives a destructive request.
+  let activeSessions;
+  try {
+    activeSessions = await client.activeSessions();
+  } catch (err) {
+    return c.json({
+      error: `could not verify active playback: ${
+        err instanceof Error ? err.message : 'Plex session lookup failed'
+      }`,
+    }, 502);
+  }
+  const selectedRatingKeys = new Set(owned.map((item) => item.ratingKey));
+  const playingRatingKeys = activeWholeItemRatingKeys(selectedRatingKeys, activeSessions);
+  if (playingRatingKeys.size > 0) {
+    const titles = owned.filter((item) => playingRatingKeys.has(item.ratingKey)).map((item) =>
+      item.title
+    );
+    return c.json({
+      error: `cannot delete media with active playback: ${titles.join(', ')}`,
+      ratingKeys: [...playingRatingKeys],
+    }, 409);
+  }
+
   // Sequential, not concurrent: deletion is destructive and irreversible, and the
   // per-item result needs to be attributable — worth the extra latency for a
   // user-triggered, page-sized (<=200) action.
@@ -547,12 +610,21 @@ router.delete('/:key/items', async (c) => {
   const removedByApp: string[] = [];
   const partial: DeleteItemsResponse['partial'] = [];
   const failed: { ratingKey: string; error: string }[] = [];
+  const outcomes: DeleteItemOutcome[] = [];
   let arrMutationOccurred = false;
   const deletedDownloadJobKeys = new Set<string>();
   const deletedOrphanPaths = new Set<string>();
   for (const ratingKey of ratingKeys) {
+    const outcome: DeleteItemOutcome = { ratingKey, stages: [] };
     if (!fileSizeByKey.has(ratingKey)) {
       failed.push({ ratingKey, error: 'not found in this library' });
+      outcome.stages.push({
+        system: 'local',
+        target: ratingKey,
+        status: 'failed',
+        error: 'not found in this library',
+      });
+      outcomes.push(outcome);
       continue;
     }
     try {
@@ -565,7 +637,7 @@ router.delete('/:key/items', async (c) => {
       }
       const cleanup = downloadCleanupByItem.get(ratingKey);
       if (cleanup) {
-        await executeDownloadedFileCleanup(
+        const cleanupResult = await executeDownloadedFileCleanup(
           cleanup,
           deletedDownloadJobKeys,
           deletedOrphanPaths,
@@ -629,6 +701,7 @@ router.delete('/:key/items', async (c) => {
             }
           },
         );
+        appendDownloadCleanupStages(outcome, cleanupResult);
       }
       if (arrTargets.length > 0) {
         const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;
@@ -654,6 +727,22 @@ router.delete('/:key/items', async (c) => {
           },
         });
         const disposition = arrDeleteDisposition(result);
+        const arrSystem = item.type === 'movie' ? 'radarr' : 'sonarr';
+        for (const deletedInstance of result.deletedInstances) {
+          outcome.stages.push({
+            system: arrSystem,
+            target: deletedInstance.instanceName,
+            status: deletedInstance.alreadyAbsent ? 'already-absent' : 'deleted',
+          });
+        }
+        for (const failure of result.failures) {
+          outcome.stages.push({
+            system: arrSystem,
+            target: failure.instanceName,
+            status: 'failed',
+            error: failure.error,
+          });
+        }
         arrMutationOccurred ||= disposition.shouldRefreshPlex;
         if (disposition.status !== 'complete') {
           if (disposition.status === 'partial') {
@@ -669,26 +758,50 @@ router.delete('/:key/items', async (c) => {
                 .join('; '),
             });
           }
+          outcomes.push(outcome);
           continue;
         }
       } else {
         await client.deleteItem(ratingKey);
+        outcome.stages.push({ system: 'plex', target: item.title, status: 'deleted' });
       }
       await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+      outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
       deleted.push(ratingKey);
       removedByApp.push(ratingKey);
     } catch (err) {
+      if (err instanceof DownloadedFileCleanupError) {
+        appendDownloadCleanupStages(outcome, err.result);
+        outcome.stages.push({
+          system: err.system,
+          target: err.target,
+          status: 'failed',
+          error: err.message,
+        });
+      }
       // A 404 means Plex already has no record of this item — most likely it was
       // deleted directly in Plex outside this app. Treat that as success and drop the
       // now-orphaned local row, rather than leaving it permanently stuck failing every
       // future delete attempt.
       if (err instanceof PlexDeleteError && err.status === 404) {
         await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+        outcome.stages.push({ system: 'plex', target: ratingKey, status: 'already-absent' });
+        outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
         deleted.push(ratingKey);
+        outcomes.push(outcome);
         continue;
+      }
+      if (!(err instanceof DownloadedFileCleanupError)) {
+        outcome.stages.push({
+          system: 'deletion',
+          target: itemByKey.get(ratingKey)?.title ?? ratingKey,
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'delete failed',
+        });
       }
       failed.push({ ratingKey, error: err instanceof Error ? err.message : 'delete failed' });
     }
+    outcomes.push(outcome);
   }
 
   // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
@@ -723,10 +836,14 @@ router.delete('/:key/items', async (c) => {
       partialCount: partial.length,
       failedCount: failed.length,
       fileSizeFreed,
+      outcomes,
     },
   }]);
 
-  return c.json({ deleted, partial, failed } satisfies DeleteItemsResponse);
+    return c.json({ deleted, partial, failed, outcomes } satisfies DeleteItemsResponse);
+  } finally {
+    releaseLibrary();
+  }
 });
 
 router.get('/:key/shows/:ratingKey', async (c) => {

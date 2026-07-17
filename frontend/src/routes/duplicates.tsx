@@ -12,6 +12,7 @@ import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
+import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionState";
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import { requireAuth } from "../lib/requireAuth";
@@ -81,9 +82,10 @@ function DuplicatesPage() {
       failedCount: number;
       fileSizeFreed: number;
       errors: string[];
+      completedStages: string[];
     } | null
   >(null);
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const versionDialogRef = useRef<HTMLDialogElement>(null);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
   // uses the shared hook (same endpoint the stale page's bulk delete calls), the
@@ -102,24 +104,45 @@ function DuplicatesPage() {
     mutationFn: async ({
       group,
       mediaIds,
+      deleteFromArr,
+      cleanupDownloads,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
+      deleteFromArr: boolean;
+      cleanupDownloads: boolean;
     }) => {
+      if (group.mediaType === "movie") {
+        const response = await api.duplicates.deleteMovieMediaVersions(
+          group.ratingKey,
+          mediaIds,
+          deleteFromArr,
+          cleanupDownloads,
+        );
+        return {
+          mode: "versions" as const,
+          deletedCount: response.deletedMediaIds.length,
+          partialCount:
+            response.deletedMediaIds.length > 0 && response.failed.length > 0
+              ? 1
+              : 0,
+          failedCount: response.failed.length,
+          fileSizeFreed: response.fileSizeFreed,
+          errors: response.failed.map((failure) => failure.error),
+          completedStages: response.outcomes
+            .filter((stage) => stage.status !== "failed")
+            .map((stage) => `${stage.system} (${stage.target})`),
+        };
+      }
       let deletedCount = 0;
       let fileSizeFreed = 0;
       const errors: string[] = [];
       for (const mediaId of mediaIds) {
         try {
-          const res = group.mediaType === "movie"
-            ? await api.duplicates.deleteMovieMediaVersion(
-              group.ratingKey,
-              mediaId,
-            )
-            : await api.duplicates.deleteEpisodeMediaVersion(
-              group.episodeRatingKey,
-              mediaId,
-            );
+          const res = await api.duplicates.deleteEpisodeMediaVersion(
+            group.episodeRatingKey,
+            mediaId,
+          );
           deletedCount++;
           fileSizeFreed += res.fileSizeFreed;
         } catch (err) {
@@ -133,31 +156,48 @@ function DuplicatesPage() {
         failedCount: errors.length,
         fileSizeFreed,
         errors,
+        completedStages: [],
       };
     },
     onSuccess: (res) => {
       setDeleteResult(res);
       setReviewItem(null);
-      dialogRef.current?.close();
+      versionDialogRef.current?.close();
       void qc.invalidateQueries({ queryKey: queryKeys.duplicates.all });
       void qc.invalidateQueries({ queryKey: queryKeys.stale.all });
       void qc.invalidateQueries({ queryKey: queryKeys.libraries.all });
       void qc.invalidateQueries({ queryKey: queryKeys.events.all });
       void qc.invalidateQueries({ queryKey: queryKeys.mediaRemovals.all });
+      void qc.invalidateQueries({
+        queryKey: queryKeys.versionDeletionPreview.all,
+      });
     },
   });
 
   function handleConfirm(
     group: DuplicateGroup,
-    mediaIds: number[],
-    deleteWholeItem: boolean,
+    plan: {
+      mediaIds: number[];
+      deleteWholeItem: boolean;
+      deleteFromArr: boolean;
+      cleanupDownloads: boolean;
+    },
   ) {
-    // Checking every version means "I don't want this at all" — hand off to the
-    // same whole-item delete the stale page uses instead of deleting versions one
-    // by one. Movies only: episodes have no whole-episode delete endpoint yet.
-    if (deleteWholeItem && group.mediaType === "movie") {
+    // Every selected movie version is a whole-title deletion, but it stays in this
+    // review dialog. The warning and destination choices above are the confirmation;
+    // execution uses the established whole-item endpoint so Plex is never asked to
+    // remove the final Media entry through the version endpoint.
+    if (
+      versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) ===
+        "whole-item"
+    ) {
       deleteWholeItemMutation.mutate(
-        { libraryKey: group.libraryKey, ratingKeys: [group.ratingKey] },
+        {
+          libraryKey: group.libraryKey,
+          ratingKeys: [group.ratingKey],
+          coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
+          cleanupDownloads: plan.deleteFromArr && plan.cleanupDownloads,
+        },
         {
           onSuccess: (res) => {
             setDeleteResult({
@@ -166,38 +206,50 @@ function DuplicatesPage() {
               deletedCount: res.deleted.length,
               partialCount: res.partial.length,
               failedCount: res.failed.length,
-              // deleteItems doesn't return freed size per item; the group's own
-              // combined size already reflects every version being removed.
               fileSizeFreed: res.deleted.length > 0
                 ? (group.combinedFileSize ?? 0)
                 : 0,
               errors: [
-                ...res.partial.flatMap((item) =>
-                  item.failedInstances.map((instance) =>
+                ...res.partial.flatMap((partial) =>
+                  partial.failedInstances.map((instance) =>
                     `${instance.instanceName}: ${instance.error}`
                   )
                 ),
                 ...res.failed.map((failure) => failure.error),
               ],
+              completedStages: res.outcomes.flatMap((outcome) =>
+                outcome.stages
+                  .filter((stage) =>
+                    stage.system !== "local" &&
+                    (stage.status === "deleted" ||
+                      stage.status === "already-absent")
+                  )
+                  .map((stage) => `${stage.system} (${stage.target})`)
+              ),
             });
             setReviewItem(null);
-            dialogRef.current?.close();
+            versionDialogRef.current?.close();
           },
         },
       );
       return;
     }
-    deleteVersionsMutation.mutate({ group, mediaIds });
+    deleteVersionsMutation.mutate({
+      group,
+      mediaIds: plan.mediaIds,
+      deleteFromArr: plan.deleteFromArr,
+      cleanupDownloads: plan.cleanupDownloads,
+    });
   }
 
   function openReview(item: DuplicateGroup) {
     setDeleteResult(null);
     setReviewItem(item);
-    dialogRef.current?.showModal();
+    versionDialogRef.current?.showModal();
   }
 
   function closeReview() {
-    dialogRef.current?.close();
+    versionDialogRef.current?.close();
   }
 
   const page = Math.floor(offset / PAGE_SIZE);
@@ -236,6 +288,8 @@ function DuplicatesPage() {
                     deleteResult.partialCount > 0
                   ? "warning"
                   : "success"}
+                autoDismiss={deleteResult.failedCount === 0 &&
+                  deleteResult.partialCount === 0}
                 onDismiss={() => setDeleteResult(null)}
               >
                 {deleteResult.mode === "whole-item" &&
@@ -253,7 +307,8 @@ function DuplicatesPage() {
                 {deleteResult.mode === "whole-item" &&
                   deleteResult.deletedCount > 0 && (
                   <>
-                    Deleted "{deleteResult.title}" from Plex (
+                    Removed "{deleteResult.title}" from its selected
+                    destinations (
                     {formatKilobytes(deleteResult.fileSizeFreed)} freed).
                   </>
                 )}
@@ -268,6 +323,13 @@ function DuplicatesPage() {
                   <>
                     {" "}
                     Details: {deleteResult.errors.join("; ")}
+                  </>
+                )}
+                {deleteResult.completedStages.length > 0 &&
+                  deleteResult.errors.length > 0 && (
+                  <>
+                    Already completed:{" "}
+                    {deleteResult.completedStages.join(", ")}.
                   </>
                 )}
               </DeleteResultAlert>
@@ -355,13 +417,12 @@ function DuplicatesPage() {
         )}
 
       <VersionPickerDialog
-        dialogRef={dialogRef}
+        dialogRef={versionDialogRef}
         item={reviewItem}
-        pending={deleteWholeItemMutation.isPending ||
-          deleteVersionsMutation.isPending}
-        error={deleteWholeItemMutation.error ?? deleteVersionsMutation.error}
-        onConfirm={(mediaIds, deleteWholeItem) =>
-          reviewItem && handleConfirm(reviewItem, mediaIds, deleteWholeItem)}
+        pending={deleteVersionsMutation.isPending ||
+          deleteWholeItemMutation.isPending}
+        error={deleteVersionsMutation.error ?? deleteWholeItemMutation.error}
+        onConfirm={(plan) => reviewItem && handleConfirm(reviewItem, plan)}
         onCancel={closeReview}
       />
     </div>

@@ -5,6 +5,17 @@ import { ServiceIcon } from "../../components/ServiceIcons";
 import type { ServiceIconName } from "../../components/ServiceIcons";
 import { InfoTip } from "./InfoTip";
 
+export interface DeletionDestinationOption {
+  id: "arr" | "cleanup";
+  service?: ServiceIconName;
+  label: string;
+  info: string;
+  checked: boolean;
+  disabled: boolean;
+  warning: boolean;
+  onChange: (checked: boolean) => void;
+}
+
 function DestinationOption({
   service,
   label,
@@ -62,44 +73,14 @@ function DestinationOption({
 }
 
 export function DestinationOptions({
-  arrService,
-  arrLabel,
-  arrVisible,
-  arrWarning,
-  arrInfo,
-  deleteFromArr,
-  arrDisabled,
-  onArrChange,
-  cleanupVisible,
-  cleanupUsesQbittorrent,
-  cleanupDownloads,
-  cleanupWarning,
-  cleanupInfo,
-  cleanupDisabled,
-  onCleanupChange,
+  options,
 }: {
-  arrService?: "radarr" | "sonarr";
-  arrLabel: string;
-  arrVisible: boolean;
-  arrWarning: boolean;
-  arrInfo: string;
-  deleteFromArr: boolean;
-  arrDisabled: boolean;
-  onArrChange: (checked: boolean) => void;
-  cleanupVisible: boolean;
-  cleanupUsesQbittorrent: boolean;
-  cleanupDownloads: boolean;
-  cleanupWarning: boolean;
-  cleanupInfo: string;
-  cleanupDisabled: boolean;
-  onCleanupChange: (checked: boolean) => void;
+  options: DeletionDestinationOption[];
 }) {
-  const destinationHelp = [
-    `${arrLabel}: ${arrInfo}`,
-    cleanupVisible
-      ? `${cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files"}: ${cleanupInfo}`
-      : null,
-  ].filter(Boolean).join(" ");
+  if (options.length === 0) return null;
+  const destinationHelp = options.map((option) =>
+    `${option.label}: ${option.info}`
+  ).join(" ");
 
   return (
     <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
@@ -107,28 +88,18 @@ export function DestinationOptions({
         Also clean up in
         <InfoTip text={destinationHelp} />
       </span>
-      {arrVisible && (
+      {options.map((option) => (
         <DestinationOption
-          service={arrService ?? "radarr"}
-          label={arrLabel}
-          info={arrInfo}
-          checked={deleteFromArr}
-          disabled={arrDisabled}
-          warning={arrWarning}
-          onChange={onArrChange}
+          key={option.id}
+          service={option.service}
+          label={option.label}
+          info={option.info}
+          checked={option.checked}
+          disabled={option.disabled}
+          warning={option.warning}
+          onChange={option.onChange}
         />
-      )}
-      {cleanupVisible && (
-        <DestinationOption
-          service={cleanupUsesQbittorrent ? "qbittorrent" : undefined}
-          label={cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files"}
-          info={cleanupInfo}
-          checked={cleanupDownloads}
-          disabled={cleanupDisabled}
-          warning={cleanupWarning}
-          onChange={onCleanupChange}
-        />
-      )}
+      ))}
     </div>
   );
 }
@@ -201,16 +172,19 @@ export function PlannedServiceExceptions({
       {deleteFromArr && arrUnavailable && (
         <ServiceMark
           service={arrService}
-          ariaLabel={`Arr deletion unavailable: ${arrReason ?? "no verified match"}`}
+          ariaLabel={`Arr deletion unavailable: ${
+            arrReason ?? "no verified match"
+          }`}
           popover={
             <>
               <div className="font-semibold text-error">Arr unavailable</div>
               <div className="mt-1 text-base-content/60">
-                {arrReason ?? "No verified Sonarr or Radarr match is available."}
+                {arrReason ??
+                  "No verified Sonarr or Radarr match is available."}
               </div>
               <div className="mt-1 text-base-content/45">
-                This item will be deleted from Plex only and may be downloaded again if it remains
-                monitored.
+                This item will be deleted from Plex only and may be downloaded
+                again if it remains monitored.
               </div>
             </>
           }
@@ -226,7 +200,9 @@ export function PlannedServiceExceptions({
           }`}
           popover={
             <>
-              <div className="font-semibold text-error">Download cleanup unavailable</div>
+              <div className="font-semibold text-error">
+                Download cleanup unavailable
+              </div>
               <div className="mt-1 text-base-content/60">
                 {cleanupReason ??
                   (cleanupStatus === "error"
@@ -240,41 +216,5 @@ export function PlannedServiceExceptions({
         />
       )}
     </span>
-  );
-}
-
-export function PreviewStatus({
-  loading,
-  error,
-  arrProblems,
-  cleanupProblems,
-}: {
-  loading: boolean;
-  error: string | null;
-  arrProblems: Array<{ title: string; reason: string }>;
-  cleanupProblems: Array<{ title: string; reason: string }>;
-}) {
-  return (
-    <div className="mt-2 space-y-1 text-xs">
-      {loading && (
-        <p className="flex items-center gap-2 text-base-content/50">
-          <span className="loading loading-spinner loading-xs" /> Verifying deletion paths…
-        </p>
-      )}
-      {error && <p className="text-error">Could not verify deletion paths: {error}</p>}
-      {!loading && !error && arrProblems.length > 0 && (
-        <p className="text-warning">
-          {arrProblems.length} {arrProblems.length === 1 ? "item has" : "items have"} no verified
-          Arr destination and will use Plex only. Review the Arr warning for details.
-        </p>
-      )}
-      {!loading && !error && cleanupProblems.length > 0 && (
-        <p className="text-warning">
-          Downloaded-file cleanup could not be verified for {cleanupProblems.length} {
-            cleanupProblems.length === 1 ? "item" : "items"
-          }: {cleanupProblems[0].reason}
-        </p>
-      )}
-    </div>
   );
 }

@@ -1,16 +1,30 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { motion, useReducedMotion } from "motion/react";
-import { AlertTriangle, Copy, Trash2 } from "lucide-react";
-import type { StaleItem } from "../../lib/api";
+import { Copy } from "lucide-react";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queryKeys";
 import { formatKilobytes } from "../../lib/format";
-import { DestinationOptions, PreviewStatus } from "./DeletionPlanSummary";
+import { DestinationOptions } from "./DeletionPlanSummary";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree";
-import { arrDestinationState } from "./deletionPreviewState";
+import {
+  arrDestinationState,
+  shouldUseArrByDefault,
+} from "./deletionPreviewState";
+import type { WholeItemDeletionCandidate } from "./types";
+import { deletionImpact } from "./deletionImpact";
+import {
+  BasicDeletionList,
+  BasicDeletionRow,
+  DeletionDialogFooter,
+  DeletionModalShell,
+  DeletionPreview,
+  DeletionPreviewStatus,
+  PlexFallbackAcknowledgement,
+  useDeletionDialogCancelFocus,
+} from "./DeletionDialog";
+import { deletionConfirmationBlocked } from "./deletionConfirmation";
 import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({
@@ -24,7 +38,7 @@ export function DeleteConfirmDialog({
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
   libraryKey: string;
-  items: StaleItem[];
+  items: WholeItemDeletionCandidate[];
   pending: boolean;
   error: unknown;
   onConfirm: (plan: {
@@ -35,12 +49,18 @@ export function DeleteConfirmDialog({
 }) {
   const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [plexFallbackAcknowledged, setPlexFallbackAcknowledged] = useState(
+    false,
+  );
   const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
-  const reduceMotion = useReducedMotion();
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
     [items],
+  );
+  const selectionKey = `${libraryKey}:${ratingKeys.join("|")}`;
+  const cancelButtonRef = useDeletionDialogCancelFocus(
+    dialogRef,
+    selectionKey,
   );
   const preview = useQuery({
     queryKey: queryKeys.downloadCleanupPreview.forItems(
@@ -73,6 +93,8 @@ export function DeleteConfirmDialog({
     : [];
   const arrDestination = arrDestinationState(preview.data);
   const arrProblems = arrDestination.problems;
+  const arrProblemKey = arrProblems.map((problem) => problem.ratingKey).sort()
+    .join("|");
   const cleanupVerificationErrors =
     preview.data?.items.filter((item) =>
       item.arrStatus === "resolved" && item.status === "error"
@@ -80,33 +102,38 @@ export function DeleteConfirmDialog({
   const arrService = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   const arrOptionVisible = arrDestination.visible;
+  const plexFallbackRequired = deleteFromArr && arrProblems.length > 0;
   const cleanupOptionVisible = arrOptionVisible &&
     (cleanupEligibleCount > 0 || cleanupVerificationErrors.length > 0);
   const cleanupUsesQbittorrent = downloadJobs.length > 0;
   useEffect(() => {
     setDeleteFromArr(true);
     setCleanupDownloads(false);
+    setPlexFallbackAcknowledged(false);
     setPreviewMode("basic");
   }, [libraryKey, ratingKeys.join("|")]);
   useEffect(() => {
-    if (preview.data && coordinatedRatingKeys.length === 0) {
+    // When Arr is configured but no selected title can be resolved, keep the Arr
+    // destination selected so the explicit Plex-fallback acknowledgement below is
+    // still required. Only switch to Plex-only automatically when this library has
+    // no coordinated destination at all.
+    if (preview.data && !shouldUseArrByDefault(preview.data)) {
       setDeleteFromArr(false);
     }
-  }, [coordinatedRatingKeys.length, preview.data]);
+  }, [preview.data]);
   useEffect(() => {
     if (cleanupEligibleCount === 0) setCleanupDownloads(false);
   }, [cleanupEligibleCount]);
-  useLayoutEffect(() => {
-    if (dialogRef.current?.open) {
-      cancelButtonRef.current?.focus({ preventScroll: true });
-    }
-  }, [dialogRef, items]);
+  useEffect(() => {
+    setPlexFallbackAcknowledged(false);
+  }, [arrProblemKey]);
   const cancel = () => {
     setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
     setCleanupDownloads(false);
+    setPlexFallbackAcknowledged(false);
     onCancel();
   };
-  const totalSize = items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
+  const { totalSize, unknownSizeCount } = deletionImpact(items);
   // Deleting here removes every synced Media version, not just one redundant copy.
   // Movies carry an exact version count; shows only carry an existence flag because
   // episode media versions are not rolled up per show. Keep both signals compact so a
@@ -114,211 +141,212 @@ export function DeleteConfirmDialog({
   const hasMultiVersionItems = items.some(
     (i) => (i.versions?.length ?? 0) >= 2 || i.hasDuplicateEpisodes === true,
   );
+  const confirmDisabled = deletionConfirmationBlocked({
+    pending,
+    hasSelection: items.length > 0,
+    preview: preview.isLoading
+      ? "loading"
+      : preview.isError
+      ? "error"
+      : "ready",
+    fallbackRequired: plexFallbackRequired,
+    fallbackAcknowledged: plexFallbackAcknowledged,
+  });
 
   return (
-    <dialog ref={dialogRef} className="modal" onClose={cancel}>
-      <div className="modal-box polished-modal max-w-2xl">
-        <h3 className="font-bold text-lg flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 text-error" /> Delete {items.length}
-          {" "}
-          item
-          {items.length === 1 ? "" : "s"}?
-        </h3>
-        <p className="py-2 text-sm text-base-content/70">
+    <DeletionModalShell
+      dialogRef={dialogRef}
+      pending={pending}
+      onClose={cancel}
+      title={<>Delete {items.length} item{items.length === 1 ? "" : "s"}?</>}
+      summary={
+        <>
           <span className="font-semibold text-base-content">
             {formatKilobytes(totalSize)}
           </span>{" "}
+          {unknownSizeCount > 0 && (
+            <>
+              plus {unknownSizeCount} unknown-size{" "}
+              {unknownSizeCount === 1 ? "item" : "items"}
+            </>
+          )}
           will be permanently removed. This cannot be undone.
-        </p>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <span className="text-xs font-medium text-base-content/50">
-            Deletion preview
-          </span>
-          <div
-            className="join rounded-md border border-base-300 bg-base-200/50 p-0.5"
-            role="group"
-            aria-label="Deletion preview detail"
-          >
-            {(["basic", "advanced"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`join-item btn btn-xs h-6 min-h-0 border-0 px-2.5 capitalize ${
-                  previewMode === mode
-                    ? "bg-base-100 text-base-content shadow-sm"
-                    : "bg-transparent text-base-content/45 shadow-none"
-                }`}
-                aria-pressed={previewMode === mode}
-                onClick={() => setPreviewMode(mode)}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
-        </div>
-        <motion.div
-          key={previewMode}
-          initial={reduceMotion ? false : { opacity: 0, y: 3 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
-        >
-          {previewMode === "basic"
-            ? (
-              <ul className="mt-2 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
-                {items.map((item) => {
-                  const versions = item.versions ?? [];
-                  const isMultiVersion = versions.length >= 2;
-                  const previewItem = previewByRatingKey.get(item.ratingKey);
-                  return (
-                    <li key={item.ratingKey} className="px-3 py-1.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="min-w-0 flex-1 flex items-center gap-1.5">
-                          <span
-                            className="min-w-0 flex-1 truncate"
-                            title={item.title}
-                          >
-                            {item.title}
-                          </span>
-                          {isMultiVersion && (
-                            <span className="badge badge-warning badge-xs shrink-0">
-                              {versions.length} versions
-                            </span>
-                          )}
-                          {!isMultiVersion && item.hasDuplicateEpisodes && (
-                            <Copy
-                              className="w-3 h-3 text-warning shrink-0"
-                              aria-label="Has duplicate episodes"
-                            />
-                          )}
-                          <DeletionServiceMarks
-                            item={item}
-                            preview={previewItem}
-                            deleteFromArr={deleteFromArr}
-                            cleanupDownloads={cleanupDownloads}
-                          />
+        </>
+      }
+    >
+      <DeletionPreview
+        mode={previewMode}
+        onModeChange={setPreviewMode}
+        basic={
+          <BasicDeletionList>
+            {items.map((item) => {
+              const versions = item.versions ?? [];
+              const isMultiVersion = versions.length >= 2;
+              const previewItem = previewByRatingKey.get(item.ratingKey);
+              return (
+                <BasicDeletionRow
+                  key={item.ratingKey}
+                  title={item.title}
+                  titleText={item.title}
+                  badges={
+                    <>
+                      {isMultiVersion && (
+                        <span className="badge badge-warning badge-xs shrink-0">
+                          {versions.length} versions
                         </span>
-                        <span className="text-base-content/50 font-mono text-xs shrink-0">
-                          {item.fileSize != null
-                            ? formatKilobytes(item.fileSize)
-                            : "—"}
+                      )}
+                      {!isMultiVersion && item.hasDuplicateEpisodes && (
+                        <span
+                          className="inline-flex size-4 shrink-0 items-center justify-center text-warning"
+                          title="This show contains episodes with multiple Plex versions"
+                          role="img"
+                          aria-label="Has duplicate episodes"
+                        >
+                          <Copy className="size-3" />
                         </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )
-            : (
-              <AdvancedDeletionTree
-                items={items}
-                plexPreviews={previewByRatingKey}
-                deleteFromArr={deleteFromArr}
-                cleanupDownloads={cleanupDownloads}
-                loading={preview.isLoading}
-              />
-            )}
-        </motion.div>
-        {hasMultiVersionItems && (
-          <p className="mt-1.5 text-xs text-base-content/40">
-            Items marked with multiple versions lose all of them here. To remove
-            just one, use the{" "}
-            <Link
-              to="/duplicates"
-              search={{ type: "all" }}
-              className="link link-primary"
-            >
-              Duplicates page
-            </Link>{" "}
-            instead.
-          </p>
-        )}
-        {error != null && (
-          <p className="text-error text-sm">
-            {error instanceof Error ? error.message : "Delete failed"}
-          </p>
-        )}
-        {(arrOptionVisible || cleanupOptionVisible) && (
-          <DestinationOptions
-            arrService={arrService}
-            arrLabel={arrLabel}
-            arrVisible={arrOptionVisible}
-            arrWarning={arrProblems.length > 0}
-            arrInfo={arrProblems[0]?.arrReason ??
-              `Deletes the managed title and its files through ${arrLabel}.`}
+                      )}
+                    </>
+                  }
+                  marks={
+                    <DeletionServiceMarks
+                      item={item}
+                      preview={previewItem}
+                      deleteFromArr={deleteFromArr}
+                      cleanupDownloads={cleanupDownloads}
+                    />
+                  }
+                  size={item.fileSize != null
+                    ? formatKilobytes(item.fileSize)
+                    : "—"}
+                />
+              );
+            })}
+          </BasicDeletionList>
+        }
+        advanced={
+          <AdvancedDeletionTree
+            items={items}
+            plexPreviews={previewByRatingKey}
             deleteFromArr={deleteFromArr}
-            arrDisabled={pending || preview.isLoading ||
-              coordinatedRatingKeys.length === 0}
-            onArrChange={(checked) => {
-              setDeleteFromArr(checked);
-              if (!checked) setCleanupDownloads(false);
-            }}
-            cleanupVisible={cleanupOptionVisible}
-            cleanupUsesQbittorrent={cleanupUsesQbittorrent}
             cleanupDownloads={cleanupDownloads}
-            cleanupWarning={cleanupVerificationErrors.length > 0}
-            cleanupInfo={cleanupVerificationErrors[0]?.reason ??
-              (cleanupUsesQbittorrent
-                ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
-                : "Removes downloaded files whose hardlink identity has been verified safely.")}
-            cleanupDisabled={pending || preview.isLoading || !deleteFromArr ||
-              cleanupEligibleCount === 0}
-            onCleanupChange={setCleanupDownloads}
+            loading={preview.isLoading}
           />
-        )}
-
-        <PreviewStatus
-          loading={preview.isLoading}
-          error={preview.isError ? preview.error.message : null}
-          arrProblems={preview.data?.coordinatedConfigured
-            ? arrProblems.map((problem) => ({
-              title: items.find((item) => item.ratingKey === problem.ratingKey)
-                ?.title ?? problem.ratingKey,
-              reason: problem.arrReason ??
-                "managed deletion could not be verified",
-            }))
-            : []}
-          cleanupProblems={cleanupVerificationErrors.map((problem) => ({
-            title: items.find((item) => item.ratingKey === problem.ratingKey)
-              ?.title ?? problem.ratingKey,
-            reason: problem.reason ??
-              "downloaded-file cleanup could not be verified",
-          }))}
+        }
+      />
+      {hasMultiVersionItems && (
+        <p className="mt-1.5 text-xs text-base-content/40">
+          Items marked with multiple versions lose all of them here. To remove
+          just one, use the{" "}
+          <Link
+            to="/duplicates"
+            search={{ type: "all" }}
+            className="link link-primary"
+          >
+            Duplicates page
+          </Link>{" "}
+          instead.
+        </p>
+      )}
+      {error != null && (
+        <p className="text-error text-sm">
+          {error instanceof Error ? error.message : "Delete failed"}
+        </p>
+      )}
+      {(arrOptionVisible || cleanupOptionVisible) && (
+        <DestinationOptions
+          options={[
+            ...(arrOptionVisible
+              ? [{
+                id: "arr" as const,
+                service: arrService,
+                label: arrLabel,
+                info: arrProblems[0]?.arrReason ??
+                  `Deletes the managed title and its files through ${arrLabel}.`,
+                checked: deleteFromArr,
+                disabled: pending || preview.isLoading ||
+                  coordinatedRatingKeys.length === 0,
+                warning: arrProblems.length > 0,
+                onChange: (checked: boolean) => {
+                  setDeleteFromArr(checked);
+                  setPlexFallbackAcknowledged(false);
+                  if (!checked) setCleanupDownloads(false);
+                },
+              }]
+              : []),
+            ...(cleanupOptionVisible
+              ? [{
+                id: "cleanup" as const,
+                service: cleanupUsesQbittorrent
+                  ? "qbittorrent" as const
+                  : undefined,
+                label: cleanupUsesQbittorrent
+                  ? "qBittorrent"
+                  : "Downloaded files",
+                info: cleanupVerificationErrors[0]?.reason ??
+                  (cleanupUsesQbittorrent
+                    ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
+                    : "Removes downloaded files whose hardlink identity has been verified safely."),
+                checked: cleanupDownloads,
+                disabled: pending || preview.isLoading || !deleteFromArr ||
+                  cleanupEligibleCount === 0,
+                warning: cleanupVerificationErrors.length > 0,
+                onChange: setCleanupDownloads,
+              }]
+              : []),
+          ]}
         />
+      )}
 
-        <div className="modal-action mt-3">
-          <button
-            ref={cancelButtonRef}
-            type="button"
-            className="btn btn-sm"
-            onClick={cancel}
-            disabled={pending}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-error gap-2"
-            onClick={() =>
-              onConfirm({
-                coordinatedRatingKeys: deleteFromArr
-                  ? coordinatedRatingKeys
-                  : [],
-                cleanupDownloads: deleteFromArr && cleanupDownloads,
-              })}
-            disabled={pending || (deleteFromArr && preview.isLoading)}
-          >
-            {pending
-              ? <span className="loading loading-spinner loading-xs" />
-              : <Trash2 className="w-4 h-4" />}
-            Delete permanently
-          </button>
-        </div>
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="submit" disabled={pending}>
-          close
-        </button>
-      </form>
-    </dialog>
+      <DeletionPreviewStatus
+        loading={preview.isLoading}
+        error={preview.isError ? preview.error.message : null}
+        warnings={[
+          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
+            ? [
+              `${arrProblems.length} ${
+                arrProblems.length === 1 ? "item has" : "items have"
+              } no verified Arr destination and will use Plex only. Review the Arr warning for details.`,
+            ]
+            : []),
+          ...(cleanupVerificationErrors.length > 0
+            ? [
+              `Downloaded-file cleanup could not be verified for ${cleanupVerificationErrors.length} ${
+                cleanupVerificationErrors.length === 1 ? "item" : "items"
+              }: ${
+                cleanupVerificationErrors[0]?.reason ??
+                  "downloaded-file cleanup could not be verified"
+              }`,
+            ]
+            : []),
+        ]}
+      />
+
+      {plexFallbackRequired && (
+        <PlexFallbackAcknowledgement
+          checked={plexFallbackAcknowledged}
+          pending={pending}
+          onChange={setPlexFallbackAcknowledged}
+        >
+          Delete {arrProblems.length}{" "}
+          {arrProblems.length === 1 ? "item" : "items"}{" "}
+          directly through Plex because no verified {arrLabel}{" "}
+          destination is available. These items may be downloaded again if they
+          remain monitored.
+        </PlexFallbackAcknowledgement>
+      )}
+
+      <DeletionDialogFooter
+        cancelButtonRef={cancelButtonRef}
+        pending={pending}
+        confirmDisabled={confirmDisabled}
+        confirmLabel="Delete permanently"
+        onCancel={cancel}
+        onConfirm={() =>
+          onConfirm({
+            coordinatedRatingKeys: deleteFromArr ? coordinatedRatingKeys : [],
+            cleanupDownloads: deleteFromArr && cleanupDownloads,
+          })}
+      />
+    </DeletionModalShell>
   );
 }

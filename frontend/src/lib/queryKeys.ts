@@ -15,6 +15,7 @@ const roots = {
   arrIntegrations: "arr-integrations",
   qbittorrentIntegrations: "qbittorrent-integrations",
   downloadCleanupPreview: "download-cleanup-preview",
+  versionDeletionPreview: "version-deletion-preview",
 } as const;
 
 export const queryKeys = {
@@ -73,6 +74,15 @@ export const queryKeys = {
     forItems: (libraryKey: string, ratingKeys: readonly string[]) =>
       [roots.downloadCleanupPreview, libraryKey, ratingKeys] as const,
   },
+  versionDeletionPreview: {
+    all: [roots.versionDeletionPreview] as const,
+    forVersions: (
+      mediaType: "movie" | "episode" | undefined,
+      ratingKey: string,
+      mediaIds: readonly number[],
+    ) =>
+      [roots.versionDeletionPreview, mediaType, ratingKey, mediaIds] as const,
+  },
 } as const;
 
 type QueryRootName = keyof typeof roots;
@@ -99,6 +109,7 @@ const rootPolicies = {
   arrIntegrations: { serverScoped: true, syncDerived: true },
   qbittorrentIntegrations: { serverScoped: true, syncDerived: false },
   downloadCleanupPreview: { serverScoped: true, syncDerived: true },
+  versionDeletionPreview: { serverScoped: true, syncDerived: true },
 } satisfies Record<QueryRootName, QueryRootPolicy>;
 
 const rootNames = Object.keys(roots) as QueryRootName[];

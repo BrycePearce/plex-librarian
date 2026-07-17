@@ -8,6 +8,7 @@ import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
 import { syncLibraryHistory } from './historySync.ts';
 import { syncArtistSizes, syncShowSizes } from './mediaRollups.ts';
 import { syncUsers } from './userSync.ts';
+import { withLibraryOperation } from '../../services/libraryOperations.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
@@ -243,14 +244,16 @@ export async function runSync(
   async function worker(): Promise<void> {
     while (nextIndex < plexLibraries.length) {
       const lib = plexLibraries[nextIndex++];
-      await syncLibrary(
-        plex,
-        lib,
-        now,
-        serverId,
-        buildCallbacks(reporter, lib.key, (d) => {
-          totalItems += d;
-        }),
+      await withLibraryOperation(serverId, lib.key, 'sync', () =>
+        syncLibrary(
+          plex,
+          lib,
+          now,
+          serverId,
+          buildCallbacks(reporter, lib.key, (d) => {
+            totalItems += d;
+          }),
+        )
       );
     }
   }
@@ -288,14 +291,16 @@ export async function runLibrarySync(
   await syncUsers(plex, serverId, now);
 
   let itemCount = 0;
-  await syncLibrary(
-    plex,
-    lib,
-    now,
-    serverId,
-    buildCallbacks(reporter, libraryKey, (d) => {
-      itemCount += d;
-    }),
+  await withLibraryOperation(serverId, libraryKey, 'sync', () =>
+    syncLibrary(
+      plex,
+      lib,
+      now,
+      serverId,
+      buildCallbacks(reporter, libraryKey, (d) => {
+        itemCount += d;
+      }),
+    )
   );
   return itemCount;
 }

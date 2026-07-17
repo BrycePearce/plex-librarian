@@ -6,6 +6,7 @@ import type {
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
+  DeleteMediaVersionsResponse,
   DownloadCleanupPreviewResponse,
   DuplicatesResponse,
   LibrariesResponse,
@@ -28,6 +29,7 @@ import type {
   UpdateArrInstanceRequest,
   UpdateQbittorrentInstanceRequest,
   UsersResponse,
+  VersionDeletionPreviewResponse,
 } from "@shared/types";
 
 export type {
@@ -43,6 +45,7 @@ export type {
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
   DeleteMediaVersionResponse,
+  DeleteMediaVersionsResponse,
   DownloadCleanupJob,
   DownloadCleanupPreviewItem,
   DownloadCleanupPreviewResponse,
@@ -76,6 +79,7 @@ export type {
   SyncLog,
   SyncTriggerResponse,
   UsersResponse,
+  VersionDeletionPreviewResponse,
 } from "@shared/types";
 
 // Frontend-only types (not part of the API contract)
@@ -127,8 +131,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await res
       .json()
       .catch(() => ({ error: res.statusText }))) as {
-      error?: string;
-    };
+        error?: string;
+      };
     const message = body.error ?? res.statusText;
     throw new ApiError(
       res.status,
@@ -196,15 +200,19 @@ export const api = {
     },
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(
-        `/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(
-          ratingKey,
-        )}`,
+        `/libraries/${encodeURIComponent(key)}/shows/${
+          encodeURIComponent(
+            ratingKey,
+          )
+        }`,
       ),
     movieDetail: (key: string, ratingKey: string) =>
       apiFetch<MovieDetail>(
-        `/libraries/${encodeURIComponent(key)}/movies/${encodeURIComponent(
-          ratingKey,
-        )}`,
+        `/libraries/${encodeURIComponent(key)}/movies/${
+          encodeURIComponent(
+            ratingKey,
+          )
+        }`,
       ),
     updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
@@ -214,7 +222,7 @@ export const api = {
     deleteItems: (
       key: string,
       ratingKeys: string[],
-      mode: "coordinated" | "plex-only" = "coordinated",
+      mode: "coordinated" | "plex-only",
       cleanupDownloads = false,
     ) =>
       apiFetch<DeleteItemsResponse>(
@@ -250,11 +258,37 @@ export const api = {
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,
         { method: "DELETE" },
       ),
+    versionDeletionPreview: (
+      mediaType: "movie" | "episode",
+      ratingKey: string,
+      mediaIds: number[],
+    ) =>
+      apiFetch<VersionDeletionPreviewResponse>(
+        `/duplicates/${mediaType === "movie" ? "movies" : "episodes"}/${
+          encodeURIComponent(ratingKey)
+        }/media/deletion-preview`,
+        { method: "POST", body: JSON.stringify({ mediaIds }) },
+      ),
+    deleteMovieMediaVersions: (
+      ratingKey: string,
+      mediaIds: number[],
+      deleteFromArr: boolean,
+      cleanupDownloads: boolean,
+    ) =>
+      apiFetch<DeleteMediaVersionsResponse>(
+        `/duplicates/movies/${encodeURIComponent(ratingKey)}/media`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ mediaIds, deleteFromArr, cleanupDownloads }),
+        },
+      ),
     deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
       apiFetch<DeleteMediaVersionResponse>(
-        `/duplicates/episodes/${encodeURIComponent(
-          episodeRatingKey,
-        )}/media/${mediaId}`,
+        `/duplicates/episodes/${
+          encodeURIComponent(
+            episodeRatingKey,
+          )
+        }/media/${mediaId}`,
         { method: "DELETE" },
       ),
   },

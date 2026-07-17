@@ -25,6 +25,9 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
       },
     ) => {
       if (coordinatedRatingKeys === undefined) {
+        if (mode === undefined) {
+          throw new Error("Deletion mode must be selected explicitly");
+        }
         return await api.libraries.deleteItems(
           libraryKey,
           ratingKeys,
@@ -57,6 +60,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         deleted: results.flatMap((result) => result.deleted),
         partial: results.flatMap((result) => result.partial),
         failed: results.flatMap((result) => result.failed),
+        outcomes: results.flatMap((result) => result.outcomes),
       } satisfies DeleteItemsResponse;
     },
     onSuccess: () => {

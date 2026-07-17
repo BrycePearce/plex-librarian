@@ -1,12 +1,9 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
-import { Check, ChevronRight, Copy, File, Folder, X } from "lucide-react";
+import { Check, Copy, File, Folder, X } from "lucide-react";
 import type {
-  ArrCleanupFile,
   ArrCleanupTarget,
   DownloadCleanupJob,
   DownloadCleanupPreviewItem,
-  StaleItem,
 } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
 import { ServiceIcon } from "../../components/ServiceIcons";
@@ -14,6 +11,7 @@ import type { ServiceIconName } from "../../components/ServiceIcons";
 import { InfoTip } from "./InfoTip";
 import { PlannedServiceExceptions } from "./DeletionPlanSummary";
 import { plexPreviewPathEntries } from "./plexPreviewPaths";
+import type { WholeItemDeletionCandidate } from "./types";
 
 interface TreeFile {
   path: string;
@@ -100,7 +98,7 @@ function TreeNodes(
   );
 }
 
-function PathTreeRoot({
+export function PathTreeRoot({
   path,
   source,
   files,
@@ -226,7 +224,7 @@ async function copyText(
   if (!copied) throw new Error("Browser rejected the copy command");
 }
 
-function managedFiles(target: ArrCleanupTarget): TreeFile[] {
+export function managedFiles(target: ArrCleanupTarget): TreeFile[] {
   if (target.type === "sonarr") {
     return (target.seasons ?? []).map((season) => ({
       path: season.seasonNumber === 0
@@ -257,7 +255,7 @@ function managedFiles(target: ArrCleanupTarget): TreeFile[] {
   return [...files.values()];
 }
 
-function downloadJobInfo(job: DownloadCleanupJob): string {
+export function downloadJobInfo(job: DownloadCleanupJob): string {
   return [
     `${job.fileCount} file${job.fileCount === 1 ? "" : "s"}`,
     formatKilobytes(job.size / 1000),
@@ -268,13 +266,13 @@ function downloadJobInfo(job: DownloadCleanupJob): string {
   ].filter(Boolean).join(" · ");
 }
 
-function downloadJobRoot(job: DownloadCleanupJob): string {
+export function downloadJobRoot(job: DownloadCleanupJob): string {
   return job.fileCount === 1
     ? job.savePath || job.contentPath
     : job.contentPath || job.savePath;
 }
 
-function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
+export function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
   const rootSegments = job.contentPath.split(/[\\/]+/).filter(Boolean);
   const rootName = rootSegments[rootSegments.length - 1]?.toLocaleLowerCase();
   return job.files.map((file) => {
@@ -287,7 +285,7 @@ function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
   });
 }
 
-function ActiveServiceMark({
+export function ActiveServiceMark({
   service,
   label,
 }: {
@@ -317,7 +315,7 @@ export function DeletionServiceMarks({
   deleteFromArr,
   cleanupDownloads,
 }: {
-  item: StaleItem;
+  item: WholeItemDeletionCandidate;
   preview?: DownloadCleanupPreviewItem;
   deleteFromArr: boolean;
   cleanupDownloads: boolean;
@@ -373,7 +371,7 @@ export function AdvancedDeletionTree({
   cleanupDownloads,
   loading,
 }: {
-  items: StaleItem[];
+  items: WholeItemDeletionCandidate[];
   plexPreviews: ReadonlyMap<string, DownloadCleanupPreviewItem>;
   deleteFromArr: boolean;
   cleanupDownloads: boolean;
@@ -515,194 +513,6 @@ export function AdvancedDeletionTree({
           </p>
         )}
       </div>
-    </div>
-  );
-}
-
-function CollapsiblePathSection({
-  title,
-  count,
-  info,
-  warning = false,
-  children,
-}: {
-  title: string;
-  count: number | null;
-  info: string;
-  warning?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <details
-      className={`group rounded-lg border ${
-        warning
-          ? "border-warning/30 bg-warning/5"
-          : "border-base-300 bg-base-200/30"
-      }`}
-    >
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-2.5 text-sm font-medium marker:hidden [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-3.5 shrink-0 text-base-content/40 transition-transform group-open:rotate-90" />
-        <span className={warning ? "text-warning" : "text-base-content/70"}>
-          {title}
-        </span>
-        <InfoTip text={info} />
-        {count === null
-          ? (
-            <span className="loading loading-spinner loading-xs ml-auto text-base-content/40" />
-          )
-          : (
-            <span className="ml-auto text-xs font-normal text-base-content/40">
-              {count} {count === 1 ? "path" : "paths"}
-            </span>
-          )}
-      </summary>
-      <div className="mx-2.5 max-h-56 divide-y divide-base-300/60 overflow-y-auto border-t border-base-300/60 pb-1">
-        {children}
-      </div>
-    </details>
-  );
-}
-
-export function DeletionTree({
-  items,
-  plexPreviews,
-  deleteFromArr,
-  arrEntries,
-  downloadJobs,
-  orphanFiles,
-  cleanupDownloads,
-  unmanagedSources,
-  retainedPaths,
-  loading,
-}: {
-  items: StaleItem[];
-  plexPreviews: ReadonlyMap<string, DownloadCleanupPreviewItem>;
-  deleteFromArr: boolean;
-  arrEntries: Array<{ ratingKey: string; target: ArrCleanupTarget }>;
-  downloadJobs: DownloadCleanupJob[];
-  orphanFiles: ArrCleanupFile[];
-  cleanupDownloads: boolean;
-  unmanagedSources: Array<{
-    ratingKey: string;
-    source: {
-      instanceName: string;
-      downloadId: string;
-      path: string;
-      reason?: string;
-    };
-  }>;
-  retainedPaths: Array<{ path: string; reason: string }>;
-  loading: boolean;
-}) {
-  const arrRatingKeys = new Set(arrEntries.map((entry) => entry.ratingKey));
-  const plexFallbackItems = deleteFromArr
-    ? items.filter((item) => !arrRatingKeys.has(item.ratingKey))
-    : items;
-  const plexFallbackEntries = plexPreviewPathEntries(
-    plexFallbackItems,
-    plexPreviews,
-  );
-  const hasRemaining = cleanupDownloads &&
-    (unmanagedSources.length > 0 || retainedPaths.length > 0);
-  const removalPathCount = deleteFromArr
-    ? arrEntries.length + plexFallbackEntries.length +
-      (cleanupDownloads ? downloadJobs.length + orphanFiles.length : 0)
-    : plexFallbackEntries.length;
-  return (
-    <div className="mt-3 space-y-2">
-      <CollapsiblePathSection
-        title="Files to be removed"
-        count={loading ? null : removalPathCount}
-        info="Shows paths reported by Plex and configured deletion services. Plex paths are informational and are never used to authorize direct filesystem deletion."
-      >
-        {plexFallbackEntries.map(({ item, path, note }, index) => (
-          <PathTreeRoot
-            key={`${item.ratingKey}:${path}:${index}`}
-            path={path}
-            source="Plex"
-            note={note ??
-              (deleteFromArr
-                ? "No verified Arr destination; this item uses Plex-only deletion"
-                : undefined)}
-          />
-        ))}
-        {deleteFromArr && arrEntries.map(({ ratingKey, target }) => {
-          const files = managedFiles(target);
-          const note = target.type === "sonarr"
-            ? "Season summaries reported by Sonarr; individual episodes omitted"
-            : target.mediaFiles === null || target.extraFiles === null
-            ? "Some managed file details are unavailable"
-            : undefined;
-          return (
-            <PathTreeRoot
-              key={`${ratingKey}:${target.instanceName}:${target.path}`}
-              path={target.path ?? target.title}
-              source={target.instanceName}
-              files={files}
-              itemName={target.type === "sonarr" ? "season" : "file"}
-              note={note}
-            />
-          );
-        })}
-        {deleteFromArr && cleanupDownloads &&
-          downloadJobs.map((job) => (
-            <PathTreeRoot
-              key={`${job.instanceKey}:${job.jobId}`}
-              path={downloadJobRoot(job) || job.name}
-              source={job.instanceName}
-              files={downloadJobFiles(job)}
-              totalFiles={job.fileCount}
-              info={downloadJobInfo(job)}
-            />
-          ))}
-        {deleteFromArr && cleanupDownloads &&
-          orphanFiles.map((file) => (
-            <PathTreeRoot
-              key={`hardlink:${file.path}`}
-              path={file.path}
-              source="Verified hardlink"
-              files={[{
-                path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
-                size: file.size,
-              }]}
-              note="Reverified immediately before removal"
-            />
-          ))}
-        {loading && (
-          <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
-            <span className="loading loading-spinner loading-xs" />{" "}
-            Loading paths…
-          </p>
-        )}
-      </CollapsiblePathSection>
-
-      {hasRemaining && (
-        <CollapsiblePathSection
-          title="Not automatically removed"
-          count={unmanagedSources.length + retainedPaths.length}
-          info="These historical paths are not automatically removed because ownership cannot be proven safely."
-          warning
-        >
-          {unmanagedSources.map(({ ratingKey, source }) => (
-            <PathTreeRoot
-              key={`${ratingKey}:${source.instanceName}:${source.downloadId}:${source.path}`}
-              path={source.path}
-              source="Arr history"
-              note={source.reason ?? "Ownership could not be verified"}
-              warning
-            />
-          ))}
-          {retainedPaths.map((path) => (
-            <PathTreeRoot
-              key={`retained:${path.path}`}
-              path={path.path}
-              source="Filesystem"
-              note={path.reason}
-              warning
-            />
-          ))}
-        </CollapsiblePathSection>
-      )}
     </div>
   );
 }

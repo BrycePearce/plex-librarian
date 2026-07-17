@@ -274,6 +274,37 @@ export interface DeleteMediaVersionResponse {
   fileSizeFreed: number;
 }
 
+export interface MediaVersionPathPreview {
+  mediaId: number;
+  plexPaths: string[];
+  status: "resolved" | "unavailable" | "error";
+  reason?: string;
+  truncated: boolean;
+}
+
+export interface VersionDeletionPreviewResponse {
+  mediaType: "movie" | "episode";
+  arrService: ArrType;
+  versions: MediaVersionPathPreview[];
+  arrConfigured: boolean;
+  arrStatus: "resolved" | "unavailable" | "error";
+  arrReason?: string;
+  arrTargets: ArrCleanupTarget[];
+  cleanupConfigured: boolean;
+  cleanupStatus: "resolved" | "unavailable" | "error";
+  cleanupReason?: string;
+  downloadJobs: DownloadCleanupJob[];
+  orphanFiles: ArrCleanupFile[];
+  retainedPaths: ArrCleanupRetainedPath[];
+}
+
+export interface DeleteMediaVersionsResponse {
+  deletedMediaIds: number[];
+  failed: Array<{ mediaId: number; error: string }>;
+  fileSizeFreed: number;
+  outcomes: DeletionStageOutcome[];
+}
+
 // --- Users (inactive-user and account-sharing review) ---
 // Surfaces who has access to the server and how active they are — including revoking
 // a user's access via DELETE /api/users/:accountId (see RemoveUserResponse below).
@@ -386,7 +417,7 @@ export interface CancelPendingInvitationResponse {
 
 export interface DeleteItemsRequest {
   ratingKeys: string[];
-  mode?: "coordinated" | "plex-only";
+  mode: "coordinated" | "plex-only";
   cleanupDownloads?: boolean;
 }
 
@@ -498,6 +529,21 @@ export interface DeleteItemsResponse {
     >;
   }>;
   failed: { ratingKey: string; error: string }[];
+  outcomes: DeleteItemOutcome[];
+}
+
+export type DeletionStageStatus = "deleted" | "already-absent" | "failed";
+
+export interface DeletionStageOutcome {
+  system: string;
+  target: string;
+  status: DeletionStageStatus;
+  error?: string;
+}
+
+export interface DeleteItemOutcome {
+  ratingKey: string;
+  stages: DeletionStageOutcome[];
 }
 
 // --- Sync ---
@@ -565,6 +611,8 @@ export interface ItemsDeletedPayload {
   // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
   // in frontend/src/lib/format.ts.
   fileSizeFreed: number;
+  // Optional for activity rows written before per-system deletion outcomes existed.
+  outcomes?: DeleteItemOutcome[];
 }
 
 // A single duplicate-version delete's payload — deliberately self-contained (carries
