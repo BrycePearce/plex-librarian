@@ -253,8 +253,7 @@ export async function runSync(
           buildCallbacks(reporter, lib.key, (d) => {
             totalItems += d;
           }),
-        )
-      );
+        ));
     }
   }
 
@@ -300,7 +299,6 @@ export async function runLibrarySync(
       buildCallbacks(reporter, libraryKey, (d) => {
         itemCount += d;
       }),
-    )
-  );
+    ));
   return itemCount;
 }

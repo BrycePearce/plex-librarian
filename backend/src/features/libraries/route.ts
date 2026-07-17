@@ -66,8 +66,8 @@ import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { tryAcquireLibraryOperation } from '../../services/libraryOperations.ts';
 import type {
-  DeleteItemsResponse,
   DeleteItemOutcome,
+  DeleteItemsResponse,
   LibrariesResponse,
   MediaVersion,
   MovieDetail,
@@ -479,366 +479,366 @@ router.delete('/:key/items', async (c) => {
     return c.json({ error: 'this library is currently syncing or being modified' }, 409);
   }
   try {
-
-  // Only ever act on items that actually belong to this library/server — guards
-  // against a client passing ratingKeys scraped from a different library or server.
-  // fileSize (decimal KB — see extractFileSize in integrations/plex) is captured here
-  // (before the rows are deleted below) so the activity event can report space
-  // freed without a second query.
-  const owned = await db.select({
-    ratingKey: items.ratingKey,
-    fileSize: items.fileSize,
-    title: items.title,
-    type: items.type,
-    tmdbId: items.tmdbId,
-    tvdbId: items.tvdbId,
-  })
-    .from(items)
-    .where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
-  const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
-  const itemByKey = new Map(owned.map((item) => [item.ratingKey, item]));
-  const arrTargets = body.mode === 'plex-only' ? [] : await getArrDeleteTargets(serverId, key);
-  if (body.mode !== 'plex-only' && arrTargets.length === 0) {
-    return c.json({
-      error: 'this library is not mapped to Sonarr or Radarr; choose Plex-only deletion explicitly',
-    }, 409);
-  }
-  const downloadTargets = body.cleanupDownloads ? await getDownloadClientTargets(serverId) : [];
-  const attemptedInstancesByItem = await loadAttemptedArrInstancesByItem(
-    serverId,
-    owned,
-    arrTargets.map((target) => target.instanceId),
-  );
-  const downloadCleanupByItem = new Map<string, ResolvedCleanupItem>();
-  if (body.cleanupDownloads) {
-    // Resolve every selected item before the first destructive call, matching the Arr
-    // lookup-before-mutation guarantee below. qBittorrent failures therefore cannot
-    // leave earlier items deleted while later previews were never checked.
-    const attemptedKeys = await loadAttemptedDownloadJobKeysByItem(
-      serverId,
-      owned.map((item) => item.ratingKey),
-    );
-    const attemptedOrphans = await loadAttemptedOrphanFilesByItem(
-      serverId,
-      owned.map((item) => item.ratingKey),
-    );
-    const cleanups = reconcileSharedDownloadCleanups(
-      await resolveDownloadCleanupBatch(
-        owned,
-        arrTargets,
-        downloadTargets,
-        attemptedKeys,
-        attemptedOrphans,
-        attemptedInstancesByItem,
-      ),
-    );
-    // qBittorrent cleanup is optional per item. An unrelated item with no live
-    // torrent or unavailable history must not prevent verified jobs elsewhere in
-    // the batch from being removed.
-    for (const [ratingKey, cleanup] of selectVerifiedDownloadCleanups(cleanups)) {
-      downloadCleanupByItem.set(ratingKey, cleanup);
+    // Only ever act on items that actually belong to this library/server — guards
+    // against a client passing ratingKeys scraped from a different library or server.
+    // fileSize (decimal KB — see extractFileSize in integrations/plex) is captured here
+    // (before the rows are deleted below) so the activity event can report space
+    // freed without a second query.
+    const owned = await db.select({
+      ratingKey: items.ratingKey,
+      fileSize: items.fileSize,
+      title: items.title,
+      type: items.type,
+      tmdbId: items.tmdbId,
+      tvdbId: items.tvdbId,
+    })
+      .from(items)
+      .where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
+    const fileSizeByKey = new Map(owned.map((r) => [r.ratingKey, r.fileSize ?? 0]));
+    const itemByKey = new Map(owned.map((item) => [item.ratingKey, item]));
+    const arrTargets = body.mode === 'plex-only' ? [] : await getArrDeleteTargets(serverId, key);
+    if (body.mode !== 'plex-only' && arrTargets.length === 0) {
+      return c.json({
+        error:
+          'this library is not mapped to Sonarr or Radarr; choose Plex-only deletion explicitly',
+      }, 409);
     }
-    if (downloadCleanupByItem.size === 0) {
-      return c.json(
-        { error: 'no verified downloaded-file cleanup is available for these items' },
-        409,
+    const downloadTargets = body.cleanupDownloads ? await getDownloadClientTargets(serverId) : [];
+    const attemptedInstancesByItem = await loadAttemptedArrInstancesByItem(
+      serverId,
+      owned,
+      arrTargets.map((target) => target.instanceId),
+    );
+    const downloadCleanupByItem = new Map<string, ResolvedCleanupItem>();
+    if (body.cleanupDownloads) {
+      // Resolve every selected item before the first destructive call, matching the Arr
+      // lookup-before-mutation guarantee below. qBittorrent failures therefore cannot
+      // leave earlier items deleted while later previews were never checked.
+      const attemptedKeys = await loadAttemptedDownloadJobKeysByItem(
+        serverId,
+        owned.map((item) => item.ratingKey),
       );
-    }
-  }
-  // A provider ID identifies a title, not a particular Plex item. Separate Plex
-  // editions, split duplicates, and resolution-specific libraries can therefore have
-  // multiple ratingKeys with the same TMDB/TVDB ID. In that case an Arr lookup cannot
-  // prove which item's files it found, so coordinated deletion must stop rather than
-  // risk deleting a different edition. Scope this across the whole active Plex server,
-  // not just this library, to cover common HD/4K library splits.
-  const ambiguousExternalIds = new Set<number>();
-  const coordinatedLibraryType = library.type === 'movie' || library.type === 'show'
-    ? library.type
-    : null;
-  if (arrTargets.length > 0 && coordinatedLibraryType) {
-    const selectedExternalIds = owned
-      .map((item) => coordinatedLibraryType === 'movie' ? item.tmdbId : item.tvdbId)
-      .filter((id): id is number => id !== null);
-    if (selectedExternalIds.length > 0) {
-      for (
-        const externalId of withTransaction((client) =>
-          findAmbiguousExternalIds(client, serverId, coordinatedLibraryType, selectedExternalIds)
-        )
-      ) ambiguousExternalIds.add(externalId);
-    }
-  }
-
-  let client;
-  try {
-    client = await createPlexClient();
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
-  }
-
-  // Do not remove a movie, show, or artist while Plex reports it (or one of its
-  // children) in an active session. This check runs after all read-only planning but
-  // before qBittorrent, filesystem, Arr, or Plex receives a destructive request.
-  let activeSessions;
-  try {
-    activeSessions = await client.activeSessions();
-  } catch (err) {
-    return c.json({
-      error: `could not verify active playback: ${
-        err instanceof Error ? err.message : 'Plex session lookup failed'
-      }`,
-    }, 502);
-  }
-  const selectedRatingKeys = new Set(owned.map((item) => item.ratingKey));
-  const playingRatingKeys = activeWholeItemRatingKeys(selectedRatingKeys, activeSessions);
-  if (playingRatingKeys.size > 0) {
-    const titles = owned.filter((item) => playingRatingKeys.has(item.ratingKey)).map((item) =>
-      item.title
-    );
-    return c.json({
-      error: `cannot delete media with active playback: ${titles.join(', ')}`,
-      ratingKeys: [...playingRatingKeys],
-    }, 409);
-  }
-
-  // Sequential, not concurrent: deletion is destructive and irreversible, and the
-  // per-item result needs to be attributable — worth the extra latency for a
-  // user-triggered, page-sized (<=200) action.
-  const deleted: string[] = [];
-  // Unlike `deleted`, this excludes Plex 404s that merely reconcile content removed
-  // outside this app. Coordinated Arr retries still count because their durable
-  // attempt markers prove Plex Librarian initiated the removal.
-  const removedByApp: string[] = [];
-  const partial: DeleteItemsResponse['partial'] = [];
-  const failed: { ratingKey: string; error: string }[] = [];
-  const outcomes: DeleteItemOutcome[] = [];
-  let arrMutationOccurred = false;
-  const deletedDownloadJobKeys = new Set<string>();
-  const deletedOrphanPaths = new Set<string>();
-  for (const ratingKey of ratingKeys) {
-    const outcome: DeleteItemOutcome = { ratingKey, stages: [] };
-    if (!fileSizeByKey.has(ratingKey)) {
-      failed.push({ ratingKey, error: 'not found in this library' });
-      outcome.stages.push({
-        system: 'local',
-        target: ratingKey,
-        status: 'failed',
-        error: 'not found in this library',
-      });
-      outcomes.push(outcome);
-      continue;
-    }
-    try {
-      const item = itemByKey.get(ratingKey)!;
-      // The Arr ID ambiguity guard must run before download cleanup too: import history is
-      // resolved through that same title-level identifier, so it cannot prove which
-      // Plex edition owns the payload when multiple items share the ID.
-      if (arrTargets.length > 0) {
-        assertArrDeleteIsUnambiguous(item, ambiguousExternalIds);
+      const attemptedOrphans = await loadAttemptedOrphanFilesByItem(
+        serverId,
+        owned.map((item) => item.ratingKey),
+      );
+      const cleanups = reconcileSharedDownloadCleanups(
+        await resolveDownloadCleanupBatch(
+          owned,
+          arrTargets,
+          downloadTargets,
+          attemptedKeys,
+          attemptedOrphans,
+          attemptedInstancesByItem,
+        ),
+      );
+      // qBittorrent cleanup is optional per item. An unrelated item with no live
+      // torrent or unavailable history must not prevent verified jobs elsewhere in
+      // the batch from being removed.
+      for (const [ratingKey, cleanup] of selectVerifiedDownloadCleanups(cleanups)) {
+        downloadCleanupByItem.set(ratingKey, cleanup);
       }
-      const cleanup = downloadCleanupByItem.get(ratingKey);
-      if (cleanup) {
-        const cleanupResult = await executeDownloadedFileCleanup(
-          cleanup,
-          deletedDownloadJobKeys,
-          deletedOrphanPaths,
-          async (job, jobKey) => {
-            // A single download job (for example, a pack) can be associated with more than
-            // one selected item. Durably mark every association before the first
-            // destructive request so each can independently resume after a stop.
-            for (const [associatedRatingKey, associatedCleanup] of downloadCleanupByItem) {
-              if (
-                !associatedCleanup.downloadJobs.some((candidate) =>
-                  `${candidate.instanceKey}:${candidate.jobId}` === jobKey
-                )
-              ) continue;
-              await db.insert(torrentDeleteAttempts).values({
-                serverId,
-                ratingKey: associatedRatingKey,
-                instanceKey: job.instanceKey,
-                torrentHash: job.jobId,
-                startedAt: Math.floor(Date.now() / 1000),
-              }).onConflictDoUpdate({
-                target: [
-                  torrentDeleteAttempts.serverId,
-                  torrentDeleteAttempts.ratingKey,
-                  torrentDeleteAttempts.instanceKey,
-                  torrentDeleteAttempts.torrentHash,
-                ],
-                set: { startedAt: Math.floor(Date.now() / 1000) },
-              });
-            }
-          },
-          undefined,
-          async (orphanFile) => {
-            // Mark every selected item whose plan references this path before unlinking.
-            // This also lets a duplicate path be skipped safely within the current batch.
-            const rootIdentity = await orphanRootIdentity(orphanFile.root);
-            for (const [associatedRatingKey, associatedCleanup] of downloadCleanupByItem) {
-              if (!associatedCleanup.orphanFiles.some((file) => file.path === orphanFile.path)) {
-                continue;
+      if (downloadCleanupByItem.size === 0) {
+        return c.json(
+          { error: 'no verified downloaded-file cleanup is available for these items' },
+          409,
+        );
+      }
+    }
+    // A provider ID identifies a title, not a particular Plex item. Separate Plex
+    // editions, split duplicates, and resolution-specific libraries can therefore have
+    // multiple ratingKeys with the same TMDB/TVDB ID. In that case an Arr lookup cannot
+    // prove which item's files it found, so coordinated deletion must stop rather than
+    // risk deleting a different edition. Scope this across the whole active Plex server,
+    // not just this library, to cover common HD/4K library splits.
+    const ambiguousExternalIds = new Set<number>();
+    const coordinatedLibraryType = library.type === 'movie' || library.type === 'show'
+      ? library.type
+      : null;
+    if (arrTargets.length > 0 && coordinatedLibraryType) {
+      const selectedExternalIds = owned
+        .map((item) => coordinatedLibraryType === 'movie' ? item.tmdbId : item.tvdbId)
+        .filter((id): id is number => id !== null);
+      if (selectedExternalIds.length > 0) {
+        for (
+          const externalId of withTransaction((client) =>
+            findAmbiguousExternalIds(client, serverId, coordinatedLibraryType, selectedExternalIds)
+          )
+        ) ambiguousExternalIds.add(externalId);
+      }
+    }
+
+    let client;
+    try {
+      client = await createPlexClient();
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : 'Plex is not configured' }, 502);
+    }
+
+    // Do not remove a movie, show, or artist while Plex reports it (or one of its
+    // children) in an active session. This check runs after all read-only planning but
+    // before qBittorrent, filesystem, Arr, or Plex receives a destructive request.
+    let activeSessions;
+    try {
+      activeSessions = await client.activeSessions();
+    } catch (err) {
+      return c.json({
+        error: `could not verify active playback: ${
+          err instanceof Error ? err.message : 'Plex session lookup failed'
+        }`,
+      }, 502);
+    }
+    const selectedRatingKeys = new Set(owned.map((item) => item.ratingKey));
+    const playingRatingKeys = activeWholeItemRatingKeys(selectedRatingKeys, activeSessions);
+    if (playingRatingKeys.size > 0) {
+      const titles = owned.filter((item) => playingRatingKeys.has(item.ratingKey)).map((item) =>
+        item.title
+      );
+      return c.json({
+        error: `cannot delete media with active playback: ${titles.join(', ')}`,
+        ratingKeys: [...playingRatingKeys],
+      }, 409);
+    }
+
+    // Sequential, not concurrent: deletion is destructive and irreversible, and the
+    // per-item result needs to be attributable — worth the extra latency for a
+    // user-triggered, page-sized (<=200) action.
+    const deleted: string[] = [];
+    // Unlike `deleted`, this excludes Plex 404s that merely reconcile content removed
+    // outside this app. Coordinated Arr retries still count because their durable
+    // attempt markers prove Plex Librarian initiated the removal.
+    const removedByApp: string[] = [];
+    const partial: DeleteItemsResponse['partial'] = [];
+    const failed: { ratingKey: string; error: string }[] = [];
+    const outcomes: DeleteItemOutcome[] = [];
+    let arrMutationOccurred = false;
+    const deletedDownloadJobKeys = new Set<string>();
+    const deletedOrphanPaths = new Set<string>();
+    for (const ratingKey of ratingKeys) {
+      const outcome: DeleteItemOutcome = { ratingKey, stages: [] };
+      if (!fileSizeByKey.has(ratingKey)) {
+        failed.push({ ratingKey, error: 'not found in this library' });
+        outcome.stages.push({
+          system: 'local',
+          target: ratingKey,
+          status: 'failed',
+          error: 'not found in this library',
+        });
+        outcomes.push(outcome);
+        continue;
+      }
+      try {
+        const item = itemByKey.get(ratingKey)!;
+        // The Arr ID ambiguity guard must run before download cleanup too: import history is
+        // resolved through that same title-level identifier, so it cannot prove which
+        // Plex edition owns the payload when multiple items share the ID.
+        if (arrTargets.length > 0) {
+          assertArrDeleteIsUnambiguous(item, ambiguousExternalIds);
+        }
+        const cleanup = downloadCleanupByItem.get(ratingKey);
+        if (cleanup) {
+          const cleanupResult = await executeDownloadedFileCleanup(
+            cleanup,
+            deletedDownloadJobKeys,
+            deletedOrphanPaths,
+            async (job, jobKey) => {
+              // A single download job (for example, a pack) can be associated with more than
+              // one selected item. Durably mark every association before the first
+              // destructive request so each can independently resume after a stop.
+              for (const [associatedRatingKey, associatedCleanup] of downloadCleanupByItem) {
+                if (
+                  !associatedCleanup.downloadJobs.some((candidate) =>
+                    `${candidate.instanceKey}:${candidate.jobId}` === jobKey
+                  )
+                ) continue;
+                await db.insert(torrentDeleteAttempts).values({
+                  serverId,
+                  ratingKey: associatedRatingKey,
+                  instanceKey: job.instanceKey,
+                  torrentHash: job.jobId,
+                  startedAt: Math.floor(Date.now() / 1000),
+                }).onConflictDoUpdate({
+                  target: [
+                    torrentDeleteAttempts.serverId,
+                    torrentDeleteAttempts.ratingKey,
+                    torrentDeleteAttempts.instanceKey,
+                    torrentDeleteAttempts.torrentHash,
+                  ],
+                  set: { startedAt: Math.floor(Date.now() / 1000) },
+                });
               }
-              await db.insert(downloadFileDeleteAttempts).values({
-                serverId,
-                ratingKey: associatedRatingKey,
-                localPath: orphanFile.path,
-                rootPath: orphanFile.root,
-                rootDevice: rootIdentity.rootDevice,
-                rootInode: rootIdentity.rootInode,
-                startedAt: Math.floor(Date.now() / 1000),
-              }).onConflictDoUpdate({
-                target: [
-                  downloadFileDeleteAttempts.serverId,
-                  downloadFileDeleteAttempts.ratingKey,
-                  downloadFileDeleteAttempts.localPath,
-                ],
-                set: {
+            },
+            undefined,
+            async (orphanFile) => {
+              // Mark every selected item whose plan references this path before unlinking.
+              // This also lets a duplicate path be skipped safely within the current batch.
+              const rootIdentity = await orphanRootIdentity(orphanFile.root);
+              for (const [associatedRatingKey, associatedCleanup] of downloadCleanupByItem) {
+                if (!associatedCleanup.orphanFiles.some((file) => file.path === orphanFile.path)) {
+                  continue;
+                }
+                await db.insert(downloadFileDeleteAttempts).values({
+                  serverId,
+                  ratingKey: associatedRatingKey,
+                  localPath: orphanFile.path,
                   rootPath: orphanFile.root,
                   rootDevice: rootIdentity.rootDevice,
                   rootInode: rootIdentity.rootInode,
                   startedAt: Math.floor(Date.now() / 1000),
-                },
+                }).onConflictDoUpdate({
+                  target: [
+                    downloadFileDeleteAttempts.serverId,
+                    downloadFileDeleteAttempts.ratingKey,
+                    downloadFileDeleteAttempts.localPath,
+                  ],
+                  set: {
+                    rootPath: orphanFile.root,
+                    rootDevice: rootIdentity.rootDevice,
+                    rootInode: rootIdentity.rootInode,
+                    startedAt: Math.floor(Date.now() / 1000),
+                  },
+                });
+              }
+            },
+          );
+          appendDownloadCleanupStages(outcome, cleanupResult);
+        }
+        if (arrTargets.length > 0) {
+          const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;
+          const result = await deleteThroughArr(item, arrTargets, {
+            attemptedInstanceIds: attemptedInstancesByItem.get(ratingKey),
+            onAttemptStarting: async (target) => {
+              const startedAt = Math.floor(Date.now() / 1000);
+              await db.insert(arrDeleteAttempts).values({
+                serverId,
+                ratingKey,
+                libraryKey: key,
+                arrInstanceId: target.instanceId,
+                externalId,
+                startedAt,
+              }).onConflictDoUpdate({
+                target: [
+                  arrDeleteAttempts.serverId,
+                  arrDeleteAttempts.ratingKey,
+                  arrDeleteAttempts.arrInstanceId,
+                ],
+                set: { libraryKey: key, externalId, startedAt },
               });
-            }
-          },
-        );
-        appendDownloadCleanupStages(outcome, cleanupResult);
-      }
-      if (arrTargets.length > 0) {
-        const externalId = item.type === 'movie' ? item.tmdbId! : item.tvdbId!;
-        const result = await deleteThroughArr(item, arrTargets, {
-          attemptedInstanceIds: attemptedInstancesByItem.get(ratingKey),
-          onAttemptStarting: async (target) => {
-            const startedAt = Math.floor(Date.now() / 1000);
-            await db.insert(arrDeleteAttempts).values({
-              serverId,
-              ratingKey,
-              libraryKey: key,
-              arrInstanceId: target.instanceId,
-              externalId,
-              startedAt,
-            }).onConflictDoUpdate({
-              target: [
-                arrDeleteAttempts.serverId,
-                arrDeleteAttempts.ratingKey,
-                arrDeleteAttempts.arrInstanceId,
-              ],
-              set: { libraryKey: key, externalId, startedAt },
-            });
-          },
-        });
-        const disposition = arrDeleteDisposition(result);
-        const arrSystem = item.type === 'movie' ? 'radarr' : 'sonarr';
-        for (const deletedInstance of result.deletedInstances) {
-          outcome.stages.push({
-            system: arrSystem,
-            target: deletedInstance.instanceName,
-            status: deletedInstance.alreadyAbsent ? 'already-absent' : 'deleted',
+            },
           });
-        }
-        for (const failure of result.failures) {
-          outcome.stages.push({
-            system: arrSystem,
-            target: failure.instanceName,
-            status: 'failed',
-            error: failure.error,
-          });
-        }
-        arrMutationOccurred ||= disposition.shouldRefreshPlex;
-        if (disposition.status !== 'complete') {
-          if (disposition.status === 'partial') {
-            partial.push({
-              ratingKey,
-              deletedInstances: result.deletedInstances,
-              failedInstances: result.failures,
-            });
-          } else {
-            failed.push({
-              ratingKey,
-              error: result.failures.map((failure) => `${failure.instanceName}: ${failure.error}`)
-                .join('; '),
+          const disposition = arrDeleteDisposition(result);
+          const arrSystem = item.type === 'movie' ? 'radarr' : 'sonarr';
+          for (const deletedInstance of result.deletedInstances) {
+            outcome.stages.push({
+              system: arrSystem,
+              target: deletedInstance.instanceName,
+              status: deletedInstance.alreadyAbsent ? 'already-absent' : 'deleted',
             });
           }
+          for (const failure of result.failures) {
+            outcome.stages.push({
+              system: arrSystem,
+              target: failure.instanceName,
+              status: 'failed',
+              error: failure.error,
+            });
+          }
+          arrMutationOccurred ||= disposition.shouldRefreshPlex;
+          if (disposition.status !== 'complete') {
+            if (disposition.status === 'partial') {
+              partial.push({
+                ratingKey,
+                deletedInstances: result.deletedInstances,
+                failedInstances: result.failures,
+              });
+            } else {
+              failed.push({
+                ratingKey,
+                error: result.failures.map((failure) => `${failure.instanceName}: ${failure.error}`)
+                  .join('; '),
+              });
+            }
+            outcomes.push(outcome);
+            continue;
+          }
+        } else {
+          await client.deleteItem(ratingKey);
+          outcome.stages.push({ system: 'plex', target: item.title, status: 'deleted' });
+        }
+        await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+        outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
+        deleted.push(ratingKey);
+        removedByApp.push(ratingKey);
+      } catch (err) {
+        if (err instanceof DownloadedFileCleanupError) {
+          appendDownloadCleanupStages(outcome, err.result);
+          outcome.stages.push({
+            system: err.system,
+            target: err.target,
+            status: 'failed',
+            error: err.message,
+          });
+        }
+        // A 404 means Plex already has no record of this item — most likely it was
+        // deleted directly in Plex outside this app. Treat that as success and drop the
+        // now-orphaned local row, rather than leaving it permanently stuck failing every
+        // future delete attempt.
+        if (err instanceof PlexDeleteError && err.status === 404) {
+          await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
+          outcome.stages.push({ system: 'plex', target: ratingKey, status: 'already-absent' });
+          outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
+          deleted.push(ratingKey);
           outcomes.push(outcome);
           continue;
         }
-      } else {
-        await client.deleteItem(ratingKey);
-        outcome.stages.push({ system: 'plex', target: item.title, status: 'deleted' });
+        if (!(err instanceof DownloadedFileCleanupError)) {
+          outcome.stages.push({
+            system: 'deletion',
+            target: itemByKey.get(ratingKey)?.title ?? ratingKey,
+            status: 'failed',
+            error: err instanceof Error ? err.message : 'delete failed',
+          });
+        }
+        failed.push({ ratingKey, error: err instanceof Error ? err.message : 'delete failed' });
       }
-      await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
-      outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
-      deleted.push(ratingKey);
-      removedByApp.push(ratingKey);
-    } catch (err) {
-      if (err instanceof DownloadedFileCleanupError) {
-        appendDownloadCleanupStages(outcome, err.result);
-        outcome.stages.push({
-          system: err.system,
-          target: err.target,
-          status: 'failed',
-          error: err.message,
-        });
-      }
-      // A 404 means Plex already has no record of this item — most likely it was
-      // deleted directly in Plex outside this app. Treat that as success and drop the
-      // now-orphaned local row, rather than leaving it permanently stuck failing every
-      // future delete attempt.
-      if (err instanceof PlexDeleteError && err.status === 404) {
-        await db.delete(items).where(itemByRatingKey(serverId, ratingKey));
-        outcome.stages.push({ system: 'plex', target: ratingKey, status: 'already-absent' });
-        outcome.stages.push({ system: 'local', target: ratingKey, status: 'deleted' });
-        deleted.push(ratingKey);
-        outcomes.push(outcome);
-        continue;
-      }
-      if (!(err instanceof DownloadedFileCleanupError)) {
-        outcome.stages.push({
-          system: 'deletion',
-          target: itemByKey.get(ratingKey)?.title ?? ratingKey,
-          status: 'failed',
-          error: err instanceof Error ? err.message : 'delete failed',
-        });
-      }
-      failed.push({ ratingKey, error: err instanceof Error ? err.message : 'delete failed' });
+      outcomes.push(outcome);
     }
-    outcomes.push(outcome);
-  }
 
-  // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
-  // in frontend/src/lib/format.ts.
-  const fileSizeFreed = deleted.reduce((sum, rk) => sum + (fileSizeByKey.get(rk) ?? 0), 0);
-  await recordMediaRemovals(
-    removedByApp.map((ratingKey) => ({
-      serverId,
-      operationId: removalOperationId,
-      targetKind: 'item' as const,
-      targetKey: ratingKey,
-      mediaSize: itemByKey.get(ratingKey)?.fileSize ?? null,
-    })),
-  ).catch((error) => {
-    // The destructive result is already final. Keep the user-facing deletion result
-    // truthful even if lifetime-accounting persistence encounters a transient failure.
-    console.error('Failed to record removed media:', error);
-  });
-  if (arrMutationOccurred) {
-    // Arr removed the files, so Plex needs a scan instead of a second destructive
-    // delete request. Refresh is best-effort: the local/Arr outcome is already final.
-    await client.refreshLibrary(key).catch((error) => {
-      console.warn(`Could not refresh Plex library ${key} after Arr deletion`, error);
+    // Decimal KB, matching Library.totalFileSize / StaleItem.fileSize — see formatKilobytes
+    // in frontend/src/lib/format.ts.
+    const fileSizeFreed = deleted.reduce((sum, rk) => sum + (fileSizeByKey.get(rk) ?? 0), 0);
+    await recordMediaRemovals(
+      removedByApp.map((ratingKey) => ({
+        serverId,
+        operationId: removalOperationId,
+        targetKind: 'item' as const,
+        targetKey: ratingKey,
+        mediaSize: itemByKey.get(ratingKey)?.fileSize ?? null,
+      })),
+    ).catch((error) => {
+      // The destructive result is already final. Keep the user-facing deletion result
+      // truthful even if lifetime-accounting persistence encounters a transient failure.
+      console.error('Failed to record removed media:', error);
     });
-  }
-  await logEvents([{
-    serverId,
-    type: 'items.deleted',
-    payload: {
-      libraryKey: key,
-      deletedCount: deleted.length,
-      partialCount: partial.length,
-      failedCount: failed.length,
-      fileSizeFreed,
-      outcomes,
-    },
-  }]);
+    if (arrMutationOccurred) {
+      // Arr removed the files, so Plex needs a scan instead of a second destructive
+      // delete request. Refresh is best-effort: the local/Arr outcome is already final.
+      await client.refreshLibrary(key).catch((error) => {
+        console.warn(`Could not refresh Plex library ${key} after Arr deletion`, error);
+      });
+    }
+    await logEvents([{
+      serverId,
+      type: 'items.deleted',
+      payload: {
+        libraryKey: key,
+        deletedCount: deleted.length,
+        partialCount: partial.length,
+        failedCount: failed.length,
+        fileSizeFreed,
+        outcomes,
+      },
+    }]);
 
     return c.json({ deleted, partial, failed, outcomes } satisfies DeleteItemsResponse);
   } finally {
