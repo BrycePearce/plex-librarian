@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Folder, X } from "lucide-react";
+import { AlertTriangle, Folder, X } from "lucide-react";
 import { HoverPopover } from "../../components/HoverPopover";
 import { ServiceIcon } from "../../components/ServiceIcons";
 import type { ServiceIconName } from "../../components/ServiceIcons";
@@ -35,24 +35,13 @@ function DestinationOption({
 }) {
   return (
     <label
-      title={info}
-      className={`relative inline-flex min-h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-[color,background-color,border-color,box-shadow] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary ${
-        checked
-          ? warning
-            ? "border-warning/40 bg-warning/10 text-warning"
-            : "border-primary/35 bg-primary/10 text-base-content"
-          : warning
-          ? "border-warning/30 bg-base-200/55 text-warning"
-          : "border-base-300 bg-base-200/55 text-base-content/60"
-      } ${
-        disabled
-          ? warning ? "opacity-75" : "opacity-40"
-          : "cursor-pointer hover:border-base-content/25 hover:bg-base-200"
-      }`}
+      className={`inline-flex items-center gap-1.5 text-sm transition-colors ${
+        warning ? "text-warning" : "text-base-content/75"
+      } ${disabled ? warning ? "opacity-80" : "opacity-45" : "cursor-pointer"}`}
     >
       <input
         type="checkbox"
-        className="sr-only"
+        className="checkbox checkbox-sm mr-0.5"
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
@@ -62,12 +51,7 @@ function DestinationOption({
         : <Folder className="size-4 shrink-0" />}
       <span className="whitespace-nowrap font-medium">{label}</span>
       {warning && <AlertTriangle className="size-3.5 shrink-0" />}
-      {checked && !warning && (
-        <Check
-          className="size-3.5 shrink-0 text-primary"
-          strokeWidth={2.5}
-        />
-      )}
+      <InfoTip text={info} />
     </label>
   );
 }
@@ -78,16 +62,9 @@ export function DestinationOptions({
   options: DeletionDestinationOption[];
 }) {
   if (options.length === 0) return null;
-  const destinationHelp = options.map((option) =>
-    `${option.label}: ${option.info}`
-  ).join(" ");
 
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-      <span className="mr-0.5 inline-flex items-center gap-1.5 text-xs text-base-content/45">
-        Also clean up in
-        <InfoTip text={destinationHelp} />
-      </span>
+    <div className="mt-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-2">
       {options.map((option) => (
         <DestinationOption
           key={option.id}
