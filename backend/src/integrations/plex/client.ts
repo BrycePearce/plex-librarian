@@ -14,6 +14,8 @@ import type {
   PlexRawMetadata,
   PlexTrack,
 } from './types.ts';
+import { buildPlexHeaders } from './headers.ts';
+export { buildPlexHeaders, PLEX_CLIENT_PRODUCT, PLEX_TV } from './headers.ts';
 
 const ITEMS_PAGE_SIZE = 300;
 export const MAX_PREVIEW_MEDIA_PATHS = 2_000;
@@ -30,26 +32,6 @@ export const PLEX_TYPE = {
   ALBUM: 9,
   TRACK: 10,
 } as const;
-
-// plex.tv account-level API root — distinct from a PMS's own URL. Shared by auth.ts
-// (OAuth PIN flow, account profile lookup) and plexUsers.ts (roster fetch).
-export const PLEX_TV = 'https://plex.tv';
-
-export const PLEX_CLIENT_PRODUCT = 'Plex Librarian';
-const PLEX_CLIENT_VERSION = '1.0.0';
-const PLEX_CLIENT_PLATFORM = 'Web';
-
-export function buildPlexHeaders(clientId?: string, token?: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Accept': 'application/json',
-    'X-Plex-Product': PLEX_CLIENT_PRODUCT,
-    'X-Plex-Version': PLEX_CLIENT_VERSION,
-    'X-Plex-Platform': PLEX_CLIENT_PLATFORM,
-  };
-  if (clientId) headers['X-Plex-Client-Identifier'] = clientId;
-  if (token) headers['X-Plex-Token'] = token;
-  return headers;
-}
 
 type PlexRawSession = {
   sessionKey?: string | number;

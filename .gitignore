@@ -10,4 +10,5 @@ Thumbs.db
 CLAUDE.md
 AGENTS.md
 .claude/settings.json
+.claude/settings.local.json
 .codex*

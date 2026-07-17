@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityEvent, EventType } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import { formatKilobytes, formatRelativeTime } from "../lib/format";
 import { ActivityListSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
@@ -33,7 +34,7 @@ function ActivityPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["events"],
+    queryKey: queryKeys.events.all,
     queryFn: ({ pageParam }: { pageParam: number | undefined }) =>
       api.events.list({ limit: PAGE_SIZE, before: pageParam }),
     initialPageParam: undefined as number | undefined,
@@ -46,7 +47,7 @@ function ActivityPage() {
   // dashboard fetches. A library dropped from Plex after the event was recorded just
   // falls back to its raw key below.
   const { data: librariesData } = useQuery({
-    queryKey: ["libraries"],
+    queryKey: queryKeys.libraries.all,
     queryFn: () => api.libraries.list(),
   });
   const libraryTitleByKey = new Map(

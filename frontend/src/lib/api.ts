@@ -1,4 +1,3 @@
-import type { QueryClient } from "@tanstack/react-query";
 import type {
   ActivityEventsResponse,
   ArrInstance,
@@ -125,7 +124,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText })) as {
+    const body = (await res
+      .json()
+      .catch(() => ({ error: res.statusText }))) as {
       error?: string;
     };
     const message = body.error ?? res.statusText;
@@ -143,7 +144,7 @@ export const api = {
     createPin: () => apiFetch<PlexPin>("/auth/plex/pin", { method: "POST" }),
     pollPin: (id: number) => apiFetch<PinPollResult>(`/auth/plex/pin/${id}`),
     chooseServer: (
-      serverUrl: string,
+      serverUrls: string[],
       accessToken: string,
       machineIdentifier: string,
       name: string,
@@ -151,7 +152,7 @@ export const api = {
       apiFetch<{ ok: true }>("/auth/plex/server", {
         method: "POST",
         body: JSON.stringify({
-          serverUrl,
+          serverUrls,
           accessToken,
           machineIdentifier,
           name,
@@ -195,15 +196,15 @@ export const api = {
     },
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(
-        `/libraries/${encodeURIComponent(key)}/shows/${
-          encodeURIComponent(ratingKey)
-        }`,
+        `/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(
+          ratingKey,
+        )}`,
       ),
     movieDetail: (key: string, ratingKey: string) =>
       apiFetch<MovieDetail>(
-        `/libraries/${encodeURIComponent(key)}/movies/${
-          encodeURIComponent(ratingKey)
-        }`,
+        `/libraries/${encodeURIComponent(key)}/movies/${encodeURIComponent(
+          ratingKey,
+        )}`,
       ),
     updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
@@ -251,9 +252,9 @@ export const api = {
       ),
     deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
       apiFetch<DeleteMediaVersionResponse>(
-        `/duplicates/episodes/${
-          encodeURIComponent(episodeRatingKey)
-        }/media/${mediaId}`,
+        `/duplicates/episodes/${encodeURIComponent(
+          episodeRatingKey,
+        )}/media/${mediaId}`,
         { method: "DELETE" },
       ),
   },
@@ -304,18 +305,13 @@ export const api = {
   },
   qbittorrent: {
     get: () =>
-      apiFetch<QbittorrentIntegrationSettings>(
-        "/integrations/qbittorrent",
-      ),
+      apiFetch<QbittorrentIntegrationSettings>("/integrations/qbittorrent"),
     createInstance: (instance: SaveQbittorrentInstanceRequest) =>
       apiFetch<QbittorrentInstance>("/integrations/qbittorrent/instances", {
         method: "POST",
         body: JSON.stringify(instance),
       }),
-    updateInstance: (
-      id: number,
-      instance: UpdateQbittorrentInstanceRequest,
-    ) =>
+    updateInstance: (id: number, instance: UpdateQbittorrentInstanceRequest) =>
       apiFetch<QbittorrentInstance>(
         `/integrations/qbittorrent/instances/${id}`,
         { method: "PATCH", body: JSON.stringify(instance) },
@@ -408,36 +404,3 @@ export const api = {
     summary: () => apiFetch<MediaRemovalSummary>("/media-removals/summary"),
   },
 };
-
-// Connecting, switching, or disconnecting the active server points every server-scoped
-// query — libraries, sync history, stale lists, show detail, activity events — at a
-// different dataset. `invalidateQueries` alone marks them stale and refetches in the
-// background, but still renders whatever the previously-active server's data was cached
-// as in the meantime — on a client-side nav (no full page reload) straight to /dashboard
-// right after this, that means the *old* server's populated library grid flashes on
-// screen before the new server's fresh (often empty, first-sync) data lands.
-// `resetQueries` clears the cached data back to unfetched instead, so anything reading it
-// renders a genuine loading state rather than stale content — but only for these roots.
-// An unfiltered `resetQueries()` would reset every query in the app (e.g. `['auth',
-// 'status']`, which callers usually just refetched a line earlier), forcing pointless
-// extra fetches and a visible flash back to loading state for data that has nothing to
-// do with the active server.
-const SERVER_SCOPED_QUERY_ROOTS = [
-  "libraries",
-  "sync",
-  "stale",
-  "show",
-  "duplicates",
-  "events",
-  "media-removals",
-  "users",
-  "arr-integrations",
-  "qbittorrent-integrations",
-];
-
-export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {
-  return qc.resetQueries({
-    predicate: (query) =>
-      SERVER_SCOPED_QUERY_ROOTS.includes(query.queryKey[0] as string),
-  });
-}

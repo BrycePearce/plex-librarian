@@ -44,6 +44,10 @@ ENV DB_PATH=/data/librarian.db
 VOLUME ["/data"]
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD deno eval --allow-env --allow-net \
+  "const port=Deno.env.get('PORT')??'8080';const r=await fetch('http://127.0.0.1:'+port+'/health');Deno.exit(r.ok?0:1)"
+
 CMD ["deno", "run", \
      "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--allow-ffi", \
      "src/server.ts"]

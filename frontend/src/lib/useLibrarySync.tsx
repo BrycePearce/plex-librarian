@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { api } from "./api";
+import { queryKeys } from "./queryKeys";
 import { useSyncStream } from "./useSyncStream";
 
 // A "Sync all" run finishing many libraries in a burst (small ones like Music/Podcasts
@@ -33,18 +34,19 @@ function makeDebouncedInvalidator(queryKey: readonly unknown[], delayMs = 500) {
   };
 }
 
-const debouncedInvalidateLibraries = makeDebouncedInvalidator(["libraries"]);
-const debouncedInvalidateSyncHistory = makeDebouncedInvalidator([
-  "sync",
-  "history",
-]);
-const debouncedInvalidateEvents = makeDebouncedInvalidator(["events"]);
+const debouncedInvalidateLibraries = makeDebouncedInvalidator(
+  queryKeys.libraries.all,
+);
+const debouncedInvalidateSyncHistory = makeDebouncedInvalidator(
+  queryKeys.sync.history,
+);
+const debouncedInvalidateEvents = makeDebouncedInvalidator(queryKeys.events.all);
 
 // Shared across every caller (dashboard's "Recent syncs" list, per-library reattach
 // below) so they all read the same cached list instead of each issuing their own fetch.
 export function useSyncHistory() {
   return useQuery({
-    queryKey: ["sync", "history"],
+    queryKey: queryKeys.sync.history,
     queryFn: () => api.sync.history(10),
   });
 }
@@ -160,10 +162,10 @@ export function useLibrarySync(libraryKey: string) {
     debouncedInvalidateLibraries(qc);
     // Roster reconciliation runs before every sync, and each completed library history
     // walk can advance users.lastViewedAt, so refresh the Users page as well.
-    void qc.invalidateQueries({ queryKey: ["users"] });
+    void qc.invalidateQueries({ queryKey: queryKeys.users.all });
     // Not debounced — this key is scoped to this one library, so there's nothing for
     // it to coalesce with, and this is likely the page the user is actually watching.
-    void qc.invalidateQueries({ queryKey: ["stale", libraryKey] });
+    void qc.invalidateQueries({ queryKey: queryKeys.stale.library(libraryKey) });
     // A global run's own history-list entry doesn't flip to 'success' until every
     // library finishes, so only invalidate it once the whole thing is actually over.
     // The backend logs its sync.completed/sync.failed activity event on that same
@@ -180,7 +182,7 @@ export function useLibrarySync(libraryKey: string) {
     mutationFn: () => api.sync.triggerLibrary(libraryKey),
     onSuccess: (data) => {
       setAttached({ id: data.syncId, scope: "library" });
-      void qc.invalidateQueries({ queryKey: ["sync", "history"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.sync.history });
     },
   });
 
@@ -201,7 +203,9 @@ export function useLibrarySync(libraryKey: string) {
     if (isSyncing && !prevSyncing.current) {
       prevSyncing.current = true;
       increment();
-      void qc.invalidateQueries({ queryKey: ["stale", libraryKey] });
+      void qc.invalidateQueries({
+        queryKey: queryKeys.stale.library(libraryKey),
+      });
     } else if (!isSyncing && prevSyncing.current) {
       prevSyncing.current = false;
       decrement();

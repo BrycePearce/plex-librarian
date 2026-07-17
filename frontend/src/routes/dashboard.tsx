@@ -26,6 +26,8 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { invalidateSyncDerivedQueries } from "../lib/queryCache";
+import { queryKeys } from "../lib/queryKeys";
 import type {
   Library,
   LibraryPhase,
@@ -135,7 +137,7 @@ function DashboardInner() {
     refetch: refetchLibraries,
     isRefetching: isRefetchingLibraries,
   } = useQuery({
-    queryKey: ["libraries"],
+    queryKey: queryKeys.libraries.all,
     queryFn: () => api.libraries.list(),
     // The initial `retry: 1` (see main.tsx) exhausts almost immediately, so without this
     // a dead backend (e.g. killed during local dev) leaves the error banner stuck until
@@ -150,18 +152,18 @@ function DashboardInner() {
     setLibrariesBannerDismissed(false);
   }, [libsError === null]);
   const { data: arrSettings } = useQuery({
-    queryKey: ["arr-integrations"],
+    queryKey: queryKeys.arrIntegrations.all,
     queryFn: api.arr.get,
   });
   const { data: qbittorrentSettings } = useQuery({
-    queryKey: ["qbittorrent-integrations"],
+    queryKey: queryKeys.qbittorrentIntegrations.all,
     queryFn: api.qbittorrent.get,
   });
   const {
     data: mediaRemovalSummary,
     isLoading: isMediaRemovalSummaryLoading,
   } = useQuery({
-    queryKey: ["media-removals", "summary"],
+    queryKey: queryKeys.mediaRemovals.summary,
     queryFn: api.mediaRemovals.summary,
   });
 
@@ -169,15 +171,13 @@ function DashboardInner() {
     mutationFn: () => api.sync.trigger(),
     onSuccess: (data) => {
       setActiveGlobalSyncId(data.syncId);
-      void qc.invalidateQueries({ queryKey: ["sync", "history"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.sync.history });
     },
   });
 
   const anyLibrarySyncing = useAnyLibrarySyncing();
 
   const { data: history, isLoading: isHistoryLoading } = useSyncHistory();
-  const isDashboardLoading = libsLoading || isHistoryLoading ||
-    isMediaRemovalSummaryLoading;
 
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
@@ -247,6 +247,15 @@ function DashboardInner() {
     !hasEverSyncedSuccessfully &&
     isAnySyncing;
 
+  // Library data is the only unconditional blocker. Once an empty library response has
+  // established that this might be a first run, let the dedicated checking/first-run
+  // states render instead of flashing the populated-dashboard skeleton. Ancillary stats
+  // such as media removed are not used by FirstRunHero and must not hold it up.
+  const isDashboardLoading = libsLoading ||
+    (!isCheckingFirstRun &&
+      !isFirstRun &&
+      (isHistoryLoading || isMediaRemovalSummaryLoading));
+
   const showArrOnboarding = !arrOnboardingDismissed &&
     arrSettings !== undefined &&
     arrSettings.instances.length === 0 &&
@@ -269,10 +278,12 @@ function DashboardInner() {
   useEffect(() => {
     if (activeGlobalSyncId === null) return;
     if (!globalSyncDone && globalSyncError === null) return;
-    void qc.invalidateQueries({ queryKey: ["libraries"] });
-    void qc.invalidateQueries({ queryKey: ["users"] });
-    void qc.invalidateQueries({ queryKey: ["sync", "history"] });
-    void qc.invalidateQueries({ queryKey: ["events"] });
+    // This component already knows the sync id returned by the trigger endpoint, so it
+    // remains the authoritative completion fallback for very fast runs. The root cache
+    // coordinator still covers runs that outlive navigation away from the dashboard.
+    // Repeated invalidation is safe if both observers see completion, and inactive
+    // queries are only marked stale until they are used again.
+    void invalidateSyncDerivedQueries(qc);
     if (globalSyncError !== null) {
       setActiveGlobalSyncId(null);
       return;

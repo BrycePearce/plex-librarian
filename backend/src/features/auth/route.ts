@@ -13,6 +13,10 @@ import {
   resolveActiveServer,
 } from '../../integrations/plex/index.ts';
 import { triggerFullSync } from '../sync/manager.ts';
+import {
+  PlexConnectionError,
+  selectReachablePlexUrl,
+} from './serverConnection.ts';
 
 const router = new Hono();
 
@@ -152,27 +156,45 @@ router.post('/plex/server', async (c) => {
 
   const body = await c.req.json() as {
     serverUrl?: string;
+    serverUrls?: unknown;
     accessToken?: string;
     machineIdentifier?: string;
     name?: string;
   };
+  const candidateUrls = Array.isArray(body.serverUrls)
+    ? body.serverUrls
+    : body.serverUrl
+    ? [body.serverUrl]
+    : [];
 
-  if (!body.serverUrl || !body.accessToken || !body.machineIdentifier) {
-    return c.json({ error: 'serverUrl, accessToken and machineIdentifier are required' }, 400);
+  if (
+    candidateUrls.length === 0 ||
+    !body.accessToken ||
+    !body.machineIdentifier
+  ) {
+    return c.json({
+      error: 'serverUrls, accessToken and machineIdentifier are required',
+    }, 400);
   }
 
+  const clientId = await getOrCreateClientId();
+  let serverUrl: string;
   try {
-    const u = new URL(body.serverUrl);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error();
-  } catch {
-    return c.json({ error: 'serverUrl must be a valid http/https URL' }, 400);
+    serverUrl = await selectReachablePlexUrl(
+      candidateUrls,
+      body.accessToken,
+      clientId,
+      body.machineIdentifier,
+    );
+  } catch (err) {
+    if (err instanceof PlexConnectionError) return c.json({ error: err.message }, 502);
+    throw err;
   }
 
-  await getOrCreateClientId();
   const serverId = await findOrCreateServer({
     machineIdentifier: body.machineIdentifier,
     name: body.name ?? 'Plex Server',
-    url: body.serverUrl,
+    url: serverUrl,
     accessToken: body.accessToken,
   });
   await db.update(settings)
@@ -224,7 +246,9 @@ router.get('/status', async (c) => {
   // rather than falling through to DB credentials that createPlexClient() would ignore.
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
     const configured = !!(Deno.env.get('PLEX_URL') && Deno.env.get('PLEX_TOKEN'));
-    if (!configured) return c.json({ configured, source: 'env' });
+    if (!configured) {
+      return c.json({ configured, source: 'env', reason: 'env_incomplete' });
+    }
     const clientId = await getOrCreateClientId();
     const user = await fetchPlexAccount(clientId, Deno.env.get('PLEX_TOKEN')!);
     return c.json({ configured, source: 'env', user: user ?? undefined });

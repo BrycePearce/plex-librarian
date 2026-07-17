@@ -15,6 +15,7 @@ import { PosterThumb } from "../components/PosterThumb";
 import { requireAuth } from "../lib/requireAuth";
 import { DetailStat } from "../components/DetailStat";
 import { useSyncedDetail } from "../lib/useSyncedDetail";
+import { queryKeys } from "../lib/queryKeys";
 import { DataSurface } from "../components/Workspace";
 
 export const Route = createFileRoute("/libraries/$key/movies/$ratingKey")({
@@ -32,7 +33,7 @@ function MovieDetailPage() {
 
   const { data, isLoading, isError, error, refetch, isNotFoundYet } =
     useSyncedDetail(
-      ["movie", key, ratingKey],
+      queryKeys.movie.detail(key, ratingKey),
       () => api.libraries.movieDetail(key, ratingKey),
     );
 

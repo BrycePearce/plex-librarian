@@ -6,6 +6,7 @@
     "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-ffi --env-file=.env src/server.ts",
     "db:generate": "deno run -A --env-file=.env npm:drizzle-kit generate",
     "db:migrate": "deno run --allow-read --allow-write --allow-env --allow-ffi --allow-net --env-file=.env src/db/migrate.ts",
+    "db:reset": "rm -f ./data/librarian.db ./data/librarian.db-shm ./data/librarian.db-wal && deno task db:migrate",
     "fmt": "deno fmt",
     "lint": "deno lint"
   },

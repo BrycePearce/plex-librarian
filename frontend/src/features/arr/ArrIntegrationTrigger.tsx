@@ -2,16 +2,17 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Server } from "lucide-react";
 import { api } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 
 // Pure navigation to /settings/sonarr-radarr — the dialog itself (ArrIntegrationDialog)
 // mounts only while that route is active, so there's no local open/close state here.
 export function ArrIntegrationTrigger() {
   const { data } = useQuery({
-    queryKey: ["arr-integrations"],
+    queryKey: queryKeys.arrIntegrations.all,
     queryFn: api.arr.get,
   });
   const { data: qbit } = useQuery({
-    queryKey: ["qbittorrent-integrations"],
+    queryKey: queryKeys.qbittorrentIntegrations.all,
     queryFn: api.qbittorrent.get,
   });
   const connectionCount = (data?.instances.length ?? 0) +

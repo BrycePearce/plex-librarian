@@ -6,6 +6,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api";
 import { api } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 import { formatKilobytes } from "../../lib/format";
 import { DestinationOptions, PreviewStatus } from "./DeletionPlanSummary";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree";
@@ -42,7 +43,10 @@ export function DeleteConfirmDialog({
     [items],
   );
   const preview = useQuery({
-    queryKey: ["download-cleanup-preview", libraryKey, ratingKeys],
+    queryKey: queryKeys.downloadCleanupPreview.forItems(
+      libraryKey,
+      ratingKeys,
+    ),
     queryFn: () => api.libraries.downloadCleanupPreview(libraryKey, ratingKeys),
     enabled: ratingKeys.length > 0,
     staleTime: 15_000,

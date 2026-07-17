@@ -19,12 +19,10 @@ Unraid or any other Docker host.
 
 ## Install on Unraid
 
-Install **Plex Librarian** from Community Applications (the **Apps** tab). Map
-`/data` to a persistent appdata directory such as
-`/mnt/user/appdata/plex-librarian`, then start the container.
-
-Open the web UI from the Docker page and select **Sign in with Plex** — the app
-walks you through the rest.
+Install **Plex Librarian** from Community Applications (the **Apps** tab), keep
+the defaults, and select **Apply**. Open its web UI from the Docker page and
+select **Sign in with Plex**. The app finds your server and starts the first sync
+automatically.
 
 Plex Librarian does not need access to your media shares for normal operation.
 Sonarr, Radarr, or Plex performs managed deletion using its own mounts and
@@ -33,7 +31,8 @@ library and read/write download mounts described below.
 
 ## Install with Docker
 
-Create a Compose file with a persistent `/data` mount:
+Create a Compose file. The named volume keeps the database and settings
+persistent without requiring a host-specific path:
 
 ```yaml
 services:
@@ -43,15 +42,18 @@ services:
     ports:
       - "8288:8080"
     volumes:
-      - /path/to/appdata/plex-librarian:/data
+      - plex-librarian-data:/data
       # Optional: required only for verified orphan-hardlink cleanup.
       # - /path/to/library:/media:ro
       # - /path/to/downloads:/downloads:rw
     restart: unless-stopped
+
+volumes:
+  plex-librarian-data:
 ```
 
 Start the container, open `http://<docker-host>:8288`, and select **Sign in with
-Plex**:
+Plex**. The app finds your server and starts the first sync automatically.
 
 ```bash
 docker compose up -d
@@ -158,6 +160,10 @@ available for Docker and advanced Unraid installations:
 The concurrency defaults are intentionally conservative because Plex Librarian
 often shares a host with Plex. Raise them only when the host has capacity to
 spare.
+
+For a bind mount instead of the Docker-managed volume shown above, map any
+persistent host directory to `/data`. This makes the database easier to include
+in an existing file-based backup routine.
 
 Sonarr and Radarr connections are configured in the web UI rather than through
 environment variables so multiple instances can be managed independently.

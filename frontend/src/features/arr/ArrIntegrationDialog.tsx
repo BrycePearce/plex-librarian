@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { PlugZap, Plus, Server, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
 import { ArrConnectionWizard } from "./ArrConnectionWizard";
 import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections";
@@ -16,7 +17,7 @@ export function ArrIntegrationDialog() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["arr-integrations"],
+    queryKey: queryKeys.arrIntegrations.all,
     queryFn: api.arr.get,
   });
   const {
@@ -24,7 +25,7 @@ export function ArrIntegrationDialog() {
     isLoading: librariesLoading,
     error: librariesError,
   } = useQuery({
-    queryKey: ["libraries", "arr-settings"],
+    queryKey: queryKeys.libraries.arrSettings,
     queryFn: api.libraries.listAll,
   });
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -58,7 +59,7 @@ export function ArrIntegrationDialog() {
   const remove = useMutation({
     mutationFn: api.arr.deleteInstance,
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["arr-integrations"] });
+      await qc.invalidateQueries({ queryKey: queryKeys.arrIntegrations.all });
       setPendingRemoval(null);
       setView("manager");
     },
@@ -67,7 +68,9 @@ export function ArrIntegrationDialog() {
   const removeQbittorrent = useMutation({
     mutationFn: api.qbittorrent.deleteInstance,
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["qbittorrent-integrations"] });
+      await qc.invalidateQueries({
+        queryKey: queryKeys.qbittorrentIntegrations.all,
+      });
       setPendingQbittorrentRemoval(null);
       setView("manager");
     },
@@ -267,7 +270,9 @@ export function ArrIntegrationDialog() {
           editingInstanceId={editingInstanceId}
           onCancel={() => dialogRef.current?.close()}
           onSaved={() => {
-            void qc.invalidateQueries({ queryKey: ["arr-integrations"] });
+            void qc.invalidateQueries({
+              queryKey: queryKeys.arrIntegrations.all,
+            });
             dialogRef.current?.close();
           }}
         />
@@ -281,7 +286,7 @@ export function ArrIntegrationDialog() {
           onCancel={() => dialogRef.current?.close()}
           onSaved={() => {
             void qc.invalidateQueries({
-              queryKey: ["qbittorrent-integrations"],
+              queryKey: queryKeys.qbittorrentIntegrations.all,
             });
             dialogRef.current?.close();
           }}

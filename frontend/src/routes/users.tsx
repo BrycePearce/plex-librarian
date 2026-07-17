@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { PendingInvitation, PlexUser } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import { avatarUrl } from "../lib/avatar";
 import { formatDate, formatRelativeTime } from "../lib/format";
 import { ErrorAlert } from "../components/ErrorAlert";
@@ -190,7 +191,7 @@ function UsersPage() {
   }
 
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ["users", { ...search, offset }],
+    queryKey: queryKeys.users.list({ ...search, offset }),
     queryFn: () => api.users.list({ ...search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
     refetchInterval: 30_000,
@@ -210,8 +211,8 @@ function UsersPage() {
       setRemoveResult({ username: res.username });
       setReviewUser(null);
       dialogRef.current?.close();
-      void qc.invalidateQueries({ queryKey: ["users"] });
-      void qc.invalidateQueries({ queryKey: ["events"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.users.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.events.all });
     },
   });
 
@@ -626,7 +627,13 @@ function PendingInvitationsPanel() {
     return () => clearTimeout(timer);
   }, [searchInput]);
   const query = useQuery({
-    queryKey: ["users", "invitations", { filter, search, sort, order, offset }],
+    queryKey: queryKeys.users.invitationList({
+      filter,
+      search,
+      sort,
+      order,
+      offset,
+    }),
     queryFn: () =>
       api.users.invitations({
         filter,
@@ -652,7 +659,7 @@ function PendingInvitationsPanel() {
       if (data?.invitations.length === 1 && offset > 0) {
         setOffset(Math.max(0, offset - INVITATION_PAGE_SIZE));
       }
-      void qc.invalidateQueries({ queryKey: ["users", "invitations"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.users.invitations });
     },
   });
 

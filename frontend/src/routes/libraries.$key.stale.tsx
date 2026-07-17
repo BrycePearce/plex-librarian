@@ -23,6 +23,7 @@ import type {
   StaleParams,
 } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
+import { queryKeys } from "../lib/queryKeys";
 import { useLibrarySync } from "../lib/useLibrarySync";
 import { useNotSyncedYet } from "../lib/useNotSyncedYet";
 import { useDeleteItems } from "../lib/useDeleteItems";
@@ -110,7 +111,7 @@ export const Route = createFileRoute("/libraries/$key/stale")({
     Promise.all([
       requireAuth(context.queryClient),
       context.queryClient.ensureQueryData({
-        queryKey: ["libraries"],
+        queryKey: queryKeys.libraries.all,
         queryFn: () => api.libraries.list(),
       }),
     ]),
@@ -158,7 +159,7 @@ function StalePage() {
   // not just the first, so neither can distinguish "never synced" from "just resyncing
   // an already-populated library with nothing currently stale."
   const { data: librariesData } = useQuery({
-    queryKey: ["libraries"],
+    queryKey: queryKeys.libraries.all,
     queryFn: () => api.libraries.list(),
   });
   const thisLibrary = librariesData?.libraries.find((l) => l.key === key);
@@ -194,7 +195,7 @@ function StalePage() {
     error: staleError,
     refetch: refetchStale,
   } = useQuery({
-    queryKey: ["stale", key, params],
+    queryKey: queryKeys.stale.list(key, params),
     queryFn: () => api.libraries.stale(key, { ...params, limit: PAGE_SIZE }),
     placeholderData: (prev) => prev,
     // A 404 here means this library hasn't been synced even once yet (still queued
@@ -214,7 +215,10 @@ function StalePage() {
     const nextOffset = offset + PAGE_SIZE;
     if (nextOffset < data.total) {
       void qc.prefetchQuery({
-        queryKey: ["stale", key, { ...params, offset: nextOffset }],
+        queryKey: queryKeys.stale.list(key, {
+          ...params,
+          offset: nextOffset,
+        }),
         queryFn: () =>
           api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: nextOffset }),
       });
@@ -222,7 +226,10 @@ function StalePage() {
     const prevOffset = offset - PAGE_SIZE;
     if (prevOffset >= 0) {
       void qc.prefetchQuery({
-        queryKey: ["stale", key, { ...params, offset: prevOffset }],
+        queryKey: queryKeys.stale.list(key, {
+          ...params,
+          offset: prevOffset,
+        }),
         queryFn: () =>
           api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: prevOffset }),
       });
@@ -254,7 +261,7 @@ function StalePage() {
     mutationFn: (staleMinAgeDays: number | null) =>
       api.libraries.updateStaleMinAgeDays(key, staleMinAgeDays),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["libraries"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.libraries.all });
     },
   });
 
@@ -268,9 +275,9 @@ function StalePage() {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   const deleteMutation = useDeleteItems([
-    ["stale", key],
-    ["events"],
-    ["media-removals"],
+    queryKeys.stale.library(key),
+    queryKeys.events.all,
+    queryKeys.mediaRemovals.all,
   ]);
 
   const goToOffset = useScrollToOffset(

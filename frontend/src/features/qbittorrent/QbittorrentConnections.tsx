@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Download, Plus, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { QbittorrentInstance } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck";
 
 export function QbittorrentConnections({
@@ -13,7 +14,7 @@ export function QbittorrentConnections({
   onRemove: (instance: QbittorrentInstance) => void;
 }) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ["qbittorrent-integrations"],
+    queryKey: queryKeys.qbittorrentIntegrations.all,
     queryFn: api.qbittorrent.get,
   });
   const test = useMutation({ mutationFn: api.qbittorrent.testInstance });

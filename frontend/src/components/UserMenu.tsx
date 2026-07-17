@@ -8,7 +8,9 @@ import {
   LogOut,
   User,
 } from "lucide-react";
-import { api, invalidateServerScopedQueries } from "../lib/api";
+import { api } from "../lib/api";
+import { resetServerScopedQueries } from "../lib/queryCache";
+import { queryKeys } from "../lib/queryKeys";
 import type { AuthStatus } from "../lib/api";
 import { avatarUrl } from "../lib/avatar";
 import { useClickOutside } from "../lib/useClickOutside";
@@ -22,7 +24,7 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
   useClickOutside(rootRef, () => setOpen(false), open);
 
   const { data: authStatus, isPending } = useQuery<AuthStatus>({
-    queryKey: ["auth", "status"],
+    queryKey: queryKeys.auth.status,
     queryFn: api.auth.status,
     staleTime: 60_000,
   });
@@ -31,8 +33,8 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
     mutationFn: api.auth.disconnect,
     onSuccess: async () => {
       setOpen(false);
-      await qc.invalidateQueries({ queryKey: ["auth", "status"] });
-      await invalidateServerScopedQueries(qc);
+      await qc.invalidateQueries({ queryKey: queryKeys.auth.status });
+      await resetServerScopedQueries(qc);
       void navigate({ to: "/setup" });
     },
   });

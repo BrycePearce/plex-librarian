@@ -1,5 +1,6 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryKey } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import {
   Archive,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import { requireAuth } from "../lib/requireAuth";
 import type { Settings } from "../lib/api";
 import { PageHeader } from "../components/Workspace";
@@ -25,7 +27,7 @@ export const Route = createFileRoute("/settings")({
 
 function SettingsPage() {
   const { data } = useQuery({
-    queryKey: ["settings"],
+    queryKey: queryKeys.settings.all,
     queryFn: api.settings.get,
   });
 
@@ -83,7 +85,7 @@ function SettingsPage() {
                   mutationFn={(value) =>
                     api.settings.update({ inactiveUserDays: value })}
                   getSavedValue={(updated) => updated.inactiveUserDays}
-                  invalidateQueryKey={["users"]}
+                  invalidateQueryKey={queryKeys.users.all}
                   maxDays={MAX_INACTIVITY_DAYS}
                 />
               )
@@ -101,7 +103,7 @@ function SettingsPage() {
                     api.settings.update({ ipHistoryRetentionDays: value })}
                   getSavedValue={(updated) => updated.ipHistoryRetentionDays}
                   minimumNonZero={MIN_USER_ACTIVITY_RETENTION_DAYS}
-                  invalidateQueryKey={["users"]}
+                  invalidateQueryKey={queryKeys.users.all}
                 />
               )
               : <LoadingDaysInput label="Loading user activity retention" />}
@@ -125,7 +127,7 @@ function SettingsPage() {
                   mutationFn={(value) =>
                     api.settings.update({ pendingInviteStaleDays: value })}
                   getSavedValue={(updated) => updated.pendingInviteStaleDays}
-                  invalidateQueryKey={["users", "invitations"]}
+                  invalidateQueryKey={queryKeys.users.invitations}
                   maxDays={MAX_INACTIVITY_DAYS}
                 />
               )
@@ -144,7 +146,7 @@ function SettingsPage() {
                   mutationFn={(value) =>
                     api.settings.update({ pendingInviteCriticalDays: value })}
                   getSavedValue={(updated) => updated.pendingInviteCriticalDays}
-                  invalidateQueryKey={["users", "invitations"]}
+                  invalidateQueryKey={queryKeys.users.invitations}
                   maxDays={MAX_INACTIVITY_DAYS}
                 />
               )
@@ -232,7 +234,7 @@ function DebouncedDaysInput(
     // save (e.g. the Users page reads inactiveUserDays) — settings itself is patched
     // straight into the cache below via setQueryData, but dependent queries have no
     // such direct link and would otherwise keep serving a stale threshold.
-    invalidateQueryKey?: unknown[];
+    invalidateQueryKey?: QueryKey;
     maxDays?: number;
     minimumNonZero?: number;
   },
@@ -247,7 +249,7 @@ function DebouncedDaysInput(
   const update = useMutation({
     mutationFn,
     onSuccess: (updated) => {
-      qc.setQueryData(["settings"], updated);
+      qc.setQueryData(queryKeys.settings.all, updated);
       if (invalidateQueryKey) {
         void qc.invalidateQueries({ queryKey: invalidateQueryKey });
       }

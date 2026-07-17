@@ -3,7 +3,8 @@
   "nodeModulesDir": "auto",
   "tasks": {
     "dev": "deno task --filter backend dev & deno task --filter frontend dev",
-    "build": "deno task --filter frontend build"
+    "build": "deno task --filter frontend build",
+    "db:reset": "deno task --filter backend db:reset"
   },
   "lint": {
     "exclude": ["frontend/src/routeTree.gen.ts"]

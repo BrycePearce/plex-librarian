@@ -16,6 +16,7 @@ import { PosterThumb } from "../components/PosterThumb";
 import { requireAuth } from "../lib/requireAuth";
 import { DetailStat } from "../components/DetailStat";
 import { useSyncedDetail } from "../lib/useSyncedDetail";
+import { queryKeys } from "../lib/queryKeys";
 import { DataSurface } from "../components/Workspace";
 
 export const Route = createFileRoute("/libraries/$key/shows/$ratingKey")({
@@ -41,7 +42,7 @@ function ShowDetailPage() {
   // shared history query already used elsewhere just to know whether anything's running.
   const { data, isLoading, isError, error, refetch, isNotFoundYet } =
     useSyncedDetail(
-      ["show", key, ratingKey],
+      queryKeys.show.detail(key, ratingKey),
       () => api.libraries.showDetail(key, ratingKey),
     );
 

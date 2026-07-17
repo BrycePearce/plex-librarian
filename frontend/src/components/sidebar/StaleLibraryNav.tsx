@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArchiveRestore, ChevronRight, Film, Music, Search, Tv, X } from "lucide-react";
 import type { Library } from "../../lib/api";
 import { api } from "../../lib/api";
+import { queryKeys } from "../../lib/queryKeys";
 import { useLocalStorage } from "../../lib/useLocalStorage";
 import "./StaleLibraryNav.css";
 
@@ -33,7 +34,7 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
     RECENT_STORAGE,
   );
   const { data } = useQuery({
-    queryKey: ["libraries"],
+    queryKey: queryKeys.libraries.all,
     queryFn: () => api.libraries.list(),
   });
   const libraries = data?.libraries ?? [];

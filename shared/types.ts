@@ -7,7 +7,7 @@ export interface AuthStatus {
   configured: boolean;
   source: "env" | "db" | null;
   reachable?: boolean;
-  reason?: "token_revoked";
+  reason?: "token_revoked" | "env_incomplete";
   // Best-effort — omitted if the plex.tv account lookup failed or hasn't been configured.
   user?: { username: string; thumb: string | null };
 }

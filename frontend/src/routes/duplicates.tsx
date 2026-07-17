@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { BadgeCheck, Copy } from "lucide-react";
 import { api } from "../lib/api";
 import type { DuplicateGroup } from "../lib/api";
+import { queryKeys } from "../lib/queryKeys";
 import { formatKilobytes } from "../lib/format";
 import { useDeleteItems } from "../lib/useDeleteItems";
 import { ErrorAlert } from "../components/ErrorAlert";
@@ -64,7 +65,7 @@ function DuplicatesPage() {
   }
 
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ["duplicates", { type, search, offset }],
+    queryKey: queryKeys.duplicates.list({ type, search, offset }),
     queryFn: () =>
       api.duplicates.list({ type, search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
@@ -88,11 +89,11 @@ function DuplicatesPage() {
   // uses the shared hook (same endpoint the stale page's bulk delete calls), the
   // per-version path hits a different endpoint entirely so it invalidates directly.
   const deleteWholeItemMutation = useDeleteItems([
-    ["duplicates"],
-    ["stale"],
-    ["libraries"],
-    ["events"],
-    ["media-removals"],
+    queryKeys.duplicates.all,
+    queryKeys.stale.all,
+    queryKeys.libraries.all,
+    queryKeys.events.all,
+    queryKeys.mediaRemovals.all,
   ]);
 
   // Sequential, not concurrent — same "destructive and must stay attributable"
@@ -138,11 +139,11 @@ function DuplicatesPage() {
       setDeleteResult(res);
       setReviewItem(null);
       dialogRef.current?.close();
-      void qc.invalidateQueries({ queryKey: ["duplicates"] });
-      void qc.invalidateQueries({ queryKey: ["stale"] });
-      void qc.invalidateQueries({ queryKey: ["libraries"] });
-      void qc.invalidateQueries({ queryKey: ["events"] });
-      void qc.invalidateQueries({ queryKey: ["media-removals"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.duplicates.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.stale.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.libraries.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.events.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.mediaRemovals.all });
     },
   });
 
