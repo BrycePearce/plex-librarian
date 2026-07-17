@@ -9,7 +9,10 @@ import type {
   StaleItem,
 } from "../../lib/api";
 import { formatDate, formatKilobytes } from "../../lib/format";
+import { ServiceIcon } from "../../components/ServiceIcons";
+import type { ServiceIconName } from "../../components/ServiceIcons";
 import { InfoTip } from "./InfoTip";
+import { PlannedServiceExceptions } from "./DeletionPlanSummary";
 import { plexPreviewPathEntries } from "./plexPreviewPaths";
 
 interface TreeFile {
@@ -45,28 +48,38 @@ function buildTree(files: TreeFile[]): TreeNode[] {
   return [...roots.values()];
 }
 
-function TreeNodes({ nodes, depth = 0 }: { nodes: TreeNode[]; depth?: number }) {
+function TreeNodes(
+  { nodes, depth = 0 }: { nodes: TreeNode[]; depth?: number },
+) {
   return (
-    <ul className={depth === 0 ? "ml-2 border-l border-base-300 pl-3" : "ml-4"}>
+    <ul className="ml-1.5">
       {nodes.map((node) => {
         const children = [...node.children.values()];
         const isFolder = children.length > 0;
         return (
-          <li key={`${depth}:${node.name}`} className="py-0.5">
-            <div className="flex min-w-0 items-center gap-1.5 text-xs text-base-content/60">
+          <li
+            key={`${depth}:${node.name}`}
+            className="relative py-px pl-3 before:absolute before:left-0 before:top-0 before:h-full before:border-l before:border-base-content/20 after:absolute after:left-0 after:top-2 after:w-2.5 after:border-t after:border-base-content/20 last:before:h-2"
+          >
+            <div className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-base-content/55">
               {isFolder
-                ? <Folder className="size-3.5 shrink-0 text-warning/80" />
-                : <File className="size-3.5 shrink-0 text-base-content/40" />}
-              <span className="min-w-0 flex-1 truncate font-mono" title={node.name}>
+                ? <Folder className="size-3 shrink-0 text-warning/75" />
+                : <File className="size-3 shrink-0 text-base-content/35" />}
+              <span
+                className="min-w-0 flex-1 truncate font-mono"
+                title={node.name}
+              >
                 {node.name}
               </span>
               {node.size !== null && (
-                <span className="shrink-0 text-[11px] text-base-content/40">
+                <span className="shrink-0 text-[10px] text-base-content/35">
                   {formatKilobytes(node.size / 1000)}
                 </span>
               )}
             </div>
-            {children.length > 0 && <TreeNodes nodes={children} depth={depth + 1} />}
+            {children.length > 0 && (
+              <TreeNodes nodes={children} depth={depth + 1} />
+            )}
           </li>
         );
       })}
@@ -98,17 +111,19 @@ function PathTreeRoot({
     (totalFiles ?? files?.length ?? 0) - visibleFiles.length,
   );
   return (
-    <div className="py-1.5">
-      <div className="flex min-w-0 items-center gap-2 text-xs">
+    <div className="relative py-0.5 pl-3 before:absolute before:left-0 before:top-0 before:h-full before:border-l before:border-base-content/20 after:absolute after:left-0 after:top-2.5 after:w-2.5 after:border-t after:border-base-content/20 last:before:h-2.5">
+      <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-5">
         <Folder
-          className={`size-4 shrink-0 ${warning ? "text-warning" : "text-primary"}`}
+          className={`size-3.5 shrink-0 ${
+            warning ? "text-warning" : "text-primary"
+          }`}
         />
         <span className="min-w-0 flex-1 truncate font-mono" title={path}>
           {path}
         </span>
         <button
           type="button"
-          className="btn btn-ghost btn-xs size-6 shrink-0 p-0"
+          className="btn btn-ghost btn-xs size-5 min-h-0 shrink-0 p-0"
           aria-label={copied ? "Path copied" : `Copy path ${path}`}
           title={copied ? "Copied" : "Copy path"}
           onClick={() => {
@@ -119,16 +134,18 @@ function PathTreeRoot({
           }}
         >
           {copied
-            ? <Check className="size-3.5 text-success" />
-            : <Copy className="size-3.5 text-base-content/50" />}
+            ? <Check className="size-3 text-success" />
+            : <Copy className="size-3 text-base-content/45" />}
         </button>
         {info && <InfoTip text={info} />}
         <span className="badge badge-ghost badge-xs shrink-0">{source}</span>
       </div>
       {visibleFiles.length > 0 && <TreeNodes nodes={buildTree(visibleFiles)} />}
       {(note || hiddenCount > 0) && (
-        <p className="ml-6 mt-0.5 text-[11px] text-base-content/40">
-          {[note, hiddenCount > 0 ? `${hiddenCount} more files` : null].filter(Boolean).join(" · ")}
+        <p className="ml-5 text-[10px] leading-4 text-base-content/35">
+          {[note, hiddenCount > 0 ? `${hiddenCount} more files` : null].filter(
+            Boolean,
+          ).join(" · ")}
         </p>
       )}
     </div>
@@ -166,7 +183,9 @@ function managedFiles(target: ArrCleanupTarget): TreeFile[] {
   }
   for (const file of target.extraFiles ?? []) {
     const key = file.relativePath.toLocaleLowerCase();
-    if (!files.has(key)) files.set(key, { path: file.relativePath, size: null });
+    if (!files.has(key)) {
+      files.set(key, { path: file.relativePath, size: null });
+    }
   }
   return [...files.values()];
 }
@@ -183,7 +202,9 @@ function downloadJobInfo(job: DownloadCleanupJob): string {
 }
 
 function downloadJobRoot(job: DownloadCleanupJob): string {
-  return job.fileCount === 1 ? job.savePath || job.contentPath : job.contentPath || job.savePath;
+  return job.fileCount === 1
+    ? job.savePath || job.contentPath
+    : job.contentPath || job.savePath;
 }
 
 function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
@@ -191,11 +212,243 @@ function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
   const rootName = rootSegments[rootSegments.length - 1]?.toLocaleLowerCase();
   return job.files.map((file) => {
     const segments = file.path.split(/[\\/]+/).filter(Boolean);
-    const path = job.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
-      ? segments.slice(1).join("/")
-      : file.path;
+    const path =
+      job.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
+        ? segments.slice(1).join("/")
+        : file.path;
     return { path: path || file.path, size: file.size };
   });
+}
+
+function ActiveServiceMark({
+  service,
+  label,
+}: {
+  service: ServiceIconName;
+  label: string;
+}) {
+  const color = service === "plex"
+    ? "bg-warning/15 text-warning"
+    : service === "sonarr"
+    ? "bg-warning/10 text-warning"
+    : "bg-info/10 text-info";
+  return (
+    <span
+      className={`inline-flex size-5 shrink-0 items-center justify-center rounded p-0.5 ${color}`}
+      title={label}
+      role="img"
+      aria-label={label}
+    >
+      <ServiceIcon service={service} className="size-3.5" />
+    </span>
+  );
+}
+
+export function DeletionServiceMarks({
+  item,
+  preview,
+  deleteFromArr,
+  cleanupDownloads,
+}: {
+  item: StaleItem;
+  preview?: DownloadCleanupPreviewItem;
+  deleteFromArr: boolean;
+  cleanupDownloads: boolean;
+}) {
+  const arrService = item.type === "show" ? "sonarr" : "radarr";
+  const arrActive = deleteFromArr && preview?.arrStatus === "resolved" &&
+    preview.arrTargets.length > 0;
+  const qbitActive = deleteFromArr && cleanupDownloads &&
+    preview?.status === "resolved" && preview.downloadJobs.length > 0;
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <ActiveServiceMark service="plex" label="Plex deletion" />
+      {arrActive && (
+        <ActiveServiceMark
+          service={arrService}
+          label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} deletion`}
+        />
+      )}
+      {qbitActive && (
+        <ActiveServiceMark
+          service="qbittorrent"
+          label="qBittorrent download cleanup"
+        />
+      )}
+      <PlannedServiceExceptions
+        deleteFromArr={deleteFromArr}
+        arrService={arrService}
+        arrStatus={preview?.arrStatus}
+        arrReason={preview?.arrReason}
+        downloadJobCount={cleanupDownloads && preview?.status === "resolved"
+          ? preview.downloadJobs.length
+          : 0}
+        hardlinkFileCount={cleanupDownloads && preview?.status === "resolved"
+          ? preview.orphanFiles.length
+          : 0}
+        downloadCleanupResuming={Boolean(
+          cleanupDownloads && preview?.status === "resolved" &&
+            preview.downloadJobs.length === 0 &&
+            preview.orphanFiles.length === 0,
+        )}
+        cleanupDownloads={cleanupDownloads}
+        cleanupStatus={preview?.status}
+        cleanupReason={preview?.reason}
+      />
+    </span>
+  );
+}
+
+export function AdvancedDeletionTree({
+  items,
+  plexPreviews,
+  deleteFromArr,
+  cleanupDownloads,
+  loading,
+}: {
+  items: StaleItem[];
+  plexPreviews: ReadonlyMap<string, DownloadCleanupPreviewItem>;
+  deleteFromArr: boolean;
+  cleanupDownloads: boolean;
+  loading: boolean;
+}) {
+  const plans = items.map((item) => {
+    const preview = plexPreviews.get(item.ratingKey);
+    const arrTargets = deleteFromArr && preview?.arrStatus === "resolved"
+      ? preview.arrTargets
+      : [];
+    const plexEntries = arrTargets.length === 0
+      ? plexPreviewPathEntries([item], plexPreviews)
+      : [];
+    const downloadJobs = deleteFromArr && cleanupDownloads &&
+        preview?.status === "resolved"
+      ? preview.downloadJobs
+      : [];
+    const orphanFiles = deleteFromArr && cleanupDownloads &&
+        preview?.status === "resolved"
+      ? preview.orphanFiles
+      : [];
+    return { item, arrTargets, plexEntries, downloadJobs, orphanFiles };
+  });
+  const pathCount = plans.reduce(
+    (count, plan) =>
+      count + plan.arrTargets.length + plan.plexEntries.length +
+      plan.downloadJobs.length + plan.orphanFiles.length,
+    0,
+  );
+
+  return (
+    <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
+      <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
+        <span className="font-medium text-base-content/60">Deletion tree</span>
+        <InfoTip text="Shows paths reported by Plex and configured deletion services. Plex paths are informational and never authorize direct filesystem deletion." />
+        {loading
+          ? <span className="loading loading-spinner loading-xs ml-auto" />
+          : (
+            <span className="ml-auto font-mono">
+              {pathCount} {pathCount === 1 ? "path" : "paths"}
+            </span>
+          )}
+      </div>
+      <div className="max-h-72 overflow-y-auto px-2.5 py-1">
+        {plans.map((plan) => {
+          const hasPaths = plan.arrTargets.length > 0 ||
+            plan.plexEntries.length > 0 || plan.downloadJobs.length > 0 ||
+            plan.orphanFiles.length > 0;
+          return (
+            <section
+              key={plan.item.ratingKey}
+              className="border-b border-base-300/50 py-1 last:border-b-0"
+            >
+              <div className="flex min-w-0 items-center gap-2 text-xs leading-5">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span
+                    className="min-w-0 flex-1 truncate font-semibold"
+                    title={plan.item.title}
+                  >
+                    {plan.item.title}
+                  </span>
+                  <DeletionServiceMarks
+                    item={plan.item}
+                    preview={plexPreviews.get(plan.item.ratingKey)}
+                    deleteFromArr={deleteFromArr}
+                    cleanupDownloads={cleanupDownloads}
+                  />
+                </div>
+                <span className="shrink-0 font-mono text-[10px] text-base-content/35">
+                  {plan.item.fileSize == null
+                    ? "—"
+                    : formatKilobytes(plan.item.fileSize)}
+                </span>
+              </div>
+              <div className="ml-1.5">
+                {plan.plexEntries.map(({ path, note }, index) => (
+                  <PathTreeRoot
+                    key={`plex:${path}:${index}`}
+                    path={path}
+                    source="Plex"
+                    note={note ??
+                      (deleteFromArr
+                        ? "No verified Arr destination; Plex-only deletion"
+                        : undefined)}
+                  />
+                ))}
+                {plan.arrTargets.map((target) => {
+                  const note = target.type === "sonarr"
+                    ? "Series contents removed by Sonarr; episodes omitted"
+                    : target.mediaFiles === null || target.extraFiles === null
+                    ? "Some managed file details are unavailable"
+                    : undefined;
+                  return (
+                    <PathTreeRoot
+                      key={`arr:${target.instanceName}:${target.path}`}
+                      path={target.path ?? target.title}
+                      source={target.instanceName}
+                      files={managedFiles(target)}
+                      note={note}
+                    />
+                  );
+                })}
+                {plan.downloadJobs.map((job) => (
+                  <PathTreeRoot
+                    key={`job:${job.instanceKey}:${job.jobId}`}
+                    path={downloadJobRoot(job) || job.name}
+                    source={job.instanceName}
+                    files={downloadJobFiles(job)}
+                    totalFiles={job.fileCount}
+                    info={downloadJobInfo(job)}
+                  />
+                ))}
+                {plan.orphanFiles.map((file) => (
+                  <PathTreeRoot
+                    key={`hardlink:${file.path}`}
+                    path={file.path}
+                    source="Hardlink"
+                    files={[{
+                      path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
+                      size: file.size,
+                    }]}
+                    note="Reverified before removal"
+                  />
+                ))}
+                {!loading && !hasPaths && (
+                  <p className="py-0.5 text-[10px] text-base-content/35">
+                    No path details reported
+                  </p>
+                )}
+              </div>
+            </section>
+          );
+        })}
+        {loading && (
+          <p className="flex items-center gap-2 py-2 text-[11px] text-base-content/40">
+            <span className="loading loading-spinner loading-xs" />{" "}
+            Loading paths…
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CollapsiblePathSection({
@@ -214,15 +467,21 @@ function CollapsiblePathSection({
   return (
     <details
       className={`group rounded-lg border ${
-        warning ? "border-warning/30 bg-warning/5" : "border-base-300 bg-base-200/30"
+        warning
+          ? "border-warning/30 bg-warning/5"
+          : "border-base-300 bg-base-200/30"
       }`}
     >
       <summary className="flex cursor-pointer list-none items-center gap-1.5 p-2.5 text-sm font-medium marker:hidden [&::-webkit-details-marker]:hidden">
         <ChevronRight className="size-3.5 shrink-0 text-base-content/40 transition-transform group-open:rotate-90" />
-        <span className={warning ? "text-warning" : "text-base-content/70"}>{title}</span>
+        <span className={warning ? "text-warning" : "text-base-content/70"}>
+          {title}
+        </span>
         <InfoTip text={info} />
         {count === null
-          ? <span className="loading loading-spinner loading-xs ml-auto text-base-content/40" />
+          ? (
+            <span className="loading loading-spinner loading-xs ml-auto text-base-content/40" />
+          )
           : (
             <span className="ml-auto text-xs font-normal text-base-content/40">
               {count} {count === 1 ? "path" : "paths"}
@@ -271,7 +530,10 @@ export function DeletionTree({
   const plexFallbackItems = deleteFromArr
     ? items.filter((item) => !arrRatingKeys.has(item.ratingKey))
     : items;
-  const plexFallbackEntries = plexPreviewPathEntries(plexFallbackItems, plexPreviews);
+  const plexFallbackEntries = plexPreviewPathEntries(
+    plexFallbackItems,
+    plexPreviews,
+  );
   const hasRemaining = cleanupDownloads &&
     (unmanagedSources.length > 0 || retainedPaths.length > 0);
   const removalPathCount = deleteFromArr
@@ -313,31 +575,34 @@ export function DeletionTree({
             />
           );
         })}
-        {deleteFromArr && cleanupDownloads && downloadJobs.map((job) => (
-          <PathTreeRoot
-            key={`${job.instanceKey}:${job.jobId}`}
-            path={downloadJobRoot(job) || job.name}
-            source={job.instanceName}
-            files={downloadJobFiles(job)}
-            totalFiles={job.fileCount}
-            info={downloadJobInfo(job)}
-          />
-        ))}
-        {deleteFromArr && cleanupDownloads && orphanFiles.map((file) => (
-          <PathTreeRoot
-            key={`hardlink:${file.path}`}
-            path={file.path}
-            source="Verified hardlink"
-            files={[{
-              path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
-              size: file.size,
-            }]}
-            note="Reverified immediately before removal"
-          />
-        ))}
+        {deleteFromArr && cleanupDownloads &&
+          downloadJobs.map((job) => (
+            <PathTreeRoot
+              key={`${job.instanceKey}:${job.jobId}`}
+              path={downloadJobRoot(job) || job.name}
+              source={job.instanceName}
+              files={downloadJobFiles(job)}
+              totalFiles={job.fileCount}
+              info={downloadJobInfo(job)}
+            />
+          ))}
+        {deleteFromArr && cleanupDownloads &&
+          orphanFiles.map((file) => (
+            <PathTreeRoot
+              key={`hardlink:${file.path}`}
+              path={file.path}
+              source="Verified hardlink"
+              files={[{
+                path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
+                size: file.size,
+              }]}
+              note="Reverified immediately before removal"
+            />
+          ))}
         {loading && (
           <p className="flex items-center gap-2 py-3 text-xs text-base-content/45">
-            <span className="loading loading-spinner loading-xs" /> Loading paths…
+            <span className="loading loading-spinner loading-xs" />{" "}
+            Loading paths…
           </p>
         )}
       </CollapsiblePathSection>

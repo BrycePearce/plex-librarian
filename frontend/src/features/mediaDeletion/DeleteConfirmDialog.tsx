@@ -2,20 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  AlertTriangle,
-  Copy,
-  Trash2,
-} from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AlertTriangle, Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api";
 import { api } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
-import {
-  DestinationOptions,
-  PlannedServiceExceptions,
-  PreviewStatus,
-} from "./DeletionPlanSummary";
-import { DeletionTree } from "./DeletionTree";
+import { DestinationOptions, PreviewStatus } from "./DeletionPlanSummary";
+import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree";
 import { arrDestinationState } from "./deletionPreviewState";
 import "../../components/dataSurfaces.css";
 
@@ -41,6 +34,8 @@ export function DeleteConfirmDialog({
 }) {
   const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
+  const reduceMotion = useReducedMotion();
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
@@ -66,11 +61,6 @@ export function DeleteConfirmDialog({
       job,
     ]),
   ).values()];
-  const orphanFiles = [...new Map(
-    cleanupEligibleItems.flatMap((item) => item.orphanFiles).map((
-      file,
-    ) => [file.path, file]),
-  ).values()];
   const cleanupEligibleCount = cleanupEligibleItems.length;
   const coordinatedRatingKeys = preview.data?.coordinatedConfigured
     ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((
@@ -83,28 +73,8 @@ export function DeleteConfirmDialog({
     preview.data?.items.filter((item) =>
       item.arrStatus === "resolved" && item.status === "error"
     ) ?? [];
-  const arrEntries =
-    preview.data?.items.flatMap((previewItem) =>
-      previewItem.arrStatus === "resolved"
-        ? previewItem.arrTargets.map((target) => ({
-          ratingKey: previewItem.ratingKey,
-          target,
-        }))
-        : []
-    ) ?? [];
   const arrService = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
-  const unmanagedSources =
-    preview.data?.items.flatMap((previewItem) =>
-      previewItem.sources.filter(
-        (source) => source.verification === "unverified",
-      ).map((source) => ({ ratingKey: previewItem.ratingKey, source }))
-    ) ?? [];
-  const retainedPaths = [...new Map(
-    (preview.data?.items ?? []).flatMap((item) => item.retainedPaths).map((
-      path,
-    ) => [path.path, path]),
-  ).values()];
   const arrOptionVisible = arrDestination.visible;
   const cleanupOptionVisible = arrOptionVisible &&
     (cleanupEligibleCount > 0 || cleanupVerificationErrors.length > 0);
@@ -112,6 +82,7 @@ export function DeleteConfirmDialog({
   useEffect(() => {
     setDeleteFromArr(true);
     setCleanupDownloads(false);
+    setPreviewMode("basic");
   }, [libraryKey, ratingKeys.join("|")]);
   useEffect(() => {
     if (preview.data && coordinatedRatingKeys.length === 0) {
@@ -155,60 +126,97 @@ export function DeleteConfirmDialog({
           </span>{" "}
           will be permanently removed. This cannot be undone.
         </p>
-        <ul className="mt-3 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
-          {items.map((item) => {
-            const versions = item.versions ?? [];
-            const isMultiVersion = versions.length >= 2;
-            const previewItem = previewByRatingKey.get(item.ratingKey);
-            return (
-              <li key={item.ratingKey} className="px-3 py-1.5">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate min-w-0 flex-1 flex items-center gap-1.5">
-                    <span className="truncate">{item.title}</span>
-                    {isMultiVersion && (
-                      <span className="badge badge-warning badge-xs shrink-0">
-                        {versions.length} versions
-                      </span>
-                    )}
-                    {!isMultiVersion && item.hasDuplicateEpisodes && (
-                      <Copy
-                        className="w-3 h-3 text-warning shrink-0"
-                        aria-label="Has duplicate episodes"
-                      />
-                    )}
-                  </span>
-                  <PlannedServiceExceptions
-                    deleteFromArr={deleteFromArr}
-                    arrService={arrService}
-                    arrStatus={previewItem?.arrStatus}
-                    arrReason={previewItem?.arrReason}
-                    downloadJobCount={cleanupDownloads &&
-                        previewItem?.status === "resolved"
-                      ? previewItem.downloadJobs.length
-                      : 0}
-                    hardlinkFileCount={cleanupDownloads &&
-                        previewItem?.status === "resolved"
-                      ? previewItem.orphanFiles.length
-                      : 0}
-                    downloadCleanupResuming={Boolean(
-                      cleanupDownloads && previewItem?.status === "resolved" &&
-                        previewItem.downloadJobs.length === 0 &&
-                        previewItem.orphanFiles.length === 0,
-                    )}
-                    cleanupDownloads={cleanupDownloads}
-                    cleanupStatus={previewItem?.status}
-                    cleanupReason={previewItem?.reason}
-                  />
-                  <span className="text-base-content/50 font-mono text-xs shrink-0">
-                    {item.fileSize != null
-                      ? formatKilobytes(item.fileSize)
-                      : "—"}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-base-content/50">
+            Deletion preview
+          </span>
+          <div
+            className="join rounded-md border border-base-300 bg-base-200/50 p-0.5"
+            role="group"
+            aria-label="Deletion preview detail"
+          >
+            {(["basic", "advanced"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`join-item btn btn-xs h-6 min-h-0 border-0 px-2.5 capitalize ${
+                  previewMode === mode
+                    ? "bg-base-100 text-base-content shadow-sm"
+                    : "bg-transparent text-base-content/45 shadow-none"
+                }`}
+                aria-pressed={previewMode === mode}
+                onClick={() => setPreviewMode(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+        </div>
+        <AnimatePresence initial={false} mode="popLayout">
+          <motion.div
+            key={previewMode}
+            initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -3 }}
+            transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
+          >
+            {previewMode === "basic"
+              ? (
+                <ul className="mt-2 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
+                  {items.map((item) => {
+                    const versions = item.versions ?? [];
+                    const isMultiVersion = versions.length >= 2;
+                    const previewItem = previewByRatingKey.get(item.ratingKey);
+                    return (
+                      <li key={item.ratingKey} className="px-3 py-1.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 flex-1 flex items-center gap-1.5">
+                            <span
+                              className="min-w-0 flex-1 truncate"
+                              title={item.title}
+                            >
+                              {item.title}
+                            </span>
+                            {isMultiVersion && (
+                              <span className="badge badge-warning badge-xs shrink-0">
+                                {versions.length} versions
+                              </span>
+                            )}
+                            {!isMultiVersion && item.hasDuplicateEpisodes && (
+                              <Copy
+                                className="w-3 h-3 text-warning shrink-0"
+                                aria-label="Has duplicate episodes"
+                              />
+                            )}
+                            <DeletionServiceMarks
+                              item={item}
+                              preview={previewItem}
+                              deleteFromArr={deleteFromArr}
+                              cleanupDownloads={cleanupDownloads}
+                            />
+                          </span>
+                          <span className="text-base-content/50 font-mono text-xs shrink-0">
+                            {item.fileSize != null
+                              ? formatKilobytes(item.fileSize)
+                              : "—"}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )
+              : (
+                <AdvancedDeletionTree
+                  items={items}
+                  plexPreviews={previewByRatingKey}
+                  deleteFromArr={deleteFromArr}
+                  cleanupDownloads={cleanupDownloads}
+                  loading={preview.isLoading}
+                />
+              )}
+          </motion.div>
+        </AnimatePresence>
         {hasMultiVersionItems && (
           <p className="mt-1.5 text-xs text-base-content/40">
             Items marked with multiple versions lose all of them here. To remove
@@ -276,18 +284,6 @@ export function DeleteConfirmDialog({
           }))}
         />
 
-        <DeletionTree
-          items={items}
-          plexPreviews={previewByRatingKey}
-          deleteFromArr={deleteFromArr}
-          arrEntries={arrEntries}
-          downloadJobs={downloadJobs}
-          orphanFiles={orphanFiles}
-          cleanupDownloads={cleanupDownloads}
-          unmanagedSources={unmanagedSources}
-          retainedPaths={retainedPaths}
-          loading={preview.isLoading}
-        />
         <div className="modal-action mt-3">
           <button
             ref={cancelButtonRef}
