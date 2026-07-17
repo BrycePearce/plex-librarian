@@ -9,6 +9,7 @@ Thumbs.db
 .tanstack/
 CLAUDE.md
 AGENTS.md
+FEATURE_IDEAS.md
 .claude/settings.json
 .claude/settings.local.json
 .codex*
