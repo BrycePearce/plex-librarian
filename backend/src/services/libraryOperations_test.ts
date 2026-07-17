@@ -18,7 +18,7 @@ Deno.test('library operations reject a competing destructive request', () => {
 Deno.test('queued library operations run in order and release after errors', async () => {
   const first = await acquireLibraryOperation(2, 'shows', 'sync');
   const events: string[] = [];
-  const queued = withLibraryOperation(2, 'shows', 'deletion', async () => {
+  const queued = withLibraryOperation(2, 'shows', 'deletion', () => {
     events.push('deletion');
     throw new Error('expected');
   }).catch(() => events.push('failed'));
