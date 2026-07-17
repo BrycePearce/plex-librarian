@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api";
 import { api } from "../../lib/api";
@@ -152,71 +152,68 @@ export function DeleteConfirmDialog({
             ))}
           </div>
         </div>
-        <AnimatePresence initial={false} mode="popLayout">
-          <motion.div
-            key={previewMode}
-            initial={reduceMotion ? false : { opacity: 0, y: 3 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -3 }}
-            transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
-          >
-            {previewMode === "basic"
-              ? (
-                <ul className="mt-2 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
-                  {items.map((item) => {
-                    const versions = item.versions ?? [];
-                    const isMultiVersion = versions.length >= 2;
-                    const previewItem = previewByRatingKey.get(item.ratingKey);
-                    return (
-                      <li key={item.ratingKey} className="px-3 py-1.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="min-w-0 flex-1 flex items-center gap-1.5">
-                            <span
-                              className="min-w-0 flex-1 truncate"
-                              title={item.title}
-                            >
-                              {item.title}
+        <motion.div
+          key={previewMode}
+          initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
+        >
+          {previewMode === "basic"
+            ? (
+              <ul className="mt-2 max-h-56 overflow-y-auto text-sm py-1 divide-y divide-base-300/50 rounded-lg border border-base-300 bg-base-200/40">
+                {items.map((item) => {
+                  const versions = item.versions ?? [];
+                  const isMultiVersion = versions.length >= 2;
+                  const previewItem = previewByRatingKey.get(item.ratingKey);
+                  return (
+                    <li key={item.ratingKey} className="px-3 py-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 flex-1 flex items-center gap-1.5">
+                          <span
+                            className="min-w-0 flex-1 truncate"
+                            title={item.title}
+                          >
+                            {item.title}
+                          </span>
+                          {isMultiVersion && (
+                            <span className="badge badge-warning badge-xs shrink-0">
+                              {versions.length} versions
                             </span>
-                            {isMultiVersion && (
-                              <span className="badge badge-warning badge-xs shrink-0">
-                                {versions.length} versions
-                              </span>
-                            )}
-                            {!isMultiVersion && item.hasDuplicateEpisodes && (
-                              <Copy
-                                className="w-3 h-3 text-warning shrink-0"
-                                aria-label="Has duplicate episodes"
-                              />
-                            )}
-                            <DeletionServiceMarks
-                              item={item}
-                              preview={previewItem}
-                              deleteFromArr={deleteFromArr}
-                              cleanupDownloads={cleanupDownloads}
+                          )}
+                          {!isMultiVersion && item.hasDuplicateEpisodes && (
+                            <Copy
+                              className="w-3 h-3 text-warning shrink-0"
+                              aria-label="Has duplicate episodes"
                             />
-                          </span>
-                          <span className="text-base-content/50 font-mono text-xs shrink-0">
-                            {item.fileSize != null
-                              ? formatKilobytes(item.fileSize)
-                              : "—"}
-                          </span>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )
-              : (
-                <AdvancedDeletionTree
-                  items={items}
-                  plexPreviews={previewByRatingKey}
-                  deleteFromArr={deleteFromArr}
-                  cleanupDownloads={cleanupDownloads}
-                  loading={preview.isLoading}
-                />
-              )}
-          </motion.div>
-        </AnimatePresence>
+                          )}
+                          <DeletionServiceMarks
+                            item={item}
+                            preview={previewItem}
+                            deleteFromArr={deleteFromArr}
+                            cleanupDownloads={cleanupDownloads}
+                          />
+                        </span>
+                        <span className="text-base-content/50 font-mono text-xs shrink-0">
+                          {item.fileSize != null
+                            ? formatKilobytes(item.fileSize)
+                            : "—"}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )
+            : (
+              <AdvancedDeletionTree
+                items={items}
+                plexPreviews={previewByRatingKey}
+                deleteFromArr={deleteFromArr}
+                cleanupDownloads={cleanupDownloads}
+                loading={preview.isLoading}
+              />
+            )}
+        </motion.div>
         {hasMultiVersionItems && (
           <p className="mt-1.5 text-xs text-base-content/40">
             Items marked with multiple versions lose all of them here. To remove
