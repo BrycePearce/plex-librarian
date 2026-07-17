@@ -1,7 +1,4 @@
-import {
-  SEARCH_MAX_LENGTH,
-  SEARCH_MIN_LENGTH,
-} from '@plex-librarian/shared/search.ts';
+import { SEARCH_MAX_LENGTH, SEARCH_MIN_LENGTH } from '@plex-librarian/shared/search.ts';
 
 export type SearchQueryResult =
   | { search: string; error?: never }

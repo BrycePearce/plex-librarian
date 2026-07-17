@@ -233,28 +233,24 @@ router.get('/:key/stale', async (c) => {
   // Watched but stale: viewed before the minimum boundary and, for range queries,
   // on or after the maximum boundary.
   const showEverything = days === 0 && maxDays === null;
-  const watchedStaleCond = showEverything
-    ? isNotNull(items.lastViewedAt)
-    : and(
-      isNotNull(items.lastViewedAt),
-      viewedOnOrAfter !== null
-        ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
-        : lt(items.lastViewedAt, viewedBefore),
-    );
+  const watchedStaleCond = showEverything ? isNotNull(items.lastViewedAt) : and(
+    isNotNull(items.lastViewedAt),
+    viewedOnOrAfter !== null
+      ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
+      : lt(items.lastViewedAt, viewedBefore),
+  );
 
   // Unwatched: null lastViewedAt AND old enough for both the selected inactivity
   // duration and the minimum-item-age safety floor (the stricter boundary wins).
   // Unknown add dates are excluded: they cannot prove that the item has met the selected
   // threshold, which matters when this list informs destructive cleanup decisions.
-  const unwatchedCond = showEverything
-    ? isNull(items.lastViewedAt)
-    : and(
-      isNull(items.lastViewedAt),
-      isNotNull(items.addedAt),
-      unwatchedAddedOnOrAfter !== null
-        ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
-        : lt(items.addedAt, unwatchedAddedBefore),
-    );
+  const unwatchedCond = showEverything ? isNull(items.lastViewedAt) : and(
+    isNull(items.lastViewedAt),
+    isNotNull(items.addedAt),
+    unwatchedAddedOnOrAfter !== null
+      ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
+      : lt(items.addedAt, unwatchedAddedBefore),
+  );
 
   const staleCond = filter === 'unwatched'
     ? unwatchedCond
