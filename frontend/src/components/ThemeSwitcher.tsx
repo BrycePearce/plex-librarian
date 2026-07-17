@@ -10,6 +10,8 @@ const THEME_LABELS: Record<Theme, string> = {
   night: "Night",
   dracula: "Dracula",
   light: "Light",
+  nord: "Nord",
+  sunset: "Sunset",
 };
 
 export function ThemeSwitcher({ sidebar = false }: { sidebar?: boolean }) {

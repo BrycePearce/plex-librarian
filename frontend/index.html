@@ -23,6 +23,8 @@
         night: "oklch(20.768% 0.039 265.754)",
         dracula: "oklch(28.822% 0.022 277.508)",
         light: "oklch(100% 0 0)",
+        nord: "oklch(95.127% 0.007 260.731)",
+        sunset: "oklch(22% 0.019 237.69)",
       };
       let theme = "dark";
       try {
@@ -37,7 +39,10 @@
         "--boot-background",
         themeBackgrounds[theme],
       );
-      document.documentElement.style.colorScheme = theme === "light"
+      document.documentElement.style.colorScheme = [
+          "light",
+          "nord",
+        ].includes(theme)
         ? "light"
         : "dark";
     </script>

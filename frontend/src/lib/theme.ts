@@ -1,8 +1,15 @@
 import { useState } from "react";
 
 // Curated subset of daisyUI's built-in themes — the full ~30-theme list is overkill for
-// a dropdown. Two dark variants (this app defaults to dark) plus one light, one playful.
-export const THEMES = ["dark", "night", "dracula", "light"] as const;
+// a dropdown. Four distinct dark choices plus plain and muted light alternatives.
+export const THEMES = [
+  "dark",
+  "night",
+  "dracula",
+  "light",
+  "nord",
+  "sunset",
+] as const;
 export type Theme = typeof THEMES[number];
 
 const STORAGE_KEY = "theme";

@@ -4,7 +4,9 @@
     dark --default,
     night,
     dracula,
-    light;
+    light,
+    nord,
+    sunset;
 }
 
 @theme {
