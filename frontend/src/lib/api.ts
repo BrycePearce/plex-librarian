@@ -432,6 +432,7 @@ const SERVER_SCOPED_QUERY_ROOTS = [
   "media-removals",
   "users",
   "arr-integrations",
+  "qbittorrent-integrations",
 ];
 
 export function invalidateServerScopedQueries(qc: QueryClient): Promise<void> {

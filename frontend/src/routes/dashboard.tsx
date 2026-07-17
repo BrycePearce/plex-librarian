@@ -12,6 +12,7 @@ import {
   Clock,
   Copy,
   Database,
+  Download,
   Film,
   HardDrive,
   Info,
@@ -87,6 +88,8 @@ const cardVariants: Variants = {
 };
 
 const ARR_ONBOARDING_DISMISSED_KEY = "plex-librarian:arr-onboarding-dismissed";
+const QBITTORRENT_ONBOARDING_DISMISSED_KEY =
+  "plex-librarian:qbittorrent-onboarding-dismissed";
 const ARR_ONBOARDING_STORAGE = {
   serialize: (value: boolean) => value ? "1" : "0",
   deserialize: (value: string) => value === "1",
@@ -115,6 +118,12 @@ function DashboardInner() {
     false,
     ARR_ONBOARDING_STORAGE,
   );
+  const [qbittorrentOnboardingDismissed, setQbittorrentOnboardingDismissed] =
+    useLocalStorage(
+      QBITTORRENT_ONBOARDING_DISMISSED_KEY,
+      false,
+      ARR_ONBOARDING_STORAGE,
+    );
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
@@ -143,6 +152,10 @@ function DashboardInner() {
   const { data: arrSettings } = useQuery({
     queryKey: ["arr-integrations"],
     queryFn: api.arr.get,
+  });
+  const { data: qbittorrentSettings } = useQuery({
+    queryKey: ["qbittorrent-integrations"],
+    queryFn: api.qbittorrent.get,
   });
   const {
     data: mediaRemovalSummary,
@@ -239,9 +252,18 @@ function DashboardInner() {
     arrSettings.instances.length === 0 &&
     hasVideoLibraries &&
     (hasEverSyncedSuccessfully || hasAnyImportedItems);
+  const showQbittorrentOnboarding = !qbittorrentOnboardingDismissed &&
+    qbittorrentSettings !== undefined &&
+    qbittorrentSettings.instances.length === 0 &&
+    hasVideoLibraries &&
+    (hasEverSyncedSuccessfully || hasAnyImportedItems);
 
   function dismissArrOnboarding() {
     setArrOnboardingDismissed(true);
+  }
+
+  function dismissQbittorrentOnboarding() {
+    setQbittorrentOnboardingDismissed(true);
   }
 
   useEffect(() => {
@@ -369,6 +391,41 @@ function DashboardInner() {
                 className="arr-onboarding-dismiss"
                 onClick={dismissArrOnboarding}
                 aria-label="Don't show Sonarr and Radarr setup again"
+                title="Don't show again"
+              >
+                <X className="size-4" />
+                <span>Don&apos;t show again</span>
+              </button>
+            </motion.aside>
+          )}
+
+          {showQbittorrentOnboarding && (
+            <motion.aside
+              className="arr-onboarding-nudge"
+              variants={pageSectionVariants}
+              aria-label="qBittorrent setup"
+            >
+              <span className="arr-onboarding-icon">
+                <Download className="size-4" />
+              </span>
+              <span className="arr-onboarding-copy">
+                <strong>Using qBittorrent?</strong>
+                <span>
+                  Connect it to inspect torrent metadata and optionally remove
+                  verified download payloads during coordinated deletion.
+                </span>
+              </span>
+              <Link
+                to="/settings/sonarr-radarr"
+                className="btn btn-primary btn-sm arr-onboarding-setup"
+              >
+                Set up qBittorrent
+              </Link>
+              <button
+                type="button"
+                className="arr-onboarding-dismiss"
+                onClick={dismissQbittorrentOnboarding}
+                aria-label="Don't show qBittorrent setup again"
                 title="Don't show again"
               >
                 <X className="size-4" />

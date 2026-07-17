@@ -27,24 +27,45 @@
 .workspace-surface .table thead { color: color-mix(in oklab, var(--color-base-content) 42%, transparent); font-size: .65rem; letter-spacing: .035em; text-transform: uppercase; }
 .settings-page { margin-inline: 0; }
 .settings-sections { display: flex; flex-direction: column; gap: 1.15rem; }
-.settings-section { --settings-color: var(--color-primary); overflow: hidden; border-radius: 18px; }
+.settings-section { --settings-color: var(--color-primary); overflow: hidden; border-radius: 18px; transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease; }
 .settings-section-secondary { --settings-color: var(--color-secondary); }
 .settings-section-accent { --settings-color: var(--color-accent); }
+.settings-section:hover { border-color: color-mix(in oklab, var(--settings-color) 25%, transparent); background-color: color-mix(in oklab, var(--color-base-200) 77%, var(--settings-color) 3%); box-shadow: 0 9px 26px rgb(0 0 0 / .1), 0 0 0 1px color-mix(in oklab, var(--settings-color) 4%, transparent); }
+.settings-section:focus-within { border-color: color-mix(in oklab, var(--settings-color) 38%, transparent); box-shadow: 0 10px 28px rgb(0 0 0 / .12), 0 0 0 1px color-mix(in oklab, var(--settings-color) 8%, transparent); }
 .settings-section-header { display: flex; align-items: flex-start; gap: 1rem; padding: 1.25rem 1.5rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); background: linear-gradient(100deg, color-mix(in oklab, var(--settings-color) 7%, transparent), transparent 52%); }
-.settings-section-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--settings-color) 25%, transparent); border-radius: 13px; background: color-mix(in oklab, var(--settings-color) 13%, transparent); color: var(--settings-color); }
+.settings-section-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid color-mix(in oklab, var(--settings-color) 25%, transparent); border-radius: 13px; background: color-mix(in oklab, var(--settings-color) 13%, transparent); color: var(--settings-color); transition: transform 190ms cubic-bezier(.2,.8,.2,1), border-color 190ms ease, box-shadow 190ms ease, background-color 190ms ease; }
+.settings-section:is(:hover, :focus-within) .settings-section-icon { transform: translateY(-1px) scale(1.04); border-color: color-mix(in oklab, var(--settings-color) 40%, transparent); background-color: color-mix(in oklab, var(--settings-color) 17%, transparent); box-shadow: 0 7px 18px color-mix(in oklab, var(--settings-color) 15%, transparent); }
 .settings-section-header small { color: color-mix(in oklab, var(--settings-color) 75%, var(--color-base-content)); font-size: .6rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .settings-section-header h2 { margin-top: .1rem; font-size: 1rem; font-weight: 750; letter-spacing: -.02em; }
 .settings-section-header p { margin-top: .22rem; color: color-mix(in oklab, var(--color-base-content) 42%, transparent); font-size: .72rem; line-height: 1.5; }
 .settings-section-fields { padding: 0 1.5rem; }
-.settings-field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2rem; padding: 1.2rem 0; }
+.settings-field-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2rem; padding: 1.2rem 0; }
+.settings-field-row::before { content: ""; position: absolute; inset: 0 -1.5rem; opacity: 0; border-left: 2px solid transparent; background: linear-gradient(90deg, color-mix(in oklab, var(--settings-color) 8%, transparent), transparent 58%); pointer-events: none; transition: opacity 150ms ease, border-color 150ms ease; }
+.settings-field-row:is(:hover, :focus-within)::before { opacity: 1; border-left-color: color-mix(in oklab, var(--settings-color) 70%, transparent); }
+.settings-field-row > * { position: relative; z-index: 1; }
 .settings-field-row + .settings-field-row { border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
 .settings-field-row h3 { font-size: .84rem; font-weight: 700; letter-spacing: -.01em; }
 .settings-field-row p { max-width: 34rem; margin-top: .3rem; color: color-mix(in oklab, var(--color-base-content) 42%, transparent); font-size: .72rem; line-height: 1.5; }
 .settings-field-control { min-width: 13rem; }
+.settings-section .input:focus-visible { border-color: color-mix(in oklab, var(--settings-color) 65%, transparent); outline-color: color-mix(in oklab, var(--settings-color) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--settings-color) 10%, transparent); }
+.settings-save-status-visible { animation: settings-save-pop 260ms cubic-bezier(.2,.8,.2,1); }
+
+@keyframes settings-save-pop {
+  0% { transform: translateY(2px) scale(.94); }
+  70% { transform: translateY(-1px) scale(1.04); }
+  100% { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-section, .settings-section-icon, .settings-field-row::before { transition-duration: .01ms; }
+  .settings-section:is(:hover, :focus-within) .settings-section-icon { transform: none; }
+  .settings-save-status-visible { animation: none; }
+}
 
 @media (max-width: 640px) {
   .settings-section-header, .settings-section-fields { padding-right: 1rem; padding-left: 1rem; }
   .settings-field-row { grid-template-columns: 1fr; gap: .85rem; }
+  .settings-field-row::before { right: -1rem; left: -1rem; }
   .settings-field-control { min-width: 0; }
 }
 .activity-feed .polished-row + .polished-row { border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }

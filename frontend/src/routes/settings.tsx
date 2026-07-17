@@ -296,6 +296,10 @@ function DebouncedDaysInput(
       <span
         className={`flex items-center gap-1 text-xs text-success transition-opacity duration-300 ${
           justSaved && !update.isPending ? "opacity-100" : "opacity-0"
+        } ${
+          justSaved && !update.isPending
+            ? "settings-save-status-visible"
+            : ""
         }`}
       >
         <Check className="w-3.5 h-3.5" /> Saved
