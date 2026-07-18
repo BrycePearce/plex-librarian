@@ -7,6 +7,8 @@ import { secureHeaders } from 'hono/secure-headers';
 import auth from './features/auth/route.ts';
 import arr from './features/arr/route.ts';
 import duplicates from './features/duplicates/route.ts';
+import deletionOperations from './features/deletionOperations/route.ts';
+import { durableDeletionAdapter } from './features/deletionOperations/middleware.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
 import mediaRemovals from './features/mediaRemovals/route.ts';
@@ -35,6 +37,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
     }),
   );
   app.use('*', bodyLimit({ maxSize: 1 * 1024 * 1024 }));
+  app.use('/api/*', durableDeletionAdapter);
 
   app.onError((err, c) => {
     console.error(err);
@@ -46,6 +49,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/auth', auth);
   app.route('/api/integrations/arr', arr);
   app.route('/api/duplicates', duplicates);
+  app.route('/api/deletion-operations', deletionOperations);
   app.route('/api/events', events);
   app.route('/api/libraries', downloadCleanupPreview);
   app.route('/api/libraries', libraries);

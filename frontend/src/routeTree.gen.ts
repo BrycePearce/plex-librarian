@@ -17,6 +17,7 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr'
+import { Route as DeletionOperationsIdRouteImport } from './routes/deletion-operations.$id'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
 import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey'
@@ -61,6 +62,11 @@ const SettingsSonarrRadarrRoute = SettingsSonarrRadarrRouteImport.update({
   path: '/sonarr-radarr',
   getParentRoute: () => SettingsRoute,
 } as any)
+const DeletionOperationsIdRoute = DeletionOperationsIdRouteImport.update({
+  id: '/deletion-operations/$id',
+  path: '/deletion-operations/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   id: '/libraries/$key/stale',
   path: '/libraries/$key/stale',
@@ -87,6 +93,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
@@ -100,6 +107,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
@@ -114,6 +122,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteWithChildren
   '/setup': typeof SetupRoute
   '/users': typeof UsersRoute
+  '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
@@ -129,6 +138,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
@@ -142,6 +152,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
@@ -155,6 +166,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/users'
+    | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
@@ -169,6 +181,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   SetupRoute: typeof SetupRoute
   UsersRoute: typeof UsersRoute
+  DeletionOperationsIdRoute: typeof DeletionOperationsIdRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
   LibrariesKeyMoviesRatingKeyRoute: typeof LibrariesKeyMoviesRatingKeyRoute
   LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
@@ -232,6 +245,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSonarrRadarrRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/deletion-operations/$id': {
+      id: '/deletion-operations/$id'
+      path: '/deletion-operations/$id'
+      fullPath: '/deletion-operations/$id'
+      preLoaderRoute: typeof DeletionOperationsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/libraries/$key/stale': {
       id: '/libraries/$key/stale'
       path: '/libraries/$key/stale'
@@ -276,6 +296,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   SetupRoute: SetupRoute,
   UsersRoute: UsersRoute,
+  DeletionOperationsIdRoute: DeletionOperationsIdRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
   LibrariesKeyMoviesRatingKeyRoute: LibrariesKeyMoviesRatingKeyRoute,
   LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,

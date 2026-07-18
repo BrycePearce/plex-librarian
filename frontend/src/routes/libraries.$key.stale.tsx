@@ -16,12 +16,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { api, isNotFoundError } from "../lib/api";
-import type {
-  DeleteItemsResponse,
-  SortKey,
-  StaleItem,
-  StaleParams,
-} from "../lib/api";
+import type { SortKey, StaleItem, StaleParams } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
 import { queryKeys } from "../lib/queryKeys";
 import { useLibrarySync } from "../lib/useLibrarySync";
@@ -32,7 +27,6 @@ import { StaleTableSkeleton } from "../components/Skeletons";
 import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { HistorySyncWarning } from "../components/HistorySyncWarning";
-import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { useItemSelection } from "./-stale/useItemSelection";
 import { useScrollToOffset } from "./-stale/useScrollToOffset";
@@ -167,23 +161,7 @@ function StalePage() {
   const params = Route.useSearch();
   const navigate = Route.useNavigate();
 
-  // A page/sort/filter/grace-period change replaces the whole visible set with rows that
-  // weren't shown before, while deleting an item just removes it from the same set — only
-  // the latter should play the row exit fade. Defaults to `false` (plain keyed array, no
-  // AnimatePresence wrapper, see `StaleItemsTable`) because that's the common case, letting
-  // React swap old rows for new ones in a single synchronous commit with no exit animation
-  // lifecycle to race against the incoming rows.
-  //
-  // Flipped to `true` only right before a same-page deletion (see deleteMutation below), and
-  // back to `false` by the *next* navigation rather than immediately once the delete settles
-  // — resetting it right away would force an unwanted extra remount of the very rows that
-  // just finished settling (every row's file-size bar replays its grow-in animation on
-  // mount, so a wrapper toggle with no actual key change is very visible). Since `setParams`
-  // is the single choke point for every navigation, resetting there means the flip is a
-  // total no-op (bails out, no re-render) on every navigation that doesn't follow a delete.
-  const [animateRowRemoval, setAnimateRowRemoval] = useState(false);
   function setParams(updater: (prev: StaleParams) => StaleParams) {
-    setAnimateRowRemoval(false);
     void navigate({ search: updater, replace: true });
   }
 
@@ -220,7 +198,11 @@ function StalePage() {
           offset: nextOffset,
         }),
         queryFn: () =>
-          api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: nextOffset }),
+          api.libraries.stale(key, {
+            ...params,
+            limit: PAGE_SIZE,
+            offset: nextOffset,
+          }),
       });
     }
     const prevOffset = offset - PAGE_SIZE;
@@ -231,7 +213,11 @@ function StalePage() {
           offset: prevOffset,
         }),
         queryFn: () =>
-          api.libraries.stale(key, { ...params, limit: PAGE_SIZE, offset: prevOffset }),
+          api.libraries.stale(key, {
+            ...params,
+            limit: PAGE_SIZE,
+            offset: prevOffset,
+          }),
       });
     }
   }, [data, params, key, qc]);
@@ -268,17 +254,8 @@ function StalePage() {
   const pageItems = data?.items ?? [];
   const selection = useItemSelection(pageItems);
 
-  const [deleteResult, setDeleteResult] = useState<DeleteItemsResponse | null>(
-    null,
-  );
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const completedExternalStages = deleteResult?.outcomes.flatMap((outcome) =>
-    outcome.stages.filter((stage) =>
-      stage.system !== "local" &&
-      (stage.status === "deleted" || stage.status === "already-absent")
-    )
-  ) ?? [];
 
   const deleteMutation = useDeleteItems([
     queryKeys.stale.library(key),
@@ -292,7 +269,6 @@ function StalePage() {
   );
 
   function openConfirm(items: StaleItem[]) {
-    setDeleteResult(null);
     setConfirmItems(items);
     dialogRef.current?.showModal();
   }
@@ -511,60 +487,6 @@ function StalePage() {
               />
             )}
 
-            {deleteResult && (
-              <DeleteResultAlert
-                variant={deleteResult.failed.length > 0 ||
-                    deleteResult.partial.length > 0
-                  ? "warning"
-                  : "success"}
-                autoDismiss={deleteResult.failed.length === 0 &&
-                  deleteResult.partial.length === 0}
-                onDismiss={() => setDeleteResult(null)}
-              >
-                Deleted {deleteResult.deleted.length} item
-                {deleteResult.deleted.length === 1 ? "" : "s"}.
-                {deleteResult.partial.length > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.partial.length}{" "}
-                    partially completed; files were removed from{" "}
-                    {deleteResult.partial
-                      .flatMap((item) =>
-                        item.deletedInstances.map(
-                          (instance) => instance.instanceName,
-                        )
-                      )
-                      .join(", ")}
-                    , but failed in {deleteResult.partial
-                      .flatMap((item) =>
-                        item.failedInstances.map(
-                          (instance) =>
-                            `${instance.instanceName}: ${instance.error}`,
-                        )
-                      )
-                      .join("; ")}
-                    . Retry to reconcile the remaining instances.
-                  </>
-                )}
-                {deleteResult.failed.length > 0 && (
-                  <>
-                    {" "}
-                    {deleteResult.failed.length} failed:{" "}
-                    {deleteResult.failed.map((f) => f.error).join("; ")}
-                  </>
-                )}
-                {completedExternalStages.length > 0 &&
-                  (deleteResult.failed.length > 0 || deleteResult.partial.length > 0) && (
-                  <>
-                    {" "}
-                    Already completed: {completedExternalStages.map((stage) =>
-                      `${stage.system} (${stage.target})`
-                    ).join(", ")}.
-                  </>
-                )}
-              </DeleteResultAlert>
-            )}
-
             <CollectionToolbar
               eyebrow="Content review"
               title="Stale items"
@@ -604,7 +526,6 @@ function StalePage() {
                 onToggle={selection.toggleOne}
                 onToggleAll={selection.toggleAllOnPage}
                 onDeleteOne={(item) => openConfirm([item])}
-                animateRowRemoval={animateRowRemoval}
                 hasAnimatedIn={hasAnimatedIn}
                 historySyncedAt={data?.historySyncedAt ?? null}
                 isSyncing={isSyncing}
@@ -636,10 +557,11 @@ function StalePage() {
             },
             {
               onSuccess: (res) => {
-                selection.remove(res.deleted);
-                setDeleteResult(res);
                 dialogRef.current?.close();
-                setAnimateRowRemoval(true);
+                void navigate({
+                  to: "/deletion-operations/$id",
+                  params: { id: res.operationId },
+                });
               },
             },
           )}

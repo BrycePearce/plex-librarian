@@ -1,4 +1,3 @@
-import { AnimatePresence } from "motion/react";
 import { ArrowDown, ArrowUp, SearchX, Sparkles } from "lucide-react";
 import type { SortKey, StaleItem, StaleParams } from "../../lib/api";
 import { StaleItemRow } from "./StaleItemRow";
@@ -49,7 +48,6 @@ export function StaleItemsTable({
   onToggle,
   onToggleAll,
   onDeleteOne,
-  animateRowRemoval,
   hasAnimatedIn,
   historySyncedAt,
   isSyncing,
@@ -63,7 +61,6 @@ export function StaleItemsTable({
   onToggle: (item: StaleItem) => void;
   onToggleAll: () => void;
   onDeleteOne: (item: StaleItem) => void;
-  animateRowRemoval: boolean;
   hasAnimatedIn: boolean;
   historySyncedAt: number | null;
   isSyncing: boolean;
@@ -155,16 +152,7 @@ export function StaleItemsTable({
           </tr>
         </thead>
         <tbody>
-          {
-            // Plain keyed array by default, only wrapped in AnimatePresence right before a
-            // same-page deletion — see `animateRowRemoval` in the stale page for why: even
-            // with a zero-duration exit variant, AnimatePresence keeps an outgoing element
-            // mounted until its exit animation's completion callback fires (a tick later,
-            // not synchronously) while incoming elements mount immediately, so old and new
-            // rows would briefly coexist in the tbody on every page/sort/filter change. A
-            // plain array lets React swap keys in one synchronous commit instead.
-            animateRowRemoval ? <AnimatePresence>{rows}</AnimatePresence> : rows
-          }
+          {rows}
         </tbody>
       </table>
       {items.length === 0 && (

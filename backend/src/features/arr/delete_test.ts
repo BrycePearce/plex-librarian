@@ -107,6 +107,19 @@ Deno.test('a retry reconciles a target absent after a durably recorded attempt',
   );
 });
 
+Deno.test('desired-state replay accepts an Arr record that was already absent', async () => {
+  const absent = (() => Promise.resolve(Response.json([]))) as typeof fetch;
+  assertEquals(
+    await deleteThroughArr(movie, [target('primary', absent)], {
+      acceptAlreadyAbsent: true,
+    }),
+    {
+      deletedInstances: [{ instanceId: 7, instanceName: 'primary', alreadyAbsent: true }],
+      failures: [],
+    },
+  );
+});
+
 Deno.test('a delete 404 is idempotent success after lookup', async () => {
   const disappears = ((input: string | URL | Request) =>
     Promise.resolve(

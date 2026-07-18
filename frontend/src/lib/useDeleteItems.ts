@@ -1,8 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { api } from "./api";
-import type { DeleteItemsResponse } from "./api";
-import { partitionDeletionRatingKeys } from "./deletionPlan.ts";
 
 // Shared between the stale page's bulk whole-item delete and the duplicates page's
 // "delete this movie entirely" escalation (see VersionPickerDialog) — both ultimately
@@ -16,52 +14,23 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
 
   return useMutation({
     mutationFn: async (
-      { libraryKey, ratingKeys, mode, cleanupDownloads, coordinatedRatingKeys }: {
-        libraryKey: string;
-        ratingKeys: string[];
-        mode?: "coordinated" | "plex-only";
-        cleanupDownloads?: boolean;
-        coordinatedRatingKeys?: string[];
-      },
+      { libraryKey, ratingKeys, mode, cleanupDownloads, coordinatedRatingKeys }:
+        {
+          libraryKey: string;
+          ratingKeys: string[];
+          mode?: "coordinated" | "plex-only";
+          cleanupDownloads?: boolean;
+          coordinatedRatingKeys?: string[];
+        },
     ) => {
-      if (coordinatedRatingKeys === undefined) {
-        if (mode === undefined) {
-          throw new Error("Deletion mode must be selected explicitly");
-        }
-        return await api.libraries.deleteItems(
-          libraryKey,
-          ratingKeys,
-          mode,
-          cleanupDownloads,
-        );
-      }
-
-      const { coordinated, plexOnly } = partitionDeletionRatingKeys(
+      const coordinated = coordinatedRatingKeys ??
+        (mode === "coordinated" ? ratingKeys : []);
+      return await api.libraries.deleteItems(
+        libraryKey,
         ratingKeys,
-        coordinatedRatingKeys,
+        coordinated,
+        cleanupDownloads,
       );
-      const results: DeleteItemsResponse[] = [];
-      if (coordinated.length > 0) {
-        results.push(
-          await api.libraries.deleteItems(
-            libraryKey,
-            coordinated,
-            "coordinated",
-            cleanupDownloads,
-          ),
-        );
-      }
-      if (plexOnly.length > 0) {
-        results.push(
-          await api.libraries.deleteItems(libraryKey, plexOnly, "plex-only"),
-        );
-      }
-      return {
-        deleted: results.flatMap((result) => result.deleted),
-        partial: results.flatMap((result) => result.partial),
-        failed: results.flatMap((result) => result.failed),
-        outcomes: results.flatMap((result) => result.outcomes),
-      } satisfies DeleteItemsResponse;
     },
     onSuccess: () => {
       for (const queryKey of invalidateQueryKeys) {

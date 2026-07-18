@@ -27,6 +27,7 @@ export interface ArrDeleteResult {
 
 export interface ArrDeleteOptions {
   attemptedInstanceIds?: ReadonlySet<number>;
+  acceptAlreadyAbsent?: boolean;
   onAttemptStarting?: (target: ArrDeleteTarget) => Promise<void>;
 }
 
@@ -154,7 +155,9 @@ export async function deleteThroughArr(
     }
     if (record) {
       matches.push({ target, mediaId: record.id });
-    } else if (options.attemptedInstanceIds?.has(target.instanceId)) {
+    } else if (
+      options.acceptAlreadyAbsent || options.attemptedInstanceIds?.has(target.instanceId)
+    ) {
       // This target was durably marked immediately before an earlier DELETE. If it is
       // now absent, the desired state was reached even if the response was lost.
       result.deletedInstances.push({

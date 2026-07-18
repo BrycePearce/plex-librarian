@@ -4,9 +4,8 @@ import type {
   ArrIntegrationSettings,
   AuthStatus,
   CancelPendingInvitationResponse,
-  DeleteItemsResponse,
-  DeleteMediaVersionResponse,
-  DeleteMediaVersionsResponse,
+  DeletionOperation,
+  DeletionOperationCreated,
   DownloadCleanupPreviewResponse,
   DuplicatesResponse,
   LibrariesResponse,
@@ -44,8 +43,8 @@ export type {
   AuthStatus,
   CancelPendingInvitationResponse,
   DeleteItemsResponse,
-  DeleteMediaVersionResponse,
-  DeleteMediaVersionsResponse,
+  DeletionOperation,
+  DeletionOperationCreated,
   DownloadCleanupJob,
   DownloadCleanupPreviewItem,
   DownloadCleanupPreviewResponse,
@@ -222,14 +221,19 @@ export const api = {
     deleteItems: (
       key: string,
       ratingKeys: string[],
-      mode: "coordinated" | "plex-only",
+      coordinatedRatingKeys: string[],
       cleanupDownloads = false,
     ) =>
-      apiFetch<DeleteItemsResponse>(
+      apiFetch<DeletionOperationCreated>(
         `/libraries/${encodeURIComponent(key)}/items`,
         {
           method: "DELETE",
-          body: JSON.stringify({ ratingKeys, mode, cleanupDownloads }),
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            ratingKeys,
+            coordinatedRatingKeys,
+            cleanupDownloads,
+          }),
         },
       ),
     downloadCleanupPreview: (key: string, ratingKeys: string[]) =>
@@ -254,9 +258,12 @@ export const api = {
       return apiFetch<DuplicatesResponse>(`/duplicates?${q}`);
     },
     deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
-      apiFetch<DeleteMediaVersionResponse>(
+      apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,
-        { method: "DELETE" },
+        {
+          method: "DELETE",
+          body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+        },
       ),
     versionDeletionPreview: (
       mediaType: "movie" | "episode",
@@ -275,21 +282,59 @@ export const api = {
       deleteFromArr: boolean,
       cleanupDownloads: boolean,
     ) =>
-      apiFetch<DeleteMediaVersionsResponse>(
+      apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media`,
         {
           method: "DELETE",
-          body: JSON.stringify({ mediaIds, deleteFromArr, cleanupDownloads }),
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            mediaIds,
+            deleteFromArr,
+            cleanupDownloads,
+          }),
         },
       ),
     deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
-      apiFetch<DeleteMediaVersionResponse>(
+      apiFetch<DeletionOperationCreated>(
         `/duplicates/episodes/${
           encodeURIComponent(
             episodeRatingKey,
           )
         }/media/${mediaId}`,
-        { method: "DELETE" },
+        {
+          method: "DELETE",
+          body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+        },
+      ),
+    deleteEpisodeMediaVersions: (
+      episodeRatingKey: string,
+      mediaIds: number[],
+    ) =>
+      apiFetch<DeletionOperationCreated>(
+        `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            mediaIds,
+          }),
+        },
+      ),
+  },
+  deletionOperations: {
+    get: (id: string) =>
+      apiFetch<DeletionOperation>(
+        `/deletion-operations/${encodeURIComponent(id)}`,
+      ),
+    cancel: (id: string) =>
+      apiFetch<DeletionOperation>(
+        `/deletion-operations/${encodeURIComponent(id)}/cancel`,
+        { method: "POST" },
+      ),
+    retry: (id: string) =>
+      apiFetch<DeletionOperation>(
+        `/deletion-operations/${encodeURIComponent(id)}/retry`,
+        { method: "POST" },
       ),
   },
   settings: {

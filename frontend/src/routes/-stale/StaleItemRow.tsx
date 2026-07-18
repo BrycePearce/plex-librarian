@@ -6,9 +6,7 @@ import { formatDate, formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
 import "../../components/dataSurfaces.css";
 
-// `hidden`/`exit` play on delete (rows are only ever wrapped in AnimatePresence for a
-// same-page deletion — see `animateRowRemoval` in the stale page) and, when `animateIn` is
-// set, on first mount too.
+// `hidden` plays only on first mount, when `animateIn` is set.
 // Opacity-only, deliberately no `y` offset: a translateY here once caused the table's
 // `overflow-x-auto` wrapper to briefly grow its own vertical scrollbar mid-animation (it
 // implicitly computes `overflow-y: auto` from having `overflow-x: auto` set at all), which
@@ -16,15 +14,10 @@ import "../../components/dataSurfaces.css";
 // barely-perceptible slide effect.
 // The entrance transition (with its index-driven stagger delay) is passed as a plain prop
 // rather than baked into the variants, since motion's dynamic (function) variants don't
-// play well with a nested `transition` field under this version's types — the `exit`
-// variant's own `transition` still overrides it for the delete animation.
+// play well with a nested `transition` field under this version's types.
 const rowVariants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1 },
-  exit: {
-    opacity: 0,
-    transition: { duration: 0.15, ease: "easeIn" as const },
-  },
 };
 
 // A relative "how overdue" scale for the whole displayed set, not an absolute judgment —
@@ -100,7 +93,6 @@ export function StaleItemRow({
       variants={rowVariants}
       initial={animateIn ? "hidden" : false}
       animate="visible"
-      exit="exit"
       transition={animateIn
         ? {
           duration: 0.16,

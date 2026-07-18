@@ -87,6 +87,60 @@ Deno.test('item sync requests external GUIDs without adding them to episode stre
   ]);
 });
 
+Deno.test('metadata identity captures immutable item, ancestry, and media fields', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        Metadata: [{
+          ratingKey: 'episode-1',
+          title: 'Pilot',
+          type: 'episode',
+          librarySectionID: 7,
+          grandparentRatingKey: 'show-1',
+          parentRatingKey: 'season-1',
+          parentIndex: 1,
+          index: 2,
+          Guid: [{ id: 'tvdb://1234' }],
+          Media: [{
+            id: 44,
+            videoResolution: '1080',
+            bitrate: 8000,
+            videoCodec: 'h264',
+            container: 'mkv',
+          }],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  assertEquals(await client.metadataIdentity('episode-1'), {
+    ratingKey: 'episode-1',
+    title: 'Pilot',
+    type: 'episode',
+    librarySectionId: '7',
+    tmdbId: null,
+    tvdbId: 1234,
+    parentRatingKey: 'season-1',
+    grandparentRatingKey: 'show-1',
+    seasonIndex: 1,
+    index: 2,
+    media: [{
+      mediaId: 44,
+      videoResolution: '1080',
+      bitrate: 8000,
+      videoCodec: 'h264',
+      container: 'mkv',
+      fileSize: null,
+    }],
+  });
+});
+
+Deno.test('metadata identity returns null only when Plex confirms absence', async () => {
+  const mockFetch = (() => Promise.resolve(new Response(null, { status: 404 }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  assertEquals(await client.metadataIdentity('gone'), null);
+});
+
 Deno.test('media path preview preserves and deduplicates multi-version movie Part paths', async () => {
   const urls: string[] = [];
   const mockFetch = ((input: string | URL | Request) => {

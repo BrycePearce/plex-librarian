@@ -5,6 +5,7 @@ import { failAllPendingSyncs } from './features/sync/syncLog.ts';
 import { startScheduler, startupSyncIfStale } from './features/sync/scheduler.ts';
 import { startPlexSessionMonitor } from './features/users/sessionMonitor.ts';
 import { createPlexClient, PlexConfigError } from './integrations/plex/index.ts';
+import { startDeletionWorker } from './features/deletionOperations/service.ts';
 
 await runMigrations(
   Deno.env.get('DB_PATH') ?? './data/librarian.db',
@@ -17,6 +18,9 @@ await failAllPendingSyncs();
 void startupSyncIfStale();
 startScheduler();
 startPlexSessionMonitor();
+
+const app = createApp();
+startDeletionWorker();
 
 // Check Plex Pass availability in the background — don't block server startup
 void (async () => {
@@ -41,4 +45,4 @@ void (async () => {
 const port = parseInt(Deno.env.get('PORT') ?? '', 10) || 8080;
 console.log(`plex-librarian listening on http://localhost:${port}`);
 
-Deno.serve({ port }, createApp().fetch);
+Deno.serve({ port }, app.fetch);

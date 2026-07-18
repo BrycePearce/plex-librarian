@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import { settings } from '../../db/schema.ts';
 import {
   buildPlexHeaders,
@@ -13,6 +13,7 @@ import {
   resolveActiveServer,
 } from '../../integrations/plex/index.ts';
 import { triggerFullSync } from '../sync/manager.ts';
+import { setActiveServerIfDeletionIdle } from '../deletionOperations/coordination.ts';
 import { PlexConnectionError, selectReachablePlexUrl } from './serverConnection.ts';
 
 const router = new Hono();
@@ -194,9 +195,13 @@ router.post('/plex/server', async (c) => {
     url: serverUrl,
     accessToken: body.accessToken,
   });
-  await db.update(settings)
-    .set({ activeServerId: serverId })
-    .where(eq(settings.id, 1));
+  const switched = withTransaction((client) => setActiveServerIfDeletionIdle(client, serverId));
+  if (!switched) {
+    return c.json(
+      { error: 'wait for the active deletion operation before switching servers' },
+      409,
+    );
+  }
 
   clearPlexClientCache();
   // The server connection itself is already committed above — a failure to kick off the
@@ -222,14 +227,21 @@ router.post('/plex/server', async (c) => {
 // row (and everything synced under it) is left untouched — reconnecting to the same
 // server later, even after connecting to others in between, restores it as-is.
 // No-op when credentials come from env vars (can't clear those at runtime).
-router.delete('/plex', async (c) => {
+router.delete('/plex', (c) => {
   if (Deno.env.get('PLEX_URL') || Deno.env.get('PLEX_TOKEN')) {
     return c.json({
       error: 'credentials are set via environment variables and cannot be cleared here',
     }, 409);
   }
 
-  await disconnectActiveServer();
+  const disconnected = withTransaction((client) => setActiveServerIfDeletionIdle(client, null));
+  if (!disconnected) {
+    return c.json(
+      { error: 'wait for the active deletion operation before disconnecting Plex' },
+      409,
+    );
+  }
+  clearPlexClientCache();
 
   return c.json({ ok: true });
 });

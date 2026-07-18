@@ -56,6 +56,7 @@ export interface PlexRawMetadata {
   parentTitle?: string; // season title
   grandparentRatingKey?: string; // show ratingKey
   index?: number; // episode number within season — only present on type=4 responses, like parentIndex
+  librarySectionID?: number | string;
   Media?: Array<{
     id?: number;
     videoResolution?: string;
@@ -63,6 +64,27 @@ export interface PlexRawMetadata {
     videoCodec?: string;
     container?: string;
     Part?: Array<{ size?: number; file?: string }>;
+  }>;
+}
+
+export interface PlexMetadataIdentity {
+  ratingKey: string;
+  title: string;
+  type: string;
+  librarySectionId: string | null;
+  tmdbId: number | null;
+  tvdbId: number | null;
+  parentRatingKey: string | null;
+  grandparentRatingKey: string | null;
+  seasonIndex: number | null;
+  index: number | null;
+  media: Array<{
+    mediaId: number;
+    videoResolution: string | null;
+    bitrate: number | null;
+    videoCodec: string | null;
+    container: string | null;
+    fileSize: number | null;
   }>;
 }
 

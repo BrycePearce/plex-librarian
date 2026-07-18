@@ -589,6 +589,107 @@ export const syncLog = sqliteTable(
   }),
 );
 
+export const deletionOperations = sqliteTable(
+  'deletion_operations',
+  {
+    id: text('id').primaryKey(),
+    clientRequestId: text('client_request_id').notNull(),
+    requestHash: text('request_hash').notNull(),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    libraryKey: text('library_key').notNull(),
+    kind: text('kind', { enum: ['whole_item', 'movie_version', 'episode_version'] }).notNull(),
+    status: text('status', {
+      enum: ['queued', 'running', 'waiting_retry', 'completed', 'needs_attention', 'cancelled'],
+    }).notNull().default('queued'),
+    targetCount: integer('target_count').notNull(),
+    completedCount: integer('completed_count').notNull().default(0),
+    failedCount: integer('failed_count').notNull().default(0),
+    logicalSizeRemoved: integer('logical_size_removed').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    createdAt: integer('created_at').notNull(),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    requestUnique: uniqueIndex('deletion_operations_request_unique').on(
+      table.serverId,
+      table.clientRequestId,
+    ),
+    workIdx: index('deletion_operations_work_idx').on(
+      table.status,
+      table.nextRetryAt,
+      table.createdAt,
+    ),
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+  }),
+);
+
+export const deletionTargets = sqliteTable(
+  'deletion_targets',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    operationId: text('operation_id').notNull().references(() => deletionOperations.id, {
+      onDelete: 'cascade',
+    }),
+    ordinal: integer('ordinal').notNull(),
+    targetKind: text('target_kind', { enum: ['whole_item', 'movie_version', 'episode_version'] })
+      .notNull(),
+    targetKey: text('target_key').notNull(),
+    title: text('title').notNull(),
+    snapshot: text('snapshot').notNull(),
+    status: text('status', {
+      enum: ['queued', 'running', 'waiting_retry', 'completed', 'needs_attention', 'cancelled'],
+    }).notNull().default('queued'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    error: text('error'),
+    logicalSize: integer('logical_size'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    ordinalUnique: uniqueIndex('deletion_targets_operation_ordinal_unique').on(
+      table.operationId,
+      table.ordinal,
+    ),
+    workIdx: index('deletion_targets_work_idx').on(
+      table.status,
+      table.nextRetryAt,
+      table.operationId,
+      table.ordinal,
+    ),
+  }),
+);
+
+export const mediaVersionReservations = sqliteTable(
+  'media_version_reservations',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    mediaKind: text('media_kind', { enum: ['movie', 'episode'] }).notNull(),
+    mediaId: integer('media_id').notNull(),
+    ratingKey: text('rating_key').notNull(),
+    operationId: text('operation_id').notNull().references(() => deletionOperations.id, {
+      onDelete: 'cascade',
+    }),
+    targetId: integer('target_id').notNull().references(() => deletionTargets.id, {
+      onDelete: 'cascade',
+    }),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.mediaKind, table.mediaId] }),
+    ratingIdx: index('media_version_reservations_rating_idx').on(
+      table.serverId,
+      table.mediaKind,
+      table.ratingKey,
+    ),
+  }),
+);
+
 // General admin activity log — one row per meaningful action (a completed sync, a
 // batch deletion, etc.), not per underlying DB write. Deliberately separate from
 // sync_log: sync_log has typed columns and in-flight progress plumbing for the
@@ -604,7 +705,14 @@ export const events = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     serverId: integer('server_id').references(() => servers.id),
     type: text('type', {
-      enum: ['sync.completed', 'sync.failed', 'items.deleted', 'media.deleted', 'user.removed'],
+      enum: [
+        'sync.completed',
+        'sync.failed',
+        'items.deleted',
+        'media.deleted',
+        'deletion.completed',
+        'user.removed',
+      ],
     })
       .notNull(),
     payload: text('payload'), // JSON: event-specific detail, see EventType in shared/types.ts

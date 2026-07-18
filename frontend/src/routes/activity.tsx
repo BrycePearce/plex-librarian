@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -112,14 +112,14 @@ function ActivityPage() {
   );
 }
 
-// EventType is a closed union with all 4 members covered below, so these lookups can
-// never miss — TypeScript's Record<EventType, X> already fails the build if a 5th
-// EventType is ever added without a matching entry here.
+// EventType is a closed union, so these lookups cannot miss: TypeScript's
+// Record<EventType, X> fails the build when a new type lacks a matching entry.
 const EVENT_ICON: Record<EventType, typeof CheckCircle> = {
   "sync.completed": CheckCircle,
   "sync.failed": AlertCircle,
   "items.deleted": Trash2,
   "media.deleted": Copy,
+  "deletion.completed": Trash2,
   "user.removed": UserX,
 };
 
@@ -128,6 +128,7 @@ const EVENT_ICON_CLASS: Record<EventType, string> = {
   "sync.failed": "text-error",
   "items.deleted": "text-warning",
   "media.deleted": "text-warning",
+  "deletion.completed": "text-warning",
   "user.removed": "text-error",
 };
 
@@ -182,6 +183,18 @@ function describeEvent(
         libraryLabel(libraryKey, titleByKey)
       }`;
     }
+    case "deletion.completed": {
+      const { libraryKey, completedCount, failedCount, cancelledCount } =
+        event.payload;
+      const label = libraryLabel(libraryKey, titleByKey);
+      const suffix = [
+        failedCount > 0 ? `${failedCount} failed` : null,
+        cancelledCount > 0 ? `${cancelledCount} cancelled` : null,
+      ].filter(Boolean).join(", ");
+      return `Deletion finished for ${label}: ${completedCount} completed${
+        suffix ? ` (${suffix})` : ""
+      }`;
+    }
     case "user.removed": {
       const { username } = event.payload;
       return `Removed ${username}'s access to this server`;
@@ -199,9 +212,11 @@ function EventRow(
   // just a full 0-deleted wipeout — give it the same error styling as sync.failed
   // instead of the neutral "items deleted" warning treatment, so a half-failed delete
   // isn't visually indistinguishable from a fully successful one.
-  const hasFailedDelete = event.type === "items.deleted" &&
+  const hasFailedDelete = (event.type === "items.deleted" &&
     !!event.payload &&
-    (event.payload.failedCount > 0 || (event.payload.partialCount ?? 0) > 0);
+    (event.payload.failedCount > 0 || (event.payload.partialCount ?? 0) > 0)) ||
+    (event.type === "deletion.completed" && !!event.payload &&
+      (event.payload.failedCount > 0 || event.payload.cancelledCount > 0));
   const Icon = hasFailedDelete ? AlertCircle : EVENT_ICON[event.type];
   const iconClass = hasFailedDelete
     ? "text-error"
@@ -213,9 +228,12 @@ function EventRow(
     ? event.payload.fileSizeFreed
     : event.type === "media.deleted" && event.payload
     ? event.payload.fileSizeFreed
+    : event.type === "deletion.completed" && event.payload &&
+        event.payload.completedCount > 0
+    ? event.payload.logicalSizeRemoved
     : undefined;
 
-  return (
+  const row = (
     <div className="polished-row">
       <div className="flex items-center gap-3 px-4 py-3.5">
         <Icon className={`w-4 h-4 shrink-0 ${iconClass}`} />
@@ -236,4 +254,17 @@ function EventRow(
       </div>
     </div>
   );
+  if (event.type === "deletion.completed" && event.payload?.operationId) {
+    return (
+      <Link
+        to="/deletion-operations/$id"
+        params={{ id: event.payload.operationId }}
+        className="block rounded-lg focus-visible:outline-2 focus-visible:outline-primary"
+        aria-label="Review deletion operation"
+      >
+        {row}
+      </Link>
+    );
+  }
+  return row;
 }

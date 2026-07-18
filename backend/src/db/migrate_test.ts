@@ -24,11 +24,16 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'arr_instances_server_type_url_unique',
         'arr_path_mappings',
         'arr_path_mappings_unique',
+        'deletion_operations',
+        'deletion_operations_request_unique',
+        'deletion_targets',
         'download_file_delete_attempts',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'media_removals',
         'media_removals_operation_target_unique',
+        'media_version_reservations',
+        'media_version_reservations_rating_idx',
         'qbittorrent_instances',
         'qbittorrent_instances_server_url_unique',
         'torrent_delete_attempts',
@@ -42,11 +47,16 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'arr_instances_server_type_url_unique',
         'arr_path_mappings',
         'arr_path_mappings_unique',
+        'deletion_operations',
+        'deletion_operations_request_unique',
+        'deletion_targets',
         'download_file_delete_attempts',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'media_removals',
         'media_removals_operation_target_unique',
+        'media_version_reservations',
+        'media_version_reservations_rating_idx',
         'qbittorrent_instances',
         'qbittorrent_instances_server_url_unique',
         'torrent_delete_attempts',
@@ -67,6 +77,12 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       ['source', 'session_key', 'rating_key'],
     );
     observationColumns.finalize();
+    const targetColumns = sqlite.prepare("PRAGMA table_info('deletion_targets')");
+    assertEquals(
+      targetColumns.values().map((column) => column[1]).includes('ambiguous'),
+      false,
+    );
+    targetColumns.finalize();
     sqlite.close();
   } finally {
     // @db/sqlite's native Windows handle can outlive close() briefly; the OS temp

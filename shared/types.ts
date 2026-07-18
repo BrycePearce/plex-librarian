@@ -272,6 +272,57 @@ export interface DuplicatesResponse {
 
 export interface DeleteMediaVersionResponse {
   fileSizeFreed: number;
+  removedByApp: boolean;
+}
+
+export type DeletionOperationStatus =
+  | "queued"
+  | "running"
+  | "waiting_retry"
+  | "completed"
+  | "needs_attention"
+  | "cancelled";
+
+export interface DeletionOperationCreated {
+  operationId: string;
+  status: DeletionOperationStatus;
+}
+
+export interface DeletionOperationTarget {
+  id: number;
+  ordinal: number;
+  targetKind: "whole_item" | "movie_version" | "episode_version";
+  targetKey: string;
+  title: string;
+  status:
+    | "queued"
+    | "running"
+    | "waiting_retry"
+    | "completed"
+    | "needs_attention"
+    | "cancelled";
+  attemptCount: number;
+  nextRetryAt: number | null;
+  error: string | null;
+  logicalSize: number | null;
+}
+
+export interface DeletionOperation {
+  id: string;
+  clientRequestId: string;
+  libraryKey: string;
+  kind: "whole_item" | "movie_version" | "episode_version";
+  status: DeletionOperationStatus;
+  targetCount: number;
+  completedCount: number;
+  failedCount: number;
+  logicalSizeRemoved: number;
+  nextRetryAt: number | null;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  updatedAt: number;
+  targets: DeletionOperationTarget[];
 }
 
 export interface MediaVersionPathPreview {
@@ -300,6 +351,7 @@ export interface VersionDeletionPreviewResponse {
 
 export interface DeleteMediaVersionsResponse {
   deletedMediaIds: number[];
+  removedByAppMediaIds: number[];
   failed: Array<{ mediaId: number; error: string }>;
   fileSizeFreed: number;
   outcomes: DeletionStageOutcome[];
@@ -519,6 +571,7 @@ export interface DownloadCleanupPreviewResponse {
 
 export interface DeleteItemsResponse {
   deleted: string[];
+  removedByAppRatingKeys: string[];
   partial: Array<{
     ratingKey: string;
     deletedInstances: Array<
@@ -587,7 +640,20 @@ export type EventType =
   | "sync.failed"
   | "items.deleted"
   | "media.deleted"
+  | "deletion.completed"
   | "user.removed";
+
+export interface DeletionCompletedPayload {
+  operationId: string;
+  libraryKey: string;
+  kind: "whole_item" | "movie_version" | "episode_version";
+  status: "completed" | "needs_attention" | "cancelled";
+  targetCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  logicalSizeRemoved: number;
+}
 
 export interface SyncCompletedPayload {
   syncId: number;
@@ -658,6 +724,12 @@ export type ActivityEvent =
     id: number;
     type: "media.deleted";
     payload: MediaDeletedPayload | null;
+    createdAt: number;
+  }
+  | {
+    id: number;
+    type: "deletion.completed";
+    payload: DeletionCompletedPayload | null;
     createdAt: number;
   }
   | {

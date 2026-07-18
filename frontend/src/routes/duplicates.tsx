@@ -1,14 +1,12 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { BadgeCheck, Copy } from "lucide-react";
 import { api } from "../lib/api";
 import type { DuplicateGroup } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
-import { formatKilobytes } from "../lib/format";
 import { useDeleteItems } from "../lib/useDeleteItems";
 import { ErrorAlert } from "../components/ErrorAlert";
-import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog";
@@ -51,7 +49,6 @@ export const Route = createFileRoute("/duplicates")({
 function DuplicatesPage() {
   const { type, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
-  const qc = useQueryClient();
 
   const [offset, setOffset] = useState(0);
 
@@ -73,18 +70,6 @@ function DuplicatesPage() {
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
-  const [deleteResult, setDeleteResult] = useState<
-    {
-      mode: "versions" | "whole-item";
-      title?: string;
-      deletedCount: number;
-      partialCount: number;
-      failedCount: number;
-      fileSizeFreed: number;
-      errors: string[];
-      completedStages: string[];
-    } | null
-  >(null);
   const versionDialogRef = useRef<HTMLDialogElement>(null);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
@@ -113,63 +98,24 @@ function DuplicatesPage() {
       cleanupDownloads: boolean;
     }) => {
       if (group.mediaType === "movie") {
-        const response = await api.duplicates.deleteMovieMediaVersions(
+        return await api.duplicates.deleteMovieMediaVersions(
           group.ratingKey,
           mediaIds,
           deleteFromArr,
           cleanupDownloads,
         );
-        return {
-          mode: "versions" as const,
-          deletedCount: response.deletedMediaIds.length,
-          partialCount:
-            response.deletedMediaIds.length > 0 && response.failed.length > 0
-              ? 1
-              : 0,
-          failedCount: response.failed.length,
-          fileSizeFreed: response.fileSizeFreed,
-          errors: response.failed.map((failure) => failure.error),
-          completedStages: response.outcomes
-            .filter((stage) => stage.status !== "failed")
-            .map((stage) => `${stage.system} (${stage.target})`),
-        };
       }
-      let deletedCount = 0;
-      let fileSizeFreed = 0;
-      const errors: string[] = [];
-      for (const mediaId of mediaIds) {
-        try {
-          const res = await api.duplicates.deleteEpisodeMediaVersion(
-            group.episodeRatingKey,
-            mediaId,
-          );
-          deletedCount++;
-          fileSizeFreed += res.fileSizeFreed;
-        } catch (err) {
-          errors.push(err instanceof Error ? err.message : "Delete failed");
-        }
-      }
-      return {
-        mode: "versions" as const,
-        deletedCount,
-        partialCount: 0,
-        failedCount: errors.length,
-        fileSizeFreed,
-        errors,
-        completedStages: [],
-      };
+      return await api.duplicates.deleteEpisodeMediaVersions(
+        group.episodeRatingKey,
+        mediaIds,
+      );
     },
     onSuccess: (res) => {
-      setDeleteResult(res);
       setReviewItem(null);
       versionDialogRef.current?.close();
-      void qc.invalidateQueries({ queryKey: queryKeys.duplicates.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.stale.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.libraries.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.events.all });
-      void qc.invalidateQueries({ queryKey: queryKeys.mediaRemovals.all });
-      void qc.invalidateQueries({
-        queryKey: queryKeys.versionDeletionPreview.all,
+      void navigate({
+        to: "/deletion-operations/$id",
+        params: { id: res.operationId },
       });
     },
   });
@@ -188,6 +134,7 @@ function DuplicatesPage() {
     // execution uses the established whole-item endpoint so Plex is never asked to
     // remove the final Media entry through the version endpoint.
     if (
+      group.mediaType === "movie" &&
       versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) ===
         "whole-item"
     ) {
@@ -200,35 +147,12 @@ function DuplicatesPage() {
         },
         {
           onSuccess: (res) => {
-            setDeleteResult({
-              mode: "whole-item",
-              title: group.title,
-              deletedCount: res.deleted.length,
-              partialCount: res.partial.length,
-              failedCount: res.failed.length,
-              fileSizeFreed: res.deleted.length > 0
-                ? (group.combinedFileSize ?? 0)
-                : 0,
-              errors: [
-                ...res.partial.flatMap((partial) =>
-                  partial.failedInstances.map((instance) =>
-                    `${instance.instanceName}: ${instance.error}`
-                  )
-                ),
-                ...res.failed.map((failure) => failure.error),
-              ],
-              completedStages: res.outcomes.flatMap((outcome) =>
-                outcome.stages
-                  .filter((stage) =>
-                    stage.system !== "local" &&
-                    (stage.status === "deleted" ||
-                      stage.status === "already-absent")
-                  )
-                  .map((stage) => `${stage.system} (${stage.target})`)
-              ),
-            });
             setReviewItem(null);
             versionDialogRef.current?.close();
+            void navigate({
+              to: "/deletion-operations/$id",
+              params: { id: res.operationId },
+            });
           },
         },
       );
@@ -243,7 +167,6 @@ function DuplicatesPage() {
   }
 
   function openReview(item: DuplicateGroup) {
-    setDeleteResult(null);
     setReviewItem(item);
     versionDialogRef.current?.showModal();
   }
@@ -282,59 +205,6 @@ function DuplicatesPage() {
         )
         : (
           <>
-            {deleteResult && (
-              <DeleteResultAlert
-                variant={deleteResult.failedCount > 0 ||
-                    deleteResult.partialCount > 0
-                  ? "warning"
-                  : "success"}
-                autoDismiss={deleteResult.failedCount === 0 &&
-                  deleteResult.partialCount === 0}
-                onDismiss={() => setDeleteResult(null)}
-              >
-                {deleteResult.mode === "whole-item" &&
-                  deleteResult.partialCount > 0 && (
-                  <>
-                    Partially deleted "{deleteResult.title}" from its mapped
-                    media managers. Retry to reconcile the remaining instances.
-                  </>
-                )}
-                {deleteResult.mode === "whole-item" &&
-                  deleteResult.partialCount === 0 &&
-                  deleteResult.deletedCount === 0 && (
-                  <>Could not delete "{deleteResult.title}".</>
-                )}
-                {deleteResult.mode === "whole-item" &&
-                  deleteResult.deletedCount > 0 && (
-                  <>
-                    Removed "{deleteResult.title}" from its selected
-                    destinations (
-                    {formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                  </>
-                )}
-                {deleteResult.mode === "versions" && (
-                  <>
-                    Deleted {deleteResult.deletedCount} version
-                    {deleteResult.deletedCount === 1 ? "" : "s"} (
-                    {formatKilobytes(deleteResult.fileSizeFreed)} freed).
-                  </>
-                )}
-                {deleteResult.errors.length > 0 && (
-                  <>
-                    {" "}
-                    Details: {deleteResult.errors.join("; ")}
-                  </>
-                )}
-                {deleteResult.completedStages.length > 0 &&
-                  deleteResult.errors.length > 0 && (
-                  <>
-                    Already completed:{" "}
-                    {deleteResult.completedStages.join(", ")}.
-                  </>
-                )}
-              </DeleteResultAlert>
-            )}
-
             <CollectionToolbar
               eyebrow="Content review"
               title="Duplicate groups"

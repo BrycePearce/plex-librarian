@@ -12,6 +12,7 @@ import type {
   PlexMediaPathPreview,
   PlexMediaVersion,
   PlexMediaVersionPathPreview,
+  PlexMetadataIdentity,
   PlexRawMetadata,
   PlexTrack,
 } from './types.ts';
@@ -294,6 +295,10 @@ export class PlexClient {
     this.url = url.replace(/\/$/, '');
   }
 
+  get serverUrl(): string {
+    return this.url;
+  }
+
   private async get<T>(
     path: string,
     extraHeaders?: Record<string, string>,
@@ -381,6 +386,48 @@ export class PlexClient {
       '/status/sessions',
     );
     return mapActiveSessions(data.MediaContainer.Metadata ?? []);
+  }
+
+  async metadataIdentity(ratingKey: string): Promise<PlexMetadataIdentity | null> {
+    const url = `${this.url}/library/metadata/${encodeURIComponent(ratingKey)}?includeGuids=1`;
+    const res = await this.fetchImpl(url, {
+      headers: buildPlexHeaders(this.clientId, this.token),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 404) {
+      res.body?.cancel();
+      return null;
+    }
+    if (!res.ok) {
+      res.body?.cancel();
+      throw new Error(`Plex ${res.status} reading metadata ${ratingKey}`);
+    }
+    const data = await res.json() as { MediaContainer: { Metadata?: PlexRawMetadata[] } };
+    const item = data.MediaContainer.Metadata?.[0];
+    if (!item) return null;
+    const externalIds = extractExternalIds(item);
+    return {
+      ratingKey: item.ratingKey,
+      title: item.title,
+      type: item.type,
+      librarySectionId: item.librarySectionID == null ? null : String(item.librarySectionID),
+      tmdbId: externalIds.tmdbId,
+      tvdbId: externalIds.tvdbId,
+      parentRatingKey: item.parentRatingKey ?? null,
+      grandparentRatingKey: item.grandparentRatingKey ?? null,
+      seasonIndex: item.parentIndex ?? null,
+      index: item.index ?? null,
+      media: (item.Media ?? []).flatMap((media) =>
+        media.id == null ? [] : [{
+          mediaId: media.id,
+          videoResolution: media.videoResolution ?? null,
+          bitrate: media.bitrate ?? null,
+          videoCodec: media.videoCodec ?? null,
+          container: media.container ?? null,
+          fileSize: extractFileSize({ ...item, Media: [media] }),
+        }]
+      ),
+    };
   }
 
   // Fetches current Plex-reported Part paths solely for confirmation UI. Movies and

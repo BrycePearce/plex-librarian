@@ -19,6 +19,7 @@ export async function syncShowSizes(
   lib: PlexLibrary,
   now: number,
   serverId: number,
+  preserveDeletionProjections = false,
 ): Promise<void> {
   type SeasonAgg = {
     showRatingKey: string;
@@ -152,20 +153,24 @@ export async function syncShowSizes(
       });
   }
 
-  // Prune season rows for shows deleted from this library since the last sync.
-  await db
-    .delete(seasons)
-    .where(and(seasonsByLibrary(serverId, lib.key), lt(seasons.updatedAt, now)));
+  // Needs-attention deletion recovery owns its existing show/episode projection until
+  // manual replay finalizes it. Skipping both prunes together also prevents the season
+  // FK cascade from deleting a protected episode-version row indirectly.
+  if (!preserveDeletionProjections) {
+    await db
+      .delete(seasons)
+      .where(and(seasonsByLibrary(serverId, lib.key), lt(seasons.updatedAt, now)));
 
-  // Runs after the seasons prune (not before) purely to avoid redundant work: any
-  // episode-version row belonging to a show/season pruned above is already
-  // cascade-deleted by that prune (both showRatingKey->items and
-  // seasonRatingKey->seasons cascade). This explicit prune only catches the remaining
-  // case — the show/season still exists, but a specific episode version disappeared
-  // from Plex between syncs.
-  await db.delete(episodeMediaVersions).where(
-    and(episodeVersionsByLibrary(serverId, lib.key), lt(episodeMediaVersions.updatedAt, now)),
-  );
+    // Runs after the seasons prune (not before) purely to avoid redundant work: any
+    // episode-version row belonging to a show/season pruned above is already
+    // cascade-deleted by that prune (both showRatingKey->items and
+    // seasonRatingKey->seasons cascade). This explicit prune only catches the remaining
+    // case — the show/season still exists, but a specific episode version disappeared
+    // from Plex between syncs.
+    await db.delete(episodeMediaVersions).where(
+      and(episodeVersionsByLibrary(serverId, lib.key), lt(episodeMediaVersions.updatedAt, now)),
+    );
+  }
 
   // Roll season sizes up to the show row so the stale list can display total size.
   // COALESCE preserves the existing value when SUM returns NULL (all season sizes unknown).

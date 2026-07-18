@@ -3,6 +3,7 @@ import { db } from '../../db/index.ts';
 import { LOG_RETENTION_DAYS, pruneOlderThan } from '../../db/prune.ts';
 import { events } from '../../db/schema.ts';
 import type {
+  DeletionCompletedPayload,
   ItemsDeletedPayload,
   MediaDeletedPayload,
   SyncCompletedPayload,
@@ -19,6 +20,7 @@ export type LogEventInput =
   | { serverId: number; type: 'sync.failed'; payload?: SyncFailedPayload }
   | { serverId: number; type: 'items.deleted'; payload?: ItemsDeletedPayload }
   | { serverId: number; type: 'media.deleted'; payload?: MediaDeletedPayload }
+  | { serverId: number; type: 'deletion.completed'; payload?: DeletionCompletedPayload }
   | { serverId: number; type: 'user.removed'; payload?: UserRemovedPayload };
 
 // Never lets a logging failure fail the caller — recording that a sync/deletion

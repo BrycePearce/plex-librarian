@@ -1,8 +1,12 @@
 import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
 import { sqliteWriteBatches } from '../../db/batch.ts';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import { itemMediaVersions, items, libraries } from '../../db/schema.ts';
 import { itemsByLibrary, libraryByKey, mediaVersionsByLibrary } from '../../db/scope.ts';
+import {
+  deletionRecoveryLibraryKeys,
+  deletionRecoveryNeedsProjection,
+} from '../deletionOperations/coordination.ts';
 import { PLEX_TYPE } from '../../integrations/plex/index.ts';
 import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
 import { syncLibraryHistory } from './historySync.ts';
@@ -165,6 +169,13 @@ async function syncLibrary(
     }
   }
 
+  // A needs-attention deletion is terminal for worker scheduling but still owns its
+  // local projection until manual replay finalizes it. Continue refreshing the library,
+  // but suppress every prune for this pass so sync cannot split that finalization.
+  const preserveDeletionProjections = withTransaction((client) =>
+    deletionRecoveryNeedsProjection(client, serverId, lib.key)
+  );
+
   // Both size-rollup functions run before the prune, for different reasons.
   // syncShowSizes: the seasons table has FK(server_id, show_rating_key) → items(server_id,
   // rating_key) ON DELETE CASCADE. If shows were pruned first and Plex's episode endpoint
@@ -175,13 +186,13 @@ async function syncLibrary(
   // after the prune, deleted artists are gone and the UPDATEs would silently no-op.
   if (lib.type === 'show') {
     callbacks?.onPhase('episodes');
-    await syncShowSizes(plex, lib, now, serverId);
+    await syncShowSizes(plex, lib, now, serverId, preserveDeletionProjections);
   } else if (lib.type === 'artist') {
     callbacks?.onPhase('tracks');
     await syncArtistSizes(plex, lib, serverId);
   }
 
-  if (itemCount > 0) {
+  if (itemCount > 0 && !preserveDeletionProjections) {
     await db.delete(items).where(and(itemsByLibrary(serverId, lib.key), lt(items.updatedAt, now)));
     // Cascade-deletes media-version rows for any item pruned above. This explicit prune
     // additionally catches the case where the parent item still exists but one specific
@@ -223,10 +234,16 @@ export async function runSync(
   // if Plex reports zero libraries, that's far more likely a transient glitch than every
   // library having been deleted, and wiping everything on a blip would be catastrophic.
   if (plexLibraries.length > 0) {
+    const retainedLibraryKeys = new Set(plexLibraries.map((library) => library.key));
+    for (
+      const libraryKey of withTransaction((client) => deletionRecoveryLibraryKeys(client, serverId))
+    ) {
+      retainedLibraryKeys.add(libraryKey);
+    }
     await db.delete(libraries).where(
       and(
         eq(libraries.serverId, serverId),
-        notInArray(libraries.key, plexLibraries.map((l) => l.key)),
+        notInArray(libraries.key, [...retainedLibraryKeys]),
       ),
     );
   }

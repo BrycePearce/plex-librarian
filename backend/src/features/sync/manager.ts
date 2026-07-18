@@ -218,6 +218,12 @@ export function triggerFullSync(
       .prepare("SELECT id FROM sync_log WHERE status = 'pending' AND server_id = ? LIMIT 1")
       .value<[number]>(serverId);
     if (existing) return { conflict: existing[0] };
+    const deletion = client
+      .prepare(
+        "SELECT 1 FROM deletion_operations WHERE server_id = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
+      )
+      .value<[number]>(serverId);
+    if (deletion) return { conflict: -1 };
     const row = client
       .prepare(
         "INSERT INTO sync_log (server_id, started_at, status, items_processed) VALUES (?, ?, 'pending', 0) RETURNING id",
@@ -252,6 +258,12 @@ export function triggerLibrarySync(
       )
       .value<[number]>(serverId, libraryKey);
     if (existing) return { conflict: existing[0] };
+    const deletion = client
+      .prepare(
+        "SELECT 1 FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
+      )
+      .value<[number]>(serverId, libraryKey);
+    if (deletion) return { conflict: -1 };
     const row = client
       .prepare(
         "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (?, ?, ?, 'pending', 0) RETURNING id",
