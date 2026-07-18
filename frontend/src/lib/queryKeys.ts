@@ -16,6 +16,7 @@ const roots = {
   qbittorrentIntegrations: "qbittorrent-integrations",
   downloadCleanupPreview: "download-cleanup-preview",
   versionDeletionPreview: "version-deletion-preview",
+  deletionOperations: "deletion-operations",
 } as const;
 
 export const queryKeys = {
@@ -83,6 +84,10 @@ export const queryKeys = {
     ) =>
       [roots.versionDeletionPreview, mediaType, ratingKey, mediaIds] as const,
   },
+  deletionOperations: {
+    all: [roots.deletionOperations] as const,
+    detail: (id: string) => [roots.deletionOperations, id] as const,
+  },
 } as const;
 
 type QueryRootName = keyof typeof roots;
@@ -110,6 +115,7 @@ const rootPolicies = {
   qbittorrentIntegrations: { serverScoped: true, syncDerived: false },
   downloadCleanupPreview: { serverScoped: true, syncDerived: true },
   versionDeletionPreview: { serverScoped: true, syncDerived: true },
+  deletionOperations: { serverScoped: true, syncDerived: false },
 } satisfies Record<QueryRootName, QueryRootPolicy>;
 
 const rootNames = Object.keys(roots) as QueryRootName[];

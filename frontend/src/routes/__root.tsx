@@ -5,6 +5,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { Library } from "lucide-react";
 import { AppSidebar } from "../components/AppSidebar";
 import { SyncCacheCoordinator } from "../features/sync/SyncCacheCoordinator";
+import { DeletionOperationCoordinator } from "../features/deletionOperations/DeletionOperationCoordinator";
 import "./__root.css";
 
 interface RouterContext {
@@ -36,22 +37,24 @@ function RootLayout() {
   }
 
   return (
-    <div className="app-shell bg-base-100 text-base-content">
-      <SyncCacheCoordinator />
-      <AppSidebar />
-      <main className="scroll-area app-main overflow-y-auto">
-        <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
-          <div className="flex flex-col flex-1">
-            <Outlet />
+    <DeletionOperationCoordinator>
+      <div className="app-shell bg-base-100 text-base-content">
+        <SyncCacheCoordinator />
+        <AppSidebar />
+        <main className="scroll-area app-main overflow-y-auto">
+          <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
+            <div className="flex flex-col flex-1">
+              <Outlet />
+            </div>
           </div>
-        </div>
-      </main>
-      {import.meta.env.DEV && (
-        <>
-          <TanStackRouterDevtools />
-          <ReactQueryDevtools />
-        </>
-      )}
-    </div>
+        </main>
+        {import.meta.env.DEV && (
+          <>
+            <TanStackRouterDevtools />
+            <ReactQueryDevtools />
+          </>
+        )}
+      </div>
+    </DeletionOperationCoordinator>
   );
 }

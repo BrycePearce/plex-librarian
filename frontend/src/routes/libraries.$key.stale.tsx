@@ -556,12 +556,9 @@ function StalePage() {
               cleanupDownloads,
             },
             {
-              onSuccess: (res) => {
+              onSuccess: () => {
+                selection.clear();
                 dialogRef.current?.close();
-                void navigate({
-                  to: "/deletion-operations/$id",
-                  params: { id: res.operationId },
-                });
               },
             },
           )}

@@ -10,6 +10,7 @@ import {
 import { api } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
 import { requireAuth } from "../lib/requireAuth";
+import { queryKeys } from "../lib/queryKeys";
 import { ErrorAlert } from "../components/ErrorAlert";
 import {
   activeDeletionStatuses,
@@ -25,7 +26,7 @@ export const Route = createFileRoute("/deletion-operations/$id")({
 function DeletionOperationPage() {
   const { id } = Route.useParams();
   const qc = useQueryClient();
-  const queryKey = ["deletion-operation", id] as const;
+  const queryKey = queryKeys.deletionOperations.detail(id);
   const query = useQuery({
     queryKey,
     queryFn: () => api.deletionOperations.get(id),

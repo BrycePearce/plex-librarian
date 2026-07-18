@@ -21,6 +21,7 @@ import {
 } from "../components/Workspace";
 import { ExpandableSearch } from "../components/ExpandableSearch";
 import { normalizeSearchQuery } from "@shared/search";
+import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator";
 
 const PAGE_SIZE = 50;
 
@@ -49,6 +50,7 @@ export const Route = createFileRoute("/duplicates")({
 function DuplicatesPage() {
   const { type, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
+  const { trackDeletionOperation } = useDeletionOperationTracker();
 
   const [offset, setOffset] = useState(0);
 
@@ -111,12 +113,16 @@ function DuplicatesPage() {
       );
     },
     onSuccess: (res) => {
+      trackDeletionOperation(res.operationId, [
+        queryKeys.duplicates.all,
+        queryKeys.stale.all,
+        queryKeys.libraries.all,
+        queryKeys.events.all,
+        queryKeys.mediaRemovals.all,
+        queryKeys.versionDeletionPreview.all,
+      ]);
       setReviewItem(null);
       versionDialogRef.current?.close();
-      void navigate({
-        to: "/deletion-operations/$id",
-        params: { id: res.operationId },
-      });
     },
   });
 
@@ -146,13 +152,9 @@ function DuplicatesPage() {
           cleanupDownloads: plan.deleteFromArr && plan.cleanupDownloads,
         },
         {
-          onSuccess: (res) => {
+          onSuccess: () => {
             setReviewItem(null);
             versionDialogRef.current?.close();
-            void navigate({
-              to: "/deletion-operations/$id",
-              params: { id: res.operationId },
-            });
           },
         },
       );
