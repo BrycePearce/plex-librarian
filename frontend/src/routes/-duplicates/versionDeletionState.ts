@@ -1,7 +1,7 @@
 import type {
   MediaVersion,
   VersionDeletionPreviewResponse,
-} from "../../lib/api";
+} from "../../lib/api.ts";
 
 export function largestVersionId(
   versions: readonly MediaVersion[],

@@ -1,4 +1,4 @@
-import type { DuplicateMovieGroup, MediaVersion } from "../../lib/api";
+import type { DuplicateMovieGroup, MediaVersion } from "../../lib/api.ts";
 
 // The whole-title deletion workflow is shared by the stale and duplicates pages.
 // Keep its input limited to the fields the confirmation/preview UI actually needs so
