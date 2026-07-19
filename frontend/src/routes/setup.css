@@ -1,7 +1,27 @@
+/* Registered so the ambient tint crossfades between steps; without @property
+   support the tint still applies, it just switches instantly. */
+@property --setup-ambient {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
 .setup-page {
+  --setup-ambient: var(--color-primary);
   box-sizing: border-box;
   overflow: hidden;
   padding-block: 2rem;
+  transition: --setup-ambient 1200ms ease;
+}
+
+/* The atmosphere follows the story: warm while off in Plex's world, settling
+   to a mostly-home blend once the two are connected. */
+.setup-page-step-2 {
+  --setup-ambient: color-mix(in oklab, var(--color-plex) 55%, var(--color-primary));
+}
+
+.setup-page-step-3 {
+  --setup-ambient: color-mix(in oklab, var(--color-plex) 28%, var(--color-primary));
 }
 
 .setup-page::before {
@@ -12,8 +32,8 @@
   transform: translate(-50%, -46%);
   background: radial-gradient(
     ellipse at center,
-    color-mix(in oklab, var(--color-primary) 10%, transparent) 0%,
-    color-mix(in oklab, var(--color-primary) 4%, transparent) 42%,
+    color-mix(in oklab, var(--setup-ambient) 10%, transparent) 0%,
+    color-mix(in oklab, var(--setup-ambient) 4%, transparent) 42%,
     transparent 72%
   );
   opacity: 1;
@@ -253,12 +273,17 @@
 }
 
 .setup-progress li {
+  --setup-step-color: var(--color-primary);
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.38rem;
   color: color-mix(in oklab, var(--color-base-content) 32%, transparent);
+}
+
+.setup-progress li.is-plex {
+  --setup-step-color: var(--color-plex);
 }
 
 .setup-progress li + li::before {
@@ -277,6 +302,24 @@
     90deg,
     var(--color-primary),
     color-mix(in oklab, var(--color-primary) 18%, transparent)
+  );
+}
+
+/* Directional handoffs: the connector into Authorize passes purple to orange,
+   the one out of it brings orange back home to purple. */
+.setup-progress li.is-plex.is-current::before {
+  background: linear-gradient(
+    90deg,
+    var(--color-primary),
+    color-mix(in oklab, var(--color-plex) 62%, transparent)
+  );
+}
+
+.setup-progress li.is-plex.is-complete + li::before {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-plex) 75%, transparent),
+    color-mix(in oklab, var(--color-primary) 45%, transparent)
   );
 }
 
@@ -299,26 +342,26 @@
 .setup-progress li.is-complete {
   color: color-mix(
     in oklab,
-    var(--color-primary) 78%,
+    var(--setup-step-color) 78%,
     var(--color-base-content)
   );
 }
 
 .setup-progress li.is-current > span {
-  border-color: color-mix(in oklab, var(--color-primary) 65%, transparent);
+  border-color: color-mix(in oklab, var(--setup-step-color) 65%, transparent);
   color: var(--color-primary-content);
-  background: var(--color-primary);
+  background: var(--setup-step-color);
   box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--color-primary) 10%, transparent),
-    0 0 15px color-mix(in oklab, var(--color-primary) 34%, transparent);
+    0 0 0 4px color-mix(in oklab, var(--setup-step-color) 10%, transparent),
+    0 0 15px color-mix(in oklab, var(--setup-step-color) 34%, transparent);
   animation: setup-current-step 2.6s ease-in-out infinite;
 }
 
 .setup-progress li.is-complete > span {
-  border-color: color-mix(in oklab, var(--color-primary) 30%, transparent);
+  border-color: color-mix(in oklab, var(--setup-step-color) 30%, transparent);
   background: color-mix(
     in oklab,
-    var(--color-primary) 13%,
+    var(--setup-step-color) 13%,
     var(--color-base-200)
   );
 }
@@ -611,13 +654,13 @@
   0%,
   100% {
     box-shadow:
-      0 0 0 4px color-mix(in oklab, var(--color-primary) 8%, transparent),
-      0 0 10px color-mix(in oklab, var(--color-primary) 24%, transparent);
+      0 0 0 4px color-mix(in oklab, var(--setup-step-color) 8%, transparent),
+      0 0 10px color-mix(in oklab, var(--setup-step-color) 24%, transparent);
   }
   50% {
     box-shadow:
-      0 0 0 5px color-mix(in oklab, var(--color-primary) 12%, transparent),
-      0 0 17px color-mix(in oklab, var(--color-primary) 38%, transparent);
+      0 0 0 5px color-mix(in oklab, var(--setup-step-color) 12%, transparent),
+      0 0 17px color-mix(in oklab, var(--setup-step-color) 38%, transparent);
   }
 }
 @keyframes setup-status-pulse {

@@ -54,7 +54,7 @@ function SetupPage() {
     <MotionConfig reducedMotion="user">
       <div
         className={`setup-page flex items-center justify-center min-h-[calc(100vh-8rem)] ${
-          isFinale ? "setup-page-finale" : ""
+          isFinale ? "setup-page-finale" : `setup-page-step-${ringStep}`
         }`}
       >
         <div
@@ -368,20 +368,27 @@ function SetupProgress({
   current: 0 | 1 | 2;
   done?: boolean;
 }) {
-  const labels = ["Sign in", "Authorize", "Connect"];
+  // Authorize is the step spent in Plex's world, so its stepper chip speaks
+  // Plex orange; the other steps stay in the app's own color.
+  const steps: { label: string; plex?: boolean }[] = [
+    { label: "Sign in" },
+    { label: "Authorize", plex: true },
+    { label: "Connect" },
+  ];
 
   return (
     <ol className="setup-progress" aria-label="Setup progress">
-      {labels.map((label, index) => {
+      {steps.map(({ label, plex }, index) => {
         const isComplete = done || index < current;
         const isCurrent = !done && index === current;
+        const state = isComplete
+          ? "is-complete"
+          : isCurrent
+          ? "is-current"
+          : "";
         return (
           <li
-            className={isComplete
-              ? "is-complete"
-              : isCurrent
-              ? "is-current"
-              : ""}
+            className={plex ? `is-plex ${state}` : state}
             key={label}
             aria-current={isCurrent ? "step" : undefined}
           >
