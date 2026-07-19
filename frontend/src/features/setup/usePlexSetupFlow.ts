@@ -107,6 +107,7 @@ export function usePlexSetupFlow() {
     mutate: mutateServer,
     reset: resetServerMutation,
     isPending: isConnecting,
+    isSuccess: isConnected,
     error: connectionError,
     variables: connectingServer,
   } = useMutation({
@@ -118,6 +119,10 @@ export function usePlexSetupFlow() {
         server.name,
       ),
     onSuccess: async () => {
+      // Hold the success beat at least as long as the ring-collapse finale so
+      // the resolution reads before the dashboard swap; the cache work below
+      // runs concurrently, so this rarely adds real wait.
+      const finaleBeat = new Promise((resolve) => setTimeout(resolve, 900));
       await queryClient.refetchQueries({ queryKey: queryKeys.auth.status });
       await resetServerScopedQueries(queryClient);
       // Cache warming is an optimization, not part of connecting the server. A failed
@@ -132,6 +137,7 @@ export function usePlexSetupFlow() {
           queryFn: () => api.sync.history(10),
         }),
       ]);
+      await finaleBeat;
       void navigate({ to: "/dashboard" });
     },
   });
@@ -187,10 +193,9 @@ export function usePlexSetupFlow() {
 
   const { data: pollData, error: authorizationError } = useQuery({
     queryKey: queryKeys.auth.pin(pinId),
-    queryFn:
-      step === "polling" && pinId !== null && !pinExpired
-        ? () => api.auth.pollPin(pinId)
-        : skipToken,
+    queryFn: step === "polling" && pinId !== null && !pinExpired
+      ? () => api.auth.pollPin(pinId)
+      : skipToken,
     refetchInterval: 2_000,
   });
 
@@ -227,6 +232,7 @@ export function usePlexSetupFlow() {
     signInError,
     authorizationError,
     isConnecting,
+    isConnected,
     connectionError,
     connectingServerId: connectingServer?.machineIdentifier ?? null,
     startSignIn,
