@@ -306,8 +306,10 @@
 }
 
 /* Directional handoffs: the connector into Authorize passes purple to orange,
-   the one out of it brings orange back home to purple. */
-.setup-progress li.is-plex.is-current::before {
+   the one out of it brings orange back home to purple — on both sides of the
+   orange node, whether Authorize is the current step or already complete. */
+.setup-progress li.is-plex.is-current::before,
+.setup-progress li.is-plex.is-complete::before {
   background: linear-gradient(
     90deg,
     var(--color-primary),
@@ -319,7 +321,7 @@
   background: linear-gradient(
     90deg,
     color-mix(in oklab, var(--color-plex) 75%, transparent),
-    color-mix(in oklab, var(--color-primary) 45%, transparent)
+    color-mix(in oklab, var(--color-primary) 55%, transparent)
   );
 }
 
