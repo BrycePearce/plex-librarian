@@ -182,6 +182,7 @@ export function VersionPickerDialog({
                       aria-label={`Delete ${versionLabel(version)}`}
                     />
                   }
+                  selected={selected}
                   title={versionLabel(version)}
                   titleText={versionLabel(version)}
                   marks={selected

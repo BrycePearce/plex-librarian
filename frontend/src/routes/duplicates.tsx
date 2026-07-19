@@ -1,7 +1,7 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { BadgeCheck, Copy } from "lucide-react";
+import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import type { DuplicateGroup } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
@@ -22,6 +22,9 @@ import {
 import { ExpandableSearch } from "../components/ExpandableSearch";
 import { normalizeSearchQuery } from "@shared/search";
 import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator";
+import { formatKilobytes } from "../lib/format";
+import { duplicatePageSummary } from "./-duplicates/duplicatePresentation";
+import "./duplicates.css";
 
 const PAGE_SIZE = 50;
 
@@ -179,6 +182,7 @@ function DuplicatesPage() {
 
   const page = Math.floor(offset / PAGE_SIZE);
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
+  const summary = duplicatePageSummary(data?.groups ?? []);
 
   return (
     <div className="workspace-page workspace-tone-accent space-y-6">
@@ -240,6 +244,49 @@ function DuplicatesPage() {
                 : undefined}
             />
 
+            {data && data.groups.length > 0 && (
+              <section
+                className="duplicates-summary"
+                aria-label="Duplicate storage summary"
+              >
+                <div className="duplicates-summary-card">
+                  <span className="duplicates-summary-icon">
+                    <Layers3 className="size-4" />
+                  </span>
+                  <span className="duplicates-summary-copy">
+                    <span>Versions on this page</span>
+                    <strong>{summary.versionCount.toLocaleString()}</strong>
+                  </span>
+                </div>
+                <div className="duplicates-summary-card">
+                  <span className="duplicates-summary-icon">
+                    <HardDrive className="size-4" />
+                  </span>
+                  <span className="duplicates-summary-copy">
+                    <span>Storage on this page</span>
+                    <strong>
+                      {summary.storageKilobytes != null
+                        ? formatKilobytes(summary.storageKilobytes)
+                        : "Unknown"}
+                    </strong>
+                  </span>
+                </div>
+                <div className="duplicates-summary-card duplicates-summary-card-featured">
+                  <span className="duplicates-summary-icon">
+                    <Sparkles className="size-4" />
+                  </span>
+                  <span className="duplicates-summary-copy">
+                    <span>Extra copies on page · largest kept</span>
+                    <strong>
+                      {summary.reclaimableKilobytes != null
+                        ? formatKilobytes(summary.reclaimableKilobytes)
+                        : "Unknown"}
+                    </strong>
+                  </span>
+                </div>
+              </section>
+            )}
+
             {isLoading
               ? <DuplicatesTableSkeleton />
               : data && data.groups.length === 0
@@ -261,7 +308,7 @@ function DuplicatesPage() {
                       <tr>
                         <th>Title</th>
                         <th>Versions</th>
-                        <th>Combined size</th>
+                        <th>Storage footprint</th>
                         <th />
                       </tr>
                     </thead>

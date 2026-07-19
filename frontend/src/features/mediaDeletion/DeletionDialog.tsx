@@ -114,6 +114,7 @@ export function BasicDeletionList({ children }: { children: ReactNode }) {
 
 export function BasicDeletionRow({
   selection,
+  selected = false,
   title,
   titleText,
   badges,
@@ -121,14 +122,15 @@ export function BasicDeletionRow({
   size,
 }: {
   selection?: ReactNode;
+  selected?: boolean;
   title: ReactNode;
   titleText?: string;
   badges?: ReactNode;
   marks?: ReactNode;
   size: ReactNode;
 }) {
-  return (
-    <li className="flex items-center gap-3 px-3 py-1.5">
+  const content = (
+    <>
       {selection}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -142,6 +144,18 @@ export function BasicDeletionRow({
       <span className="shrink-0 font-mono text-xs text-base-content/50">
         {size}
       </span>
+    </>
+  );
+
+  return (
+    <li className={selection && selected ? "bg-primary/10" : undefined}>
+      {selection
+        ? (
+          <label className="flex cursor-pointer items-center gap-3 px-3 py-1.5 transition-colors hover:bg-primary/5 focus-within:bg-primary/5">
+            {content}
+          </label>
+        )
+        : <div className="flex items-center gap-3 px-3 py-1.5">{content}</div>}
     </li>
   );
 }
