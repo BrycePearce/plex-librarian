@@ -126,7 +126,7 @@ function SetupPage() {
             <SetupStage key="polling">
               <div className="card workspace-surface setup-card setup-card-authorizing w-full max-w-md">
                 <SetupPerimeter
-                  segments={!pinExpired && !authorizationError}
+                  trace={!pinExpired && !authorizationError}
                   tone="plex"
                 />
                 <div className="card-body items-center text-center gap-6 py-10">
@@ -233,6 +233,8 @@ function SetupPage() {
             <SetupStage key="pick-server">
               <div className="card workspace-surface setup-card w-full max-w-md">
                 <SetupPerimeter
+                  trace={!connectionError}
+                  calm
                   aura={(isConnecting || isConnected) && !connectionError}
                   sealed={isConnected}
                   tone="plex"
@@ -403,94 +405,81 @@ function SetupProgress({
   );
 }
 
-// One border treatment per step: the bare track (sign in), the scanning
-// segments (authorize), or the connection aura (connect) — never stacked.
+// One border treatment per step: the bare track (sign in), the orbiting
+// tracer (authorize — and, calmed, the server picker), or the connection aura
+// (connect). The tracer is the aura's unfinished form: an arc lapping the
+// border without ever closing, until the aura's ignite draw completes the
+// loop (is-yielding fades it out underneath). It's a conic-gradient border
+// band rather than an SVG dash — a dash sliding around a closed path breaks
+// visibly where the path starts/ends (top-left), while a conic wraps
+// seamlessly; it also makes the card comet the same construction as the
+// background ring comets.
 function SetupPerimeter({
-  segments = false,
+  trace = false,
+  calm = false,
   aura = false,
   sealed = false,
   tone = "primary",
 }: {
-  segments?: boolean;
+  trace?: boolean;
+  calm?: boolean;
   aura?: boolean;
   sealed?: boolean;
   tone?: "primary" | "plex";
 }) {
   return (
-    <svg
-      className={`setup-perimeter setup-perimeter-${tone}${
-        aura ? " has-connection-aura" : ""
-      }${sealed ? " is-sealed" : ""}`}
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <rect
-        className="setup-perimeter-track"
-        x="1"
-        y="1"
-        width="98"
-        height="98"
-        rx="5"
-        pathLength="100"
-      />
-      {aura && (
-        <>
-          <defs>
-            <linearGradient
-              id="setup-aura-gradient"
-              x1="0"
-              y1="0"
-              x2="1"
-              y2="1"
-            >
-              <stop className="setup-aura-stop-head" offset="0" />
-              <stop className="setup-aura-stop-tail" offset="1" />
-            </linearGradient>
-          </defs>
-          <rect
-            className="setup-connection-aura"
-            x="0.7"
-            y="0.7"
-            width="98.6"
-            height="98.6"
-            rx="5.2"
-            pathLength="100"
-          />
-        </>
+    <>
+      {trace && (
+        <span
+          className={`setup-trace${calm ? " is-calm" : ""}${
+            aura ? " is-yielding" : ""
+          }`}
+          aria-hidden="true"
+        />
       )}
-      {segments && (
-        <g className="setup-authorization-segments">
-          <line
-            className="setup-authorization-segment setup-authorization-segment-1"
-            x1="13"
-            y1="1"
-            x2="87"
-            y2="1"
-          />
-          <line
-            className="setup-authorization-segment setup-authorization-segment-2"
-            x1="99"
-            y1="13"
-            x2="99"
-            y2="87"
-          />
-          <line
-            className="setup-authorization-segment setup-authorization-segment-3"
-            x1="87"
-            y1="99"
-            x2="13"
-            y2="99"
-          />
-          <line
-            className="setup-authorization-segment setup-authorization-segment-4"
-            x1="1"
-            y1="87"
-            x2="1"
-            y2="13"
-          />
-        </g>
-      )}
-    </svg>
+      <svg
+        className={`setup-perimeter setup-perimeter-${tone}${
+          trace ? " has-trace" : ""
+        }${aura ? " has-connection-aura" : ""}${sealed ? " is-sealed" : ""}`}
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <rect
+          className="setup-perimeter-track"
+          x="1"
+          y="1"
+          width="98"
+          height="98"
+          rx="5"
+          pathLength="100"
+        />
+        {aura && (
+          <>
+            <defs>
+              <linearGradient
+                id="setup-aura-gradient"
+                x1="0"
+                y1="0"
+                x2="1"
+                y2="1"
+              >
+                <stop className="setup-aura-stop-head" offset="0" />
+                <stop className="setup-aura-stop-tail" offset="1" />
+              </linearGradient>
+            </defs>
+            <rect
+              className="setup-connection-aura"
+              x="0.7"
+              y="0.7"
+              width="98.6"
+              height="98.6"
+              rx="5.2"
+              pathLength="100"
+            />
+          </>
+        )}
+      </svg>
+    </>
   );
 }

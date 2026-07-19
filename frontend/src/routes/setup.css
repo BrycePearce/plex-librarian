@@ -405,16 +405,14 @@
   box-shadow: 0 10px 28px
     color-mix(in oklab, var(--color-plex) 22%, transparent);
   transition:
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow 180ms ease,
     filter 180ms ease;
 }
 
 .setup-plex-button:hover:not(:disabled) {
-  transform: translateY(-2px);
   filter: brightness(1.05);
-  box-shadow: 0 15px 36px
-    color-mix(in oklab, var(--color-plex) 33%, transparent);
+  box-shadow: 0 12px 34px
+    color-mix(in oklab, var(--color-plex) 36%, transparent);
 }
 .setup-button-arrow {
   transition: transform 180ms ease;
@@ -430,11 +428,9 @@
   transition:
     color 150ms ease,
     border-color 150ms ease,
-    background 150ms ease,
-    transform 150ms ease;
+    background 150ms ease;
 }
 .setup-secondary-button:hover {
-  transform: translateY(-1px);
   border-color: color-mix(in oklab, var(--color-plex) 42%, transparent);
   color: color-mix(in oklab, var(--color-plex) 75%, var(--color-base-content));
   background: color-mix(in oklab, var(--color-plex) 8%, transparent);
@@ -538,28 +534,66 @@
   stroke: color-mix(in oklab, var(--setup-signal-color) 26%, transparent);
 }
 
-.setup-authorization-segment {
-  stroke: var(--setup-signal-color);
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-  opacity: 0.34;
-  filter: drop-shadow(
-    0 0 3px color-mix(in oklab, var(--setup-signal-color) 40%, transparent)
+/* The tracer: a comet lapping the card border — the same conic-gradient
+   anatomy as the ring orbits, clipped to a thin border band via the
+   two-layer mask (everything except the content box). Calm mode (the server
+   picker) slows it down and dresses it in the merge palette: purple tail,
+   Plex head — the outermost ring's grammar, on the card. */
+@property --setup-trace-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.setup-trace {
+  position: absolute;
+  inset: -1.5px;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 2px;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--setup-trace-angle),
+    transparent 0 76%,
+    color-mix(in oklab, var(--color-plex) 10%, transparent) 79%,
+    color-mix(in oklab, var(--color-plex) 80%, transparent) 91%,
+    color-mix(in oklab, var(--color-plex) 18%, transparent) 94.5%,
+    transparent 96%
   );
-  animation: setup-authorization-pulse 4.8s ease-in-out infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: drop-shadow(
+    0 0 6px color-mix(in oklab, var(--color-plex) 28%, transparent)
+  );
+  transition: opacity 450ms ease;
+  animation: setup-trace-orbit 3.6s linear infinite;
 }
 
-.setup-authorization-segment-2 {
-  animation-delay: 1.2s;
+.setup-trace.is-calm {
+  animation-duration: 6.4s;
+  background: conic-gradient(
+    from var(--setup-trace-angle),
+    transparent 0 74%,
+    color-mix(in oklab, var(--color-primary) 12%, transparent) 78%,
+    color-mix(in oklab, var(--color-primary) 50%, transparent) 86%,
+    color-mix(in oklab, var(--color-plex) 55%, transparent) 92%,
+    color-mix(in oklab, var(--color-plex) 12%, transparent) 95%,
+    transparent 96%
+  );
 }
 
-.setup-authorization-segment-3 {
-  animation-delay: 2.4s;
+.setup-trace.is-yielding {
+  opacity: 0;
 }
 
-.setup-authorization-segment-4 {
-  animation-delay: 3.6s;
+.has-trace .setup-perimeter-track {
+  stroke: color-mix(in oklab, var(--setup-signal-color) 22%, transparent);
 }
 .setup-card-authorizing {
   box-shadow:
@@ -581,7 +615,6 @@
   cursor: pointer;
   box-shadow: 0 1px 0 rgb(255 255 255 / 0.025) inset;
   transition:
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-color 180ms ease,
     background 180ms ease,
     box-shadow 180ms ease;
@@ -589,7 +622,6 @@
 
 .setup-server-option:hover:not(:disabled),
 .setup-server-option:focus-visible {
-  transform: translateY(-2px) scale(1.008);
   border-color: color-mix(in oklab, var(--color-primary) 40%, transparent);
   background: linear-gradient(
     100deg,
@@ -598,7 +630,7 @@
   );
   box-shadow:
     0 12px 26px rgb(0 0 0 / 0.12),
-    0 0 0 1px color-mix(in oklab, var(--color-primary) 5%, transparent);
+    0 0 0 1px color-mix(in oklab, var(--color-primary) 12%, transparent);
   outline: none;
 }
 .setup-server-option:disabled {
@@ -676,17 +708,9 @@
     transform: scale(1.22);
   }
 }
-@keyframes setup-authorization-pulse {
-  0%,
-  30%,
-  100% {
-    opacity: 0.28;
-  }
-  12% {
-    opacity: 0.82;
-    filter: drop-shadow(
-      0 0 5px color-mix(in oklab, var(--setup-signal-color) 62%, transparent)
-    );
+@keyframes setup-trace-orbit {
+  to {
+    --setup-trace-angle: 360deg;
   }
 }
 
@@ -802,7 +826,6 @@
   .setup-progress li.is-current > span,
   .setup-waiting-mark::before,
   .setup-connecting-mark::before,
-  .setup-authorization-segment,
   .setup-connection-aura,
   .setup-ring-orbit,
   .setup-ring-ripple,
@@ -810,6 +833,12 @@
   .setup-ring-finale::after,
   .setup-page-finale::after {
     animation: none;
+  }
+
+  /* A frozen partial arc reads as a rendering glitch — hide the tracer and
+     let the brightened track carry the active-border state instead. */
+  .setup-trace {
+    display: none;
   }
 
   .setup-ring-glow {
@@ -822,11 +851,5 @@
   .setup-plex-button,
   .setup-button-arrow {
     transition-duration: 0.01ms;
-  }
-
-  .setup-server-option:hover:not(:disabled),
-  .setup-server-option:focus-visible,
-  .setup-plex-button:hover:not(:disabled) {
-    transform: none;
   }
 }
