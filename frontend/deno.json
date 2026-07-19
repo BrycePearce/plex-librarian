@@ -37,6 +37,7 @@
     "motion/react": "npm:motion@^12.42.2/react",
     "tailwindcss": "npm:tailwindcss@^4.3.1",
     "typescript": "npm:typescript@^6.0.3",
+    "uuid": "npm:uuid@13.0.0",
     "vite": "npm:vite@^8.1.0"
   }
 }

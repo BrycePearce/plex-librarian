@@ -41,6 +41,7 @@
     "npm:tailwindcss@^4.3.1": "4.3.1",
     "npm:typescript@*": "6.0.3",
     "npm:typescript@^6.0.3": "6.0.3",
+    "npm:uuid@13.0.0": "13.0.0",
     "npm:vite@*": "8.1.0_esbuild@0.28.1",
     "npm:vite@^8.1.0": "8.1.0_esbuild@0.28.1"
   },
@@ -1555,6 +1556,10 @@
         "react"
       ]
     },
+    "uuid@13.0.0": {
+      "integrity": "sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==",
+      "bin": true
+    },
     "vite@8.1.0_esbuild@0.28.1": {
       "integrity": "sha512-BuJcQK/56NQTWDGn4ABea3q4SSBdNPWwNZKTkkUpcMPnLoquSYH8llRtSUIgoL1KSCpHt5eghLShn50mH36y7Q==",
       "dependencies": [
@@ -1618,6 +1623,7 @@
           "npm:react@^19.2.7",
           "npm:tailwindcss@^4.3.1",
           "npm:typescript@^6.0.3",
+          "npm:uuid@13.0.0",
           "npm:vite@^8.1.0"
         ]
       }

@@ -30,6 +30,7 @@ import type {
   UsersResponse,
   VersionDeletionPreviewResponse,
 } from "@shared/types";
+import { v4 as uuidv4 } from "uuid";
 
 export type {
   ActivityEvent,
@@ -229,7 +230,7 @@ export const api = {
         {
           method: "DELETE",
           body: JSON.stringify({
-            clientRequestId: crypto.randomUUID(),
+            clientRequestId: uuidv4(),
             ratingKeys,
             coordinatedRatingKeys,
             cleanupDownloads,
@@ -262,7 +263,7 @@ export const api = {
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,
         {
           method: "DELETE",
-          body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+          body: JSON.stringify({ clientRequestId: uuidv4() }),
         },
       ),
     versionDeletionPreview: (
@@ -287,7 +288,7 @@ export const api = {
         {
           method: "DELETE",
           body: JSON.stringify({
-            clientRequestId: crypto.randomUUID(),
+            clientRequestId: uuidv4(),
             mediaIds,
             deleteFromArr,
             cleanupDownloads,
@@ -303,7 +304,7 @@ export const api = {
         }/media/${mediaId}`,
         {
           method: "DELETE",
-          body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+          body: JSON.stringify({ clientRequestId: uuidv4() }),
         },
       ),
     deleteEpisodeMediaVersions: (
@@ -315,7 +316,7 @@ export const api = {
         {
           method: "DELETE",
           body: JSON.stringify({
-            clientRequestId: crypto.randomUUID(),
+            clientRequestId: uuidv4(),
             mediaIds,
           }),
         },
