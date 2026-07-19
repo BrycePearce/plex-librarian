@@ -101,14 +101,7 @@ export const Route = createFileRoute("/libraries/$key/stale")({
   search: {
     middlewares: [stripSearchParams(staleSearchDefaults)],
   },
-  beforeLoad: ({ context }) =>
-    Promise.all([
-      requireAuth(context.queryClient),
-      context.queryClient.ensureQueryData({
-        queryKey: queryKeys.libraries.all,
-        queryFn: () => api.libraries.list(),
-      }),
-    ]),
+  beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: StalePage,
 });
 

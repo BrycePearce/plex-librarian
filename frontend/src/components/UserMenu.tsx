@@ -9,17 +9,22 @@ import {
   User,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { resetServerScopedQueries } from "../lib/queryCache";
+import { clearServerScopedQueries } from "../lib/queryCache";
 import { queryKeys } from "../lib/queryKeys";
 import type { AuthStatus } from "../lib/api";
 import { avatarUrl } from "../lib/avatar";
 import { useClickOutside } from "../lib/useClickOutside";
+import { useDisconnectTransition } from "../features/auth/DisconnectTransition";
+
+const DISCONNECT_LOADER_MIN_MS = 350;
 
 export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const disconnectStartedAt = useRef(0);
+  const { beginDisconnect, endDisconnect } = useDisconnectTransition();
 
   useClickOutside(rootRef, () => setOpen(false), open);
 
@@ -31,13 +36,37 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
 
   const disconnect = useMutation({
     mutationFn: api.auth.disconnect,
+    onMutate: () => {
+      disconnectStartedAt.current = Date.now();
+      beginDisconnect();
+    },
     onSuccess: async () => {
       setOpen(false);
-      await qc.invalidateQueries({ queryKey: queryKeys.auth.status });
-      await resetServerScopedQueries(qc);
-      void navigate({ to: "/setup" });
+      const remainingLoaderTime = DISCONNECT_LOADER_MIN_MS -
+        (Date.now() - disconnectStartedAt.current);
+      if (remainingLoaderTime > 0) {
+        await new Promise<void>((resolve) =>
+          globalThis.setTimeout(resolve, remainingLoaderTime)
+        );
+      }
+      qc.setQueryData<AuthStatus>(queryKeys.auth.status, {
+        configured: false,
+        source: null,
+      });
+      try {
+        await navigate({ to: "/setup", replace: true });
+        await clearServerScopedQueries(qc);
+      } finally {
+        endDisconnect();
+      }
     },
+    onError: () => endDisconnect(),
   });
+
+  const requestDisconnect = () => {
+    disconnect.reset();
+    disconnect.mutate();
+  };
 
   // Same footprint as the real button below — this query resolves after first paint (it
   // races the same queryKey the route's beforeLoad already kicked off), so without a
@@ -109,18 +138,30 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
               </a>
             </li>
             {authStatus.source !== "env" && (
-              <li>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex items-center gap-2 leading-none"
-                  onClick={() => disconnect.mutate()}
-                  disabled={disconnect.isPending}
-                >
-                  <LogOut className="w-4 h-4" />
-                  Disconnect
-                </button>
-              </li>
+              <>
+                <li>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="flex items-center gap-2 leading-none"
+                    onClick={requestDisconnect}
+                    disabled={disconnect.isPending}
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Disconnect
+                  </button>
+                </li>
+                {disconnect.isError && (
+                  <li
+                    role="alert"
+                    className="px-3 py-2 text-xs leading-relaxed text-error"
+                  >
+                    {disconnect.error instanceof Error
+                      ? disconnect.error.message
+                      : "Unable to disconnect from Plex"}
+                  </li>
+                )}
+              </>
             )}
           </motion.ul>
         )}

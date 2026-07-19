@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { QueryClient } from "@tanstack/react-query";
 import {
+  clearServerScopedQueries,
   invalidateSyncDerivedQueries,
   resetServerScopedQueries,
 } from "./queryCache.ts";
@@ -43,5 +44,24 @@ Deno.test("server switch resets every server-scoped detail cache", async () => {
   assertEquals(queryClient.getQueryData(previewKey), undefined);
   assertEquals(queryClient.getQueryData(queryKeys.auth.status), {
     configured: true,
+  });
+});
+
+Deno.test("disconnect clears server data without clearing auth status", async () => {
+  const queryClient = new QueryClient();
+  const libraryKey = queryKeys.libraries.all;
+
+  queryClient.setQueryData(libraryKey, { libraries: [{ title: "Movies" }] });
+  queryClient.setQueryData(queryKeys.auth.status, {
+    configured: false,
+    source: null,
+  });
+
+  await clearServerScopedQueries(queryClient);
+
+  assertEquals(queryClient.getQueryData(libraryKey), undefined);
+  assertEquals(queryClient.getQueryData(queryKeys.auth.status), {
+    configured: false,
+    source: null,
   });
 });

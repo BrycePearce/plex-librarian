@@ -11,6 +11,19 @@ export function resetServerScopedQueries(
   });
 }
 
+// Disconnect is different from a server switch: by the time this runs the protected
+// layout has been replaced by setup. Cancel any stragglers and remove their data
+// without making mounted queries refetch against a server that is no longer active.
+export async function clearServerScopedQueries(
+  queryClient: QueryClient,
+): Promise<void> {
+  const predicate = (query: { queryKey: readonly unknown[] }) =>
+    serverScopedQueryRoots.some((root) => query.queryKey[0] === root);
+
+  await queryClient.cancelQueries({ predicate });
+  queryClient.removeQueries({ predicate });
+}
+
 // Mark both mounted and previously visited sync-derived views stale. Mounted queries
 // refetch immediately; inactive ones refetch when the user returns to them.
 export async function invalidateSyncDerivedQueries(

@@ -6,6 +6,7 @@ import { Library } from "lucide-react";
 import { AppSidebar } from "../components/AppSidebar";
 import { SyncCacheCoordinator } from "../features/sync/SyncCacheCoordinator";
 import { DeletionOperationCoordinator } from "../features/deletionOperations/DeletionOperationCoordinator";
+import { DisconnectTransitionProvider } from "../features/auth/DisconnectTransition";
 import "./__root.css";
 
 interface RouterContext {
@@ -13,7 +14,11 @@ interface RouterContext {
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  component: RootLayout,
+  component: () => (
+    <DisconnectTransitionProvider>
+      <RootLayout />
+    </DisconnectTransitionProvider>
+  ),
 });
 
 function RootLayout() {
