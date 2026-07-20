@@ -1,19 +1,21 @@
 <div align="center">
   <img src="assets/icon.png" alt="Plex Librarian" width="128" height="128">
-
-  # Plex Librarian
-
-  **Find the Plex media nobody watches. Recover space without guesswork.**
-
-  A lightweight, self-hosted library health dashboard for Plex.
-
-  [![CI](https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml/badge.svg)](https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml)
-  [![Docker pulls](https://img.shields.io/docker/pulls/edon231/plex-librarian?logo=docker&label=pulls)](https://hub.docker.com/r/edon231/plex-librarian)
-  [![GHCR](https://img.shields.io/badge/GHCR-plex--librarian-2496ED?logo=docker&logoColor=white)](https://github.com/BrycePearce/plex-librarian/pkgs/container/plex-librarian)
-  [![Unraid](https://img.shields.io/badge/Unraid-Community%20Apps-F15A2C?logo=unraid&logoColor=white)](https://ca.unraid.net/apps/plexlibrarian-08vc6n70wshbuf)
-  [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
-
-  [Install](#installation) · [Features](#what-it-does) · [Integrations](#sonarr-radarr-and-qbittorrent) · [Configuration](#configuration) · [Get help](https://github.com/BrycePearce/plex-librarian/issues)
+  <h1>Plex Librarian</h1>
+  <p>Find the Plex media nobody watches and recover space without guesswork.</p>
+  <p>
+    <a href="https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml"><img src="https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+    <a href="https://hub.docker.com/r/edon231/plex-librarian"><img src="https://img.shields.io/docker/pulls/edon231/plex-librarian?logo=docker&amp;label=pulls" alt="Docker pulls"></a>
+    <a href="https://github.com/BrycePearce/plex-librarian/pkgs/container/plex-librarian"><img src="https://img.shields.io/badge/GHCR-plex--librarian-2496ED?logo=docker&amp;logoColor=white" alt="GitHub Container Registry"></a>
+    <a href="https://ca.unraid.net/apps/plexlibrarian-08vc6n70wshbuf"><img src="https://img.shields.io/badge/Unraid-Community%20Apps-F15A2C?logo=unraid&amp;logoColor=white" alt="Unraid Community Apps"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f" alt="MIT License"></a>
+  </p>
+  <p>
+    <a href="#installation">Install</a> ·
+    <a href="#what-it-does">Features</a> ·
+    <a href="#sonarr-radarr-and-qbittorrent">Integrations</a> ·
+    <a href="#configuration">Configuration</a> ·
+    <a href="https://github.com/BrycePearce/plex-librarian/issues">Get help</a>
+  </p>
 </div>
 
 ![Plex Librarian dashboard](https://github.com/user-attachments/assets/a8f19d12-d86f-4395-897b-0447768f5d12)
