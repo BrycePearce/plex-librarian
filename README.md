@@ -37,7 +37,7 @@ persistent without requiring a host-specific path:
 ```yaml
 services:
   plex-librarian:
-    image: ghcr.io/brycepearce/plex-librarian:latest
+    image: edon231/plex-librarian:latest
     container_name: plex-librarian
     ports:
       - "8288:8080"
@@ -58,6 +58,15 @@ Plex**. The app finds your server and starts the first sync automatically.
 ```bash
 docker compose up -d
 ```
+
+Stable images are published to both
+[Docker Hub](https://hub.docker.com/r/edon231/plex-librarian) and
+[GitHub Container Registry](https://github.com/BrycePearce/plex-librarian/pkgs/container/plex-librarian).
+Use `edon231/plex-librarian:latest` for the newest stable release, or pin a
+complete version such as `edon231/plex-librarian:0.1.0` for predictable
+upgrades. The equivalent GHCR tags remain available under
+`ghcr.io/brycepearce/plex-librarian`. The `edge` tag tracks the latest successful
+build from `main` and may contain unreleased changes.
 
 ## Connect Sonarr and Radarr
 
