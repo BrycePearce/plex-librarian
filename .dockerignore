@@ -3,6 +3,17 @@
 .env.*
 backend/data/
 /data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 backend/.deno/
 node_modules/
 frontend/dist/
