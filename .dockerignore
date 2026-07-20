@@ -2,6 +2,7 @@
 .env
 .env.*
 backend/data/
+/data/
 backend/.deno/
 node_modules/
 frontend/dist/

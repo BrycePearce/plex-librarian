@@ -1,5 +1,6 @@
 .env
 backend/data/
+/data/
 node_modules/
 frontend/dist/
 frontend/.vite/
