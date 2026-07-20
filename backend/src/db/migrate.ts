@@ -1,8 +1,5 @@
 import { resolve } from '@std/path';
-import {
-  DEFAULT_AUTO_SYNC_TIME_ZONE,
-  isValidTimeZone,
-} from '@plex-librarian/shared/schedule.ts';
+import { DEFAULT_AUTO_SYNC_TIME_ZONE, isValidTimeZone } from '@plex-librarian/shared/schedule.ts';
 import { openSqliteDb } from './util.ts';
 
 export async function runMigrations(dbPath: string, migrationsDir: string): Promise<void> {
