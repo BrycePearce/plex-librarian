@@ -20,14 +20,10 @@
 
 ![Plex Librarian dashboard](https://github.com/user-attachments/assets/a8f19d12-d86f-4395-897b-0447768f5d12)
 
-Plex Librarian turns stale, duplicated, and oversized media into clear cleanup
-decisions. It combines Plex viewing history with file-size insights, user
-activity, and optional Sonarr, Radarr, and qBittorrent integrations so you can
-reclaim terabytes in a few deliberate clicks—not by blindly deleting files.
-
-It ships as one small Docker container for Unraid or any other Docker host. The
-defaults are designed to be useful immediately, while every destructive action
-is previewed and revalidated before it runs.
+Plex Librarian is a tool for managing and maintaining Plex servers. It's
+intended as a simpler alternative to heavier tools with similar functionality,
+while offering some unique cleanup tools of its own. The goal is to reclaim
+terabytes of storage in as few clicks as possible, using sensible defaults.
 
 ## What it does
 
@@ -37,13 +33,7 @@ is previewed and revalidated before it runs.
 | 💾 | **Duplicate detection** | Surface duplicate movie and episode versions and see how much space each copy consumes. |
 | 👥 | **User insights** | Review viewing activity, inactive accounts, and signals that may indicate account sharing. |
 | 🔗 | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported. |
-| 🌱 | **qBittorrent cleanup** | Optionally remove a verified torrent payload and its remaining Arr hardlink in the same guided workflow. |
-| 🛡️ | **Deletion guardrails** | Preview every effect, check active playback and ownership, queue work durably, and retry or review failures. |
-| 🔄 | **Automatic sync** | Schedule daily refreshes in your own time zone and follow live sync progress from the web UI. |
-
-Plex Librarian complements tools such as Sonarr and Radarr: they acquire and
-organize media; Plex Librarian shows what is no longer earning its space and
-helps you remove it safely.
+| 🌱 | **Hardlink & torrent cleanup** | Delete verified qBittorrent files and the library hardlink created by an Arr import in one guided workflow. Plex Librarian can also clean up orphaned download-side hardlinks after the torrent is gone. |
 
 ## Installation
 
