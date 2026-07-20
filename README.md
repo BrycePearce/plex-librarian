@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icon.png" alt="Plex Librarian" width="128" height="128">
   <h1>Plex Librarian</h1>
-  <p>Find the Plex media nobody watches and recover space without guesswork.</p>
+  <p>Find unwatched media, manage users, save bandwidth and space.</p>
   <p>
     <a href="https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml"><img src="https://github.com/BrycePearce/plex-librarian/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
     <a href="https://hub.docker.com/r/edon231/plex-librarian"><img src="https://img.shields.io/docker/pulls/edon231/plex-librarian?logo=docker&amp;label=pulls" alt="Docker pulls"></a>
