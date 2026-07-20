@@ -140,7 +140,14 @@ browser; only the tracker hostname is displayed.
 
 ## Configuration
 
-Most settings are managed from the web UI. These environment variables are
+Most settings are managed from the web UI. Under **Settings → Automatic sync**, you
+can enable or disable the daily refresh, choose its local-time hour and IANA time
+zone, and decide whether the app catches up after being offline for more than 24
+hours. The page previews the next scheduled window and named zones follow
+daylight-saving changes automatically. If a daylight-saving jump removes the
+selected local hour, that day's scheduled run is skipped.
+
+These environment variables are
 available for Docker and advanced Unraid installations:
 
 | Variable                     | Required | Description                                                                                           |

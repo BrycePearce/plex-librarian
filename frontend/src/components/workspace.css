@@ -50,6 +50,196 @@
 .settings-section .input:focus-visible { border-color: color-mix(in oklab, var(--settings-color) 65%, transparent); outline-color: color-mix(in oklab, var(--settings-color) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--settings-color) 10%, transparent); }
 .settings-save-status-visible { animation: settings-save-pop 260ms cubic-bezier(.2,.8,.2,1); }
 
+.auto-sync-content {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem 0 1rem;
+}
+.auto-sync-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  min-height: 5.5rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid color-mix(in oklab, var(--settings-color) 19%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(
+    105deg,
+    color-mix(in oklab, var(--settings-color) 13%, transparent),
+    color-mix(in oklab, var(--color-base-100) 30%, transparent)
+  );
+}
+.auto-sync-summary-icon,
+.auto-sync-control-icon {
+  display: grid;
+  place-items: center;
+  color: var(--settings-color);
+  background: color-mix(in oklab, var(--settings-color) 13%, transparent);
+}
+.auto-sync-summary-icon {
+  width: 40px;
+  height: 40px;
+  border: 1px solid color-mix(in oklab, var(--settings-color) 23%, transparent);
+  border-radius: 12px;
+}
+.auto-sync-summary-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.16rem;
+}
+.auto-sync-kicker {
+  color: color-mix(
+    in oklab,
+    var(--settings-color) 78%,
+    var(--color-base-content)
+  );
+  font-size: 0.6rem;
+  font-weight: 750;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.auto-sync-summary-copy strong {
+  overflow: hidden;
+  font-size: 1rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auto-sync-summary-copy > span:last-child {
+  overflow: hidden;
+  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auto-sync-enable {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.auto-sync-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+.auto-sync-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.auto-sync-status.is-active {
+  color: var(--color-success);
+}
+.auto-sync-controls {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.8fr) minmax(22rem, 1.2fr);
+  gap: 0.8rem;
+}
+.auto-sync-control-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 4.65rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid
+    color-mix(in oklab, var(--color-base-content) 8%, transparent);
+  border-radius: 13px;
+  background: color-mix(in oklab, var(--color-base-100) 24%, transparent);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+.auto-sync-control-card:focus-within {
+  border-color: color-mix(in oklab, var(--settings-color) 34%, transparent);
+  background: color-mix(
+    in oklab,
+    var(--settings-color) 4%,
+    var(--color-base-100)
+  );
+}
+.auto-sync-control-icon {
+  width: 31px;
+  height: 31px;
+  border-radius: 9px;
+}
+.auto-sync-control-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+.auto-sync-control-copy strong,
+.auto-sync-catch-up strong {
+  font-size: 0.77rem;
+  font-weight: 700;
+}
+.auto-sync-control-copy small,
+.auto-sync-catch-up small {
+  color: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  font-size: 0.65rem;
+  line-height: 1.35;
+}
+.auto-sync-control-card .select {
+  width: 7.5rem;
+}
+.auto-sync-time-zone-control {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.auto-sync-time-zone-control .input {
+  width: 13rem;
+}
+.auto-sync-use-local.is-hidden {
+  visibility: hidden;
+}
+.auto-sync-field-error {
+  grid-column: 2 / -1;
+  color: var(--color-error);
+  font-size: 0.62rem;
+  visibility: hidden;
+}
+.auto-sync-field-error.is-visible {
+  visibility: visible;
+}
+.auto-sync-catch-up {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid
+    color-mix(in oklab, var(--color-base-content) 7%, transparent);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.auto-sync-catch-up > span:nth-child(2) {
+  display: grid;
+  gap: 0.15rem;
+}
+.auto-sync-content.is-disabled .auto-sync-controls,
+.auto-sync-content.is-disabled .auto-sync-catch-up {
+  opacity: 0.52;
+}
+.auto-sync-save-error {
+  padding: 0.65rem 0.8rem;
+  border-radius: 9px;
+  color: var(--color-error);
+  background: color-mix(in oklab, var(--color-error) 9%, transparent);
+  font-size: 0.7rem;
+}
+.auto-sync-footnote {
+  color: color-mix(in oklab, var(--color-base-content) 34%, transparent);
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
 @keyframes settings-save-pop {
   0% { transform: translateY(2px) scale(.94); }
   70% { transform: translateY(-1px) scale(1.04); }
@@ -67,6 +257,13 @@
   .settings-field-row { grid-template-columns: 1fr; gap: .85rem; }
   .settings-field-row::before { right: -1rem; left: -1rem; }
   .settings-field-control { min-width: 0; }
+  .auto-sync-summary { grid-template-columns: auto minmax(0, 1fr); }
+  .auto-sync-enable { grid-column: 1 / -1; justify-content: space-between; padding-top: .65rem; border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
+  .auto-sync-controls { grid-template-columns: 1fr; }
+  .auto-sync-control-card { grid-template-columns: auto minmax(0, 1fr); }
+  .auto-sync-control-card .select, .auto-sync-time-zone-control { grid-column: 1 / -1; width: 100%; }
+  .auto-sync-time-zone-control .input { width: 100%; }
+  .auto-sync-field-error { grid-column: 1 / -1; }
 }
 .activity-feed .polished-row + .polished-row { border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
 .media-detail-header { padding: .25rem 0 .5rem; }

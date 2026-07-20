@@ -6,7 +6,7 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// This config runs under `deno run -A npm:vite` (see frontend/deno.json), so the real
+// This config runs under Vite via `deno task` (see frontend/deno.json), so the real
 // `Deno` global is always present at runtime — but frontend/ is outside the Deno LSP's
 // `deno.enablePaths` (.vscode/settings.json), so the editor's plain-TS view of this file
 // doesn't know about it without this narrow ambient declaration.

@@ -269,8 +269,12 @@ export const settings = sqliteTable('settings', {
   publicJwk: text('public_jwk'),
   privateJwk: text('private_jwk'),
   activeServerId: integer('active_server_id').references(() => servers.id),
-  autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).default(true),
-  autoSyncHour: integer('auto_sync_hour').default(3), // 0–23 local server time; default 3am
+  autoSyncEnabled: integer('auto_sync_enabled', { mode: 'boolean' }).notNull().default(true),
+  autoSyncHour: integer('auto_sync_hour').notNull().default(3), // 0–23 in autoSyncTimeZone
+  // The migration temporarily uses NULL to identify rows that need the legacy TZ value
+  // copied into this app-managed setting; committed rows are always backfilled.
+  autoSyncTimeZone: text('auto_sync_time_zone').default('UTC'),
+  autoSyncCatchUp: integer('auto_sync_catch_up', { mode: 'boolean' }).notNull().default(true),
   staleMinAgeDays: integer('stale_min_age_days').notNull().default(90),
   // Deliberately a separate column from staleMinAgeDays rather than reused — media
   // staleness and user inactivity are different concepts that happen to share a "days"

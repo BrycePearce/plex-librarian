@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { libraries, syncLog } from '../../db/schema.ts';
 import { libraryByKey, syncLogById } from '../../db/scope.ts';
@@ -81,6 +81,26 @@ router.get('/history', async (c) => {
     desc(syncLog.id),
   ).limit(limit);
   return c.json(rows satisfies SyncLog[]);
+});
+
+// Kept separate from the capped history feed so schedule previews use the same
+// authoritative latest-success lookup as the backend scheduler.
+router.get('/latest-success', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ finishedAt: null });
+
+  const [row] = await db.select({ finishedAt: syncLog.finishedAt })
+    .from(syncLog)
+    .where(
+      and(
+        eq(syncLog.serverId, serverId),
+        eq(syncLog.status, 'success'),
+        isNull(syncLog.libraryKey),
+      ),
+    )
+    .orderBy(desc(syncLog.finishedAt))
+    .limit(1);
+  return c.json({ finishedAt: row?.finishedAt ?? null });
 });
 
 router.get('/:id/events', async (c) => {

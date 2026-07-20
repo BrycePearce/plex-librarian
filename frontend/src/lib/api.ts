@@ -341,7 +341,7 @@ export const api = {
   settings: {
     get: () => apiFetch<Settings>("/settings"),
     // Only the keys present in `partial` are validated/changed server-side — see
-    // routes/settings.ts — so the independent Settings inputs can each
+    // features/settings/route.ts — so the independent Settings inputs can each
     // save independently without clobbering the other's value.
     update: (partial: Partial<Settings>) =>
       apiFetch<Settings>("/settings", {
@@ -471,6 +471,8 @@ export const api = {
     poll: (id: number) => apiFetch<SyncLog>(`/sync/${id}`),
     history: (limit = 20) =>
       apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
+    latestSuccess: () =>
+      apiFetch<{ finishedAt: number | null }>("/sync/latest-success"),
   },
   events: {
     list: (params: { limit?: number; before?: number } = {}) => {

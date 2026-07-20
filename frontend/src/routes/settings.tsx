@@ -1,21 +1,21 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { QueryKey } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { Archive, Mail, Settings as SettingsIcon, Users } from "lucide-react";
+import { PageHeader } from "../components/Workspace";
+import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger";
 import {
-  Archive,
-  Check,
-  Mail,
-  Settings as SettingsIcon,
-  Users,
-} from "lucide-react";
-import type { ReactNode } from "react";
+  AutoSyncSettings,
+  LoadingAutoSyncSettings,
+} from "../features/settings/AutoSyncSettings";
+import { DebouncedDaysInput } from "../features/settings/DebouncedDaysInput";
+import {
+  LoadingDaysInput,
+  SettingRow,
+  SettingsSection,
+} from "../features/settings/SettingsSection";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import { requireAuth } from "../lib/requireAuth";
-import type { Settings } from "../lib/api";
-import { PageHeader } from "../components/Workspace";
-import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger";
 
 const MAX_INACTIVITY_DAYS = 36_500;
 const MIN_USER_ACTIVITY_RETENTION_DAYS = 30;
@@ -30,21 +30,38 @@ function SettingsPage() {
     queryKey: queryKeys.settings.all,
     queryFn: api.settings.get,
   });
+  const { data: latestSuccessfulSync, isPending: latestSuccessPending } =
+    useQuery({
+      queryKey: queryKeys.sync.latestSuccess,
+      queryFn: api.sync.latestSuccess,
+    });
+  const lastSuccessfulSyncAt = latestSuccessPending
+    ? undefined
+    : (latestSuccessfulSync?.finishedAt ?? null);
 
   return (
     <div className="workspace-page settings-page space-y-6 max-w-5xl">
       <PageHeader
         eyebrow="Application preferences"
         title="Settings"
-        description="Tune library analysis, user activity, and media-manager integrations."
+        description="Tune automatic sync, library analysis, user activity, and media-manager integrations."
         icon={SettingsIcon}
         actions={<ArrIntegrationTrigger />}
       />
-      {/* Renders the Sonarr/Radarr dialog only while /settings/sonarr-radarr is active —
-          see that route and ArrIntegrationDialog. */}
+      {/* Renders the Sonarr/Radarr dialog only while /settings/sonarr-radarr is
+          active; see that route and ArrIntegrationDialog. */}
       <Outlet />
 
       <div className="settings-sections">
+        {data ? (
+          <AutoSyncSettings
+            settings={data}
+            lastSuccessfulSyncAt={lastSuccessfulSyncAt}
+          />
+        ) : (
+          <LoadingAutoSyncSettings />
+        )}
+
         <SettingsSection
           icon={Archive}
           tone="primary"
@@ -55,16 +72,17 @@ function SettingsPage() {
             title="Default minimum age for never-watched items"
             description="Unwatched items added within this many days are not considered stale. Libraries without their own override use this default."
           >
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.staleMinAgeDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ staleMinAgeDays: value })}
-                  getSavedValue={(updated) => updated.staleMinAgeDays}
-                />
-              )
-              : <LoadingDaysInput label="Loading default minimum item age" />}
+            {data ? (
+              <DebouncedDaysInput
+                initialDays={data.staleMinAgeDays}
+                mutationFn={(value) =>
+                  api.settings.update({ staleMinAgeDays: value })
+                }
+                getSavedValue={(updated) => updated.staleMinAgeDays}
+              />
+            ) : (
+              <LoadingDaysInput label="Loading default minimum item age" />
+            )}
           </SettingRow>
         </SettingsSection>
 
@@ -78,35 +96,37 @@ function SettingsPage() {
             title="Inactive user threshold"
             description="Users who haven't watched anything in at least this many days are flagged inactive on the Users page."
           >
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.inactiveUserDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ inactiveUserDays: value })}
-                  getSavedValue={(updated) => updated.inactiveUserDays}
-                  invalidateQueryKey={queryKeys.users.all}
-                  maxDays={MAX_INACTIVITY_DAYS}
-                />
-              )
-              : <LoadingDaysInput label="Loading inactive user threshold" />}
+            {data ? (
+              <DebouncedDaysInput
+                initialDays={data.inactiveUserDays}
+                mutationFn={(value) =>
+                  api.settings.update({ inactiveUserDays: value })
+                }
+                getSavedValue={(updated) => updated.inactiveUserDays}
+                invalidateQueryKey={queryKeys.users.all}
+                maxDays={MAX_INACTIVITY_DAYS}
+              />
+            ) : (
+              <LoadingDaysInput label="Loading inactive user threshold" />
+            )}
           </SettingRow>
           <SettingRow
             title="User activity retention"
             description="Keep user IP, device, and playback observations for at least the full 30-day sharing-risk window. Set to 0 to keep them forever."
           >
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.ipHistoryRetentionDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ ipHistoryRetentionDays: value })}
-                  getSavedValue={(updated) => updated.ipHistoryRetentionDays}
-                  minimumNonZero={MIN_USER_ACTIVITY_RETENTION_DAYS}
-                  invalidateQueryKey={queryKeys.users.all}
-                />
-              )
-              : <LoadingDaysInput label="Loading user activity retention" />}
+            {data ? (
+              <DebouncedDaysInput
+                initialDays={data.ipHistoryRetentionDays}
+                mutationFn={(value) =>
+                  api.settings.update({ ipHistoryRetentionDays: value })
+                }
+                getSavedValue={(updated) => updated.ipHistoryRetentionDays}
+                minimumNonZero={MIN_USER_ACTIVITY_RETENTION_DAYS}
+                invalidateQueryKey={queryKeys.users.all}
+              />
+            ) : (
+              <LoadingDaysInput label="Loading user activity retention" />
+            )}
           </SettingRow>
         </SettingsSection>
 
@@ -120,199 +140,40 @@ function SettingsPage() {
             title="Pending invitation threshold"
             description="Pending Plex invitations at least this old are highlighted for follow-up on the Users page."
           >
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.pendingInviteStaleDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ pendingInviteStaleDays: value })}
-                  getSavedValue={(updated) => updated.pendingInviteStaleDays}
-                  invalidateQueryKey={queryKeys.users.invitations}
-                  maxDays={MAX_INACTIVITY_DAYS}
-                />
-              )
-              : (
-                <LoadingDaysInput label="Loading pending invitation threshold" />
-              )}
+            {data ? (
+              <DebouncedDaysInput
+                initialDays={data.pendingInviteStaleDays}
+                mutationFn={(value) =>
+                  api.settings.update({ pendingInviteStaleDays: value })
+                }
+                getSavedValue={(updated) => updated.pendingInviteStaleDays}
+                invalidateQueryKey={queryKeys.users.invitations}
+                maxDays={MAX_INACTIVITY_DAYS}
+              />
+            ) : (
+              <LoadingDaysInput label="Loading pending invitation threshold" />
+            )}
           </SettingRow>
           <SettingRow
             title="Overdue invitation threshold"
             description="Pending invitations at least this old are marked overdue. This must be at least the pending invitation threshold."
           >
-            {data
-              ? (
-                <DebouncedDaysInput
-                  initialDays={data.pendingInviteCriticalDays}
-                  mutationFn={(value) =>
-                    api.settings.update({ pendingInviteCriticalDays: value })}
-                  getSavedValue={(updated) => updated.pendingInviteCriticalDays}
-                  invalidateQueryKey={queryKeys.users.invitations}
-                  maxDays={MAX_INACTIVITY_DAYS}
-                />
-              )
-              : (
-                <LoadingDaysInput label="Loading overdue invitation threshold" />
-              )}
+            {data ? (
+              <DebouncedDaysInput
+                initialDays={data.pendingInviteCriticalDays}
+                mutationFn={(value) =>
+                  api.settings.update({ pendingInviteCriticalDays: value })
+                }
+                getSavedValue={(updated) => updated.pendingInviteCriticalDays}
+                invalidateQueryKey={queryKeys.users.invitations}
+                maxDays={MAX_INACTIVITY_DAYS}
+              />
+            ) : (
+              <LoadingDaysInput label="Loading overdue invitation threshold" />
+            )}
           </SettingRow>
         </SettingsSection>
       </div>
-    </div>
-  );
-}
-
-function SettingsSection({ icon: Icon, tone, title, description, children }: {
-  icon: typeof Archive;
-  tone: "primary" | "secondary" | "accent";
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      className={`workspace-surface settings-section settings-section-${tone}`}
-    >
-      <header className="settings-section-header">
-        <span className="settings-section-icon">
-          <Icon className="size-5" />
-        </span>
-        <span>
-          <small>Preferences</small>
-          <h2>{title}</h2>
-          <p>{description}</p>
-        </span>
-      </header>
-      <div className="settings-section-fields">{children}</div>
-    </section>
-  );
-}
-
-function SettingRow({ title, description, children }: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="settings-field-row">
-      <div>
-        <h3>{title}</h3>
-        <p>{description}</p>
-      </div>
-      <div className="settings-field-control">{children}</div>
-    </div>
-  );
-}
-
-function LoadingDaysInput({ label }: { label: string }) {
-  return (
-    <input
-      type="number"
-      className="input input-bordered input-sm w-24"
-      disabled
-      aria-label={label}
-    />
-  );
-}
-
-// Only rendered once `data` has loaded (see SettingsPage above), so local editing state
-// can be initialized directly from the server value on mount — no Effect syncing data
-// into state, and so no frame where "not loaded yet" could be misread as "invalid".
-// Generic over which settings key it saves (see api.settings.update's comment for why
-// two of these can save independently without clobbering each other).
-function DebouncedDaysInput(
-  {
-    initialDays,
-    mutationFn,
-    getSavedValue,
-    invalidateQueryKey,
-    maxDays,
-    minimumNonZero,
-  }: {
-    initialDays: number;
-    mutationFn: (value: number) => Promise<Settings>;
-    getSavedValue: (updated: Settings) => number;
-    // Other cached queries that read this setting's value and need to be refetched on
-    // save (e.g. the Users page reads inactiveUserDays) — settings itself is patched
-    // straight into the cache below via setQueryData, but dependent queries have no
-    // such direct link and would otherwise keep serving a stale threshold.
-    invalidateQueryKey?: QueryKey;
-    maxDays?: number;
-    minimumNonZero?: number;
-  },
-) {
-  const qc = useQueryClient();
-  const [days, setDays] = useState(String(initialDays));
-  const lastSavedRef = useRef(initialDays);
-
-  const [justSaved, setJustSaved] = useState(false);
-  const savedTimeoutRef = useRef<number | undefined>(undefined);
-
-  const update = useMutation({
-    mutationFn,
-    onSuccess: (updated) => {
-      qc.setQueryData(queryKeys.settings.all, updated);
-      if (invalidateQueryKey) {
-        void qc.invalidateQueries({ queryKey: invalidateQueryKey });
-      }
-      lastSavedRef.current = getSavedValue(updated);
-      setJustSaved(true);
-      clearTimeout(savedTimeoutRef.current);
-      savedTimeoutRef.current = setTimeout(() => setJustSaved(false), 2000);
-    },
-  });
-
-  useEffect(() => () => clearTimeout(savedTimeoutRef.current), []);
-
-  const parsed = Number(days);
-  const valid = days !== "" && Number.isInteger(parsed) && parsed >= 0 &&
-    (minimumNonZero === undefined || parsed === 0 ||
-      parsed >= minimumNonZero) &&
-    (maxDays === undefined || parsed <= maxDays);
-
-  // Debounced auto-save: waits for typing to settle so we don't PATCH on every keystroke.
-  useEffect(() => {
-    if (!valid || parsed === lastSavedRef.current) return;
-    const timer = setTimeout(() => update.mutate(parsed), 500);
-    return () => clearTimeout(timer);
-  }, [days, valid, parsed]);
-
-  return (
-    <div className="flex items-center gap-2">
-      <input
-        type="number"
-        min={0}
-        max={maxDays}
-        step={1}
-        className={`input input-bordered input-sm w-24 ${
-          !valid ? "input-error" : ""
-        }`}
-        value={days}
-        onChange={(e) => setDays(e.target.value)}
-        title={minimumNonZero === undefined
-          ? undefined
-          : `Enter 0 or at least ${minimumNonZero} days`}
-      />
-      <span className="text-sm text-base-content/40">days</span>
-      {update.isPending && (
-        <span className="loading loading-spinner loading-xs text-base-content/40" />
-      )}
-      <span
-        className={`flex items-center gap-1 text-xs text-success transition-opacity duration-300 ${
-          justSaved && !update.isPending ? "opacity-100" : "opacity-0"
-        } ${
-          justSaved && !update.isPending
-            ? "settings-save-status-visible"
-            : ""
-        }`}
-      >
-        <Check className="w-3.5 h-3.5" /> Saved
-      </span>
-      {update.isError && (
-        <span className="text-xs text-error">
-          {update.error instanceof Error
-            ? update.error.message
-            : "Failed to save"}
-        </span>
-      )}
     </div>
   );
 }

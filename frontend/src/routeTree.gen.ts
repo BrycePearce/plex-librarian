@@ -9,42 +9,22 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as UsersRouteImport } from './routes/users'
-import { Route as SetupRouteImport } from './routes/setup'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as DuplicatesRouteImport } from './routes/duplicates'
-import { Route as DashboardRouteImport } from './routes/dashboard'
-import { Route as ActivityRouteImport } from './routes/activity'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr'
+import { Route as ActivityRouteImport } from './routes/activity'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as DuplicatesRouteImport } from './routes/duplicates'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as SetupRouteImport } from './routes/setup'
+import { Route as UsersRouteImport } from './routes/users'
 import { Route as DeletionOperationsIdRouteImport } from './routes/deletion-operations.$id'
+import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale'
-import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey'
+import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey'
 
-const UsersRoute = UsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SetupRoute = SetupRouteImport.update({
-  id: '/setup',
-  path: '/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DuplicatesRoute = DuplicatesRouteImport.update({
-  id: '/duplicates',
-  path: '/duplicates',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActivityRoute = ActivityRouteImport.update({
@@ -52,9 +32,34 @@ const ActivityRoute = ActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DuplicatesRoute = DuplicatesRouteImport.update({
+  id: '/duplicates',
+  path: '/duplicates',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupRoute = SetupRouteImport.update({
+  id: '/setup',
+  path: '/setup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsersRoute = UsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeletionOperationsIdRoute = DeletionOperationsIdRouteImport.update({
+  id: '/deletion-operations/$id',
+  path: '/deletion-operations/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsSonarrRadarrRoute = SettingsSonarrRadarrRouteImport.update({
@@ -62,26 +67,21 @@ const SettingsSonarrRadarrRoute = SettingsSonarrRadarrRouteImport.update({
   path: '/sonarr-radarr',
   getParentRoute: () => SettingsRoute,
 } as any)
-const DeletionOperationsIdRoute = DeletionOperationsIdRouteImport.update({
-  id: '/deletion-operations/$id',
-  path: '/deletion-operations/$id',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   id: '/libraries/$key/stale',
   path: '/libraries/$key/stale',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LibrariesKeyShowsRatingKeyRoute =
-  LibrariesKeyShowsRatingKeyRouteImport.update({
-    id: '/libraries/$key/shows/$ratingKey',
-    path: '/libraries/$key/shows/$ratingKey',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const LibrariesKeyMoviesRatingKeyRoute =
   LibrariesKeyMoviesRatingKeyRouteImport.update({
     id: '/libraries/$key/movies/$ratingKey',
     path: '/libraries/$key/movies/$ratingKey',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const LibrariesKeyShowsRatingKeyRoute =
+  LibrariesKeyShowsRatingKeyRouteImport.update({
+    id: '/libraries/$key/shows/$ratingKey',
+    path: '/libraries/$key/shows/$ratingKey',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -189,39 +189,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/users': {
-      id: '/users'
-      path: '/users'
-      fullPath: '/users'
-      preLoaderRoute: typeof UsersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/setup': {
-      id: '/setup'
-      path: '/setup'
-      fullPath: '/setup'
-      preLoaderRoute: typeof SetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/duplicates': {
-      id: '/duplicates'
-      path: '/duplicates'
-      fullPath: '/duplicates'
-      preLoaderRoute: typeof DuplicatesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/activity': {
@@ -231,11 +203,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ActivityRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/duplicates': {
+      id: '/duplicates'
+      path: '/duplicates'
+      fullPath: '/duplicates'
+      preLoaderRoute: typeof DuplicatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/setup': {
+      id: '/setup'
+      path: '/setup'
+      fullPath: '/setup'
+      preLoaderRoute: typeof SetupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/users': {
+      id: '/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof UsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/deletion-operations/$id': {
+      id: '/deletion-operations/$id'
+      path: '/deletion-operations/$id'
+      fullPath: '/deletion-operations/$id'
+      preLoaderRoute: typeof DeletionOperationsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/sonarr-radarr': {
@@ -245,13 +252,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSonarrRadarrRouteImport
       parentRoute: typeof SettingsRoute
     }
-    '/deletion-operations/$id': {
-      id: '/deletion-operations/$id'
-      path: '/deletion-operations/$id'
-      fullPath: '/deletion-operations/$id'
-      preLoaderRoute: typeof DeletionOperationsIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/libraries/$key/stale': {
       id: '/libraries/$key/stale'
       path: '/libraries/$key/stale'
@@ -259,18 +259,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibrariesKeyStaleRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/libraries/$key/shows/$ratingKey': {
-      id: '/libraries/$key/shows/$ratingKey'
-      path: '/libraries/$key/shows/$ratingKey'
-      fullPath: '/libraries/$key/shows/$ratingKey'
-      preLoaderRoute: typeof LibrariesKeyShowsRatingKeyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/libraries/$key/movies/$ratingKey': {
       id: '/libraries/$key/movies/$ratingKey'
       path: '/libraries/$key/movies/$ratingKey'
       fullPath: '/libraries/$key/movies/$ratingKey'
       preLoaderRoute: typeof LibrariesKeyMoviesRatingKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/libraries/$key/shows/$ratingKey': {
+      id: '/libraries/$key/shows/$ratingKey'
+      path: '/libraries/$key/shows/$ratingKey'
+      fullPath: '/libraries/$key/shows/$ratingKey'
+      preLoaderRoute: typeof LibrariesKeyShowsRatingKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

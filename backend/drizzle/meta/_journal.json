@@ -260,6 +260,13 @@
       "when": 1784363188153,
       "tag": "0037_dashing_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1784510687950,
+      "tag": "0038_ambitious_supernaut",
+      "breakpoints": true
     }
   ]
 }

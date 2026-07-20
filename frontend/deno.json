@@ -2,9 +2,9 @@
   "name": "frontend",
   "exports": {},
   "tasks": {
-    "dev": "deno run -A npm:vite",
-    "build": "deno run -A npm:vite build",
-    "preview": "deno run -A npm:vite preview"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
@@ -16,28 +16,29 @@
   "imports": {
     "@shared/types": "../shared/types.ts",
     "@shared/search": "../shared/search.ts",
+    "@shared/schedule": "../shared/schedule.ts",
     "react": "npm:react@^19.2.7",
     "react/jsx-runtime": "npm:react@^19.2.7/jsx-runtime",
     "react-dom": "npm:react-dom@^19.2.7",
     "react-dom/client": "npm:react-dom@^19.2.7/client",
-    "@tanstack/react-query": "npm:@tanstack/react-query@^5.101.1",
-    "@tanstack/react-router": "npm:@tanstack/react-router@^1.170.16",
-    "@tanstack/react-query-devtools": "npm:@tanstack/react-query-devtools@^5.101.1",
+    "@tanstack/react-query": "npm:@tanstack/react-query@^5.101.2",
+    "@tanstack/react-router": "npm:@tanstack/react-router@^1.170.18",
+    "@tanstack/react-query-devtools": "npm:@tanstack/react-query-devtools@^5.101.2",
     "@tanstack/react-router-devtools": "npm:@tanstack/react-router-devtools@^1.167.0",
-    "@tanstack/router-plugin": "npm:@tanstack/router-plugin@^1.168.18",
+    "@tanstack/router-plugin": "npm:@tanstack/router-plugin@^1.168.23",
     "@types/react": "npm:@types/react@^19.2.17",
     "@types/react-dom": "npm:@types/react-dom@^19.2.3",
-    "@std/assert": "jsr:@std/assert@^1",
+    "@std/assert": "jsr:@std/assert@^1.0.19",
     "@vitejs/plugin-react": "npm:@vitejs/plugin-react@^6.0.3",
     "@rolldown/plugin-babel": "npm:@rolldown/plugin-babel@^0.2.3",
     "babel-plugin-react-compiler": "npm:babel-plugin-react-compiler@^1.0.0",
-    "@tailwindcss/vite": "npm:@tailwindcss/vite@^4.3.1",
-    "daisyui": "npm:daisyui@^5.5.23",
-    "lucide-react": "npm:lucide-react@^1.21.0",
+    "@tailwindcss/vite": "npm:@tailwindcss/vite@^4.3.3",
+    "daisyui": "npm:daisyui@^5.6.18",
+    "lucide-react": "npm:lucide-react@^1.25.0",
     "motion/react": "npm:motion@^12.42.2/react",
-    "tailwindcss": "npm:tailwindcss@^4.3.1",
-    "typescript": "npm:typescript@^6.0.3",
-    "uuid": "npm:uuid@13.0.0",
-    "vite": "npm:vite@^8.1.0"
+    "tailwindcss": "npm:tailwindcss@^4.3.3",
+    "typescript": "npm:typescript@^7.0.2",
+    "uuid": "npm:uuid@14.0.1",
+    "vite": "npm:vite@^8.1.5"
   }
 }

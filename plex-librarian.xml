@@ -11,7 +11,6 @@
   <!-- Sonarr, Radarr, and qBittorrent connections are normally configured in the web UI. -->
   <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and reclaim disk space. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely.</Overview>
   <Category>MediaApp:Other</Category>
-  <Beta>true</Beta>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL />
   <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>

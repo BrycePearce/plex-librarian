@@ -4,12 +4,21 @@ import { db } from '../../db/index.ts';
 import { settings } from '../../db/schema.ts';
 import type { Settings } from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS, MIN_USER_ACTIVITY_RETENTION_DAYS } from '../../configLimits.ts';
+import {
+  DEFAULT_AUTO_SYNC_HOUR,
+  DEFAULT_AUTO_SYNC_TIME_ZONE,
+  isValidTimeZone,
+} from '@plex-librarian/shared/schedule.ts';
 
 const router = new Hono();
 
 // GET /api/settings
 router.get('/', async (c) => {
   const [row] = await db.select({
+    autoSyncEnabled: settings.autoSyncEnabled,
+    autoSyncHour: settings.autoSyncHour,
+    autoSyncTimeZone: settings.autoSyncTimeZone,
+    autoSyncCatchUp: settings.autoSyncCatchUp,
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
     pendingInviteStaleDays: settings.pendingInviteStaleDays,
@@ -22,6 +31,10 @@ router.get('/', async (c) => {
 
   return c.json(
     {
+      autoSyncEnabled: row?.autoSyncEnabled ?? true,
+      autoSyncHour: row?.autoSyncHour ?? DEFAULT_AUTO_SYNC_HOUR,
+      autoSyncTimeZone: row?.autoSyncTimeZone ?? DEFAULT_AUTO_SYNC_TIME_ZONE,
+      autoSyncCatchUp: row?.autoSyncCatchUp ?? true,
       staleMinAgeDays: row?.staleMinAgeDays ?? 90,
       inactiveUserDays: row?.inactiveUserDays ?? 90,
       pendingInviteStaleDays: row?.pendingInviteStaleDays ?? 30,
@@ -33,12 +46,15 @@ router.get('/', async (c) => {
 
 // PATCH /api/settings
 // Only the keys present in the body are touched — omitting a key never resets it — so
-// the Settings-page inputs (which save on their own debounce) can never clobber
-// each other's value. Validation for both keys runs before either is written, so a
-// request naming both keys is all-or-nothing: if either fails validation, the request
-// is rejected and nothing is written, rather than applying the valid key silently.
+// independently-saving Settings controls cannot clobber each other. Every supplied
+// field is validated before the update is written, making a multi-field request
+// all-or-nothing rather than silently applying only its valid values.
 router.patch('/', async (c) => {
   const body = await c.req.json() as {
+    autoSyncEnabled?: unknown;
+    autoSyncHour?: unknown;
+    autoSyncTimeZone?: unknown;
+    autoSyncCatchUp?: unknown;
     staleMinAgeDays?: unknown;
     inactiveUserDays?: unknown;
     pendingInviteStaleDays?: unknown;
@@ -47,6 +63,37 @@ router.patch('/', async (c) => {
   };
 
   const set: Partial<typeof settings.$inferInsert> = {};
+
+  if (body.autoSyncEnabled !== undefined) {
+    if (typeof body.autoSyncEnabled !== 'boolean') {
+      return c.json({ error: 'autoSyncEnabled must be a boolean' }, 400);
+    }
+    set.autoSyncEnabled = body.autoSyncEnabled;
+  }
+
+  if (body.autoSyncHour !== undefined) {
+    if (
+      typeof body.autoSyncHour !== 'number' || !Number.isInteger(body.autoSyncHour) ||
+      body.autoSyncHour < 0 || body.autoSyncHour > 23
+    ) {
+      return c.json({ error: 'autoSyncHour must be an integer between 0 and 23' }, 400);
+    }
+    set.autoSyncHour = body.autoSyncHour;
+  }
+
+  if (body.autoSyncTimeZone !== undefined) {
+    if (typeof body.autoSyncTimeZone !== 'string' || !isValidTimeZone(body.autoSyncTimeZone)) {
+      return c.json({ error: 'autoSyncTimeZone must be a valid IANA time zone' }, 400);
+    }
+    set.autoSyncTimeZone = body.autoSyncTimeZone;
+  }
+
+  if (body.autoSyncCatchUp !== undefined) {
+    if (typeof body.autoSyncCatchUp !== 'boolean') {
+      return c.json({ error: 'autoSyncCatchUp must be a boolean' }, 400);
+    }
+    set.autoSyncCatchUp = body.autoSyncCatchUp;
+  }
 
   if (body.staleMinAgeDays !== undefined) {
     if (
@@ -141,6 +188,10 @@ router.patch('/', async (c) => {
     });
 
   const [row] = await db.select({
+    autoSyncEnabled: settings.autoSyncEnabled,
+    autoSyncHour: settings.autoSyncHour,
+    autoSyncTimeZone: settings.autoSyncTimeZone,
+    autoSyncCatchUp: settings.autoSyncCatchUp,
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
     pendingInviteStaleDays: settings.pendingInviteStaleDays,
@@ -153,6 +204,10 @@ router.patch('/', async (c) => {
 
   return c.json(
     {
+      autoSyncEnabled: row!.autoSyncEnabled,
+      autoSyncHour: row!.autoSyncHour,
+      autoSyncTimeZone: row!.autoSyncTimeZone ?? DEFAULT_AUTO_SYNC_TIME_ZONE,
+      autoSyncCatchUp: row!.autoSyncCatchUp,
       staleMinAgeDays: row!.staleMinAgeDays,
       inactiveUserDays: row!.inactiveUserDays,
       pendingInviteStaleDays: row!.pendingInviteStaleDays,

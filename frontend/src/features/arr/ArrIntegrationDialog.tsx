@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { PlugZap, Plus, Server, Trash2 } from "lucide-react";
+import { PlugZap, Plus, Server, Trash2, X } from "lucide-react";
 import { api } from "../../lib/api";
 import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
 import { queryKeys } from "../../lib/queryKeys";
@@ -115,42 +115,50 @@ export function ArrIntegrationDialog() {
       onClose={() => void navigate({ to: "/settings" })}
     >
       {view === "manager" && (
-        <div className="modal-box polished-modal max-w-3xl">
-          <div className="flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+        <div
+          className="modal-box polished-modal max-w-3xl p-6 outline-none"
+          tabIndex={-1}
+          autoFocus
+        >
+          <div className="flex items-start gap-3.5">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-primary/15 bg-primary/10 text-primary shadow-sm">
               <Server className="size-5" />
             </span>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-bold">Media connections</h2>
-              <p className="mt-1 text-sm text-base-content/60">
+              <h2 className="text-lg font-bold tracking-tight">
+                Media connections
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-base-content/55">
                 Connect Sonarr and Radarr for managed deletion, plus qBittorrent
                 for optional torrent cleanup.
               </p>
             </div>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-sm btn-square -mr-1 -mt-1 text-base-content/55 hover:text-base-content"
               onClick={() => dialogRef.current?.close()}
+              aria-label="Close media connections"
+              title="Close"
             >
-              Close
+              <X className="size-4" />
             </button>
           </div>
 
-          <div className="mt-5 space-y-4">
+          <div className="mt-6 space-y-5">
             {isLoading && (
               <span className="loading loading-spinner loading-sm" />
             )}
             {error && <p className="text-sm text-error">{error.message}</p>}
             {data?.instances.length === 0 && (
-              <div className="flex flex-wrap items-center gap-4 rounded-xl border border-dashed border-base-300 bg-base-200/25 p-4">
-                <span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary">
+              <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-dashed border-base-content/15 bg-base-200/30 p-4 transition-colors hover:border-primary/25 hover:bg-base-200/45">
+                <span className="grid size-11 place-items-center rounded-xl border border-primary/10 bg-primary/10 text-primary">
                   <PlugZap className="size-5" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <strong className="block text-sm">
                     No media managers connected
                   </strong>
-                  <span className="mt-0.5 block text-xs text-base-content/55">
+                  <span className="mt-1 block text-xs leading-relaxed text-base-content/50">
                     Configure Sonarr, Radarr, or both in one pass.
                   </span>
                 </span>

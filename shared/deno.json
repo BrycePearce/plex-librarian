@@ -2,6 +2,7 @@
   "name": "@plex-librarian/shared",
   "exports": {
     "./types.ts": "./types.ts",
-    "./search.ts": "./search.ts"
+    "./search.ts": "./search.ts",
+    "./schedule.ts": "./schedule.ts"
   }
 }

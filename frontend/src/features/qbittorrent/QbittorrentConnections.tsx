@@ -25,17 +25,20 @@ export function QbittorrentConnections({
     return () => globalThis.clearTimeout(timeout);
   }, [test.isSuccess]);
 
+  const isEmpty = !isLoading && !error && data && !data.envConfigured &&
+    data.instances.length === 0;
+
   return (
-    <section className="border-t border-base-300 pt-4">
+    <section className="border-t border-base-content/10 pt-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="font-medium">Download client</h3>
-          <p className="text-xs text-base-content/55">
+          <h3 className="font-semibold">Download client</h3>
+          <p className="mt-0.5 text-xs leading-relaxed text-base-content/50">
             Connect qBittorrent to inspect and optionally remove verified
             torrent payloads during deletion.
           </p>
         </div>
-        {!data?.envConfigured && (
+        {!data?.envConfigured && !isEmpty && (
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -49,6 +52,29 @@ export function QbittorrentConnections({
       {isLoading &&
         <span className="mt-3 loading loading-spinner loading-sm" />}
       {error && <p className="mt-2 text-xs text-error">{error.message}</p>}
+      {isEmpty && (
+        <div className="mt-3 flex flex-wrap items-center gap-4 rounded-2xl border border-dashed border-base-content/15 bg-base-200/30 p-4 transition-colors hover:border-primary/25 hover:bg-base-200/45">
+          <span className="grid size-11 place-items-center rounded-xl border border-primary/10 bg-primary/10 text-primary">
+            <Download className="size-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <strong className="block text-sm">
+              No download client connected
+            </strong>
+            <span className="mt-1 block text-xs leading-relaxed text-base-content/50">
+              Add qBittorrent when you want verified torrent cleanup during
+              deletion.
+            </span>
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => onConfigure()}
+          >
+            <Plus className="size-4" /> Add qBittorrent
+          </button>
+        </div>
+      )}
       {data?.envConfigured && (
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3">
           <Download className="size-4 text-primary" />

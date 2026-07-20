@@ -38,6 +38,10 @@ export type PinPollResult =
 // --- Settings ---
 
 export interface Settings {
+  autoSyncEnabled: boolean;
+  autoSyncHour: number;
+  autoSyncTimeZone: string;
+  autoSyncCatchUp: boolean;
   staleMinAgeDays: number;
   inactiveUserDays: number;
   pendingInviteStaleDays: number;

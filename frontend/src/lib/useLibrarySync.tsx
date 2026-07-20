@@ -37,8 +37,8 @@ function makeDebouncedInvalidator(queryKey: readonly unknown[], delayMs = 500) {
 const debouncedInvalidateLibraries = makeDebouncedInvalidator(
   queryKeys.libraries.all,
 );
-const debouncedInvalidateSyncHistory = makeDebouncedInvalidator(
-  queryKeys.sync.history,
+const debouncedInvalidateSyncQueries = makeDebouncedInvalidator(
+  queryKeys.sync.all,
 );
 const debouncedInvalidateEvents = makeDebouncedInvalidator(queryKeys.events.all);
 
@@ -171,7 +171,9 @@ export function useLibrarySync(libraryKey: string) {
     // The backend logs its sync.completed/sync.failed activity event on that same
     // whole-run boundary, so the events feed is invalidated on the same condition.
     if (attached.scope !== "global" || isDone || syncError !== null) {
-      debouncedInvalidateSyncHistory(qc);
+      // Refresh both the history feed and the latest-success value used by the
+      // automatic-sync preview.
+      debouncedInvalidateSyncQueries(qc);
       debouncedInvalidateEvents(qc);
     }
     handledSyncId.current = attached.id;

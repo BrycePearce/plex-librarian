@@ -1,4 +1,8 @@
 import { resolve } from '@std/path';
+import {
+  DEFAULT_AUTO_SYNC_TIME_ZONE,
+  isValidTimeZone,
+} from '@plex-librarian/shared/schedule.ts';
 import { openSqliteDb } from './util.ts';
 
 export async function runMigrations(dbPath: string, migrationsDir: string): Promise<void> {
@@ -36,6 +40,20 @@ export async function runMigrations(dbPath: string, migrationsDir: string): Prom
     try {
       for (const stmt of statements) {
         sqlite.exec(stmt);
+      }
+      if (entry.tag === '0038_ambitious_supernaut') {
+        const configuredTimeZone = Deno.env.get('TZ')?.trim();
+        const legacyTimeZone = configuredTimeZone && isValidTimeZone(configuredTimeZone)
+          ? configuredTimeZone
+          : DEFAULT_AUTO_SYNC_TIME_ZONE;
+        const backfillStmt = sqlite.prepare(
+          'UPDATE settings SET auto_sync_time_zone = ? WHERE auto_sync_time_zone IS NULL',
+        );
+        try {
+          backfillStmt.run(legacyTimeZone);
+        } finally {
+          backfillStmt.finalize();
+        }
       }
       insertStmt.run(entry.tag, Math.floor(Date.now() / 1000));
       sqlite.exec('COMMIT');

@@ -32,6 +32,7 @@ export const queryKeys = {
   sync: {
     all: [roots.sync] as const,
     history: [roots.sync, "history"] as const,
+    latestSuccess: [roots.sync, "latest-success"] as const,
   },
   stale: {
     all: [roots.stale] as const,
