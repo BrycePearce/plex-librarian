@@ -17,6 +17,7 @@
     "@shared/types": "../shared/types.ts",
     "@shared/search": "../shared/search.ts",
     "@shared/schedule": "../shared/schedule.ts",
+    "@shared/mediaComparison": "../shared/mediaComparison.ts",
     "react": "npm:react@^19.2.7",
     "react/jsx-runtime": "npm:react@^19.2.7/jsx-runtime",
     "react-dom": "npm:react-dom@^19.2.7",

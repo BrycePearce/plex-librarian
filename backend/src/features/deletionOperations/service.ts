@@ -86,7 +86,10 @@ export async function repeatedDeletionOperation(
 }
 
 function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation): void {
-  const groups = new Map<string, { kind: 'movie' | 'episode'; ratingKey: string; ids: number[] }>();
+  const groups = new Map<
+    string,
+    { kind: 'movie' | 'episode'; ratingKey: string; ids: number[]; hasFinalArrTarget: boolean }
+  >();
   for (const target of input.targets) {
     if (!target.reservation) continue;
     const reservation = target.reservation;
@@ -95,8 +98,11 @@ function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation
       kind: reservation.mediaKind,
       ratingKey: reservation.ratingKey,
       ids: [],
+      hasFinalArrTarget: false,
     };
     group.ids.push(reservation.mediaId);
+    group.hasFinalArrTarget ||= target.kind === 'movie_version' &&
+      target.snapshot.deleteFromArr === true;
     groups.set(key, group);
   }
   for (const group of groups.values()) {
@@ -108,7 +114,7 @@ function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation
     const reserved = client.prepare(
       'SELECT COUNT(*) FROM media_version_reservations WHERE server_id = ? AND media_kind = ? AND rating_key = ?',
     ).value<[number]>(input.serverId, group.kind, group.ratingKey)?.[0] ?? 0;
-    if (total - reserved - group.ids.length < 1) {
+    if (total - reserved - group.ids.length < 1 && !group.hasFinalArrTarget) {
       throw new DeletionConflictError(
         'at least one version must remain; delete the item instead',
         400,
@@ -259,7 +265,16 @@ function claimTarget(): DeletionWorkTarget | null {
     const row = client.prepare(
       `SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size
        FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id
-       WHERE t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?)
+       WHERE (t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?))
+         AND (
+           COALESCE(json_extract(t.snapshot, '$.deleteFromArr'), 0) <> 1
+           OR NOT EXISTS (
+             SELECT 1 FROM deletion_targets prior
+             WHERE prior.operation_id = t.operation_id
+               AND prior.ordinal < t.ordinal
+               AND prior.status IN ('queued', 'running', 'waiting_retry')
+           )
+         )
        ORDER BY o.created_at, t.ordinal LIMIT 1`,
     ).value<[number, string, number, DeletionKind, string, string, number | null]>(now);
     if (!row) return null;
@@ -305,6 +320,19 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
       client.prepare(
         "UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'running'",
       ).run(message, now, target.id);
+      // A coordinated version target is deliberately ordered after Plex-only targets.
+      // If an earlier target cannot complete, do not let the coordinated target run
+      // against a live/projection state that no longer matches that ordering. Mark it
+      // for attention too so retrying the operation requeues the dependency chain.
+      client.prepare(
+        `UPDATE deletion_targets
+         SET status = 'needs_attention', next_retry_at = NULL,
+             error = 'blocked because an earlier deletion target needs attention', updated_at = ?
+         WHERE operation_id = ?
+           AND ordinal > (SELECT ordinal FROM deletion_targets WHERE id = ?)
+           AND status IN ('queued', 'waiting_retry')
+           AND COALESCE(json_extract(snapshot, '$.deleteFromArr'), 0) = 1`,
+      ).run(now, target.operationId, target.id);
     }
     refreshDeletionOperation(client, target.operationId);
   });

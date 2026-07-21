@@ -10,6 +10,8 @@ import type {
   PlexLibrary,
   PlexLocalAccount,
   PlexMediaPathPreview,
+  PlexMediaStreamSummary,
+  PlexMediaTechnicalDetails,
   PlexMediaVersion,
   PlexMediaVersionPathPreview,
   PlexMetadataIdentity,
@@ -204,6 +206,70 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
   });
 }
 
+type RawMedia = NonNullable<PlexRawMetadata['Media']>[number];
+type RawStream = NonNullable<NonNullable<RawMedia['Part']>[number]['Stream']>[number];
+
+function asFlag(value: boolean | number | undefined): boolean {
+  return value === true || value === 1;
+}
+
+function streamSummary(stream: RawStream): PlexMediaStreamSummary {
+  return {
+    codec: stream.codec ?? null,
+    language: stream.languageCode ?? stream.language ?? null,
+    channels: stream.channels ?? null,
+    channelLayout: stream.channelLayout ?? null,
+    title: stream.title ?? stream.displayTitle ?? null,
+    forced: asFlag(stream.forced),
+    default: asFlag(stream.default),
+  };
+}
+
+function uniqueStreams(streams: PlexMediaStreamSummary[]): PlexMediaStreamSummary[] {
+  const seen = new Set<string>();
+  return streams.filter((stream) => {
+    const key = JSON.stringify(stream);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function technicalDetails(media: RawMedia): PlexMediaTechnicalDetails {
+  const parts = media.Part ?? [];
+  const streams = parts.flatMap((part) => part.Stream ?? []);
+  const videoStream = streams.find((stream) => stream.streamType === 1);
+  const dynamicRange = media.videoDynamicRange ?? (
+    asFlag(videoStream?.DOVIPresent)
+      ? 'Dolby Vision'
+      : asFlag(videoStream?.HDR10PlusMetadataPresent)
+      ? 'HDR10+'
+      : videoStream?.colorTrc?.toLowerCase().includes('2084')
+      ? 'HDR'
+      : null
+  );
+  return {
+    width: media.width ?? null,
+    height: media.height ?? null,
+    duration: media.duration ?? null,
+    videoProfile: media.videoProfile ?? null,
+    videoBitDepth: videoStream?.bitDepth ?? null,
+    videoDynamicRange: dynamicRange,
+    videoFrameRate: media.videoFrameRate ?? null,
+    videoScanType: videoStream?.scanType ?? null,
+    audioCodec: media.audioCodec ?? null,
+    audioChannels: media.audioChannels ?? null,
+    audioProfile: media.audioProfile ?? null,
+    audioStreams: uniqueStreams(
+      streams.filter((stream) => stream.streamType === 2).map(streamSummary),
+    ),
+    subtitleStreams: uniqueStreams(
+      streams.filter((stream) => stream.streamType === 3).map(streamSummary),
+    ),
+    streamDetailsAvailable: parts.some((part) => Array.isArray(part.Stream)),
+  };
+}
+
 function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
   return raw
     .filter((item) => item.type === 'movie')
@@ -214,6 +280,7 @@ function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
           mediaId: m.id,
           itemRatingKey: item.ratingKey,
           videoResolution: m.videoResolution ?? null,
+          ...technicalDetails(m),
           bitrate: m.bitrate ?? null,
           videoCodec: m.videoCodec ?? null,
           container: m.container ?? null,
@@ -275,6 +342,7 @@ function mapEpisodeMediaVersions(raw: PlexRawMetadata[]): PlexEpisodeMediaVersio
         episodeIndex: item.index ?? 0,
         seasonIndex: item.parentIndex!,
         videoResolution: m.videoResolution ?? null,
+        ...technicalDetails(m),
         bitrate: m.bitrate ?? null,
         videoCodec: m.videoCodec ?? null,
         container: m.container ?? null,
@@ -520,6 +588,34 @@ export class PlexClient {
         return [{ mediaId: media.id, paths, truncated }];
       })
     );
+  }
+
+  // Fetches full per-item Media/Part/Stream detail live from Plex, keyed by Media id.
+  // The bulk library listing that populates itemMediaVersions/episodeMediaVersions at
+  // sync time can come back with thinner (or absent) Stream-level detail than a
+  // single-item lookup does, which is why a duplicate group can show matching
+  // resolution/codec/container but still land in the "unknown" comparison bucket — the
+  // audio/subtitle track signatures needed to rule out a real difference were never
+  // available. Called on demand (not during sync) for the bounded set of groups a user
+  // actually opens, reusing the same technicalDetails() mapping sync already uses so
+  // there is one source of truth for "how a Plex Media entry becomes comparison data."
+  async mediaVersionTechnicalDetails(
+    ratingKey: string,
+    signal?: AbortSignal,
+  ): Promise<Map<number, PlexMediaTechnicalDetails>> {
+    const data = await this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[] } }>(
+      `/library/metadata/${encodeURIComponent(ratingKey)}`,
+      undefined,
+      signal,
+    );
+    const result = new Map<number, PlexMediaTechnicalDetails>();
+    for (const metadata of data.MediaContainer.Metadata ?? []) {
+      for (const media of metadata.Media ?? []) {
+        if (media.id == null) continue;
+        result.set(media.id, technicalDetails(media));
+      }
+    }
+    return result;
   }
 
   // Deletes an item's media from Plex (metadata + underlying file(s) on disk).

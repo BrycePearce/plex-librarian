@@ -41,6 +41,7 @@ import type {
   ShowDetail,
   StaleResponse,
 } from '@plex-librarian/shared/types.ts';
+import { mediaVersionFromRow } from '../duplicates/mediaVersion.ts';
 import { staleCutoffs } from './staleFilters.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -289,14 +290,7 @@ router.get('/:key/stale', async (c) => {
   const versionsByKey = new Map<string, MediaVersion[]>();
   for (const v of pageVersionRows) {
     const list = versionsByKey.get(v.itemRatingKey) ?? [];
-    list.push({
-      mediaId: v.mediaId,
-      videoResolution: v.videoResolution,
-      bitrate: v.bitrate,
-      videoCodec: v.videoCodec,
-      container: v.container,
-      fileSize: v.fileSize,
-    });
+    list.push(mediaVersionFromRow(v));
     versionsByKey.set(v.itemRatingKey, list);
   }
 

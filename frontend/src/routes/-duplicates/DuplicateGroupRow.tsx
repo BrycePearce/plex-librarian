@@ -1,8 +1,12 @@
 import { Link } from "@tanstack/react-router";
+import { compareDuplicateVersions } from "@shared/mediaComparison";
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
+import { HoverPopover } from "../../components/HoverPopover";
 import {
+  comparisonIcon,
+  comparisonToneClass,
   reclaimableKilobytes,
   versionQualityLabels,
 } from "./duplicatePresentation";
@@ -20,6 +24,8 @@ export function DuplicateGroupRow({
     ? Math.min(100, Math.max(0, (reclaimable / item.combinedFileSize) * 100))
     : 0;
   const quality = versionQualityLabels(item.versions);
+  const comparison = compareDuplicateVersions(item.versions);
+  const ComparisonIcon = comparisonIcon(comparison.kind);
 
   const title = item.mediaType === "movie"
     ? (
@@ -76,8 +82,23 @@ export function DuplicateGroupRow({
             )}
           </span>
           <div>
-            <div className="duplicates-version-count">
-              {item.versions.length} versions
+            <div className="duplicates-version-count flex items-center gap-1.5">
+              <span>{item.versions.length} versions</span>
+              <HoverPopover
+                content={
+                  <>
+                    <div className="font-semibold">{comparison.label}</div>
+                    <div className="mt-0.5 opacity-70">
+                      {comparison.reasons.join(" · ")}
+                    </div>
+                  </>
+                }
+              >
+                <ComparisonIcon
+                  className={`size-3.5 ${comparisonToneClass(comparison.kind)}`}
+                  aria-label={comparison.label}
+                />
+              </HoverPopover>
             </div>
             {quality.labels.length > 0 && (
               <div className="duplicates-quality">

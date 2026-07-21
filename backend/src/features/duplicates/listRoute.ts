@@ -10,8 +10,12 @@ import type {
   DuplicateGroup,
   DuplicateMovieGroup,
   DuplicatesResponse,
-  MediaVersion,
 } from '@plex-librarian/shared/types.ts';
+import {
+  compareDuplicateVersions,
+  type DuplicateComparisonFilter,
+} from '@plex-librarian/shared/mediaComparison.ts';
+import { mediaVersionFromRow } from './mediaVersion.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -24,6 +28,7 @@ router.use('*', withActiveServerId);
 // ranked beyond the cap simply won't surface, even via deep pagination. Documented here
 // so that's a known, remote tradeoff rather than a support-ticket surprise.
 const GROUP_FETCH_CAP = 2000;
+const VERSION_FILTER_BATCH_SIZE = 400;
 
 type GroupStub = {
   mediaType: 'movie' | 'episode';
@@ -44,6 +49,12 @@ router.get('/', async (c) => {
   const type = rawType === 'movie' || rawType === 'tv' ? rawType : 'all';
   const wantMovies = type !== 'tv';
   const wantTv = type !== 'movie';
+  const rawComparison = c.req.query('comparison');
+  const comparison: DuplicateComparisonFilter =
+    rawComparison === 'same-profile' || rawComparison === 'different' ||
+      rawComparison === 'unknown'
+      ? rawComparison
+      : 'all';
 
   const rawLimit = parseInt(c.req.query('limit') ?? '50', 10);
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 50 : Math.min(rawLimit, 200);
@@ -87,7 +98,9 @@ router.get('/', async (c) => {
   // ahead of it to reach the merged page even in the best case). So fetching only that
   // many per type (rather than always GROUP_FETCH_CAP) is exact, not an approximation —
   // it just means shallow pages read and sort far fewer rows than deep ones.
-  const fetchLimit = Math.min(GROUP_FETCH_CAP, offset + limit);
+  const fetchLimit = comparison === 'all'
+    ? Math.min(GROUP_FETCH_CAP, offset + limit)
+    : GROUP_FETCH_CAP;
 
   const [movieStubRows, episodeStubRows] = await Promise.all([
     wantMovies
@@ -125,7 +138,7 @@ router.get('/', async (c) => {
   // actually contain — an uncapped total here would overstate the paginable set on a
   // server with more than GROUP_FETCH_CAP genuine duplicate groups of one type, leaving
   // the client's pagination pointing at offsets that always return an empty page.
-  const total = Math.min(movieStubRows[0]?.totalGroups ?? 0, GROUP_FETCH_CAP) +
+  const unfilteredTotal = Math.min(movieStubRows[0]?.totalGroups ?? 0, GROUP_FETCH_CAP) +
     Math.min(episodeStubRows[0]?.totalGroups ?? 0, GROUP_FETCH_CAP);
 
   const stubs: GroupStub[] = [
@@ -141,7 +154,35 @@ router.get('/', async (c) => {
     })),
   ].sort((a, b) => (b.combinedFileSize ?? 0) - (a.combinedFileSize ?? 0));
 
-  const page = stubs.slice(offset, offset + limit);
+  let preloadedMovieVersionRows: Array<typeof itemMediaVersions.$inferSelect> | null = null;
+  let preloadedEpisodeVersionRows: Array<typeof episodeMediaVersions.$inferSelect> | null = null;
+  let filteredStubs = stubs;
+  if (comparison !== 'all') {
+    const movieKeys = stubs.filter((stub) => stub.mediaType === 'movie').map((stub) =>
+      stub.ratingKey
+    );
+    const episodeKeys = stubs.filter((stub) => stub.mediaType === 'episode').map((stub) =>
+      stub.ratingKey
+    );
+    [preloadedMovieVersionRows, preloadedEpisodeVersionRows] = await Promise.all([
+      loadMovieVersionRows(serverId, movieKeys),
+      loadEpisodeVersionRows(serverId, episodeKeys),
+    ]);
+    const allMovieVersions = groupVersions(preloadedMovieVersionRows, (row) => row.itemRatingKey);
+    const allEpisodeVersions = groupVersions(
+      preloadedEpisodeVersionRows,
+      (row) => row.episodeRatingKey,
+    );
+    filteredStubs = stubs.filter((stub) => {
+      const versions = stub.mediaType === 'movie'
+        ? allMovieVersions.get(stub.ratingKey) ?? []
+        : allEpisodeVersions.get(stub.ratingKey) ?? [];
+      return compareDuplicateVersions(versions).kind === comparison;
+    });
+  }
+
+  const total = comparison === 'all' ? unfilteredTotal : filteredStubs.length;
+  const page = filteredStubs.slice(offset, offset + limit);
   const pageMovieKeys = page.filter((s) => s.mediaType === 'movie').map((s) => s.ratingKey);
   const pageEpisodeKeys = page.filter((s) => s.mediaType === 'episode').map((s) => s.ratingKey);
 
@@ -155,20 +196,28 @@ router.get('/', async (c) => {
     })
       .from(items)
       .where(and(eq(items.serverId, serverId), inArray(items.ratingKey, pageMovieKeys))),
-    pageMovieKeys.length === 0 ? [] : db.select().from(itemMediaVersions)
-      .where(
-        and(
-          eq(itemMediaVersions.serverId, serverId),
-          inArray(itemMediaVersions.itemRatingKey, pageMovieKeys),
+    pageMovieKeys.length === 0
+      ? []
+      : preloadedMovieVersionRows !== null
+      ? preloadedMovieVersionRows.filter((row) => pageMovieKeys.includes(row.itemRatingKey))
+      : db.select().from(itemMediaVersions)
+        .where(
+          and(
+            eq(itemMediaVersions.serverId, serverId),
+            inArray(itemMediaVersions.itemRatingKey, pageMovieKeys),
+          ),
         ),
-      ),
-    pageEpisodeKeys.length === 0 ? [] : db.select().from(episodeMediaVersions)
-      .where(
-        and(
-          eq(episodeMediaVersions.serverId, serverId),
-          inArray(episodeMediaVersions.episodeRatingKey, pageEpisodeKeys),
+    pageEpisodeKeys.length === 0
+      ? []
+      : preloadedEpisodeVersionRows !== null
+      ? preloadedEpisodeVersionRows.filter((row) => pageEpisodeKeys.includes(row.episodeRatingKey))
+      : db.select().from(episodeMediaVersions)
+        .where(
+          and(
+            eq(episodeMediaVersions.serverId, serverId),
+            inArray(episodeMediaVersions.episodeRatingKey, pageEpisodeKeys),
+          ),
         ),
-      ),
   ]);
 
   const movieItemByKey = new Map(movieItemRows.map((r) => [r.ratingKey, r]));
@@ -224,31 +273,56 @@ router.get('/', async (c) => {
   return c.json({ search, limit, offset, total, groups } satisfies DuplicatesResponse);
 });
 
-function groupVersions<
-  T extends {
-    mediaId: number;
-    videoResolution: string | null;
-    bitrate: number | null;
-    videoCodec: string | null;
-    container: string | null;
-    fileSize: number | null;
-  },
->(rows: T[], keyOf: (row: T) => string): Map<string, MediaVersion[]> {
-  const map = new Map<string, MediaVersion[]>();
+function groupVersions<T extends Parameters<typeof mediaVersionFromRow>[0]>(
+  rows: T[],
+  keyOf: (row: T) => string,
+): Map<string, ReturnType<typeof mediaVersionFromRow>[]> {
+  const map = new Map<string, ReturnType<typeof mediaVersionFromRow>[]>();
   for (const row of rows) {
     const key = keyOf(row);
     const list = map.get(key) ?? [];
-    list.push({
-      mediaId: row.mediaId,
-      videoResolution: row.videoResolution,
-      bitrate: row.bitrate,
-      videoCodec: row.videoCodec,
-      container: row.container,
-      fileSize: row.fileSize,
-    });
+    list.push(mediaVersionFromRow(row));
     map.set(key, list);
   }
   return map;
 }
 
 export default router;
+
+function keyBatches(keys: string[]): string[][] {
+  const batches: string[][] = [];
+  for (let start = 0; start < keys.length; start += VERSION_FILTER_BATCH_SIZE) {
+    batches.push(keys.slice(start, start + VERSION_FILTER_BATCH_SIZE));
+  }
+  return batches;
+}
+
+async function loadMovieVersionRows(
+  serverId: number,
+  keys: string[],
+): Promise<Array<typeof itemMediaVersions.$inferSelect>> {
+  const pages = await Promise.all(
+    keyBatches(keys).map((batch) =>
+      db.select().from(itemMediaVersions).where(and(
+        eq(itemMediaVersions.serverId, serverId),
+        inArray(itemMediaVersions.itemRatingKey, batch),
+      ))
+    ),
+  );
+  return pages.flat();
+}
+
+async function loadEpisodeVersionRows(
+  serverId: number,
+  keys: string[],
+): Promise<Array<typeof episodeMediaVersions.$inferSelect>> {
+  const pages = await Promise.all(
+    keyBatches(keys).map((batch) =>
+      db.select().from(episodeMediaVersions).where(and(
+        eq(episodeMediaVersions.serverId, serverId),
+        inArray(episodeMediaVersions.episodeRatingKey, batch),
+      ))
+    ),
+  );
+  return pages.flat();
+}

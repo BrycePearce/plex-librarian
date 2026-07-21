@@ -1,11 +1,37 @@
+import { AlertTriangle, CircleHelp, CopyCheck } from "lucide-react";
+import type { DuplicateComparison } from "@shared/mediaComparison";
 import type { DuplicateGroup, MediaVersion } from "../../lib/api.ts";
+
+// One icon and tone per comparison kind, shared by the duplicates list row, the
+// comparison filter, and the version-picker modal so the same signal reads the same way
+// everywhere a user encounters it — no separate legend to learn per surface.
+export function comparisonIcon(kind: DuplicateComparison["kind"]) {
+  switch (kind) {
+    case "same-profile":
+      return CopyCheck;
+    case "different":
+      return AlertTriangle;
+    case "unknown":
+      return CircleHelp;
+  }
+}
+
+export function comparisonToneClass(kind: DuplicateComparison["kind"]): string {
+  switch (kind) {
+    case "same-profile":
+      return "text-success";
+    case "different":
+      return "text-warning";
+    case "unknown":
+      return "text-base-content/40";
+  }
+}
 
 export function reclaimableKilobytes(
   versions: readonly MediaVersion[],
 ): number | null {
   if (
-    versions.length < 2 ||
-    versions.some((version) => version.fileSize == null)
+    versions.length < 2 || versions.some((version) => version.fileSize == null)
   ) {
     return null;
   }

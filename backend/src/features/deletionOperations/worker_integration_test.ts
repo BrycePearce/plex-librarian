@@ -697,6 +697,156 @@ Deno.test('multi-version batch replays sequentially while earlier selected versi
   );
 });
 
+Deno.test('mixed version batch deletes Plex-only copies before the final Radarr-managed copy', async () => {
+  reset();
+  configureRadarr();
+  addMovie('mixed-version-batch', [11, 12], 10);
+  coordinatedRatingKey = 'mixed-version-batch';
+  arrPresent = true;
+  live.get('mixed-version-batch')!.Media = [
+    { id: 11, Part: [{ file: '/library/Unmanaged/movie.mkv', size: 50_000 }] },
+    { id: 12, Part: [{ file: '/library/Coordinated/movie.mkv', size: 50_000 }] },
+  ];
+
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'movies',
+    kind: 'movie_version',
+    payload: {
+      ratingKey: 'mixed-version-batch',
+      mediaIds: [11, 12],
+      arrMediaIds: [12],
+      cleanupMediaIds: [],
+    },
+    targets: [11, 12].map((mediaId) => ({
+      kind: 'movie_version' as const,
+      key: `mixed-version-batch:${mediaId}`,
+      title: 'Movie mixed-version-batch',
+      logicalSize: 50,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'movies',
+        ratingKey: 'mixed-version-batch',
+        mediaId,
+        selectedMediaIds: [mediaId],
+        title: 'Movie mixed-version-batch',
+        type: 'movie',
+        tmdbId: 10,
+        tvdbId: null,
+        fileSize: 50,
+        videoResolution: null,
+        bitrate: null,
+        videoCodec: null,
+        container: null,
+        deleteFromArr: mediaId === 12,
+        cleanupDownloads: false,
+      },
+      reservation: {
+        mediaKind: 'movie' as const,
+        mediaId,
+        ratingKey: 'mixed-version-batch',
+      },
+    })),
+  });
+
+  await settle();
+
+  const operation = getDeletionOperation(result.operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrDeleteCount, 1);
+  assertEquals(live.has('mixed-version-batch'), false);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM items WHERE rating_key = ?').value<[number]>(
+        'mixed-version-batch',
+      )?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('mixed version batch waits for a Plex-only retry before running Radarr', async () => {
+  reset();
+  configureRadarr();
+  addMovie('mixed-version-retry', [11, 12], 10);
+  coordinatedRatingKey = 'mixed-version-retry';
+  arrPresent = true;
+  live.get('mixed-version-retry')!.Media = [
+    { id: 11, Part: [{ file: '/library/Unmanaged/movie.mkv', size: 50_000 }] },
+    { id: 12, Part: [{ file: '/library/Coordinated/movie.mkv', size: 50_000 }] },
+  ];
+  loseDeleteResponse = true;
+
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'movies',
+    kind: 'movie_version',
+    payload: {
+      ratingKey: 'mixed-version-retry',
+      mediaIds: [11, 12],
+      arrMediaIds: [12],
+      cleanupMediaIds: [],
+    },
+    targets: [11, 12].map((mediaId) => ({
+      kind: 'movie_version' as const,
+      key: `mixed-version-retry:${mediaId}`,
+      title: 'Movie mixed-version-retry',
+      logicalSize: 50,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'movies',
+        ratingKey: 'mixed-version-retry',
+        mediaId,
+        selectedMediaIds: [mediaId],
+        title: 'Movie mixed-version-retry',
+        type: 'movie',
+        tmdbId: 10,
+        tvdbId: null,
+        fileSize: 50,
+        videoResolution: null,
+        bitrate: null,
+        videoCodec: null,
+        container: null,
+        deleteFromArr: mediaId === 12,
+        cleanupDownloads: false,
+      },
+      reservation: {
+        mediaKind: 'movie' as const,
+        mediaId,
+        ratingKey: 'mixed-version-retry',
+      },
+    })),
+  });
+
+  await settle();
+  assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'queued');
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(live.get('mixed-version-retry')?.Media?.map((media) => media.id), [12]);
+
+  loseDeleteResponse = false;
+  withTransaction((client) =>
+    client.prepare(
+      "UPDATE deletion_targets SET next_retry_at = 0 WHERE operation_id = ? AND status = 'waiting_retry'",
+    ).run(result.operationId)
+  );
+  await settle();
+
+  assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'completed');
+  assertEquals(arrDeleteCount, 1);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM items WHERE rating_key = ?').value<[number]>(
+        'mixed-version-retry',
+      )?.[0]
+    ),
+    0,
+  );
+});
+
 Deno.test('lost destructive response retains projection and reservation until replay confirms absence', async () => {
   reset();
   addMovie('movie-replay');

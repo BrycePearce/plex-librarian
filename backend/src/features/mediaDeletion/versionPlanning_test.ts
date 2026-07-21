@@ -61,6 +61,30 @@ Deno.test('version plan rejects Radarr when an unselected Plex version shares it
   assertStringIncludes(plan.preview.arrReason ?? '', 'unselected version');
 });
 
+Deno.test('version plan reports Radarr applicability per selected version in a mixed batch', async () => {
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1, 2]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/unmanaged/Movie/copy.mkv'], truncated: false },
+      { mediaId: 2, paths: ['/movies/Movie/managed.mkv'], truncated: false },
+      { mediaId: 3, paths: ['/kept/Movie/kept.mkv'], truncated: false },
+    ],
+    arrTargets: [target(['managed.mkv'])],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+    allowPartialCoverage: true,
+  });
+
+  assertEquals(plan.preview.arrStatus, 'resolved');
+  assertEquals(plan.eligibleArrTargets.length, 1);
+  assertEquals(
+    plan.preview.versions.map((version) => [version.mediaId, version.arrStatus]),
+    [[1, 'unavailable'], [2, 'resolved']],
+  );
+});
+
 Deno.test('episode version plan never authorizes series-wide Sonarr deletion', async () => {
   const plan = await buildVersionDeletionPlan({
     mediaType: 'episode',

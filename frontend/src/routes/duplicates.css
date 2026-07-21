@@ -15,6 +15,10 @@
   box-shadow: 0 14px 36px rgb(0 0 0 / 0.08);
 }
 
+.workspace-collection-actions:has(.duplicates-comparison-filter) {
+  flex-wrap: wrap;
+}
+
 .duplicates-summary-card {
   display: flex;
   min-width: 0;
@@ -124,6 +128,19 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.58rem;
   line-height: 1.35;
+}
+
+.duplicates-review-comparison {
+  margin-bottom: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
+}
+
+.duplicates-review-comparison-same-profile {
+  background: color-mix(in oklab, var(--color-success) 9%, var(--color-base-200));
+}
+
+.duplicates-review-comparison-different {
+  background: color-mix(in oklab, var(--color-warning) 10%, var(--color-base-200));
 }
 
 .duplicates-storage {

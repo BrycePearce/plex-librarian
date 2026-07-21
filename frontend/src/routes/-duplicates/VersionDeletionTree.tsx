@@ -20,10 +20,12 @@ interface SelectedVersion {
 
 export function VersionDeletionServiceMarks({
   preview,
+  mediaId,
   deleteFromArr,
   cleanupDownloads,
 }: {
   preview?: VersionDeletionPreviewResponse;
+  mediaId?: number;
   deleteFromArr: boolean;
   cleanupDownloads: boolean;
 }) {
@@ -33,8 +35,19 @@ export function VersionDeletionServiceMarks({
     deleteFromArr,
     cleanupDownloads,
   );
-  const arrActive = presentation.arrTargets.length > 0;
-  const cleanupActive = presentation.downloadJobs.length > 0;
+  const versionPreview = mediaId === undefined
+    ? undefined
+    : preview?.versions.find((version) => version.mediaId === mediaId);
+  const arrStatus = versionPreview?.arrStatus ?? preview?.arrStatus;
+  const cleanupStatus = versionPreview?.cleanupStatus ?? preview?.cleanupStatus;
+  const arrReason = versionPreview?.arrReason ?? preview?.arrReason;
+  const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
+  const arrActive = deleteFromArr && arrStatus === "resolved";
+  const cleanupResolved = cleanupDownloads && arrStatus === "resolved" &&
+    cleanupStatus === "resolved";
+  const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
+  const hardlinkActive = cleanupResolved &&
+    (preview?.orphanFiles.length ?? 0) > 0;
   const downloadCleanupResuming = Boolean(
     cleanupDownloads && preview?.cleanupStatus === "resolved" &&
       presentation.downloadJobs.length === 0 &&
@@ -49,7 +62,7 @@ export function VersionDeletionServiceMarks({
           label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} deletion`}
         />
       )}
-      {cleanupActive && (
+      {qbitActive && (
         <ActiveServiceMark
           service="qbittorrent"
           label="qBittorrent download cleanup"
@@ -58,14 +71,14 @@ export function VersionDeletionServiceMarks({
       <PlannedServiceExceptions
         deleteFromArr={deleteFromArr}
         arrService={arrService}
-        arrStatus={preview?.arrStatus}
-        arrReason={preview?.arrReason}
-        downloadJobCount={cleanupActive ? preview?.downloadJobs.length ?? 0 : 0}
-        hardlinkFileCount={cleanupActive ? preview?.orphanFiles.length ?? 0 : 0}
+        arrStatus={arrStatus}
+        arrReason={arrReason}
+        downloadJobCount={qbitActive ? 1 : 0}
+        hardlinkFileCount={hardlinkActive ? 1 : 0}
         downloadCleanupResuming={downloadCleanupResuming}
         cleanupDownloads={cleanupDownloads}
-        cleanupStatus={preview?.cleanupStatus}
-        cleanupReason={preview?.cleanupReason}
+        cleanupStatus={cleanupStatus}
+        cleanupReason={cleanupReason}
       />
     </span>
   );

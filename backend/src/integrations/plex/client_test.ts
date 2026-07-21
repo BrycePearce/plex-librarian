@@ -87,6 +87,98 @@ Deno.test('item sync requests external GUIDs without adding them to episode stre
   ]);
 });
 
+Deno.test('movie sync captures technical and stream metadata for version comparison', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [{
+            id: 44,
+            videoResolution: '4k',
+            width: 3840,
+            height: 2160,
+            duration: 7_200_000,
+            bitrate: 24_000,
+            videoCodec: 'hevc',
+            videoProfile: 'main 10',
+            videoFrameRate: '23.976p',
+            audioCodec: 'truehd',
+            audioChannels: 8,
+            container: 'mkv',
+            Part: [{
+              size: 123_000,
+              Stream: [
+                {
+                  streamType: 1,
+                  codec: 'hevc',
+                  bitDepth: 10,
+                  DOVIPresent: 1,
+                  scanType: 'progressive',
+                },
+                {
+                  streamType: 2,
+                  codec: 'truehd',
+                  languageCode: 'eng',
+                  channels: 8,
+                  channelLayout: '7.1',
+                  title: 'Atmos',
+                  default: 1,
+                },
+                { streamType: 3, codec: 'srt', languageCode: 'eng', forced: 1 },
+              ],
+            }],
+          }],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryItems('7', 1).next();
+  assertEquals(page.value?.mediaVersions[0], {
+    mediaId: 44,
+    itemRatingKey: '10',
+    videoResolution: '4k',
+    width: 3840,
+    height: 2160,
+    duration: 7_200_000,
+    videoProfile: 'main 10',
+    videoBitDepth: 10,
+    videoDynamicRange: 'Dolby Vision',
+    videoFrameRate: '23.976p',
+    videoScanType: 'progressive',
+    audioCodec: 'truehd',
+    audioChannels: 8,
+    audioProfile: null,
+    audioStreams: [{
+      codec: 'truehd',
+      language: 'eng',
+      channels: 8,
+      channelLayout: '7.1',
+      title: 'Atmos',
+      forced: false,
+      default: true,
+    }],
+    subtitleStreams: [{
+      codec: 'srt',
+      language: 'eng',
+      channels: null,
+      channelLayout: null,
+      title: null,
+      forced: true,
+      default: false,
+    }],
+    streamDetailsAvailable: true,
+    bitrate: 24_000,
+    videoCodec: 'hevc',
+    container: 'mkv',
+    fileSize: 123,
+  });
+});
+
 Deno.test('metadata identity captures immutable item, ancestry, and media fields', async () => {
   const mockFetch = (() =>
     Promise.resolve(Response.json({
@@ -198,6 +290,44 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
     { mediaId: 11, paths: ['/movies/Example-1080p.mkv'], truncated: false },
     { mediaId: 12, paths: ['/movies/Example-4k.mkv'], truncated: false },
   ]);
+});
+
+Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Media id', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [
+            {
+              id: 11,
+              audioCodec: 'aac',
+              audioChannels: 2,
+              Part: [{ Stream: [{ streamType: 2, codec: 'aac', channels: 2 }] }],
+            },
+            { id: 12, audioCodec: 'truehd', audioChannels: 8, Part: [{}] },
+          ],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const details = await client.mediaVersionTechnicalDetails('10');
+  assertEquals(details.get(11)?.streamDetailsAvailable, true);
+  assertEquals(details.get(11)?.audioStreams, [{
+    codec: 'aac',
+    language: null,
+    channels: 2,
+    channelLayout: null,
+    title: null,
+    forced: false,
+    default: false,
+  }]);
+  // Media 12's Part has no Stream array at all — distinct from "Stream present but
+  // empty" — so audio equivalence still can't be verified from this response for it.
+  assertEquals(details.get(12)?.streamDetailsAvailable, false);
 });
 
 Deno.test('show media path preview pages through live allLeaves metadata', async () => {

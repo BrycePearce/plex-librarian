@@ -20,10 +20,12 @@ import {
   PageHeader,
 } from "../components/Workspace";
 import { ExpandableSearch } from "../components/ExpandableSearch";
+import { InfoTip } from "../features/mediaDeletion/InfoTip";
 import { normalizeSearchQuery } from "@shared/search";
 import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator";
 import { formatKilobytes } from "../lib/format";
 import { duplicatePageSummary } from "./-duplicates/duplicatePresentation";
+import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
 import "./duplicates.css";
 
 const PAGE_SIZE = 50;
@@ -32,11 +34,17 @@ type TypeFilter = "all" | "movie" | "tv";
 
 function validateDuplicatesSearch(search: Record<string, unknown>): {
   type: TypeFilter;
+  comparison: DuplicateComparisonFilter;
   search?: string;
 } {
   const type = search.type;
+  const comparison = search.comparison;
   return {
     type: type === "movie" || type === "tv" ? type : "all",
+    comparison: comparison === "same-profile" || comparison === "different" ||
+        comparison === "unknown"
+      ? comparison
+      : "all",
     search: normalizeSearchQuery(search.search),
   };
 }
@@ -44,14 +52,16 @@ function validateDuplicatesSearch(search: Record<string, unknown>): {
 export const Route = createFileRoute("/duplicates")({
   validateSearch: validateDuplicatesSearch,
   search: {
-    middlewares: [stripSearchParams({ type: "all", search: "" })],
+    middlewares: [
+      stripSearchParams({ type: "all", comparison: "all", search: "" }),
+    ],
   },
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DuplicatesPage,
 });
 
 function DuplicatesPage() {
-  const { type, search = "" } = Route.useSearch();
+  const { type, comparison, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
   const { trackDeletionOperation } = useDeletionOperationTracker();
 
@@ -59,18 +69,38 @@ function DuplicatesPage() {
 
   function setType(newType: TypeFilter) {
     setOffset(0);
-    void navigate({ search: { type: newType, search }, replace: true });
+    void navigate({
+      search: { type: newType, comparison, search },
+      replace: true,
+    });
+  }
+
+  function setComparison(newComparison: DuplicateComparisonFilter) {
+    setOffset(0);
+    void navigate({
+      search: { type, comparison: newComparison, search },
+      replace: true,
+    });
   }
 
   function setSearch(newSearch: string) {
     setOffset(0);
-    void navigate({ search: { type, search: newSearch }, replace: true });
+    void navigate({
+      search: { type, comparison, search: newSearch },
+      replace: true,
+    });
   }
 
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: queryKeys.duplicates.list({ type, search, offset }),
+    queryKey: queryKeys.duplicates.list({ type, comparison, search, offset }),
     queryFn: () =>
-      api.duplicates.list({ type, search, limit: PAGE_SIZE, offset }),
+      api.duplicates.list({
+        type,
+        comparison,
+        search,
+        limit: PAGE_SIZE,
+        offset,
+      }),
     placeholderData: (prev) => prev,
   });
 
@@ -94,20 +124,20 @@ function DuplicatesPage() {
     mutationFn: async ({
       group,
       mediaIds,
-      deleteFromArr,
-      cleanupDownloads,
+      arrMediaIds,
+      cleanupMediaIds,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
-      deleteFromArr: boolean;
-      cleanupDownloads: boolean;
+      arrMediaIds: number[];
+      cleanupMediaIds: number[];
     }) => {
       if (group.mediaType === "movie") {
         return await api.duplicates.deleteMovieMediaVersions(
           group.ratingKey,
           mediaIds,
-          deleteFromArr,
-          cleanupDownloads,
+          arrMediaIds,
+          cleanupMediaIds,
         );
       }
       return await api.duplicates.deleteEpisodeMediaVersions(
@@ -136,16 +166,17 @@ function DuplicatesPage() {
       deleteWholeItem: boolean;
       deleteFromArr: boolean;
       cleanupDownloads: boolean;
+      arrMediaIds: number[];
+      cleanupMediaIds: number[];
     },
   ) {
-    // Every selected movie version is a whole-title deletion, but it stays in this
-    // review dialog. The warning and destination choices above are the confirmation;
-    // execution uses the established whole-item endpoint so Plex is never asked to
-    // remove the final Media entry through the version endpoint.
+    // A fully selected movie normally uses the whole-item workflow. Mixed destination
+    // support is the exception: Plex-only copies run first and the Radarr copy runs last.
     if (
       group.mediaType === "movie" &&
       versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) ===
-        "whole-item"
+        "whole-item" &&
+      plan.arrMediaIds.length === 0
     ) {
       deleteWholeItemMutation.mutate(
         {
@@ -166,8 +197,8 @@ function DuplicatesPage() {
     deleteVersionsMutation.mutate({
       group,
       mediaIds: plan.mediaIds,
-      deleteFromArr: plan.deleteFromArr,
-      cleanupDownloads: plan.cleanupDownloads,
+      arrMediaIds: plan.arrMediaIds,
+      cleanupMediaIds: plan.cleanupMediaIds,
     });
   }
 
@@ -224,7 +255,7 @@ function DuplicatesPage() {
                     placeholder="Search movies, shows, or episodes..."
                   />
                   <select
-                    className="select select-bordered select-sm"
+                    className="select select-bordered select-sm w-28 max-w-full"
                     value={type}
                     onChange={(e) => setType(e.target.value as TypeFilter)}
                     aria-label="Filter by media type"
@@ -233,6 +264,25 @@ function DuplicatesPage() {
                     <option value="movie">Movies</option>
                     <option value="tv">TV</option>
                   </select>
+                  <span className="duplicates-comparison-filter inline-flex items-center gap-1.5">
+                    <select
+                      className="select select-bordered select-sm w-44 max-w-full"
+                      value={comparison}
+                      onChange={(e) =>
+                        setComparison(
+                          e.target.value as DuplicateComparisonFilter,
+                        )}
+                      aria-label="Filter by technical comparison"
+                    >
+                      <option value="all">All comparisons</option>
+                      <option value="same-profile">
+                        Same technical profile
+                      </option>
+                      <option value="different">Meaningful differences</option>
+                      <option value="unknown">Needs review</option>
+                    </select>
+                    <InfoTip text="Compares Plex-reported resolution, codec, HDR, and audio/subtitle tracks across a group's versions. “Same technical profile” means those fields match, not that the files are byte-identical. “Needs review” means Plex didn't report enough fields to compare." />
+                  </span>
                 </>
               }
               meta={data
@@ -293,10 +343,12 @@ function DuplicatesPage() {
               ? (
                 <EmptyState
                   icon={BadgeCheck}
-                  title={search
+                  title={search || comparison !== "all"
                     ? "No matching duplicate titles"
                     : "No duplicate versions"}
-                  description={search
+                  description={comparison !== "all"
+                    ? "No duplicate groups match the selected filters."
+                    : search
                     ? `No duplicate movies, shows, or episodes match “${search}”.`
                     : "Your library is tidy—there are no redundant synced versions in this view."}
                 />

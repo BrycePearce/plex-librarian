@@ -11,6 +11,7 @@ import type {
   LibrariesResponse,
   Library,
   MediaRemovalSummary,
+  MediaVersionsRefreshResponse,
   MovieDetail,
   PendingInvitationsResponse,
   PinPollResult,
@@ -30,6 +31,7 @@ import type {
   UsersResponse,
   VersionDeletionPreviewResponse,
 } from "@shared/types";
+import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
 import { v4 as uuidv4 } from "uuid";
 
 export type {
@@ -247,6 +249,7 @@ export const api = {
     list: (
       params: {
         type?: "movie" | "tv" | "all";
+        comparison?: DuplicateComparisonFilter;
         search?: string;
         limit?: number;
         offset?: number;
@@ -280,8 +283,8 @@ export const api = {
     deleteMovieMediaVersions: (
       ratingKey: string,
       mediaIds: number[],
-      deleteFromArr: boolean,
-      cleanupDownloads: boolean,
+      arrMediaIds: number[],
+      cleanupMediaIds: number[],
     ) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media`,
@@ -290,8 +293,8 @@ export const api = {
           body: JSON.stringify({
             clientRequestId: uuidv4(),
             mediaIds,
-            deleteFromArr,
-            cleanupDownloads,
+            arrMediaIds,
+            cleanupMediaIds,
           }),
         },
       ),
@@ -320,6 +323,16 @@ export const api = {
             mediaIds,
           }),
         },
+      ),
+    refreshTechnicalDetails: (
+      mediaType: "movie" | "episode",
+      ratingKey: string,
+    ) =>
+      apiFetch<MediaVersionsRefreshResponse>(
+        `/duplicates/${mediaType === "movie" ? "movies" : "episodes"}/${
+          encodeURIComponent(ratingKey)
+        }/media/technical-refresh`,
+        { method: "POST" },
       ),
   },
   deletionOperations: {

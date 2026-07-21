@@ -164,9 +164,22 @@ function finalizeTarget(
     removed = client.prepare(
       'DELETE FROM item_media_versions WHERE server_id = ? AND item_rating_key = ? AND media_id = ?',
     ).run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
-    client.prepare(
-      'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
-    ).run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
+    const remainingVersions = client.prepare(
+      'SELECT COUNT(*) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?',
+    ).value<[number]>(target.serverId, snapshot.ratingKey)?.[0] ?? 0;
+    if (snapshot.deleteFromArr && remainingVersions === 0) {
+      // Radarr removes the movie, not an individual Media entry. When this was the
+      // final selected target, keep the local projection aligned immediately instead
+      // of waiting for the next library sync to prune the now-absent title.
+      client.prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?').run(
+        target.serverId,
+        snapshot.ratingKey,
+      );
+    } else {
+      client.prepare(
+        'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
+      ).run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
+    }
   } else {
     removed = client.prepare(
       'DELETE FROM episode_media_versions WHERE server_id = ? AND episode_rating_key = ? AND media_id = ?',
@@ -309,7 +322,10 @@ async function ensureVersionDeleted(
     return false;
   }
   const liveIds = new Set(liveAtStart.media.map((media) => media.mediaId));
-  if (![...liveIds].some((id) => !selectedIds.has(id))) {
+  if (
+    !snapshot.deleteFromArr &&
+    ![...liveIds].some((id) => !selectedIds.has(id))
+  ) {
     throw new Error('at least one unselected live Plex version must remain');
   }
   if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await client.activeSessions())) {

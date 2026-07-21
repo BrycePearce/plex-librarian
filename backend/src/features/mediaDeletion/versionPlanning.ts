@@ -68,6 +68,7 @@ function publicVersionPreviews(
 export function selectVersionDownloadCleanup(
   cleanup: ResolvedCleanupItem | null,
   selectedPaths: ReadonlySet<string>,
+  allowPartialCoverage = false,
 ): ResolvedCleanupItem | null {
   if (!cleanup || selectedPaths.size === 0 || cleanup.status === 'error') return null;
   if (
@@ -95,7 +96,7 @@ export function selectVersionDownloadCleanup(
   });
   if (
     (downloadJobs.length === 0 && orphanFiles.length === 0) ||
-    [...selectedPaths].some((path) => !coveredPaths.has(path))
+    (!allowPartialCoverage && [...selectedPaths].some((path) => !coveredPaths.has(path)))
   ) return null;
   return {
     ...cleanup,
@@ -118,6 +119,7 @@ export async function buildVersionDeletionPlan({
   resolvedCleanup,
   cleanupConfigured,
   attemptedArrInstanceIds = new Set<number>(),
+  allowPartialCoverage = false,
 }: {
   mediaType: 'movie' | 'episode';
   item: CoordinatedDeleteItem;
@@ -127,6 +129,7 @@ export async function buildVersionDeletionPlan({
   resolvedCleanup: ResolvedCleanupItem | null;
   cleanupConfigured: boolean;
   attemptedArrInstanceIds?: ReadonlySet<number>;
+  allowPartialCoverage?: boolean;
 }): Promise<VersionDeletionPlan> {
   const versions = publicVersionPreviews(liveVersions, selectedMediaIds);
   const selectedPaths = new Set(
@@ -229,6 +232,7 @@ export async function buildVersionDeletionPlan({
   }
 
   if (
+    !allowPartialCoverage &&
     eligibleArrTargets.length > 0 &&
     eligibleArrTargets.some((entry) => !entry.alreadyAbsent) &&
     [...selectedPaths].some((path) => !arrCoveredPaths.has(path))
@@ -240,13 +244,13 @@ export async function buildVersionDeletionPlan({
   }
 
   const cleanup = mediaType === 'movie' && pathsComplete
-    ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths)
+    ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths, allowPartialCoverage)
     : null;
   const publicCleanup = cleanup ? publicCleanupItem(cleanup) : null;
-  const arrStatus = arrErrors.length > 0
-    ? 'error' as const
-    : eligibleArrTargets.length > 0
+  const arrStatus = eligibleArrTargets.length > 0
     ? 'resolved' as const
+    : arrErrors.length > 0
+    ? 'error' as const
     : 'unavailable' as const;
   const arrReason = arrStatus === 'error'
     ? arrErrors.join('; ')
@@ -268,13 +272,55 @@ export async function buildVersionDeletionPlan({
         'No download payload could be tied exclusively to the selected Plex version paths'
     : undefined;
 
+  const cleanupCoveredPaths = new Set<string>();
+  if (cleanup) {
+    const jobIds = new Set(cleanup.downloadJobs.map((job) => job.jobId));
+    for (const source of cleanup.sources) {
+      if (!jobIds.has(source.downloadId)) continue;
+      const path = source.importedPath ? normalizedComparison(source.importedPath) : null;
+      if (path) cleanupCoveredPaths.add(path);
+    }
+    for (const file of cleanup.orphanFiles) {
+      const path = normalizedComparison(file.importedPath);
+      if (path) cleanupCoveredPaths.add(path);
+    }
+  }
+  const versionsWithApplicability = versions.map((version) => {
+    const paths = version.plexPaths.flatMap((path) => {
+      const normalized = normalizedComparison(path);
+      return normalized ? [normalized] : [];
+    });
+    const arrApplies = paths.length > 0 && paths.every((path) => arrCoveredPaths.has(path));
+    const cleanupApplies = arrApplies && paths.length > 0 &&
+      paths.every((path) => cleanupCoveredPaths.has(path));
+    return {
+      ...version,
+      arrStatus: arrApplies
+        ? 'resolved' as const
+        : arrStatus === 'error'
+        ? 'error' as const
+        : 'unavailable' as const,
+      ...(!arrApplies
+        ? { arrReason: arrReason ?? 'No exact Radarr-managed match for this version' }
+        : {}),
+      cleanupStatus: cleanupApplies
+        ? 'resolved' as const
+        : cleanupStatus === 'error'
+        ? 'error' as const
+        : 'unavailable' as const,
+      ...(!cleanupApplies
+        ? { cleanupReason: cleanupReason ?? 'No verified download cleanup for this version' }
+        : {}),
+    };
+  });
+
   return {
     eligibleArrTargets,
     cleanup,
     preview: {
       mediaType,
       arrService: mediaType === 'episode' ? 'sonarr' : 'radarr',
-      versions,
+      versions: versionsWithApplicability,
       arrConfigured: arrTargets.length > 0,
       arrStatus,
       arrReason,

@@ -230,12 +230,36 @@ export interface MovieDetail {
 // independent of watch/stale status, since Plex only tracks lastViewedAt/viewCount per
 // item, never per Media version, so which version was watched is never knowable.
 
+export interface MediaStreamSummary {
+  codec: string | null;
+  language: string | null;
+  channels: number | null;
+  channelLayout: string | null;
+  title: string | null;
+  forced: boolean;
+  default: boolean;
+}
+
 export interface MediaVersion {
   mediaId: number;
   videoResolution: string | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
   bitrate: number | null;
   videoCodec: string | null;
+  videoProfile: string | null;
+  videoBitDepth: number | null;
+  videoDynamicRange: string | null;
+  videoFrameRate: string | null;
+  videoScanType: string | null;
   container: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioProfile: string | null;
+  audioStreams: MediaStreamSummary[];
+  subtitleStreams: MediaStreamSummary[];
+  streamDetailsAvailable: boolean;
   fileSize: number | null;
 }
 
@@ -277,6 +301,15 @@ export interface DuplicatesResponse {
 export interface DeleteMediaVersionResponse {
   fileSizeFreed: number;
   removedByApp: boolean;
+}
+
+// Returned by the on-demand technical-detail refresh a duplicate group's review modal
+// triggers when compareDuplicateVersions() cannot confidently classify it from
+// sync-time data alone. Fetched live from Plex per-item (not during sync — see
+// CLAUDE.md's Scale assumptions) and written back to the same rows sync populates, so
+// later views of the same group reuse the improved data without asking Plex again.
+export interface MediaVersionsRefreshResponse {
+  versions: MediaVersion[];
 }
 
 export type DeletionOperationStatus =
@@ -335,6 +368,10 @@ export interface MediaVersionPathPreview {
   status: "resolved" | "unavailable" | "error";
   reason?: string;
   truncated: boolean;
+  arrStatus?: "resolved" | "unavailable" | "error";
+  arrReason?: string;
+  cleanupStatus?: "resolved" | "unavailable" | "error";
+  cleanupReason?: string;
 }
 
 export interface VersionDeletionPreviewResponse {

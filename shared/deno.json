@@ -3,6 +3,7 @@
   "exports": {
     "./types.ts": "./types.ts",
     "./search.ts": "./search.ts",
-    "./schedule.ts": "./schedule.ts"
+    "./schedule.ts": "./schedule.ts",
+    "./mediaComparison.ts": "./mediaComparison.ts"
   }
 }

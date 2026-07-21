@@ -60,11 +60,67 @@ export interface PlexRawMetadata {
   Media?: Array<{
     id?: number;
     videoResolution?: string;
+    width?: number;
+    height?: number;
+    duration?: number;
     bitrate?: number;
     videoCodec?: string;
+    videoProfile?: string;
+    videoDynamicRange?: string;
+    videoFrameRate?: string;
     container?: string;
-    Part?: Array<{ size?: number; file?: string }>;
+    audioCodec?: string;
+    audioChannels?: number;
+    audioProfile?: string;
+    Part?: Array<{
+      size?: number;
+      file?: string;
+      Stream?: Array<{
+        streamType?: number;
+        codec?: string;
+        language?: string;
+        languageCode?: string;
+        channels?: number;
+        channelLayout?: string;
+        title?: string;
+        displayTitle?: string;
+        forced?: boolean | number;
+        default?: boolean | number;
+        bitDepth?: number;
+        colorTrc?: string;
+        DOVIPresent?: boolean | number;
+        HDR10PlusMetadataPresent?: boolean | number;
+        scanType?: string;
+      }>;
+    }>;
   }>;
+}
+
+export interface PlexMediaStreamSummary {
+  codec: string | null;
+  language: string | null;
+  channels: number | null;
+  channelLayout: string | null;
+  title: string | null;
+  forced: boolean;
+  default: boolean;
+}
+
+export interface PlexMediaTechnicalDetails {
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  videoProfile: string | null;
+  videoBitDepth: number | null;
+  videoDynamicRange: string | null;
+  videoFrameRate: string | null;
+  videoScanType: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioProfile: string | null;
+  audioStreams: PlexMediaStreamSummary[];
+  subtitleStreams: PlexMediaStreamSummary[];
+  streamDetailsAvailable: boolean;
 }
 
 export interface PlexMetadataIdentity {
@@ -119,9 +175,23 @@ export interface PlexMediaVersion {
   mediaId: number;
   itemRatingKey: string;
   videoResolution: string | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
   bitrate: number | null;
   videoCodec: string | null;
+  videoProfile: string | null;
+  videoBitDepth: number | null;
+  videoDynamicRange: string | null;
+  videoFrameRate: string | null;
+  videoScanType: string | null;
   container: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioProfile: string | null;
+  audioStreams: PlexMediaStreamSummary[];
+  subtitleStreams: PlexMediaStreamSummary[];
+  streamDetailsAvailable: boolean;
   fileSize: number | null;
 }
 
@@ -151,9 +221,23 @@ export interface PlexEpisodeMediaVersion {
   episodeIndex: number;
   seasonIndex: number;
   videoResolution: string | null;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
   bitrate: number | null;
   videoCodec: string | null;
+  videoProfile: string | null;
+  videoBitDepth: number | null;
+  videoDynamicRange: string | null;
+  videoFrameRate: string | null;
+  videoScanType: string | null;
   container: string | null;
+  audioCodec: string | null;
+  audioChannels: number | null;
+  audioProfile: string | null;
+  audioStreams: PlexMediaStreamSummary[];
+  subtitleStreams: PlexMediaStreamSummary[];
+  streamDetailsAvailable: boolean;
   fileSize: number | null;
 }
 

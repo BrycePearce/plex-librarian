@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { versionLabel } from "../../lib/mediaVersion";
+import { VersionTechnicalInfo } from "./VersionTechnicalInfo";
+import { compareDuplicateVersions } from "@shared/mediaComparison";
+import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation";
 import { queryKeys } from "../../lib/queryKeys";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary";
 import {
@@ -46,6 +50,8 @@ export function VersionPickerDialog({
     deleteWholeItem: boolean;
     deleteFromArr: boolean;
     cleanupDownloads: boolean;
+    arrMediaIds: number[];
+    cleanupMediaIds: number[];
   }) => void;
   onCancel: () => void;
 }) {
@@ -54,6 +60,7 @@ export function VersionPickerDialog({
   const [deleteFromArr, setDeleteFromArr] = useState(false);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const [fallbackAcknowledged, setFallbackAcknowledged] = useState(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!item) return;
@@ -69,6 +76,27 @@ export function VersionPickerDialog({
     dialogRef,
     `${item?.mediaType ?? "none"}:${ratingKey}`,
   );
+  // The sync-time bulk listing can come back with thinner Media/Part/Stream detail than
+  // a single-item Plex lookup — that gap is exactly what pushes a group into "unknown"
+  // even when everything else about it matches. Only worth the extra Plex round trip
+  // when the group is already ambiguous, and only once (staleTime: Infinity — a stable
+  // per-item mediaId keeps this cache entry valid for the life of the session).
+  const baseComparison = item ? compareDuplicateVersions(item.versions) : null;
+  const technicalRefresh = useQuery({
+    queryKey: queryKeys.duplicates.technicalRefresh(
+      item?.mediaType ?? "movie",
+      ratingKey,
+    ),
+    queryFn: () =>
+      api.duplicates.refreshTechnicalDetails(item!.mediaType, ratingKey),
+    enabled: item !== null && baseComparison?.kind === "unknown",
+    staleTime: Infinity,
+    retry: false,
+  });
+  useEffect(() => {
+    if (!technicalRefresh.data) return;
+    void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates.all });
+  }, [technicalRefresh.data, queryClient]);
   const preview = useQuery({
     queryKey: queryKeys.versionDeletionPreview.forVersions(
       item?.mediaType,
@@ -123,7 +151,9 @@ export function VersionPickerDialog({
     0,
   );
   const arrLabel = item.mediaType === "movie" ? "Radarr" : "Sonarr";
-  const arrService = item.mediaType === "movie" ? "radarr" : "sonarr";
+  const arrService = item.mediaType === "movie"
+    ? "radarr" as const
+    : "sonarr" as const;
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
   const cleanupAvailable = destinations.cleanupAvailable;
@@ -131,6 +161,19 @@ export function VersionPickerDialog({
   const cleanupOptionVisible = destinations.cleanupVisible;
   const cleanupUsesQbittorrent = (preview.data?.downloadJobs.length ?? 0) > 0;
   const destinationOptionsVisible = arrOptionVisible || cleanupOptionVisible;
+  // Merge in refreshed technical detail by mediaId where available — selection state,
+  // fileSize, and everything else stays keyed off item.versions; only the fields the
+  // refresh can improve (video/audio/subtitle technical detail) are swapped in.
+  const refreshedByMediaId = new Map(
+    technicalRefresh.data?.versions.map((
+      version,
+    ) => [version.mediaId, version]) ?? [],
+  );
+  const displayVersions = item.versions.map((version) =>
+    refreshedByMediaId.get(version.mediaId) ?? version
+  );
+  const comparison = compareDuplicateVersions(displayVersions);
+  const ComparisonIcon = comparisonIcon(comparison.kind);
   const fallbackRequired = preview.data?.arrConfigured === true &&
     !arrAvailable;
   const confirmDisabled = deletionConfirmationBlocked({
@@ -145,6 +188,17 @@ export function VersionPickerDialog({
     fallbackRequired,
     fallbackAcknowledged,
   });
+  const arrMediaIds = deleteFromArr
+    ? preview.data?.versions.filter((version) =>
+      mediaIds.includes(version.mediaId) && version.arrStatus === "resolved"
+    ).map((version) => version.mediaId) ?? []
+    : [];
+  const cleanupMediaIds = cleanupDownloads
+    ? preview.data?.versions.filter((version) =>
+      mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
+      version.cleanupStatus === "resolved"
+    ).map((version) => version.mediaId) ?? []
+    : [];
   return (
     <DeletionModalShell
       dialogRef={dialogRef}
@@ -163,12 +217,43 @@ export function VersionPickerDialog({
         </>
       }
     >
+      <div
+        className={`alert items-start gap-2.5 py-2 text-sm duplicates-review-comparison duplicates-review-comparison-${comparison.kind}`}
+      >
+        <ComparisonIcon
+          className={`mt-0.5 size-4 shrink-0 ${
+            comparisonToneClass(comparison.kind)
+          }`}
+        />
+        <div className="min-w-0">
+          <div className="font-semibold">{comparison.label}</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {comparison.reasons.map((reason) => (
+              <span key={reason} className="duplicates-quality-chip">
+                {reason}
+              </span>
+            ))}
+          </div>
+          {comparison.kind === "same-profile" && (
+            <div className="mt-1.5 text-xs opacity-70">
+              This compares Plex metadata; it does not prove the files are
+              byte-identical.
+            </div>
+          )}
+          {technicalRefresh.isFetching && (
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs opacity-70">
+              <Loader2 className="size-3 animate-spin" />
+              Checking Plex for more detail…
+            </div>
+          )}
+        </div>
+      </div>
       <DeletionPreview
         mode={previewMode}
         onModeChange={setPreviewMode}
         basic={
           <BasicDeletionList>
-            {item.versions.map((version) => {
+            {displayVersions.map((version) => {
               const selected = checked.has(version.mediaId);
               return (
                 <BasicDeletionRow
@@ -185,10 +270,12 @@ export function VersionPickerDialog({
                   selected={selected}
                   title={versionLabel(version)}
                   titleText={versionLabel(version)}
+                  badges={<VersionTechnicalInfo version={version} />}
                   marks={selected
                     ? (
                       <VersionDeletionServiceMarks
                         preview={preview.data}
+                        mediaId={version.mediaId}
                         deleteFromArr={deleteFromArr}
                         cleanupDownloads={cleanupDownloads}
                       />
@@ -207,7 +294,9 @@ export function VersionPickerDialog({
             title={item.mediaType === "movie" ? item.title : item.episodeTitle}
             versions={selectedVersions.map((version) => ({
               mediaId: version.mediaId,
-              label: versionLabel(version),
+              label: versionLabel(
+                refreshedByMediaId.get(version.mediaId) ?? version,
+              ),
               fileSize: version.fileSize,
             }))}
             preview={preview.data}
@@ -304,6 +393,8 @@ export function VersionPickerDialog({
             deleteFromArr: deleteFromArr && arrAvailable,
             cleanupDownloads: deleteFromArr && arrAvailable &&
               cleanupDownloads,
+            arrMediaIds,
+            cleanupMediaIds,
           })}
       />
     </DeletionModalShell>
