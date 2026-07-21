@@ -90,7 +90,9 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
         title={collapsed ? `Stale content · ${library.title}` : undefined}
         onClick={() => rememberLibrary(library.key)}
       >
-        <span className="sidebar-link-icon"><ArchiveRestore className="size-[18px]" /></span>
+        <span className="sidebar-link-icon">
+          <ArchiveRestore className="size-[18px]" />
+        </span>
         <span className="sidebar-link-label">Stale content</span>
         <span className="sidebar-active-dot" />
       </Link>
@@ -106,7 +108,9 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
         onClick={toggle}
         title={collapsed ? "Stale content" : undefined}
       >
-        <span className="sidebar-link-icon"><ArchiveRestore className="size-[18px]" /></span>
+        <span className="sidebar-link-icon">
+          <ArchiveRestore className="size-[18px]" />
+        </span>
         <span className="sidebar-link-label">Stale content</span>
         <ChevronRight className={`stale-sidebar-chevron ${expanded ? "rotate-90" : ""}`} />
       </button>
@@ -130,7 +134,11 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
               />
             ))}
             {hasMany && (
-              <button type="button" className="stale-sidebar-browse" onClick={() => setPickerOpen(true)}>
+              <button
+                type="button"
+                className="stale-sidebar-browse"
+                onClick={() => setPickerOpen(true)}
+              >
                 <Search className="size-3.5" /> Browse all {libraries.length}
               </button>
             )}
@@ -146,7 +154,12 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
                 <small>Cleanup workspace</small>
                 <h2 id="stale-picker-title">Review stale content</h2>
               </div>
-              <button type="button" className="btn btn-ghost btn-circle btn-sm" onClick={() => setPickerOpen(false)} aria-label="Close library picker">
+              <button
+                type="button"
+                className="btn btn-ghost btn-circle btn-sm"
+                onClick={() => setPickerOpen(false)}
+                aria-label="Close library picker"
+              >
                 <X className="size-4" />
               </button>
             </div>
@@ -170,10 +183,17 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
                   onOpen={() => rememberLibrary(library.key)}
                 />
               ))}
-              {filteredLibraries.length === 0 && <div className="stale-picker-empty">No libraries match “{query}”.</div>}
+              {filteredLibraries.length === 0 && (
+                <div className="stale-picker-empty">No libraries match “{query}”.</div>
+              )}
             </div>
           </div>
-          <button type="button" className="modal-backdrop" onClick={() => setPickerOpen(false)} aria-label="Close library picker" />
+          <button
+            type="button"
+            className="modal-backdrop"
+            onClick={() => setPickerOpen(false)}
+            aria-label="Close library picker"
+          />
         </dialog>,
         document.body,
       )}
@@ -198,11 +218,15 @@ function StaleLibraryLink({
       to="/libraries/$key/stale"
       params={{ key: library.key }}
       preload="viewport"
-      className={`${picker ? "stale-picker-result" : "stale-sidebar-child"} ${active ? "is-active" : ""}`}
+      className={`${picker ? "stale-picker-result" : "stale-sidebar-child"} ${
+        active ? "is-active" : ""
+      }`}
       aria-current={active ? "page" : undefined}
       onClick={onOpen}
     >
-      <span className={`stale-library-type stale-library-${library.type}`}><Icon className="size-3.5" /></span>
+      <span className={`stale-library-type stale-library-${library.type}`}>
+        <Icon className="size-3.5" />
+      </span>
       <span>{library.title}</span>
       {picker && <small>{library.itemCount.toLocaleString()} items</small>}
     </Link>

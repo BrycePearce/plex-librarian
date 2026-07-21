@@ -1,14 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock3, TriangleAlert, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api } from "../../lib/api";
@@ -123,18 +116,13 @@ function DeletionOperationToast({
     return () => globalThis.clearTimeout(timeout);
   }, [active, data, onDismiss, operation.id]);
 
-  const cancelledCount =
-    data?.targets.filter((target) => target.status === "cancelled").length ?? 0;
-  const done = data
-    ? data.completedCount + data.failedCount + cancelledCount
-    : 0;
-  const percent = data && data.targetCount > 0
-    ? Math.round((done / data.targetCount) * 100)
-    : 0;
+  const cancelledCount = data?.targets.filter((target) => target.status === "cancelled").length ??
+    0;
+  const done = data ? data.completedCount + data.failedCount + cancelledCount : 0;
+  const percent = data && data.targetCount > 0 ? Math.round((done / data.targetCount) * 100) : 0;
   const current = data?.targets.find((target) => target.status === "running") ??
     data?.targets.find(
-      (target) =>
-        target.status === "waiting_retry" || target.status === "queued",
+      (target) => target.status === "waiting_retry" || target.status === "queued",
     );
   const needsAttention = data?.status === "needs_attention";
   const completed = data?.status === "completed";
@@ -161,9 +149,7 @@ function DeletionOperationToast({
           ? <X className="mt-0.5 size-5 shrink-0 text-base-content/50" />
           : query.isError
           ? <Clock3 className="mt-0.5 size-5 shrink-0 text-warning" />
-          : (
-            <span className="loading loading-spinner loading-sm mt-0.5 shrink-0 text-primary" />
-          )}
+          : <span className="loading loading-spinner loading-sm mt-0.5 shrink-0 text-primary" />}
         <div className="min-w-0 flex-1">
           <p className="font-medium">
             {completed
@@ -178,9 +164,9 @@ function DeletionOperationToast({
           </p>
           <p className="mt-0.5 truncate text-sm text-base-content/60">
             {completed && data
-              ? `${data.completedCount} item${
-                data.completedCount === 1 ? "" : "s"
-              } removed · ${formatKilobytes(data.logicalSizeRemoved)} freed`
+              ? `${data.completedCount} item${data.completedCount === 1 ? "" : "s"} removed · ${
+                formatKilobytes(data.logicalSizeRemoved)
+              } freed`
               : needsAttention && data
               ? `${data.completedCount} completed · ${data.failedCount} need attention`
               : current

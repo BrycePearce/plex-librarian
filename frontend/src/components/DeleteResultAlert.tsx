@@ -34,9 +34,7 @@ export function DeleteResultAlert({
       role="status"
       aria-live="polite"
       initial={reduceMotion ? false : { opacity: 0, x: 16, scale: 0.98 }}
-      animate={visible
-        ? { opacity: 1, x: 0, scale: 1 }
-        : { opacity: 0, x: 12, scale: 0.98 }}
+      animate={visible ? { opacity: 1, x: 0, scale: 1 } : { opacity: 0, x: 12, scale: 0.98 }}
       transition={{ duration: reduceMotion ? 0 : 0.16, ease: "easeOut" }}
       onAnimationComplete={() => {
         if (!visible) onDismiss();

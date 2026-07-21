@@ -14,11 +14,7 @@ import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionSta
 import { DuplicatesTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import { requireAuth } from "../lib/requireAuth";
-import {
-  CollectionToolbar,
-  DataSurface,
-  PageHeader,
-} from "../components/Workspace";
+import { CollectionToolbar, DataSurface, PageHeader } from "../components/Workspace";
 import { ExpandableSearch } from "../components/ExpandableSearch";
 import { InfoTip } from "../features/mediaDeletion/InfoTip";
 import { normalizeSearchQuery } from "@shared/search";
@@ -241,9 +237,7 @@ function DuplicatesPage() {
       {isError
         ? (
           <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load duplicates"}
+            message={error instanceof Error ? error.message : "Failed to load duplicates"}
             onRetry={() => void refetch()}
           />
         )
@@ -294,9 +288,7 @@ function DuplicatesPage() {
               }
               meta={data
                 ? search
-                  ? `${data.total.toLocaleString()} match${
-                    data.total === 1 ? "" : "es"
-                  }`
+                  ? `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"}`
                   : `${data.total.toLocaleString()} groups`
                 : undefined}
             />
@@ -344,9 +336,7 @@ function DuplicatesPage() {
               </section>
             )}
 
-            {isLoading
-              ? <DuplicatesTableSkeleton />
-              : data && data.groups.length === 0
+            {isLoading ? <DuplicatesTableSkeleton /> : data && data.groups.length === 0
               ? (
                 <EmptyState
                   icon={BadgeCheck}
@@ -374,9 +364,7 @@ function DuplicatesPage() {
                     <tbody>
                       {data?.groups.map((item) => (
                         <DuplicateGroupRow
-                          key={item.mediaType === "movie"
-                            ? item.ratingKey
-                            : item.episodeRatingKey}
+                          key={item.mediaType === "movie" ? item.ratingKey : item.episodeRatingKey}
                           item={item}
                           onReview={() => openReview(item)}
                         />

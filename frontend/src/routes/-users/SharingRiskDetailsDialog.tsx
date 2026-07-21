@@ -47,8 +47,7 @@ const confidenceCopy = {
   low: "This is an early picture based on a small amount of playback activity.",
   medium:
     "There is enough activity to identify recurring patterns, but the picture may still change.",
-  high:
-    "This assessment is based on a broad, established history of playback observations.",
+  high: "This assessment is based on a broad, established history of playback observations.",
 } as const;
 
 function ScoreSummary({ assessment }: { assessment: Assessment }) {
@@ -112,9 +111,7 @@ export function SharingRiskDetailsDialog({
             Sharing risk assessment
           </p>
           <h3 className="mt-1 truncate text-xl font-semibold">{user?.username}</h3>
-          {user?.email && (
-            <p className="truncate text-sm text-base-content/45">{user.email}</p>
-          )}
+          {user?.email && <p className="truncate text-sm text-base-content/45">{user.email}</p>}
         </div>
 
         {assessment && (
@@ -148,34 +145,36 @@ export function SharingRiskDetailsDialog({
                   {assessment.dataConfidence} confidence
                 </span>
               </div>
-              {assessment.signals.length > 0 ? (
-                <ul className="mt-2 space-y-2">
-                  {assessment.signals.map((signal) => (
-                    <li
-                      key={signal.type}
-                      className="flex items-start gap-3 rounded-lg border border-base-300 px-3 py-2.5"
-                    >
-                      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
-                      <span className="min-w-0 flex-1 text-sm text-base-content/75">
-                        {signal.summary}
-                      </span>
-                      <span className="badge badge-ghost badge-sm shrink-0 tabular-nums">
-                        +{signal.weight}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <div className="mt-2 flex gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3">
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
-                  <p className="text-sm text-base-content/65">
-                    {assessment.dataConfidence === "none" ||
-                    assessment.riskLevel === "insufficient_data"
-                      ? "No sharing signals are visible yet. More playback activity is needed before drawing a conclusion."
-                      : "No sharing-risk signals were observed in the current assessment window."}
-                  </p>
-                </div>
-              )}
+              {assessment.signals.length > 0
+                ? (
+                  <ul className="mt-2 space-y-2">
+                    {assessment.signals.map((signal) => (
+                      <li
+                        key={signal.type}
+                        className="flex items-start gap-3 rounded-lg border border-base-300 px-3 py-2.5"
+                      >
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                        <span className="min-w-0 flex-1 text-sm text-base-content/75">
+                          {signal.summary}
+                        </span>
+                        <span className="badge badge-ghost badge-sm shrink-0 tabular-nums">
+                          +{signal.weight}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )
+                : (
+                  <div className="mt-2 flex gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3">
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+                    <p className="text-sm text-base-content/65">
+                      {assessment.dataConfidence === "none" ||
+                          assessment.riskLevel === "insufficient_data"
+                        ? "No sharing signals are visible yet. More playback activity is needed before drawing a conclusion."
+                        : "No sharing-risk signals were observed in the current assessment window."}
+                    </p>
+                  </div>
+                )}
             </section>
 
             <div className="rounded-lg bg-base-200/45 p-3 text-sm text-base-content/60">
@@ -191,16 +190,16 @@ export function SharingRiskDetailsDialog({
               <div className="flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
                 <WifiOff className="mt-0.5 size-4 shrink-0 text-warning" />
                 <p>
-                  Playback monitoring is disconnected, so this assessment cannot
-                  collect new observations right now.
+                  Playback monitoring is disconnected, so this assessment cannot collect new
+                  observations right now.
                 </p>
               </div>
             )}
 
             <p className="flex gap-2 text-xs leading-relaxed text-base-content/40">
               <Info className="mt-0.5 size-3.5 shrink-0" />
-              The score is the sum of the signal weights above, capped at 100. It is
-              not a probability or proof that an account is being shared.
+              The score is the sum of the signal weights above, capped at 100. It is not a
+              probability or proof that an account is being shared.
             </p>
           </div>
         )}

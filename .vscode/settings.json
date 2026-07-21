@@ -1,3 +1,11 @@
 {
-  "deno.enablePaths": ["backend", "shared"]
+  "deno.enablePaths": ["backend", "frontend", "shared"],
+  "[typescript]": {
+    "editor.defaultFormatter": "denoland.vscode-deno",
+    "editor.formatOnSave": true
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "denoland.vscode-deno",
+    "editor.formatOnSave": true
+  }
 }

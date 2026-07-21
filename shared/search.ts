@@ -6,7 +6,5 @@ export const SEARCH_MAX_LENGTH = 200;
 export function normalizeSearchQuery(value: unknown): string {
   if (typeof value !== 'string') return '';
   const search = value.trim();
-  return search.length >= SEARCH_MIN_LENGTH
-    ? search.slice(0, SEARCH_MAX_LENGTH)
-    : '';
+  return search.length >= SEARCH_MIN_LENGTH ? search.slice(0, SEARCH_MAX_LENGTH) : '';
 }

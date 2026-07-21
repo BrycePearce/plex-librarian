@@ -244,13 +244,20 @@ TLS.
 ## Support and contributing
 
 Found a bug or have an idea? [Open an issue](https://github.com/BrycePearce/plex-librarian/issues).
-Pull requests are welcome; please run the workspace lint and test commands
-before submitting a change.
+Pull requests are welcome; please run the workspace validation command before
+submitting a change.
 
 ```bash
-deno lint
-deno test --allow-all backend/src frontend/src
-deno task build
+deno task fmt       # apply the repository formatting rules
+deno task verify    # formatting, lint, type-checking, tests, and production build
+```
+
+The project uses Deno `2.9.3`, matching the Docker image and CI. To catch
+problems automatically before commits and pushes, install the repository's Git
+hooks once after cloning:
+
+```bash
+deno task hooks:install
 ```
 
 Plex Librarian is open-source software available under the [MIT License](LICENSE).

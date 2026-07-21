@@ -6,13 +6,11 @@ interface LocalStorageOptions<T> {
   deserialize?: (value: string) => T;
 }
 
-const serializeJson = <T,>(value: T) => JSON.stringify(value);
-const deserializeJson = <T,>(value: string) => JSON.parse(value) as T;
+const serializeJson = <T>(value: T) => JSON.stringify(value);
+const deserializeJson = <T>(value: string) => JSON.parse(value) as T;
 
 function resolveInitialValue<T>(initialValue: T | (() => T)): T {
-  return typeof initialValue === "function"
-    ? (initialValue as () => T)()
-    : initialValue;
+  return typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
 }
 
 export function useLocalStorage<T>(

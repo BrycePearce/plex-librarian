@@ -42,9 +42,7 @@ export function reclaimableKilobytes(
 
 export function duplicatePageSummary(groups: readonly DuplicateGroup[]) {
   const storageValues = groups.map((group) => group.combinedFileSize);
-  const reclaimableValues = groups.map((group) =>
-    reclaimableKilobytes(group.versions)
-  );
+  const reclaimableValues = groups.map((group) => reclaimableKilobytes(group.versions));
 
   return {
     versionCount: groups.reduce(

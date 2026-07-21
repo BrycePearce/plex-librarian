@@ -164,8 +164,7 @@ export const api = {
           name,
         }),
       }),
-    disconnect: () =>
-      apiFetch<{ ok: true }>("/auth/plex", { method: "DELETE" }),
+    disconnect: () => apiFetch<{ ok: true }>("/auth/plex", { method: "DELETE" }),
   },
   libraries: {
     list: (limit = 100, offset = 0) =>
@@ -403,8 +402,7 @@ export const api = {
       ),
   },
   qbittorrent: {
-    get: () =>
-      apiFetch<QbittorrentIntegrationSettings>("/integrations/qbittorrent"),
+    get: () => apiFetch<QbittorrentIntegrationSettings>("/integrations/qbittorrent"),
     createInstance: (instance: SaveQbittorrentInstanceRequest) =>
       apiFetch<QbittorrentInstance>("/integrations/qbittorrent/instances", {
         method: "POST",
@@ -488,10 +486,8 @@ export const api = {
         { method: "POST" },
       ),
     poll: (id: number) => apiFetch<SyncLog>(`/sync/${id}`),
-    history: (limit = 20) =>
-      apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
-    latestSuccess: () =>
-      apiFetch<{ finishedAt: number | null }>("/sync/latest-success"),
+    history: (limit = 20) => apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
+    latestSuccess: () => apiFetch<{ finishedAt: number | null }>("/sync/latest-success"),
   },
   events: {
     list: (params: { limit?: number; before?: number } = {}) => {

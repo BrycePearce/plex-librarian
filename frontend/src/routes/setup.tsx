@@ -1,14 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
-import {
-  ArrowRight,
-  Check,
-  ExternalLink,
-  Library,
-  Radio,
-  Server,
-} from "lucide-react";
+import { ArrowRight, Check, ExternalLink, Library, Radio, Server } from "lucide-react";
 import { usePlexSetupFlow } from "../features/setup/usePlexSetupFlow";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
@@ -90,9 +83,8 @@ function SetupPage() {
                   {envIncomplete
                     ? (
                       <div className="alert alert-error text-sm text-left">
-                        PLEX_URL and PLEX_TOKEN must either both be set or both
-                        be left blank. Fix the container configuration and
-                        restart Plex Librarian.
+                        PLEX_URL and PLEX_TOKEN must either both be set or both be left blank. Fix
+                        the container configuration and restart Plex Librarian.
                       </div>
                     )
                     : (
@@ -102,14 +94,12 @@ function SetupPage() {
                         onClick={startSignIn}
                         disabled={isStartingSignIn}
                       >
-                        {isStartingSignIn
-                          ? <span className="loading loading-spinner" />
-                          : (
-                            <>
-                              <span>Sign in with Plex</span>
-                              <ArrowRight className="size-4 setup-button-arrow" />
-                            </>
-                          )}
+                        {isStartingSignIn ? <span className="loading loading-spinner" /> : (
+                          <>
+                            <span>Sign in with Plex</span>
+                            <ArrowRight className="size-4 setup-button-arrow" />
+                          </>
+                        )}
                       </button>
                     )}
                   {signInError && (
@@ -191,18 +181,14 @@ function SetupPage() {
                   <SetupProgress current={2} done={isConnected} />
                   {!connectionError && (
                     <span className="setup-connecting-mark" aria-hidden="true">
-                      {isConnected
-                        ? <Check className="size-7" />
-                        : <Server className="size-7" />}
+                      {isConnected ? <Check className="size-7" /> : <Server className="size-7" />}
                     </span>
                   )}
                   <div className="setup-heading-group">
                     <h2 className="card-title text-2xl justify-center">
                       {isConnected
                         ? "Connected"
-                        : `Connecting to ${
-                          automaticServer?.name ?? "your server"
-                        }`}
+                        : `Connecting to ${automaticServer?.name ?? "your server"}`}
                     </h2>
                     <p>
                       {isConnected
@@ -247,8 +233,7 @@ function SetupPage() {
                       Choose your server
                     </h2>
                     <p className="text-sm">
-                      Select the server you want to monitor. Only servers you
-                      own are shown.
+                      Select the server you want to monitor. Only servers you own are shown.
                     </p>
                   </div>
                   <div className="flex flex-col gap-2.5">
@@ -259,8 +244,7 @@ function SetupPage() {
                       // kicking off the initial sync before it responds — worth its own
                       // per-button spinner rather than just a disabled state, since on a slow
                       // connection that round trip can take a noticeable moment.
-                      const isThisServer =
-                        connectingServerId === server.machineIdentifier;
+                      const isThisServer = connectingServerId === server.machineIdentifier;
                       const isThisServerConnecting = isConnecting &&
                         isThisServer;
                       const isThisServerConnected = isConnected && isThisServer;
@@ -275,13 +259,9 @@ function SetupPage() {
                           disabled={isConnecting || isConnected}
                         >
                           {isThisServerConnected
-                            ? (
-                              <Check className="setup-server-check w-5 h-5 shrink-0" />
-                            )
+                            ? <Check className="setup-server-check w-5 h-5 shrink-0" />
                             : isThisServerConnecting
-                            ? (
-                              <span className="loading loading-spinner w-5 h-5 shrink-0" />
-                            )
+                            ? <span className="loading loading-spinner w-5 h-5 shrink-0" />
                             : (
                               <span className="setup-server-icon">
                                 <Server className="w-5 h-5 shrink-0" />
@@ -317,9 +297,8 @@ function SetupPage() {
                     })}
                     {servers.length === 0 && (
                       <p className="text-base-content/40 text-sm text-center py-4">
-                        Plex did not report an owned server with a usable
-                        address for this account. Make sure your server is
-                        online, then start over.
+                        Plex did not report an owned server with a usable address for this account.
+                        Make sure your server is online, then start over.
                       </p>
                     )}
                   </div>
@@ -383,11 +362,7 @@ function SetupProgress({
       {steps.map(({ label, plex }, index) => {
         const isComplete = done || index < current;
         const isCurrent = !done && index === current;
-        const state = isComplete
-          ? "is-complete"
-          : isCurrent
-          ? "is-current"
-          : "";
+        const state = isComplete ? "is-complete" : isCurrent ? "is-current" : "";
         return (
           <li
             className={plex ? `is-plex ${state}` : state}
@@ -431,16 +406,14 @@ function SetupPerimeter({
     <>
       {trace && (
         <span
-          className={`setup-trace${calm ? " is-calm" : ""}${
-            aura ? " is-yielding" : ""
-          }`}
+          className={`setup-trace${calm ? " is-calm" : ""}${aura ? " is-yielding" : ""}`}
           aria-hidden="true"
         />
       )}
       <svg
-        className={`setup-perimeter setup-perimeter-${tone}${
-          trace ? " has-trace" : ""
-        }${aura ? " has-connection-aura" : ""}${sealed ? " is-sealed" : ""}`}
+        className={`setup-perimeter setup-perimeter-${tone}${trace ? " has-trace" : ""}${
+          aura ? " has-connection-aura" : ""
+        }${sealed ? " is-sealed" : ""}`}
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
         aria-hidden="true"

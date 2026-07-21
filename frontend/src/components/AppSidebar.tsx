@@ -124,7 +124,9 @@ function Brand() {
       className="sidebar-brand"
       aria-label="Plex Librarian dashboard"
     >
-      <span className="sidebar-brand-mark"><Library className="size-5" /></span>
+      <span className="sidebar-brand-mark">
+        <Library className="size-5" />
+      </span>
       <span className="sidebar-brand-copy">
         <strong>Plex Librarian</strong>
         <small>Library health</small>
@@ -157,7 +159,9 @@ function SidebarContent({ collapsed, id }: { collapsed: boolean; id: string }) {
                   }}
                   title={collapsed ? item.label : undefined}
                 >
-                  <span className="sidebar-link-icon"><Icon className="size-[18px]" /></span>
+                  <span className="sidebar-link-icon">
+                    <Icon className="size-[18px]" />
+                  </span>
                   <span className="sidebar-link-label">{item.label}</span>
                   <span className="sidebar-active-dot" />
                 </Link>

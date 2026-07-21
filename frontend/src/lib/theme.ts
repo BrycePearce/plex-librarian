@@ -15,8 +15,8 @@ export type Theme = typeof THEMES[number];
 const STORAGE_KEY = "theme";
 const DEFAULT_THEME: Theme = "dark";
 
-function isTheme(value: string | null): value is Theme {
-  return value !== null && (THEMES as readonly string[]).includes(value);
+function isTheme(value: unknown): value is Theme {
+  return typeof value === "string" && (THEMES as readonly string[]).includes(value);
 }
 
 // Applied synchronously by the inline script in index.html before React mounts (avoids a
@@ -30,13 +30,6 @@ function currentTheme(): Theme {
 }
 
 // Not yet in every lib.dom.d.ts — feature-detected below rather than relied on statically.
-interface ViewTransitionDocument extends Document {
-  startViewTransition?(callback: () => void): {
-    ready: Promise<void>;
-    finished: Promise<void>;
-  };
-}
-
 // Screen coordinates the reveal animation expands outward from — pass the click event's
 // clientX/clientY so the transition originates from whatever the user actually clicked.
 export interface ThemeChangeOrigin {
@@ -57,9 +50,7 @@ export function useTheme(): [
       setThemeState(next);
     };
 
-    const startViewTransition = (document as ViewTransitionDocument)
-      .startViewTransition
-      ?.bind(document);
+    const startViewTransition = document.startViewTransition?.bind(document);
     const reducedMotion = globalThis.matchMedia?.(
       "(prefers-reduced-motion: reduce)",
     ).matches;

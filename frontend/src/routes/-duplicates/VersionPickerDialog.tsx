@@ -5,19 +5,13 @@ import { Loader2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
-import {
-  needsTechnicalDetailRefresh,
-  versionLabel,
-} from "../../lib/mediaVersion";
+import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation";
 import { queryKeys } from "../../lib/queryKeys";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary";
-import {
-  AdvancedVersionDeletionTree,
-  VersionDeletionServiceMarks,
-} from "./VersionDeletionTree";
+import { AdvancedVersionDeletionTree, VersionDeletionServiceMarks } from "./VersionDeletionTree";
 import {
   BasicDeletionList,
   BasicDeletionRow,
@@ -73,9 +67,7 @@ export function VersionPickerDialog({
   }, [item]);
 
   const mediaIds = useMemo(() => [...checked].sort((a, b) => a - b), [checked]);
-  const ratingKey = item?.mediaType === "movie"
-    ? item.ratingKey
-    : item?.episodeRatingKey ?? "";
+  const ratingKey = item?.mediaType === "movie" ? item.ratingKey : item?.episodeRatingKey ?? "";
   const cancelButtonRef = useDeletionDialogCancelFocus(
     dialogRef,
     `${item?.mediaType ?? "none"}:${ratingKey}`,
@@ -90,8 +82,7 @@ export function VersionPickerDialog({
       item?.mediaType ?? "movie",
       ratingKey,
     ),
-    queryFn: () =>
-      api.duplicates.refreshTechnicalDetails(item!.mediaType, ratingKey),
+    queryFn: () => api.duplicates.refreshTechnicalDetails(item!.mediaType, ratingKey),
     enabled: needsTechnicalRefresh,
     staleTime: Infinity,
     retry: false,
@@ -158,9 +149,7 @@ export function VersionPickerDialog({
     0,
   );
   const arrLabel = item.mediaType === "movie" ? "Radarr" : "Sonarr";
-  const arrService = item.mediaType === "movie"
-    ? "radarr" as const
-    : "sonarr" as const;
+  const arrService = item.mediaType === "movie" ? "radarr" as const : "sonarr" as const;
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
   const arrDeleteAvailable = destinations.arrDeleteAvailable;
@@ -188,11 +177,7 @@ export function VersionPickerDialog({
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: checkedCount > 0,
-    preview: preview.isError
-      ? "error"
-      : preview.isLoading || !preview.data
-      ? "loading"
-      : "ready",
+    preview: preview.isError ? "error" : preview.isLoading || !preview.data ? "loading" : "ready",
     semanticBlock: selection.blocked,
     fallbackRequired,
     fallbackAcknowledged,
@@ -222,8 +207,7 @@ export function VersionPickerDialog({
             : `${item.showTitle} — S${item.seasonIndex}E${item.episodeIndex} "${item.episodeTitle}"`}
           {" "}
           has {item.versions.length}{" "}
-          versions synced from Plex. Review exactly where the selected files
-          will be removed.
+          versions synced from Plex. Review exactly where the selected files will be removed.
         </>
       }
     >
@@ -231,9 +215,7 @@ export function VersionPickerDialog({
         className={`alert items-start gap-2.5 py-2 text-sm duplicates-review-comparison duplicates-review-comparison-${comparison.kind}`}
       >
         <ComparisonIcon
-          className={`mt-0.5 size-4 shrink-0 ${
-            comparisonToneClass(comparison.kind)
-          }`}
+          className={`mt-0.5 size-4 shrink-0 ${comparisonToneClass(comparison.kind)}`}
         />
         <div className="min-w-0">
           <div className="font-semibold">{comparison.label}</div>
@@ -246,8 +228,7 @@ export function VersionPickerDialog({
           </div>
           {comparison.kind === "same-profile" && (
             <div className="mt-1.5 text-xs opacity-70">
-              This compares Plex metadata; it does not prove the files are
-              byte-identical.
+              This compares Plex metadata; it does not prove the files are byte-identical.
             </div>
           )}
           {technicalRefresh.isFetching && (
@@ -291,9 +272,7 @@ export function VersionPickerDialog({
                       />
                     )
                     : undefined}
-                  size={version.fileSize != null
-                    ? formatKilobytes(version.fileSize)
-                    : "—"}
+                  size={version.fileSize != null ? formatKilobytes(version.fileSize) : "—"}
                 />
               );
             })}
@@ -327,11 +306,11 @@ export function VersionPickerDialog({
               ? [{
                 id: "arr" as const,
                 service: arrService,
-                label: arrAction === "unmonitor"
-                  ? `Unmonitor in ${arrLabel}`
-                  : arrLabel,
+                label: arrAction === "unmonitor" ? `Unmonitor in ${arrLabel}` : arrLabel,
                 info: arrAction === "unmonitor"
-                  ? `Keeps the ${arrLabel} record and files, but disables monitoring for this ${item.mediaType === "movie" ? "movie" : "episode"}.`
+                  ? `Keeps the ${arrLabel} record and files, but disables monitoring for this ${
+                    item.mediaType === "movie" ? "movie" : "episode"
+                  }.`
                   : `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
                 checked: deleteFromArr,
                 disabled: pending,
@@ -346,12 +325,8 @@ export function VersionPickerDialog({
             ...(cleanupOptionVisible
               ? [{
                 id: "cleanup" as const,
-                service: cleanupUsesQbittorrent
-                  ? "qbittorrent" as const
-                  : undefined,
-                label: cleanupUsesQbittorrent
-                  ? "qBittorrent"
-                  : "Downloaded files",
+                service: cleanupUsesQbittorrent ? "qbittorrent" as const : undefined,
+                label: cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files",
                 info: preview.data.cleanupReason ??
                   "Deletes only a qBittorrent payload tied exclusively to the selected version paths.",
                 checked: cleanupDownloads,

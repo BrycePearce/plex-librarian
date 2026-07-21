@@ -88,9 +88,7 @@ function TreeNodes(
                 </span>
               )}
             </div>
-            {children.length > 0 && (
-              <TreeNodes nodes={children} depth={depth + 1} />
-            )}
+            {children.length > 0 && <TreeNodes nodes={children} depth={depth + 1} />}
           </li>
         );
       })}
@@ -129,9 +127,7 @@ export function PathTreeRoot({
     <div className="relative py-0.5 pl-3 before:absolute before:left-0 before:top-0 before:h-full before:border-l before:border-base-content/20 after:absolute after:left-0 after:top-2.5 after:w-2.5 after:border-t after:border-base-content/20 last:before:h-2.5">
       <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-5">
         <Folder
-          className={`size-3.5 shrink-0 ${
-            warning ? "text-warning" : "text-primary"
-          }`}
+          className={`size-3.5 shrink-0 ${warning ? "text-warning" : "text-primary"}`}
         />
         <span className="min-w-0 flex-1 truncate font-mono" title={path}>
           {path}
@@ -227,15 +223,11 @@ async function copyText(
 export function managedFiles(target: ArrCleanupTarget): TreeFile[] {
   if (target.type === "sonarr") {
     return (target.seasons ?? []).map((season) => ({
-      path: season.seasonNumber === 0
-        ? "Specials"
-        : `Season ${season.seasonNumber}`,
+      path: season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`,
       size: season.size,
       detail: season.episodeFileCount === null
         ? undefined
-        : `${season.episodeFileCount} file${
-          season.episodeFileCount === 1 ? "" : "s"
-        }`,
+        : `${season.episodeFileCount} file${season.episodeFileCount === 1 ? "" : "s"}`,
       folder: true,
     }));
   }
@@ -267,9 +259,7 @@ export function downloadJobInfo(job: DownloadCleanupJob): string {
 }
 
 export function downloadJobRoot(job: DownloadCleanupJob): string {
-  return job.fileCount === 1
-    ? job.savePath || job.contentPath
-    : job.contentPath || job.savePath;
+  return job.fileCount === 1 ? job.savePath || job.contentPath : job.contentPath || job.savePath;
 }
 
 export function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
@@ -277,10 +267,9 @@ export function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
   const rootName = rootSegments[rootSegments.length - 1]?.toLocaleLowerCase();
   return job.files.map((file) => {
     const segments = file.path.split(/[\\/]+/).filter(Boolean);
-    const path =
-      job.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
-        ? segments.slice(1).join("/")
-        : file.path;
+    const path = job.fileCount > 1 && segments[0]?.toLocaleLowerCase() === rootName
+      ? segments.slice(1).join("/")
+      : file.path;
     return { path: path || file.path, size: file.size };
   });
 }
@@ -379,12 +368,8 @@ export function AdvancedDeletionTree({
 }) {
   const plans = items.map((item) => {
     const preview = plexPreviews.get(item.ratingKey);
-    const arrTargets = deleteFromArr && preview?.arrStatus === "resolved"
-      ? preview.arrTargets
-      : [];
-    const plexEntries = arrTargets.length === 0
-      ? plexPreviewPathEntries([item], plexPreviews)
-      : [];
+    const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
+    const plexEntries = arrTargets.length === 0 ? plexPreviewPathEntries([item], plexPreviews) : [];
     const downloadJobs = deleteFromArr && cleanupDownloads &&
         preview?.status === "resolved"
       ? preview.downloadJobs
@@ -441,9 +426,7 @@ export function AdvancedDeletionTree({
                   />
                 </div>
                 <span className="shrink-0 font-mono text-[10px] text-base-content/35">
-                  {plan.item.fileSize == null
-                    ? "—"
-                    : formatKilobytes(plan.item.fileSize)}
+                  {plan.item.fileSize == null ? "—" : formatKilobytes(plan.item.fileSize)}
                 </span>
               </div>
               <div className="ml-1.5">
@@ -508,8 +491,7 @@ export function AdvancedDeletionTree({
         })}
         {loading && (
           <p className="flex items-center gap-2 py-2 text-[11px] text-base-content/40">
-            <span className="loading loading-spinner loading-xs" />{" "}
-            Loading paths…
+            <span className="loading loading-spinner loading-xs" /> Loading paths…
           </p>
         )}
       </div>

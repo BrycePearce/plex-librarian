@@ -24,8 +24,7 @@ export function SelectionActionBar({
           className="selection-command-bar fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
         >
           <span>
-            {count} item{count === 1 ? "" : "s"} selected ·{" "}
-            {formatKilobytes(totalSize)}
+            {count} item{count === 1 ? "" : "s"} selected · {formatKilobytes(totalSize)}
           </span>
           <div className="flex gap-2">
             <button

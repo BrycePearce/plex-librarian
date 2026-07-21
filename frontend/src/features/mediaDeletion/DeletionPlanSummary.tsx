@@ -149,9 +149,7 @@ export function PlannedServiceExceptions({
       {deleteFromArr && arrUnavailable && (
         <ServiceMark
           service={arrService}
-          ariaLabel={`Arr deletion unavailable: ${
-            arrReason ?? "no verified match"
-          }`}
+          ariaLabel={`Arr deletion unavailable: ${arrReason ?? "no verified match"}`}
           popover={
             <>
               <div className="font-semibold text-error">Arr unavailable</div>
@@ -160,8 +158,8 @@ export function PlannedServiceExceptions({
                   "No verified Sonarr or Radarr match is available."}
               </div>
               <div className="mt-1 text-base-content/45">
-                This item will be deleted from Plex only and may be downloaded
-                again if it remains monitored.
+                This item will be deleted from Plex only and may be downloaded again if it remains
+                monitored.
               </div>
             </>
           }
@@ -172,9 +170,7 @@ export function PlannedServiceExceptions({
       {cleanupUnavailable && (
         <ServiceMark
           service="qbittorrent"
-          ariaLabel={`Downloaded-file cleanup unavailable: ${
-            cleanupReason ?? "no verified files"
-          }`}
+          ariaLabel={`Downloaded-file cleanup unavailable: ${cleanupReason ?? "no verified files"}`}
           popover={
             <>
               <div className="font-semibold text-error">

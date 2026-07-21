@@ -45,8 +45,7 @@ export function StaleFilters({
         <select
           className="select select-bordered select-sm"
           value={filter}
-          onChange={(e) =>
-            onFilterChange(e.target.value as StaleParams["filter"])}
+          onChange={(e) => onFilterChange(e.target.value as StaleParams["filter"])}
         >
           <option value="all">Any status</option>
           <option value="watched">Previously watched</option>
@@ -125,9 +124,7 @@ export function StaleFilters({
               id="duplicates-only"
             />
             <label htmlFor="duplicates-only" className="text-sm cursor-pointer">
-              {libraryType === "movie"
-                ? "Multiple versions"
-                : "Duplicate episodes"}
+              {libraryType === "movie" ? "Multiple versions" : "Duplicate episodes"}
             </label>
           </div>
         </div>

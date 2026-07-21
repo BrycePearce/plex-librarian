@@ -100,9 +100,7 @@ export function DataSurface({
   children: ReactNode;
   className?: string;
 }) {
-  return (
-    <section className={`workspace-surface ${className}`}>{children}</section>
-  );
+  return <section className={`workspace-surface ${className}`}>{children}</section>;
 }
 
 export function FilterSurface({ children }: { children: ReactNode }) {

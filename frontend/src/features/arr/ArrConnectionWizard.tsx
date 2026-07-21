@@ -49,28 +49,21 @@ function draftFor(
     apiKey: "",
     urlWasSuggested: Boolean(suggestedUrl),
     libraryKeys: new Set(
-      instance
-        ? mappings.map((mapping) => mapping.libraryKey)
-        : (libraries?.libraries ?? [])
-          .filter(
-            (library) =>
-              library.type === (type === "radarr" ? "movie" : "show"),
-          )
-          .map((library) => library.key),
+      instance ? mappings.map((mapping) => mapping.libraryKey) : (libraries?.libraries ?? [])
+        .filter(
+          (library) => library.type === (type === "radarr" ? "movie" : "show"),
+        )
+        .map((library) => library.key),
     ),
     addImportExclusion: mappings[0]?.addImportExclusion ?? true,
-    libraryArrPath:
-      instance?.pathMappings.find((mapping) => mapping.kind === "library")
-        ?.arrPath ?? "",
-    libraryLocalPath:
-      instance?.pathMappings.find((mapping) => mapping.kind === "library")
-        ?.localPath ?? "",
-    downloadArrPath:
-      instance?.pathMappings.find((mapping) => mapping.kind === "download")
-        ?.arrPath ?? "",
-    downloadLocalPath:
-      instance?.pathMappings.find((mapping) => mapping.kind === "download")
-        ?.localPath ?? "",
+    libraryArrPath: instance?.pathMappings.find((mapping) => mapping.kind === "library")
+      ?.arrPath ?? "",
+    libraryLocalPath: instance?.pathMappings.find((mapping) => mapping.kind === "library")
+      ?.localPath ?? "",
+    downloadArrPath: instance?.pathMappings.find((mapping) => mapping.kind === "download")
+      ?.arrPath ?? "",
+    downloadLocalPath: instance?.pathMappings.find((mapping) => mapping.kind === "download")
+      ?.localPath ?? "",
   };
 }
 
@@ -138,10 +131,7 @@ export function ArrConnectionWizard({
   }));
   const draft = drafts[type];
   const completeTypes = useMemo(
-    () =>
-      (["radarr", "sonarr"] as const).filter((candidate) =>
-        isComplete(drafts[candidate])
-      ),
+    () => (["radarr", "sonarr"] as const).filter((candidate) => isComplete(drafts[candidate])),
     [drafts],
   );
 
@@ -203,8 +193,8 @@ export function ArrConnectionWizard({
         <div>
           <h3 className="text-lg font-bold">Connect Sonarr and Radarr</h3>
           <p className="mt-1 text-sm text-base-content/60">
-            Configure either app or both. Every completed connection will be
-            tested and saved together.
+            Configure either app or both. Every completed connection will be tested and saved
+            together.
           </p>
         </div>
       </div>
@@ -215,9 +205,7 @@ export function ArrConnectionWizard({
         </li>
         <li
           className={`rounded-lg px-3 py-2 font-medium ${
-            step === "libraries"
-              ? "bg-primary/15 text-primary"
-              : "bg-base-200 text-base-content/45"
+            step === "libraries" ? "bg-primary/15 text-primary" : "bg-base-200 text-base-content/45"
           }`}
         >
           2. Libraries
@@ -260,9 +248,7 @@ export function ArrConnectionWizard({
                     )}
                   </span>
                   <span className="mt-0.5 block text-xs opacity-65">
-                    {application === "radarr"
-                      ? "Movie libraries"
-                      : "TV libraries"}
+                    {application === "radarr" ? "Movie libraries" : "TV libraries"}
                   </span>
                 </button>
               );
@@ -280,8 +266,7 @@ export function ArrConnectionWizard({
                 <input
                   className="input input-bordered w-full"
                   value={draft.name}
-                  onChange={(event) =>
-                    updateDraft({ name: event.target.value })}
+                  onChange={(event) => updateDraft({ name: event.target.value })}
                   required
                 />
               </label>
@@ -295,9 +280,7 @@ export function ArrConnectionWizard({
                   className="input input-bordered w-full font-mono text-sm"
                   type="url"
                   value={draft.url}
-                  placeholder={type === "radarr"
-                    ? "http://radarr:7878"
-                    : "http://sonarr:8989"}
+                  placeholder={type === "radarr" ? "http://radarr:7878" : "http://sonarr:8989"}
                   onChange={(event) =>
                     updateDraft({
                       url: event.target.value,
@@ -319,8 +302,7 @@ export function ArrConnectionWizard({
                   className="input input-bordered w-full font-mono text-sm [-webkit-text-security:disc]"
                   type="text"
                   value={draft.apiKey}
-                  onChange={(event) =>
-                    updateDraft({ apiKey: event.target.value })}
+                  onChange={(event) => updateDraft({ apiKey: event.target.value })}
                   placeholder={draft.instanceId !== null
                     ? "Stored API key — leave blank to keep it"
                     : undefined}
@@ -340,44 +322,39 @@ export function ArrConnectionWizard({
                   </summary>
                   <p className="mt-2 text-xs text-base-content/55">
                     Optional. Map the paths reported by {appName}{" "}
-                    to mounts inside Plex Librarian. The library mount is only
-                    inspected; direct deletion is restricted to the download
-                    mount and only for verified hardlinks.
+                    to mounts inside Plex Librarian. The library mount is only inspected; direct
+                    deletion is restricted to the download mount and only for verified hardlinks.
                   </p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <PathInput
                       label={`${appName} library root`}
                       value={draft.libraryArrPath}
                       placeholder="/data/media or D:\\Media"
-                      onChange={(libraryArrPath) =>
-                        updateDraft({ libraryArrPath })}
+                      onChange={(libraryArrPath) => updateDraft({ libraryArrPath })}
                     />
                     <PathInput
                       label="Local library mount"
                       value={draft.libraryLocalPath}
                       placeholder="/media"
-                      onChange={(libraryLocalPath) =>
-                        updateDraft({ libraryLocalPath })}
+                      onChange={(libraryLocalPath) => updateDraft({ libraryLocalPath })}
                     />
                     <PathInput
                       label={`${appName} download root`}
                       value={draft.downloadArrPath}
                       placeholder="/data/torrents or D:\\Downloads"
-                      onChange={(downloadArrPath) =>
-                        updateDraft({ downloadArrPath })}
+                      onChange={(downloadArrPath) => updateDraft({ downloadArrPath })}
                     />
                     <PathInput
                       label="Local download mount"
                       value={draft.downloadLocalPath}
                       placeholder="/downloads"
-                      onChange={(downloadLocalPath) =>
-                        updateDraft({ downloadLocalPath })}
+                      onChange={(downloadLocalPath) => updateDraft({ downloadLocalPath })}
                     />
                   </div>
                   <p className="mt-2 text-xs text-warning/80">
-                    Configure the library mount read-only and the download mount
-                    read/write in Docker or Unraid. Both pairs must be complete,
-                    and the two local roots must not overlap.
+                    Configure the library mount read-only and the download mount read/write in
+                    Docker or Unraid. Both pairs must be complete, and the two local roots must not
+                    overlap.
                   </p>
                 </details>
               )}
@@ -392,8 +369,7 @@ export function ArrConnectionWizard({
               selectedKeys={draft.libraryKeys}
               setSelectedKeys={(libraryKeys) => updateDraft({ libraryKeys })}
               addImportExclusion={draft.addImportExclusion}
-              setAddImportExclusion={(addImportExclusion) =>
-                updateDraft({ addImportExclusion })}
+              setAddImportExclusion={(addImportExclusion) => updateDraft({ addImportExclusion })}
             />
           )}
 
@@ -427,9 +403,7 @@ export function ArrConnectionWizard({
               )
               : (
                 <>
-                  {save.isPending && (
-                    <span className="loading loading-spinner loading-xs" />
-                  )}
+                  {save.isPending && <span className="loading loading-spinner loading-xs" />}
                   Test and save {completeTypes.length === 2 ? "both" : appName}
                 </>
               )}

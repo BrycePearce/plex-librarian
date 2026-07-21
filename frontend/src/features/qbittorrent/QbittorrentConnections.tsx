@@ -34,8 +34,8 @@ export function QbittorrentConnections({
         <div>
           <h3 className="font-semibold">Download client</h3>
           <p className="mt-0.5 text-xs leading-relaxed text-base-content/50">
-            Connect qBittorrent to inspect and optionally remove verified
-            torrent payloads during deletion.
+            Connect qBittorrent to inspect and optionally remove verified torrent payloads during
+            deletion.
           </p>
         </div>
         {!data?.envConfigured && !isEmpty && (
@@ -62,8 +62,7 @@ export function QbittorrentConnections({
               No download client connected
             </strong>
             <span className="mt-1 block text-xs leading-relaxed text-base-content/50">
-              Add qBittorrent when you want verified torrent cleanup during
-              deletion.
+              Add qBittorrent when you want verified torrent cleanup during deletion.
             </span>
           </span>
           <button
@@ -132,9 +131,7 @@ export function QbittorrentConnections({
         </div>
       ))}
       <div className="min-h-5">
-        {test.isError && (
-          <p className="mt-1 text-xs text-error">{test.error.message}</p>
-        )}
+        {test.isError && <p className="mt-1 text-xs text-error">{test.error.message}</p>}
       </div>
     </section>
   );

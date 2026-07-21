@@ -85,7 +85,8 @@ export function LibrarySyncProvider({
 }
 
 export function useAnyLibrarySyncing(): boolean {
-  return useContext(ActiveSyncCountContext) > 0;
+  const activeSyncCount = useContext(ActiveSyncCountContext);
+  return activeSyncCount > 0;
 }
 
 export function useLibrarySync(libraryKey: string) {
@@ -152,9 +153,7 @@ export function useLibrarySync(libraryKey: string) {
   const thisLibraryPhase = progress?.find(
     (lib) => lib.key === libraryKey,
   )?.phase;
-  const isThisLibraryDone = attached?.scope === "global"
-    ? thisLibraryPhase === "done"
-    : isDone;
+  const isThisLibraryDone = attached?.scope === "global" ? thisLibraryPhase === "done" : isDone;
 
   useEffect(() => {
     if (attached === null) return;

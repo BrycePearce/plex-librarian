@@ -51,7 +51,11 @@ export function ThemeSwitcher({ sidebar = false }: { sidebar?: boolean }) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -4 }}
             transition={{ type: "spring", stiffness: 400, damping: 28 }}
-            className={`menu absolute z-50 w-40 rounded-box bg-base-200 shadow-xl p-2 ${sidebar ? "bottom-full left-0 mb-2 origin-bottom-left" : "right-0 mt-2 origin-top-right"}`}
+            className={`menu absolute z-50 w-40 rounded-box bg-base-200 shadow-xl p-2 ${
+              sidebar
+                ? "bottom-full left-0 mb-2 origin-bottom-left"
+                : "right-0 mt-2 origin-top-right"
+            }`}
           >
             {THEMES.map((t) => (
               <li key={t}>
@@ -65,9 +69,7 @@ export function ThemeSwitcher({ sidebar = false }: { sidebar?: boolean }) {
                   }}
                 >
                   {THEME_LABELS[t]}
-                  {theme === t && (
-                    <Check className="w-3.5 h-3.5 text-primary" />
-                  )}
+                  {theme === t && <Check className="w-3.5 h-3.5 text-primary" />}
                 </button>
               </li>
             ))}

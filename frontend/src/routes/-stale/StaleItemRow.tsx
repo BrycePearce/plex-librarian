@@ -76,15 +76,11 @@ export function StaleItemRow({
           </span>
         )}
       </div>
-      {item.year && (
-        <div className="text-xs text-base-content/40">{item.year}</div>
-      )}
+      {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
     </div>
   );
 
-  const sizePct = item.fileSize != null
-    ? Math.max(4, (item.fileSize / maxFileSize) * 100)
-    : 0;
+  const sizePct = item.fileSize != null ? Math.max(4, (item.fileSize / maxFileSize) * 100) : 0;
 
   const dotInfo = item.lastViewedAt ? staleDotInfo(item.lastViewedAt) : null;
 
@@ -100,15 +96,11 @@ export function StaleItemRow({
           delay: Math.min(index, 12) * 0.02,
         }
         : undefined}
-      className={`row-hover group polished-row cursor-pointer ${
-        selected ? "row-selected" : ""
-      }`}
+      className={`row-hover group polished-row cursor-pointer ${selected ? "row-selected" : ""}`}
       onClick={onToggle}
     >
       <td
-        className={`${
-          selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""
-        }`}
+        className={`${selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""}`}
       >
         <input
           type="checkbox"

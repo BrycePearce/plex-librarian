@@ -60,13 +60,9 @@ export function VersionTechnicalInfo({ version }: { version: MediaVersion }) {
     : ["Not reported by Plex"];
   const file = [
     text(version.container)?.toUpperCase(),
-    version.bitrate != null
-      ? `${(version.bitrate / 1000).toFixed(1)} Mbps`
-      : null,
+    version.bitrate != null ? `${(version.bitrate / 1000).toFixed(1)} Mbps` : null,
     version.fileSize != null ? formatKilobytes(version.fileSize) : null,
-    version.duration != null
-      ? formatDuration(Math.round(version.duration / 1000))
-      : null,
+    version.duration != null ? formatDuration(Math.round(version.duration / 1000)) : null,
   ].filter(Boolean).join(" / ") || "Not reported";
 
   return (

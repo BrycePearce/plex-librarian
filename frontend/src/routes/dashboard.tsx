@@ -28,22 +28,9 @@ import {
 import { api } from "../lib/api";
 import { invalidateSyncDerivedQueries } from "../lib/queryCache";
 import { queryKeys } from "../lib/queryKeys";
-import type {
-  Library,
-  LibraryPhase,
-  LibrarySyncProgress,
-  SyncLog,
-} from "../lib/api";
-import {
-  formatDuration,
-  formatKilobytes,
-  formatRelativeTime,
-} from "../lib/format";
-import {
-  LibrarySyncProvider,
-  useAnyLibrarySyncing,
-  useSyncHistory,
-} from "../lib/useLibrarySync";
+import type { Library, LibraryPhase, LibrarySyncProgress, SyncLog } from "../lib/api";
+import { formatDuration, formatKilobytes, formatRelativeTime } from "../lib/format";
+import { LibrarySyncProvider, useAnyLibrarySyncing, useSyncHistory } from "../lib/useLibrarySync";
 import { useSyncStream } from "../lib/useSyncStream";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { requireAuth } from "../lib/requireAuth";
@@ -90,8 +77,7 @@ const cardVariants: Variants = {
 };
 
 const ARR_ONBOARDING_DISMISSED_KEY = "plex-librarian:arr-onboarding-dismissed";
-const QBITTORRENT_ONBOARDING_DISMISSED_KEY =
-  "plex-librarian:qbittorrent-onboarding-dismissed";
+const QBITTORRENT_ONBOARDING_DISMISSED_KEY = "plex-librarian:qbittorrent-onboarding-dismissed";
 const ARR_ONBOARDING_STORAGE = {
   serialize: (value: boolean) => value ? "1" : "0",
   deserialize: (value: string) => value === "1",
@@ -120,12 +106,11 @@ function DashboardInner() {
     false,
     ARR_ONBOARDING_STORAGE,
   );
-  const [qbittorrentOnboardingDismissed, setQbittorrentOnboardingDismissed] =
-    useLocalStorage(
-      QBITTORRENT_ONBOARDING_DISMISSED_KEY,
-      false,
-      ARR_ONBOARDING_STORAGE,
-    );
+  const [qbittorrentOnboardingDismissed, setQbittorrentOnboardingDismissed] = useLocalStorage(
+    QBITTORRENT_ONBOARDING_DISMISSED_KEY,
+    false,
+    ARR_ONBOARDING_STORAGE,
+  );
   const [activeGlobalSyncId, setActiveGlobalSyncId] = useState<number | null>(
     null,
   );
@@ -182,9 +167,7 @@ function DashboardInner() {
   // Re-attach to a pending global sync after a page refresh.
   useEffect(() => {
     if (activeGlobalSyncId !== null) return;
-    const pending = history?.find((h) =>
-      h.status === "pending" && h.libraryKey === null
-    );
+    const pending = history?.find((h) => h.status === "pending" && h.libraryKey === null);
     if (pending) setActiveGlobalSyncId(pending.id);
   }, [history, activeGlobalSyncId]);
 
@@ -214,8 +197,7 @@ function DashboardInner() {
   // below depend on it). Only holds up rendering while there's nothing real to show yet
   // (no libraries, or none with items) — a returning user whose libraries already loaded
   // shouldn't wait on history just to render their populated grid.
-  const hasAnyImportedItems =
-    librariesData?.libraries.some((lib) => lib.itemCount > 0) ?? false;
+  const hasAnyImportedItems = librariesData?.libraries.some((lib) => lib.itemCount > 0) ?? false;
   const isCheckingFirstRun = librariesData !== undefined &&
     !hasAnyImportedItems &&
     isHistoryLoading;
@@ -230,8 +212,7 @@ function DashboardInner() {
   // overall sync is anywhere close to done, prematurely leaving first-run mode. A
   // server's `history` only gains a 'success' row once a *whole* sync run completes, so
   // this stays accurate for the entire duration regardless of per-library speed.
-  const hasEverSyncedSuccessfully =
-    history?.some((h) => h.status === "success") ?? false;
+  const hasEverSyncedSuccessfully = history?.some((h) => h.status === "success") ?? false;
   const hasVideoLibraries =
     librariesData?.libraries.some((library) =>
       library.type === "movie" || library.type === "show"
@@ -315,9 +296,7 @@ function DashboardInner() {
           {!isAnySyncing && !isDashboardLoading && (
             <span className="dashboard-health">
               <CheckCircle className="size-4" />
-              {lastSyncedAt
-                ? `Synced ${formatRelativeTime(lastSyncedAt)}`
-                : "Ready to sync"}
+              {lastSyncedAt ? `Synced ${formatRelativeTime(lastSyncedAt)}` : "Ready to sync"}
             </span>
           )}
           <button
@@ -350,9 +329,7 @@ function DashboardInner() {
             disabled={isRefetchingLibraries}
           >
             <RefreshCw
-              className={`w-3.5 h-3.5 ${
-                isRefetchingLibraries ? "animate-spin" : ""
-              }`}
+              className={`w-3.5 h-3.5 ${isRefetchingLibraries ? "animate-spin" : ""}`}
             />
             Retry
           </button>
@@ -387,8 +364,7 @@ function DashboardInner() {
               <span className="arr-onboarding-copy">
                 <strong>Using Sonarr or Radarr?</strong>
                 <span>
-                  Connect your media managers so whole-title deletion can be
-                  coordinated safely.
+                  Connect your media managers so whole-title deletion can be coordinated safely.
                 </span>
               </span>
               <Link
@@ -422,8 +398,8 @@ function DashboardInner() {
               <span className="arr-onboarding-copy">
                 <strong>Using qBittorrent?</strong>
                 <span>
-                  Connect it to inspect torrent metadata and optionally remove
-                  verified download payloads during coordinated deletion.
+                  Connect it to inspect torrent metadata and optionally remove verified download
+                  payloads during coordinated deletion.
                 </span>
               </span>
               <Link
@@ -732,9 +708,7 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
                     {formatKilobytes(library.totalFileSize)}
                   </small>
                 </span>
-                {library.historySyncedAt === null && (
-                  <i title="Watch history is still syncing" />
-                )}
+                {library.historySyncedAt === null && <i title="Watch history is still syncing" />}
                 <ArrowRight className="size-3.5" />
               </Link>
             ))}
@@ -747,9 +721,7 @@ function HomeDirectory({ libraries }: { libraries: Library[] }) {
                 <ChevronDown
                   className={`size-4 ${showAllLibraries ? "rotate-180" : ""}`}
                 />
-                {showAllLibraries
-                  ? "Show fewer"
-                  : `Show ${libraries.length - 6} more`}
+                {showAllLibraries ? "Show fewer" : `Show ${libraries.length - 6} more`}
               </button>
             )}
           </div>
@@ -840,9 +812,7 @@ function LibraryProgressRow({ lib }: { lib: LibrarySyncProgress }) {
           : <span className="loading loading-spinner loading-xs" />}
       </div>
       <span
-        className={`w-36 truncate font-medium ${
-          pending ? "text-base-content/30" : ""
-        }`}
+        className={`w-36 truncate font-medium ${pending ? "text-base-content/30" : ""}`}
       >
         {lib.title}
       </span>
@@ -882,20 +852,19 @@ function FirstRunHero({ progress }: { progress?: LibrarySyncProgress[] }) {
             Importing your libraries
           </h2>
           <p className="text-base-content/60 max-w-md">
-            This first sync pulls everything from Plex, so it can take a few
-            minutes on large libraries.
+            This first sync pulls everything from Plex, so it can take a few minutes on large
+            libraries.
           </p>
         </div>
 
         {progress?.length
           ? (
             <div className="w-full max-w-sm flex flex-col gap-2.5 text-left">
-              {progress.map((lib) => (
-                <LibraryProgressRow key={lib.key} lib={lib} />
-              ))}
+              {progress.map((lib) => <LibraryProgressRow key={lib.key} lib={lib} />)}
               <div className="text-xs text-base-content/40 text-center pt-1">
-                {doneCount} of {progress.length} libraries done ·{" "}
-                {animatedTotal.toLocaleString()} items so far
+                {doneCount} of {progress.length} libraries done · {animatedTotal.toLocaleString()}
+                {" "}
+                items so far
               </div>
             </div>
           )
@@ -937,9 +906,7 @@ function SyncProgressPanel(
             : <span className="loading loading-spinner loading-xs shrink-0" />}
           <span className="font-medium flex-1">
             {done
-              ? isSingle
-                ? `${progress[0].title} synced`
-                : `Synced ${progress.length} libraries`
+              ? isSingle ? `${progress[0].title} synced` : `Synced ${progress.length} libraries`
               : isSingle
               ? `${progress[0].title} — ${PHASE_LABEL[progress[0].phase]}`
               : `Syncing ${progress.length} libraries`}
@@ -961,9 +928,7 @@ function SyncProgressPanel(
 
         {expanded && (
           <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-base-300">
-            {progress.map((lib) => (
-              <LibraryProgressRow key={lib.key} lib={lib} />
-            ))}
+            {progress.map((lib) => <LibraryProgressRow key={lib.key} lib={lib} />)}
           </div>
         )}
       </div>
@@ -1017,17 +982,13 @@ function SyncRow({
         )}
       </td>
       <td className="text-sm text-base-content/70">
-        {libraryTitle ?? (
-          <span className="text-base-content/40">All libraries</span>
-        )}
+        {libraryTitle ?? <span className="text-base-content/40">All libraries</span>}
       </td>
       <td className="text-sm text-base-content/70">
         {new Date(sync.startedAt * 1000).toLocaleString()}
       </td>
       <td className="text-sm text-base-content/70">
-        {sync.finishedAt
-          ? formatDuration(sync.finishedAt - sync.startedAt)
-          : "—"}
+        {sync.finishedAt ? formatDuration(sync.finishedAt - sync.startedAt) : "—"}
       </td>
       <td className="text-sm font-mono">
         {(sync.itemsProcessed ?? 0).toLocaleString()}

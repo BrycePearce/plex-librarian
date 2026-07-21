@@ -27,7 +27,9 @@ export function DebouncedDaysInput({
   const [days, setDays] = useState(String(initialDays));
   const lastSavedRef = useRef(initialDays);
   const [justSaved, setJustSaved] = useState(false);
-  const savedTimeoutRef = useRef<number | undefined>(undefined);
+  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
 
   const update = useMutation({
     mutationFn,
@@ -46,8 +48,7 @@ export function DebouncedDaysInput({
   useEffect(() => () => clearTimeout(savedTimeoutRef.current), []);
 
   const parsed = Number(days);
-  const valid =
-    days !== "" &&
+  const valid = days !== "" &&
     Number.isInteger(parsed) &&
     parsed >= 0 &&
     (minimumNonZero === undefined ||
@@ -69,16 +70,12 @@ export function DebouncedDaysInput({
         min={0}
         max={maxDays}
         step={1}
-        className={`input input-bordered input-sm w-24 ${
-          !valid ? "input-error" : ""
-        }`}
+        className={`input input-bordered input-sm w-24 ${!valid ? "input-error" : ""}`}
         value={days}
         onChange={(event) => setDays(event.target.value)}
-        title={
-          minimumNonZero === undefined
-            ? undefined
-            : `Enter 0 or at least ${minimumNonZero} days`
-        }
+        title={minimumNonZero === undefined
+          ? undefined
+          : `Enter 0 or at least ${minimumNonZero} days`}
       />
       <span className="text-sm text-base-content/40">days</span>
       {update.isPending && (
@@ -87,17 +84,13 @@ export function DebouncedDaysInput({
       <span
         className={`flex items-center gap-1 text-xs text-success transition-opacity duration-300 ${
           justSaved && !update.isPending ? "opacity-100" : "opacity-0"
-        } ${
-          justSaved && !update.isPending ? "settings-save-status-visible" : ""
-        }`}
+        } ${justSaved && !update.isPending ? "settings-save-status-visible" : ""}`}
       >
         <Check className="w-3.5 h-3.5" /> Saved
       </span>
       {update.isError && (
         <span className="text-xs text-error">
-          {update.error instanceof Error
-            ? update.error.message
-            : "Failed to save"}
+          {update.error instanceof Error ? update.error.message : "Failed to save"}
         </span>
       )}
     </div>

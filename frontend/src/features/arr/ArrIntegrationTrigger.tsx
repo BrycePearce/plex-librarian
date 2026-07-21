@@ -24,9 +24,7 @@ export function ArrIntegrationTrigger() {
       className={`btn btn-sm ${connectionCount ? "btn-ghost" : "btn-primary"}`}
     >
       <Server className="size-4" /> Media connections
-      {!!connectionCount && (
-        <span className="badge badge-sm">{connectionCount}</span>
-      )}
+      {!!connectionCount && <span className="badge badge-sm">{connectionCount}</span>}
     </Link>
   );
 }

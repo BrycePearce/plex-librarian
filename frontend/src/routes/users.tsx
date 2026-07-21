@@ -29,12 +29,7 @@ import { UsersTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
 import { requireAuth } from "../lib/requireAuth";
-import {
-  CollectionToolbar,
-  DataSurface,
-  FilterSurface,
-  PageHeader,
-} from "../components/Workspace";
+import { CollectionToolbar, DataSurface, FilterSurface, PageHeader } from "../components/Workspace";
 import { ExpandableSearch } from "../components/ExpandableSearch";
 import { CustomDaysInput } from "../components/CustomDaysInput";
 import { normalizeSearchQuery } from "@shared/search";
@@ -85,12 +80,8 @@ function validateUsersSearch(search: Record<string, unknown>): UsersSearch {
         inactiveDays <= MAX_INACTIVITY_DAYS
       ? { inactiveDays }
       : {}),
-    risk: riskValues.includes(search.risk as RiskFilter)
-      ? (search.risk as RiskFilter)
-      : "all",
-    sort: sortValues.includes(search.sort as SortKey)
-      ? (search.sort as SortKey)
-      : "username",
+    risk: riskValues.includes(search.risk as RiskFilter) ? (search.risk as RiskFilter) : "all",
+    sort: sortValues.includes(search.sort as SortKey) ? (search.sort as SortKey) : "username",
     order: search.order === "desc" ? "desc" : "asc",
   };
 }
@@ -301,8 +292,7 @@ function UsersPage() {
             <select
               className="select select-bordered select-sm"
               value={search.risk}
-              onChange={(e) =>
-                updateSearch({ risk: e.target.value as RiskFilter })}
+              onChange={(e) => updateSearch({ risk: e.target.value as RiskFilter })}
             >
               <option value="all">Any risk</option>
               <option value="attention">Needs attention</option>
@@ -329,8 +319,7 @@ function UsersPage() {
             <select
               className="select select-bordered select-sm"
               value={search.order}
-              onChange={(e) =>
-                updateSearch({ order: e.target.value as SortOrder })}
+              onChange={(e) => updateSearch({ order: e.target.value as SortOrder })}
             >
               {search.sort === "username"
                 ? (
@@ -374,8 +363,8 @@ function UsersPage() {
         <div className="alert alert-info alert-soft py-2 text-sm">
           <Activity className="w-4 h-4" />
           <span>
-            Session polling is active, but Plex live notifications are
-            unavailable. Very short plays may be missed.
+            Session polling is active, but Plex live notifications are unavailable. Very short plays
+            may be missed.
           </span>
         </div>
       )}
@@ -398,17 +387,14 @@ function UsersPage() {
           <ExpandableSearch
             search={search.search}
             pending={isFetching}
-            onSearchChange={(userSearch) =>
-              updateSearch({ search: userSearch })}
+            onSearchChange={(userSearch) => updateSearch({ search: userSearch })}
             label="Search server users"
             placeholder="Search username or email..."
           />
         }
         meta={data
           ? search.search
-            ? `${data.total.toLocaleString()} match${
-              data.total === 1 ? "" : "es"
-            }`
+            ? `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"}`
             : `${data.total.toLocaleString()} users`
           : undefined}
       />
@@ -416,9 +402,7 @@ function UsersPage() {
       {isError
         ? (
           <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load users"}
+            message={error instanceof Error ? error.message : "Failed to load users"}
             onRetry={() => void refetch()}
           />
         )
@@ -433,9 +417,7 @@ function UsersPage() {
               </DeleteResultAlert>
             )}
 
-            {isLoading
-              ? <UsersTableSkeleton />
-              : data && data.users.length === 0
+            {isLoading ? <UsersTableSkeleton /> : data && data.users.length === 0
               ? (
                 <EmptyState
                   icon={UserCheck}
@@ -556,8 +538,7 @@ function UsersPage() {
                             <SharingRiskCell
                               assessment={u.sharingRisk}
                               monitorStatus={data!.monitor.status}
-                              onOpen={() =>
-                                openRiskDetails(u)}
+                              onOpen={() => openRiskDetails(u)}
                             />
                           </td>
                           <td className="text-right">
@@ -593,8 +574,7 @@ function UsersPage() {
         user={reviewUser}
         pending={removeMutation.isPending}
         error={removeMutation.error}
-        onConfirm={() =>
-          reviewUser && removeMutation.mutate(reviewUser.accountId)}
+        onConfirm={() => reviewUser && removeMutation.mutate(reviewUser.accountId)}
         onCancel={closeReview}
       />
       <SharingRiskDetailsDialog
@@ -819,8 +799,7 @@ function PendingInvitationsPanel() {
           <Pagination
             page={page}
             totalPages={totalPages}
-            onPageChange={(nextPage) =>
-              setOffset(nextPage * INVITATION_PAGE_SIZE)}
+            onPageChange={(nextPage) => setOffset(nextPage * INVITATION_PAGE_SIZE)}
           />
         </div>
       )}
@@ -834,8 +813,8 @@ function PendingInvitationsPanel() {
                 revokeInvitation?.email ||
                 "this user"}
             </strong>
-            ? This cancels the pending Plex invitation. They will need a new
-            invitation to gain access.
+            ? This cancels the pending Plex invitation. They will need a new invitation to gain
+            access.
           </p>
           {revokeMutation.isError && (
             <div className="alert alert-error mt-4 text-sm">
@@ -861,9 +840,7 @@ function PendingInvitationsPanel() {
                 revokeInvitation &&
                 revokeMutation.mutate(revokeInvitation.inviteId)}
             >
-              {revokeMutation.isPending && (
-                <span className="loading loading-spinner loading-xs" />
-              )}
+              {revokeMutation.isPending && <span className="loading loading-spinner loading-xs" />}
               Revoke invitation
             </button>
           </div>
@@ -993,9 +970,7 @@ function UserSortTh({
         {label}
         {active
           ? (
-            order === "desc"
-              ? <ArrowDown className="w-3 h-3" />
-              : <ArrowUp className="w-3 h-3" />
+            order === "desc" ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
           )
           : (
             <span className="w-3 h-3 opacity-0">
@@ -1031,9 +1006,7 @@ function SharingRiskCell({
     ? "badge-success"
     : "badge-ghost";
   const supportingText = assessment.dataConfidence === "none"
-    ? monitorStatus === "disconnected"
-      ? "Monitoring disconnected"
-      : "No observations yet"
+    ? monitorStatus === "disconnected" ? "Monitoring disconnected" : "No observations yet"
     : `${assessment.dataConfidence} confidence · ${assessment.signals.length} ${
       assessment.signals.length === 1 ? "signal" : "signals"
     }`;

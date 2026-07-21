@@ -39,8 +39,7 @@ export function ArrLibrarySelectionStep({
         <h4 className="font-semibold">Select Plex libraries</h4>
         <p className="mt-1 text-sm text-base-content/60">
           Choose the libraries managed by{" "}
-          {appName}. Compatible libraries are selected automatically for new
-          connections.
+          {appName}. Compatible libraries are selected automatically for new connections.
         </p>
       </div>
 
@@ -62,9 +61,7 @@ export function ArrLibrarySelectionStep({
           <strong className="block text-sm">
             {libraryData?.total === 0
               ? "Sync Plex before selecting libraries"
-              : `No compatible ${
-                expectedType === "movie" ? "movie" : "TV"
-              } libraries found`}
+              : `No compatible ${expectedType === "movie" ? "movie" : "TV"} libraries found`}
           </strong>
           <p className="mt-1 text-xs text-base-content/55">
             {libraryData?.total === 0

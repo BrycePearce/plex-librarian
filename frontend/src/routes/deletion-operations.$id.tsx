@@ -1,12 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Clock3,
-  RotateCcw,
-  XCircle,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock3, RotateCcw, XCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { formatKilobytes } from "../lib/format";
 import { requireAuth } from "../lib/requireAuth";
@@ -30,8 +24,7 @@ function DeletionOperationPage() {
   const query = useQuery({
     queryKey,
     queryFn: () => api.deletionOperations.get(id),
-    refetchInterval: (state) =>
-      deletionOperationPollInterval(state.state.data?.status),
+    refetchInterval: (state) => deletionOperationPollInterval(state.state.data?.status),
   });
   const cancel = useMutation({
     mutationFn: () => api.deletionOperations.cancel(id),
@@ -52,24 +45,19 @@ function DeletionOperationPage() {
   if (query.isError || !query.data) {
     return (
       <ErrorAlert
-        message={query.error instanceof Error
-          ? query.error.message
-          : "Operation not found"}
+        message={query.error instanceof Error ? query.error.message : "Operation not found"}
         onRetry={() => void query.refetch()}
       />
     );
   }
   const operation = query.data;
-  const current =
-    operation.targets.find((target) => target.status === "running") ??
-      operation.targets.find((target) =>
-        target.status === "waiting_retry" || target.status === "queued"
-      );
+  const current = operation.targets.find((target) => target.status === "running") ??
+    operation.targets.find((target) =>
+      target.status === "waiting_retry" || target.status === "queued"
+    );
   const done = operation.completedCount + operation.failedCount +
     operation.targets.filter((target) => target.status === "cancelled").length;
-  const percent = operation.targetCount === 0
-    ? 0
-    : Math.round(done / operation.targetCount * 100);
+  const percent = operation.targetCount === 0 ? 0 : Math.round(done / operation.targetCount * 100);
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl w-full mx-auto">
@@ -113,9 +101,7 @@ function DeletionOperationPage() {
             <div className="flex items-center gap-3 rounded-lg bg-base-100 px-4 py-3">
               {current.status === "waiting_retry"
                 ? <Clock3 className="size-5 text-warning" />
-                : (
-                  <span className="loading loading-spinner loading-sm text-primary" />
-                )}
+                : <span className="loading loading-spinner loading-sm text-primary" />}
               <div className="min-w-0">
                 <p className="font-medium truncate">{current.title}</p>
                 <p className="text-sm text-base-content/55">
@@ -186,13 +172,9 @@ function DeletionOperationPage() {
                 </span>
               </div>
               <p className="text-sm text-base-content/50">
-                {target.logicalSize != null
-                  ? formatKilobytes(target.logicalSize)
-                  : ""}
+                {target.logicalSize != null ? formatKilobytes(target.logicalSize) : ""}
               </p>
-              {target.error && (
-                <p className="text-sm text-error mt-1">{target.error}</p>
-              )}
+              {target.error && <p className="text-sm text-error mt-1">{target.error}</p>}
             </div>
           </div>
         ))}

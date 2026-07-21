@@ -5,9 +5,9 @@
 
 export interface AuthStatus {
   configured: boolean;
-  source: "env" | "db" | null;
+  source: 'env' | 'db' | null;
   reachable?: boolean;
-  reason?: "token_revoked" | "env_incomplete";
+  reason?: 'token_revoked' | 'env_incomplete';
   // Best-effort — omitted if the plex.tv account lookup failed or hasn't been configured.
   user?: { username: string; thumb: string | null };
 }
@@ -32,8 +32,8 @@ export interface PlexServer {
 }
 
 export type PinPollResult =
-  | { status: "pending" }
-  | { status: "complete"; servers: PlexServer[] };
+  | { status: 'pending' }
+  | { status: 'complete'; servers: PlexServer[] };
 
 // --- Settings ---
 
@@ -49,7 +49,7 @@ export interface Settings {
   ipHistoryRetentionDays: number;
 }
 
-export type ArrType = "radarr" | "sonarr";
+export type ArrType = 'radarr' | 'sonarr';
 
 export interface ArrInstance {
   id: number;
@@ -61,7 +61,7 @@ export interface ArrInstance {
 }
 
 export interface ArrPathMapping {
-  kind: "library" | "download";
+  kind: 'library' | 'download';
   arrPath: string;
   localPath: string;
 }
@@ -264,7 +264,7 @@ export interface MediaVersion {
 }
 
 export interface DuplicateMovieGroup {
-  mediaType: "movie";
+  mediaType: 'movie';
   libraryKey: string;
   ratingKey: string;
   title: string;
@@ -275,7 +275,7 @@ export interface DuplicateMovieGroup {
 }
 
 export interface DuplicateEpisodeGroup {
-  mediaType: "episode";
+  mediaType: 'episode';
   libraryKey: string;
   episodeRatingKey: string;
   showRatingKey: string;
@@ -313,12 +313,12 @@ export interface MediaVersionsRefreshResponse {
 }
 
 export type DeletionOperationStatus =
-  | "queued"
-  | "running"
-  | "waiting_retry"
-  | "completed"
-  | "needs_attention"
-  | "cancelled";
+  | 'queued'
+  | 'running'
+  | 'waiting_retry'
+  | 'completed'
+  | 'needs_attention'
+  | 'cancelled';
 
 export interface DeletionOperationCreated {
   operationId: string;
@@ -328,16 +328,16 @@ export interface DeletionOperationCreated {
 export interface DeletionOperationTarget {
   id: number;
   ordinal: number;
-  targetKind: "whole_item" | "movie_version" | "episode_version";
+  targetKind: 'whole_item' | 'movie_version' | 'episode_version';
   targetKey: string;
   title: string;
   status:
-    | "queued"
-    | "running"
-    | "waiting_retry"
-    | "completed"
-    | "needs_attention"
-    | "cancelled";
+    | 'queued'
+    | 'running'
+    | 'waiting_retry'
+    | 'completed'
+    | 'needs_attention'
+    | 'cancelled';
   attemptCount: number;
   nextRetryAt: number | null;
   error: string | null;
@@ -348,7 +348,7 @@ export interface DeletionOperation {
   id: string;
   clientRequestId: string;
   libraryKey: string;
-  kind: "whole_item" | "movie_version" | "episode_version";
+  kind: 'whole_item' | 'movie_version' | 'episode_version';
   status: DeletionOperationStatus;
   targetCount: number;
   completedCount: number;
@@ -365,29 +365,29 @@ export interface DeletionOperation {
 export interface MediaVersionPathPreview {
   mediaId: number;
   plexPaths: string[];
-  status: "resolved" | "unavailable" | "error";
+  status: 'resolved' | 'unavailable' | 'error';
   reason?: string;
   truncated: boolean;
-  arrStatus?: "resolved" | "unavailable" | "error";
+  arrStatus?: 'resolved' | 'unavailable' | 'error';
   arrReason?: string;
-  cleanupStatus?: "resolved" | "unavailable" | "error";
+  cleanupStatus?: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;
 }
 
 export interface VersionDeletionPreviewResponse {
-  mediaType: "movie" | "episode";
+  mediaType: 'movie' | 'episode';
   arrService: ArrType;
   versions: MediaVersionPathPreview[];
   arrConfigured: boolean;
-  arrStatus: "resolved" | "unavailable" | "error";
+  arrStatus: 'resolved' | 'unavailable' | 'error';
   arrReason?: string;
   arrTargets: ArrCleanupTarget[];
-  arrUnmonitorStatus: "resolved" | "unavailable" | "error";
+  arrUnmonitorStatus: 'resolved' | 'unavailable' | 'error';
   arrUnmonitorNeeded: boolean;
   arrUnmonitorReason?: string;
   arrUnmonitorTargets: ArrCleanupTarget[];
   cleanupConfigured: boolean;
-  cleanupStatus: "resolved" | "unavailable" | "error";
+  cleanupStatus: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;
   downloadJobs: DownloadCleanupJob[];
   orphanFiles: ArrCleanupFile[];
@@ -419,15 +419,15 @@ export interface PlexUser {
   sharingRisk: SharingRiskAssessment;
 }
 
-export type UserActivityStatus = "watched" | "never" | "unknown";
+export type UserActivityStatus = 'watched' | 'never' | 'unknown';
 
-export type SharingDataConfidence = "none" | "low" | "medium" | "high";
-export type SharingRiskLevel = "insufficient_data" | "low" | "watch" | "review";
+export type SharingDataConfidence = 'none' | 'low' | 'medium' | 'high';
+export type SharingRiskLevel = 'insufficient_data' | 'low' | 'watch' | 'review';
 export type SharingRiskSignalType =
-  | "remote_network_diversity"
-  | "remote_device_diversity"
-  | "rapid_network_switching"
-  | "concurrent_remote_playback";
+  | 'remote_network_diversity'
+  | 'remote_device_diversity'
+  | 'rapid_network_switching'
+  | 'concurrent_remote_playback';
 
 export interface SharingRiskSignal {
   type: SharingRiskSignalType;
@@ -448,7 +448,7 @@ export interface SharingRiskAssessment {
 }
 
 export interface SessionMonitorHealth {
-  status: "starting" | "connected" | "polling" | "disconnected";
+  status: 'starting' | 'connected' | 'polling' | 'disconnected';
   lastSnapshotAt: number | null;
   lastObservationAt: number | null;
   activeSessionCount: number;
@@ -464,9 +464,9 @@ export interface UsersResponse {
   inactiveDays: number;
   defaultInactiveDays: number;
   search: string;
-  risk: "all" | "attention" | SharingRiskLevel;
-  sort: "username" | "lastViewedAt" | "sharingRisk";
-  order: "asc" | "desc";
+  risk: 'all' | 'attention' | SharingRiskLevel;
+  sort: 'username' | 'lastViewedAt' | 'sharingRisk';
+  order: 'asc' | 'desc';
   limit: number;
   offset: number;
   total: number;
@@ -486,21 +486,21 @@ export interface PendingInvitation {
   thumb: string | null;
   createdAt: number;
   libraryCount: number | null;
-  ageStatus: "current" | "stale" | "critical";
+  ageStatus: 'current' | 'stale' | 'critical';
 }
 
 export interface PendingInvitationsResponse {
   staleAfterDays: number;
   criticalAfterDays: number;
-  serverMatch: "matched" | "ambiguous" | "unavailable";
+  serverMatch: 'matched' | 'ambiguous' | 'unavailable';
   overallTotal: number;
   total: number;
   staleCount: number;
   criticalCount: number;
-  filter: "all" | "attention" | "current" | "stale" | "critical";
+  filter: 'all' | 'attention' | 'current' | 'stale' | 'critical';
   search: string;
-  sort: "createdAt" | "username" | "libraryCount";
-  order: "asc" | "desc";
+  sort: 'createdAt' | 'username' | 'libraryCount';
+  order: 'asc' | 'desc';
   limit: number;
   offset: number;
   invitations: PendingInvitation[];
@@ -514,7 +514,7 @@ export interface CancelPendingInvitationResponse {
 
 export interface DeleteItemsRequest {
   ratingKeys: string[];
-  mode: "coordinated" | "plex-only";
+  mode: 'coordinated' | 'plex-only';
   cleanupDownloads?: boolean;
 }
 
@@ -546,7 +546,7 @@ export interface DownloadCleanupJobFile {
 
 export interface ArrCleanupExtraFile {
   relativePath: string;
-  type: "subtitle" | "metadata" | "other";
+  type: 'subtitle' | 'metadata' | 'other';
 }
 
 export interface ArrCleanupMediaFile {
@@ -575,7 +575,7 @@ export interface ArrCleanupSource {
   downloadId: string;
   path: string;
   importedPath: string | null;
-  verification: "hardlink" | "unverified";
+  verification: 'hardlink' | 'unverified';
   localPath?: string;
   reason?: string;
 }
@@ -583,7 +583,7 @@ export interface ArrCleanupSource {
 export interface ArrCleanupFile {
   path: string;
   size: number;
-  method: "hardlink";
+  method: 'hardlink';
 }
 
 export interface ArrCleanupRetainedPath {
@@ -594,13 +594,13 @@ export interface ArrCleanupRetainedPath {
 export interface DownloadCleanupPreviewItem {
   ratingKey: string;
   plexPaths: string[];
-  plexPathStatus: "resolved" | "unavailable" | "error";
+  plexPathStatus: 'resolved' | 'unavailable' | 'error';
   plexPathReason?: string;
   plexPathsTruncated: boolean;
-  status: "resolved" | "unavailable" | "error";
+  status: 'resolved' | 'unavailable' | 'error';
   downloadJobs: DownloadCleanupJob[];
   reason?: string;
-  arrStatus: "resolved" | "unavailable" | "error";
+  arrStatus: 'resolved' | 'unavailable' | 'error';
   arrReason?: string;
   arrTargets: ArrCleanupTarget[];
   sources: ArrCleanupSource[];
@@ -630,7 +630,7 @@ export interface DeleteItemsResponse {
   outcomes: DeleteItemOutcome[];
 }
 
-export type DeletionStageStatus = "deleted" | "already-absent" | "failed";
+export type DeletionStageStatus = 'deleted' | 'already-absent' | 'failed';
 
 export interface DeletionStageOutcome {
   system: string;
@@ -647,12 +647,12 @@ export interface DeleteItemOutcome {
 // --- Sync ---
 
 export type LibraryPhase =
-  | "pending"
-  | "items"
-  | "episodes"
-  | "tracks"
-  | "history"
-  | "done";
+  | 'pending'
+  | 'items'
+  | 'episodes'
+  | 'tracks'
+  | 'history'
+  | 'done';
 
 export interface LibrarySyncProgress {
   key: string;
@@ -667,7 +667,7 @@ export interface SyncLog {
   libraryKey: string | null;
   startedAt: number;
   finishedAt: number | null;
-  status: "pending" | "success" | "error";
+  status: 'pending' | 'success' | 'error';
   itemsProcessed: number | null;
   error: string | null;
   progress?: LibrarySyncProgress[]; // only present while status === 'pending'
@@ -675,24 +675,24 @@ export interface SyncLog {
 
 export interface SyncTriggerResponse {
   syncId: number;
-  status: "pending";
+  status: 'pending';
 }
 
 // --- Activity log ---
 
 export type EventType =
-  | "sync.completed"
-  | "sync.failed"
-  | "items.deleted"
-  | "media.deleted"
-  | "deletion.completed"
-  | "user.removed";
+  | 'sync.completed'
+  | 'sync.failed'
+  | 'items.deleted'
+  | 'media.deleted'
+  | 'deletion.completed'
+  | 'user.removed';
 
 export interface DeletionCompletedPayload {
   operationId: string;
   libraryKey: string;
-  kind: "whole_item" | "movie_version" | "episode_version";
-  status: "completed" | "needs_attention" | "cancelled";
+  kind: 'whole_item' | 'movie_version' | 'episode_version';
+  status: 'completed' | 'needs_attention' | 'cancelled';
   targetCount: number;
   completedCount: number;
   failedCount: number;
@@ -749,37 +749,37 @@ export interface UserRemovedPayload {
 export type ActivityEvent =
   | {
     id: number;
-    type: "sync.completed";
+    type: 'sync.completed';
     payload: SyncCompletedPayload | null;
     createdAt: number;
   }
   | {
     id: number;
-    type: "sync.failed";
+    type: 'sync.failed';
     payload: SyncFailedPayload | null;
     createdAt: number;
   }
   | {
     id: number;
-    type: "items.deleted";
+    type: 'items.deleted';
     payload: ItemsDeletedPayload | null;
     createdAt: number;
   }
   | {
     id: number;
-    type: "media.deleted";
+    type: 'media.deleted';
     payload: MediaDeletedPayload | null;
     createdAt: number;
   }
   | {
     id: number;
-    type: "deletion.completed";
+    type: 'deletion.completed';
     payload: DeletionCompletedPayload | null;
     createdAt: number;
   }
   | {
     id: number;
-    type: "user.removed";
+    type: 'user.removed';
     payload: UserRemovedPayload | null;
     createdAt: number;
   };

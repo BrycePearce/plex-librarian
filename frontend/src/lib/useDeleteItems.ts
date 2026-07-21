@@ -22,15 +22,14 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         cleanupDownloads,
         coordinatedRatingKeys,
         unmonitorRatingKeys,
-      }:
-        {
-          libraryKey: string;
-          ratingKeys: string[];
-          mode?: "coordinated" | "plex-only";
-          cleanupDownloads?: boolean;
-          coordinatedRatingKeys?: string[];
-          unmonitorRatingKeys?: string[];
-        },
+      }: {
+        libraryKey: string;
+        ratingKeys: string[];
+        mode?: "coordinated" | "plex-only";
+        cleanupDownloads?: boolean;
+        coordinatedRatingKeys?: string[];
+        unmonitorRatingKeys?: string[];
+      },
     ) => {
       const coordinated = coordinatedRatingKeys ??
         (mode === "coordinated" ? ratingKeys : []);

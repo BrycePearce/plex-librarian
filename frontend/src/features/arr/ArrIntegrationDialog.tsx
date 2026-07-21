@@ -129,8 +129,8 @@ export function ArrIntegrationDialog() {
                 Media connections
               </h2>
               <p className="mt-1 max-w-2xl text-sm leading-relaxed text-base-content/55">
-                Connect Sonarr and Radarr for managed deletion, plus qBittorrent
-                for optional torrent cleanup.
+                Connect Sonarr and Radarr for managed deletion, plus qBittorrent for optional
+                torrent cleanup.
               </p>
             </div>
             <button
@@ -145,9 +145,7 @@ export function ArrIntegrationDialog() {
           </div>
 
           <div className="mt-6 space-y-5">
-            {isLoading && (
-              <span className="loading loading-spinner loading-sm" />
-            )}
+            {isLoading && <span className="loading loading-spinner loading-sm" />}
             {error && <p className="text-sm text-error">{error.message}</p>}
             {data?.instances.length === 0 && (
               <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-dashed border-base-content/15 bg-base-200/30 p-4 transition-colors hover:border-primary/25 hover:bg-base-200/45">
@@ -177,8 +175,7 @@ export function ArrIntegrationDialog() {
                   <div>
                     <h3 className="font-medium">Connections</h3>
                     <p className="text-xs text-base-content/55">
-                      API keys stay server-side and are never returned to the
-                      browser.
+                      API keys stay server-side and are never returned to the browser.
                     </p>
                   </div>
                   <button
@@ -196,9 +193,7 @@ export function ArrIntegrationDialog() {
                   >
                     <span
                       className={`badge badge-sm ${
-                        instance.type === "radarr"
-                          ? "badge-primary"
-                          : "badge-secondary"
+                        instance.type === "radarr" ? "badge-primary" : "badge-secondary"
                       }`}
                     >
                       {instance.type === "radarr" ? "Radarr" : "Sonarr"}
@@ -226,9 +221,7 @@ export function ArrIntegrationDialog() {
                       disabled={test.isPending}
                     >
                       {test.isPending && test.variables === instance.id
-                        ? (
-                          <span className="loading loading-spinner loading-xs" />
-                        )
+                        ? <span className="loading loading-spinner loading-xs" />
                         : test.isSuccess && test.variables === instance.id
                         ? <AnimatedSuccessCheck />
                         : "Test"}
@@ -249,9 +242,7 @@ export function ArrIntegrationDialog() {
                   </div>
                 ))}
                 <div className="min-h-5">
-                  {test.isError && (
-                    <p className="text-xs text-error">{test.error.message}</p>
-                  )}
+                  {test.isError && <p className="text-xs text-error">{test.error.message}</p>}
                 </div>
               </div>
             )}
@@ -307,15 +298,14 @@ export function ArrIntegrationDialog() {
             <Trash2 className="size-5 text-error" /> Remove connection?
           </h3>
           <p className="py-3 text-sm text-base-content/70">
-            Remove <strong>{pendingRemoval?.name}</strong>{" "}
-            from Plex Librarian? This also removes {removalMappingCount === 1
+            Remove <strong>{pendingRemoval?.name}</strong> from Plex Librarian? This also removes
+            {" "}
+            {removalMappingCount === 1
               ? "1 library mapping"
-              : `${removalMappingCount} library mappings`}. It does not delete
-            anything from Sonarr, Radarr, Plex, or disk.
+              : `${removalMappingCount} library mappings`}. It does not delete anything from Sonarr,
+            Radarr, Plex, or disk.
           </p>
-          {remove.isError && (
-            <p className="text-sm text-error">{remove.error.message}</p>
-          )}
+          {remove.isError && <p className="text-sm text-error">{remove.error.message}</p>}
           <div className="modal-action">
             <button
               type="button"
@@ -346,8 +336,8 @@ export function ArrIntegrationDialog() {
           </h3>
           <p className="py-3 text-sm text-base-content/70">
             Remove <strong>{pendingQbittorrentRemoval?.name}</strong>{" "}
-            from Plex Librarian? It does not remove torrents, downloaded
-            payloads, or anything from qBittorrent.
+            from Plex Librarian? It does not remove torrents, downloaded payloads, or anything from
+            qBittorrent.
           </p>
           {removeQbittorrent.isError && (
             <p className="text-sm text-error">

@@ -17,9 +17,7 @@ export function PosterThumb({
   hoverScope?: "poster" | "row";
 }) {
   const url = thumb
-    ? `/api/proxy/thumb?path=${
-      encodeURIComponent(thumb)
-    }&width=${width}&height=${height}`
+    ? `/api/proxy/thumb?path=${encodeURIComponent(thumb)}&width=${width}&height=${height}`
     : null;
 
   if (!hoverScope) {

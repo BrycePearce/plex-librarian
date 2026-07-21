@@ -58,8 +58,8 @@ export function QbittorrentConnectionWizard({
             {instance ? `Edit ${instance.name}` : "Connect qBittorrent"}
           </h3>
           <p className="mt-1 text-sm text-base-content/60">
-            Connect the Web UI to inspect torrent metadata and optionally remove
-            payloads during coordinated deletion.
+            Connect the Web UI to inspect torrent metadata and optionally remove payloads during
+            coordinated deletion.
           </p>
         </div>
       </div>
@@ -119,8 +119,7 @@ export function QbittorrentConnectionWizard({
               data-1p-ignore
               data-lpignore="true"
               value={form.username}
-              onChange={(event) =>
-                setForm({ ...form, username: event.target.value })}
+              onChange={(event) => setForm({ ...form, username: event.target.value })}
               disabled={clearCredentials}
             />
           </label>
@@ -135,8 +134,7 @@ export function QbittorrentConnectionWizard({
               data-1p-ignore
               data-lpignore="true"
               value={form.password}
-              onChange={(event) =>
-                setForm({ ...form, password: event.target.value })}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
               disabled={clearCredentials}
             />
           </label>
@@ -154,9 +152,8 @@ export function QbittorrentConnectionWizard({
           </label>
         )}
         <p className="text-xs text-base-content/50">
-          Credentials may be blank only when qBittorrent bypasses Web UI
-          authentication for the Plex Librarian host or subnet. Saving tests the
-          connection before storing it.
+          Credentials may be blank only when qBittorrent bypasses Web UI authentication for the Plex
+          Librarian host or subnet. Saving tests the connection before storing it.
         </p>
 
         <div className="modal-action">
@@ -173,9 +170,8 @@ export function QbittorrentConnectionWizard({
             className="btn btn-primary btn-sm"
             disabled={save.isPending || !form.name.trim() || !form.url.trim()}
           >
-            {save.isPending && (
-              <span className="loading loading-spinner loading-xs" />
-            )} Save connection
+            {save.isPending && <span className="loading loading-spinner loading-xs" />}{" "}
+            Save connection
           </button>
         </div>
       </form>

@@ -23,9 +23,7 @@ export function SyncCacheCoordinator() {
   });
   const latestGlobalSync = history?.find((sync) => sync.libraryKey === null) ??
     (history === undefined ? undefined : null);
-  const syncId = latestGlobalSync?.status === "pending"
-    ? latestGlobalSync.id
-    : null;
+  const syncId = latestGlobalSync?.status === "pending" ? latestGlobalSync.id : null;
   const { isDone, error } = useSyncStream(syncId);
   const lifecycle = useRef(initialSyncCacheLifecycleState);
 

@@ -1,22 +1,22 @@
-import { defineConfig } from 'vite'
-import react, { reactCompilerPreset } from '@vitejs/plugin-react'
-import babel from '@rolldown/plugin-babel'
-import tailwindcss from '@tailwindcss/vite'
-import { tanstackRouter } from '@tanstack/router-plugin/vite'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { defineConfig } from "vite";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
+import tailwindcss from "@tailwindcss/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // This config runs under Vite via `deno task` (see frontend/deno.json), so the real
 // `Deno` global is always present at runtime — but frontend/ is outside the Deno LSP's
 // `deno.enablePaths` (.vscode/settings.json), so the editor's plain-TS view of this file
 // doesn't know about it without this narrow ambient declaration.
-declare const Deno: { build: { os: string } }
+declare const Deno: { build: { os: string } };
 
 export default defineConfig({
   plugins: [
     tanstackRouter({
-      routesDirectory: './src/routes',
-      generatedRouteTree: './src/routeTree.gen.ts',
+      routesDirectory: "./src/routes",
+      generatedRouteTree: "./src/routeTree.gen.ts",
       autoCodeSplitting: true,
     }),
     react(),
@@ -33,7 +33,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@shared': resolve(fileURLToPath(new URL('.', import.meta.url)), '../shared'),
+      "@shared": resolve(fileURLToPath(new URL(".", import.meta.url)), "../shared"),
     },
   },
   optimizeDeps: {
@@ -43,13 +43,13 @@ export default defineConfig({
     // (its dev build assigns `exports.c` inside an IIFE, invisible to static detection),
     // breaking every compiled module. The old plugin-react `babel` option added this
     // automatically; with the compiler in a separate rolldown-plugin-babel pass, it's on us.
-    include: ['react/compiler-runtime'],
+    include: ["react/compiler-runtime"],
   },
   server: {
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
+      "/api": {
+        target: "http://localhost:8080",
         changeOrigin: true,
       },
     },
@@ -59,7 +59,8 @@ export default defineConfig({
     // Polling sidesteps the native watcher entirely at the cost of a bit more CPU — scoped
     // to Windows since native fs events work fine elsewhere and polling isn't free.
     watch: {
-      usePolling: (globalThis as typeof globalThis & { Deno?: typeof Deno }).Deno?.build.os === 'windows',
+      usePolling:
+        (globalThis as typeof globalThis & { Deno?: typeof Deno }).Deno?.build.os === "windows",
     },
   },
-})
+});

@@ -2,12 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import {
-  ExternalLink,
-  ChevronUp,
-  LogOut,
-  User,
-} from "lucide-react";
+import { ChevronUp, ExternalLink, LogOut, User } from "lucide-react";
 import { api } from "../lib/api";
 import { clearServerScopedQueries } from "../lib/queryCache";
 import { queryKeys } from "../lib/queryKeys";
@@ -45,9 +40,7 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
       const remainingLoaderTime = DISCONNECT_LOADER_MIN_MS -
         (Date.now() - disconnectStartedAt.current);
       if (remainingLoaderTime > 0) {
-        await new Promise<void>((resolve) =>
-          globalThis.setTimeout(resolve, remainingLoaderTime)
-        );
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, remainingLoaderTime));
       }
       qc.setQueryData<AuthStatus>(queryKeys.auth.status, {
         configured: false,
@@ -72,7 +65,13 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
   // races the same queryKey the route's beforeLoad already kicked off), so without a
   // same-size placeholder here the avatar pops in and shifts ThemeSwitcher beside it.
   if (isPending) {
-    return <div className={`skeleton shrink-0 ${sidebar ? "h-12 w-full rounded-xl" : "w-8 h-8 rounded-full"}`} />;
+    return (
+      <div
+        className={`skeleton shrink-0 ${
+          sidebar ? "h-12 w-full rounded-xl" : "w-8 h-8 rounded-full"
+        }`}
+      />
+    );
   }
 
   if (!authStatus?.configured) return null;
@@ -117,7 +116,11 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -4 }}
             transition={{ type: "spring", stiffness: 400, damping: 28 }}
-            className={`menu absolute z-50 w-52 rounded-box bg-base-200 shadow-xl p-2 ${sidebar ? "bottom-full left-0 mb-2 origin-bottom-left" : "right-0 mt-2 origin-top-right"}`}
+            className={`menu absolute z-50 w-52 rounded-box bg-base-200 shadow-xl p-2 ${
+              sidebar
+                ? "bottom-full left-0 mb-2 origin-bottom-left"
+                : "right-0 mt-2 origin-top-right"
+            }`}
           >
             {user?.username && (
               <li className="menu-title truncate">

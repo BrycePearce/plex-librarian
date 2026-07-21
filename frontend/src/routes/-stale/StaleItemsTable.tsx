@@ -171,9 +171,7 @@ export function StaleItemsTable({
             )
             : (
               <>
-                {params.search
-                  ? <SearchX className="w-8 h-8" />
-                  : <Sparkles className="w-8 h-8" />}
+                {params.search ? <SearchX className="w-8 h-8" /> : <Sparkles className="w-8 h-8" />}
                 <p className="font-medium text-base-content/60">
                   {params.search ? "No matching titles" : "All caught up"}
                 </p>

@@ -31,9 +31,7 @@ export function DuplicateGroupRow({
     ? (
       <div className="min-w-0">
         <div className="font-medium truncate max-w-xs">{item.title}</div>
-        {item.year && (
-          <div className="text-xs text-base-content/40">{item.year}</div>
-        )}
+        {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
       </div>
     )
     : (
@@ -57,9 +55,7 @@ export function DuplicateGroupRow({
             : "/libraries/$key/shows/$ratingKey"}
           params={{
             key: item.libraryKey,
-            ratingKey: item.mediaType === "movie"
-              ? item.ratingKey
-              : item.showRatingKey,
+            ratingKey: item.mediaType === "movie" ? item.ratingKey : item.showRatingKey,
           }}
           onClick={(event) => event.stopPropagation()}
           className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
@@ -120,9 +116,7 @@ export function DuplicateGroupRow({
       <td className="text-sm font-mono duplicates-storage">
         <div className="duplicates-storage-values">
           <span>
-            {item.combinedFileSize != null
-              ? formatKilobytes(item.combinedFileSize)
-              : "—"}
+            {item.combinedFileSize != null ? formatKilobytes(item.combinedFileSize) : "—"}
           </span>
           {reclaimable != null && (
             <small title="Potential space if the largest version is kept">

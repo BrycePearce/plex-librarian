@@ -1,9 +1,6 @@
 import { assertEquals } from "@std/assert";
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
-import {
-  arrDestinationState,
-  shouldUseArrByDefault,
-} from "./deletionPreviewState.ts";
+import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState.ts";
 
 Deno.test("configured Arr remains visible when every selected item is unavailable", () => {
   const preview = {

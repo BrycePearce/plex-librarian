@@ -5,8 +5,7 @@ export function deletionImpact(items: readonly WholeItemDeletionCandidate[]): {
   unknownSizeCount: number;
 } {
   const totalSize = items.reduce((sum, item) => sum + (item.fileSize ?? 0), 0);
-  const unknownSizeCount =
-    items.filter((item) => item.fileSize === null).length;
+  const unknownSizeCount = items.filter((item) => item.fileSize === null).length;
   return {
     totalSize,
     unknownSizeCount,

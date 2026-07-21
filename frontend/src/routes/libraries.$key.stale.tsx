@@ -1,8 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  stripSearchParams,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -138,8 +134,7 @@ function LibraryInsight({
 function StalePage() {
   const { key } = Route.useParams();
   const qc = useQueryClient();
-  const { isSyncing, isSyncStatusLoading, trigger, isError, error } =
-    useLibrarySync(key);
+  const { isSyncing, isSyncStatusLoading, trigger, isError, error } = useLibrarySync(key);
   // Reuses the dashboard's shared `['libraries']` cache (no extra request if it's already
   // populated) to get this library's real total item count — `data.total` below is the
   // *filtered* stale count, and `historySyncedAt` resets to null on every sync attempt,
@@ -341,9 +336,7 @@ function StalePage() {
                 ? (
                   "Not synced yet"
                 )
-                : (
-                  <span className="skeleton inline-block h-3 w-40 align-middle" />
-                )}
+                : <span className="skeleton inline-block h-3 w-40 align-middle" />}
             </p>
           </div>
           <div className="library-header-actions flex flex-col items-end gap-1">
@@ -354,6 +347,7 @@ function StalePage() {
                   to="/duplicates"
                   search={{
                     type: thisLibrary.type === "show" ? "tv" : "movie",
+                    comparison: "all",
                   }}
                   className="btn btn-ghost btn-sm gap-2"
                   title="Find items with multiple synced versions"
@@ -390,10 +384,8 @@ function StalePage() {
             <StaleFilters
               days={params.days ?? staleSearchDefaults.days}
               filter={params.filter ?? staleSearchDefaults.filter}
-              onDaysChange={(days) =>
-                setParams((p) => ({ ...p, days, offset: 0 }))}
-              onFilterChange={(filter) =>
-                setParams((p) => ({ ...p, filter, offset: 0 }))}
+              onDaysChange={(days) => setParams((p) => ({ ...p, days, offset: 0 }))}
+              onFilterChange={(filter) => setParams((p) => ({ ...p, filter, offset: 0 }))}
               gracePeriodValue={gracePeriodValue}
               defaultGraceDays={data?.minAgeDays}
               onGracePeriodChange={setGracePeriod}
@@ -422,9 +414,7 @@ function StalePage() {
           <LibraryInsight
             icon={<Database />}
             label="Library size"
-            value={thisLibrary
-              ? formatKilobytes(thisLibrary.totalFileSize)
-              : "—"}
+            value={thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"}
           />
           <LibraryInsight
             icon={<Clock3 />}
@@ -461,20 +451,17 @@ function StalePage() {
                 isSyncStatusLoading={isSyncStatusLoading}
                 syncingMessage={
                   <>
-                    Watch-history sync is running — "unknown" items may update
-                    once it finishes.
+                    Watch-history sync is running — "unknown" items may update once it finishes.
                   </>
                 }
                 warningMessage={
                   <>
-                    Watch-history sync hasn't completed for this library yet, so
-                    items showing{" "}
+                    Watch-history sync hasn't completed for this library yet, so items showing{" "}
                     <span className="badge badge-outline badge-sm align-middle">
                       unknown
                     </span>{" "}
-                    below may actually have been watched — the "never watched"
-                    data isn't reliable until a sync finishes. Avoid deleting
-                    based on watch status until this clears.
+                    below may actually have been watched — the "never watched" data isn't reliable
+                    until a sync finishes. Avoid deleting based on watch status until this clears.
                   </>
                 }
               />
@@ -489,15 +476,12 @@ function StalePage() {
                   pending={isFetching}
                   label="Search stale titles"
                   placeholder="Search all matching titles..."
-                  onSearchChange={(search) =>
-                    setParams((p) => ({ ...p, search, offset: 0 }))}
+                  onSearchChange={(search) => setParams((p) => ({ ...p, search, offset: 0 }))}
                 />
               }
               meta={data
                 ? params.search
-                  ? `${data.total.toLocaleString()} match${
-                    data.total === 1 ? "" : "es"
-                  }`
+                  ? `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"}`
                   : `Showing ${pageItems.length.toLocaleString()} of ${data.total.toLocaleString()}`
                 : undefined}
             />

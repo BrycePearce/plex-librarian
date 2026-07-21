@@ -42,8 +42,7 @@ export const queryKeys = {
   },
   show: {
     all: [roots.show] as const,
-    detail: (libraryKey: string, ratingKey: string) =>
-      [roots.show, libraryKey, ratingKey] as const,
+    detail: (libraryKey: string, ratingKey: string) => [roots.show, libraryKey, ratingKey] as const,
   },
   movie: {
     all: [roots.movie] as const,
@@ -61,8 +60,7 @@ export const queryKeys = {
     all: [roots.users] as const,
     list: <TParams>(params: TParams) => [roots.users, params] as const,
     invitations: [roots.users, "invitations"] as const,
-    invitationList: <TParams>(params: TParams) =>
-      [roots.users, "invitations", params] as const,
+    invitationList: <TParams>(params: TParams) => [roots.users, "invitations", params] as const,
   },
   events: { all: [roots.events] as const },
   settings: { all: [roots.settings] as const },
@@ -85,8 +83,7 @@ export const queryKeys = {
       mediaType: "movie" | "episode" | undefined,
       ratingKey: string,
       mediaIds: readonly number[],
-    ) =>
-      [roots.versionDeletionPreview, mediaType, ratingKey, mediaIds] as const,
+    ) => [roots.versionDeletionPreview, mediaType, ratingKey, mediaIds] as const,
   },
   deletionOperations: {
     all: [roots.deletionOperations] as const,

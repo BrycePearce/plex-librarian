@@ -1,9 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  useCanGoBack,
-  useRouter,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../lib/api";
 import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
@@ -31,11 +26,10 @@ function MovieDetailPage() {
   // link to the library's stale list instead of a real browser-back.
   const canGoBack = useCanGoBack();
 
-  const { data, isLoading, isError, error, refetch, isNotFoundYet } =
-    useSyncedDetail(
-      queryKeys.movie.detail(key, ratingKey),
-      () => api.libraries.movieDetail(key, ratingKey),
-    );
+  const { data, isLoading, isError, error, refetch, isNotFoundYet } = useSyncedDetail(
+    queryKeys.movie.detail(key, ratingKey),
+    () => api.libraries.movieDetail(key, ratingKey),
+  );
 
   const movie = data?.movie;
 
@@ -68,9 +62,7 @@ function MovieDetailPage() {
         <div className="workspace-page-copy">
           <span className="workspace-eyebrow">Movie details</span>
           <h1 className="text-2xl font-bold">{movie?.title ?? "…"}</h1>
-          {movie?.year && (
-            <p className="text-base-content/50 text-sm">{movie.year}</p>
-          )}
+          {movie?.year && <p className="text-base-content/50 text-sm">{movie.year}</p>}
         </div>
       </div>
 
@@ -86,9 +78,7 @@ function MovieDetailPage() {
         : isError
         ? (
           <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load movie"}
+            message={error instanceof Error ? error.message : "Failed to load movie"}
             onRetry={() => void refetch()}
           />
         )
@@ -98,10 +88,9 @@ function MovieDetailPage() {
               historySyncedAt={data.historySyncedAt}
               warningMessage={
                 <>
-                  Watch-history sync hasn't completed for this library yet —
-                  "Last viewed" below may show Unknown even if this movie has
-                  been watched. Avoid deleting based on watch status until this
-                  clears.
+                  Watch-history sync hasn't completed for this library yet — "Last viewed" below may
+                  show Unknown even if this movie has been watched. Avoid deleting based on watch
+                  status until this clears.
                 </>
               }
             />
@@ -116,9 +105,7 @@ function MovieDetailPage() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
                 <DetailStat
                   label="Size"
-                  value={movie?.fileSize != null
-                    ? formatKilobytes(movie.fileSize)
-                    : "—"}
+                  value={movie?.fileSize != null ? formatKilobytes(movie.fileSize) : "—"}
                 />
                 <DetailStat
                   label="Duration"

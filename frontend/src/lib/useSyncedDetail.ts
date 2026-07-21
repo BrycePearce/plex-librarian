@@ -21,12 +21,9 @@ export function useSyncedDetail<T>(
   const query = useQuery({
     queryKey,
     queryFn,
-    retry: (failureCount, error) =>
-      !isNotFoundError(error) && failureCount < 2,
+    retry: (failureCount, error) => !isNotFoundError(error) && failureCount < 2,
     refetchInterval: (result) =>
-      isNotFoundError(result.state.error) && syncMightResolveThis
-        ? 4_000
-        : false,
+      isNotFoundError(result.state.error) && syncMightResolveThis ? 4_000 : false,
   });
 
   const isNotFoundYet = useNotSyncedYet(

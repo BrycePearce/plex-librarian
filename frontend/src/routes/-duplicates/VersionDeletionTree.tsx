@@ -121,8 +121,7 @@ export function AdvancedVersionDeletionTree({
   } = presentation;
   const plexPathCount = showPlexPaths
     ? versions.reduce(
-      (count, version) =>
-        count + (previewByMediaId.get(version.mediaId)?.plexPaths.length ?? 0),
+      (count, version) => count + (previewByMediaId.get(version.mediaId)?.plexPaths.length ?? 0),
       0,
     )
     : 0;
@@ -224,8 +223,7 @@ export function AdvancedVersionDeletionTree({
             ))}
             {loading && (
               <p className="flex items-center gap-2 py-2 pl-3 text-[11px] text-base-content/40">
-                <span className="loading loading-spinner loading-xs" />{" "}
-                Loading paths…
+                <span className="loading loading-spinner loading-xs" /> Loading paths…
               </p>
             )}
             {!loading && pathCount === 0 && (

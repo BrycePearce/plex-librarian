@@ -3,15 +3,13 @@ import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Copy } from "lucide-react";
+import type { ServiceIconName } from "../../components/ServiceIcons";
 import { api } from "../../lib/api";
 import { queryKeys } from "../../lib/queryKeys";
 import { formatKilobytes } from "../../lib/format";
 import { DestinationOptions } from "./DeletionPlanSummary";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree";
-import {
-  arrDestinationState,
-  shouldUseArrByDefault,
-} from "./deletionPreviewState";
+import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState";
 import type { WholeItemDeletionCandidate } from "./types";
 import { deletionImpact } from "./deletionImpact";
 import {
@@ -73,12 +71,11 @@ export function DeleteConfirmDialog({
     retry: false,
   });
   const previewByRatingKey = useMemo(
-    () =>
-      new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
+    () => new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
   );
-  const cleanupEligibleItems =
-    preview.data?.items.filter((item) => item.status === "resolved") ?? [];
+  const cleanupEligibleItems = preview.data?.items.filter((item) => item.status === "resolved") ??
+    [];
   const downloadJobs = [...new Map(
     cleanupEligibleItems.flatMap((item) => item.downloadJobs).map((job) => [
       `${job.instanceKey}:${job.jobId}`,
@@ -99,7 +96,7 @@ export function DeleteConfirmDialog({
     preview.data?.items.filter((item) =>
       item.arrStatus === "resolved" && item.status === "error"
     ) ?? [];
-  const arrService = items[0]?.type === "show" ? "sonarr" : "radarr";
+  const arrService: ServiceIconName = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   const arrOptionVisible = arrDestination.visible;
   const plexFallbackRequired = deleteFromArr && arrProblems.length > 0;
@@ -144,11 +141,7 @@ export function DeleteConfirmDialog({
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: items.length > 0,
-    preview: preview.isLoading
-      ? "loading"
-      : preview.isError
-      ? "error"
-      : "ready",
+    preview: preview.isLoading ? "loading" : preview.isError ? "error" : "ready",
     fallbackRequired: plexFallbackRequired,
     fallbackAcknowledged: plexFallbackAcknowledged,
   });
@@ -166,8 +159,7 @@ export function DeleteConfirmDialog({
           </span>{" "}
           {unknownSizeCount > 0 && (
             <>
-              plus {unknownSizeCount} unknown-size{" "}
-              {unknownSizeCount === 1 ? "item" : "items"}
+              plus {unknownSizeCount} unknown-size {unknownSizeCount === 1 ? "item" : "items"}
             </>
           )}
           will be permanently removed. This cannot be undone.
@@ -215,9 +207,7 @@ export function DeleteConfirmDialog({
                       cleanupDownloads={cleanupDownloads}
                     />
                   }
-                  size={item.fileSize != null
-                    ? formatKilobytes(item.fileSize)
-                    : "—"}
+                  size={item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
                 />
               );
             })}
@@ -235,11 +225,11 @@ export function DeleteConfirmDialog({
       />
       {hasMultiVersionItems && (
         <p className="mt-1.5 text-xs text-base-content/40">
-          Items marked with multiple versions lose all of them here. To remove
-          just one, use the{" "}
+          Items marked with multiple versions lose all of them here. To remove just one, use the
+          {" "}
           <Link
             to="/duplicates"
-            search={{ type: "all" }}
+            search={{ type: "all", comparison: "all" }}
             className="link link-primary"
           >
             Duplicates page
@@ -276,12 +266,8 @@ export function DeleteConfirmDialog({
             ...(cleanupOptionVisible
               ? [{
                 id: "cleanup" as const,
-                service: cleanupUsesQbittorrent
-                  ? "qbittorrent" as const
-                  : undefined,
-                label: cleanupUsesQbittorrent
-                  ? "qBittorrent"
-                  : "Downloaded files",
+                service: cleanupUsesQbittorrent ? "qbittorrent" as const : undefined,
+                label: cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files",
                 info: cleanupVerificationErrors[0]?.reason ??
                   (cleanupUsesQbittorrent
                     ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
@@ -327,11 +313,9 @@ export function DeleteConfirmDialog({
           pending={pending}
           onChange={setPlexFallbackAcknowledged}
         >
-          Delete {arrProblems.length}{" "}
-          {arrProblems.length === 1 ? "item" : "items"}{" "}
+          Delete {arrProblems.length} {arrProblems.length === 1 ? "item" : "items"}{" "}
           directly through Plex because no verified {arrLabel}{" "}
-          destination is available. These items may be downloaded again if they
-          remain monitored.
+          destination is available. These items may be downloaded again if they remain monitored.
         </PlexFallbackAcknowledgement>
       )}
 

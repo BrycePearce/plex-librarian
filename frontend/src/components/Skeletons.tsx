@@ -11,8 +11,10 @@ export function StatsStripSkeleton() {
             <div className="skeleton w-10 h-10 rounded-lg shrink-0" />
             <div className="min-w-0 flex-1 space-y-2">
               <div className="skeleton h-3 w-16" />
-              {/* h-6, not h-5 — the real value line is text-xl (28px line-height); with
-                  the 8px gap above, 24+8+12=44 matches the real stack's total height. */}
+              {
+                /* h-6, not h-5 — the real value line is text-xl (28px line-height); with
+                  the 8px gap above, 24+8+12=44 matches the real stack's total height. */
+              }
               <div className="skeleton h-6 w-20" />
             </div>
           </div>
@@ -30,9 +32,11 @@ export function LibraryCardSkeleton() {
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div className="skeleton w-8 h-8 rounded-lg shrink-0" />
             <div className="min-w-0 flex-1 space-y-2">
-              {/* h-5, not h-4 — the real title line inherits a 24px line-height; with
+              {
+                /* h-5, not h-4 — the real title line inherits a 24px line-height; with
                   the 8px gap and the 12px type line below, 20+8+12=40 matches the real
-                  title+type stack's total height. */}
+                  title+type stack's total height. */
+              }
               <div className="skeleton h-5 w-3/4" />
               <div className="skeleton h-3 w-1/3" />
             </div>
@@ -252,7 +256,9 @@ export function DashboardSkeleton() {
               {Array.from({ length: 5 }).map((__, column) => (
                 <span
                   key={column}
-                  className={`dashboard-skeleton-block h-2.5 rounded ${column === 1 ? "w-28" : "w-16"}`}
+                  className={`dashboard-skeleton-block h-2.5 rounded ${
+                    column === 1 ? "w-28" : "w-16"
+                  }`}
                 />
               ))}
             </div>
@@ -287,7 +293,9 @@ export function UsersTableSkeleton({ rows = 8 }: { rows?: number }) {
                   </div>
                 </div>
               </td>
-              <td><div className="skeleton h-3 w-20" /></td>
+              <td>
+                <div className="skeleton h-3 w-20" />
+              </td>
               <td>
                 <div className="space-y-2">
                   <div className="skeleton h-5 w-24 rounded-full" />
@@ -324,8 +332,12 @@ export function DuplicatesTableSkeleton({ rows = 8 }: { rows?: number }) {
                   <div className="skeleton h-3 w-24" />
                 </div>
               </td>
-              <td><div className="skeleton h-5 w-20 rounded-full" /></td>
-              <td><div className="skeleton h-3 w-20" /></td>
+              <td>
+                <div className="skeleton h-5 w-20 rounded-full" />
+              </td>
+              <td>
+                <div className="skeleton h-3 w-20" />
+              </td>
               <td />
             </tr>
           ))}

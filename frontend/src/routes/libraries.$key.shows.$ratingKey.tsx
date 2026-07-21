@@ -1,9 +1,4 @@
-import {
-  createFileRoute,
-  Link,
-  useCanGoBack,
-  useRouter,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../lib/api";
 import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
@@ -40,11 +35,10 @@ function ShowDetailPage() {
   // would produce (the backend can't tell the two apart). No `useLibrarySync` on this
   // page to invalidate us once a sync lands, so this falls back to the lightweight
   // shared history query already used elsewhere just to know whether anything's running.
-  const { data, isLoading, isError, error, refetch, isNotFoundYet } =
-    useSyncedDetail(
-      queryKeys.show.detail(key, ratingKey),
-      () => api.libraries.showDetail(key, ratingKey),
-    );
+  const { data, isLoading, isError, error, refetch, isNotFoundYet } = useSyncedDetail(
+    queryKeys.show.detail(key, ratingKey),
+    () => api.libraries.showDetail(key, ratingKey),
+  );
 
   const show = data?.show;
 
@@ -77,9 +71,7 @@ function ShowDetailPage() {
         <div className="workspace-page-copy">
           <span className="workspace-eyebrow">TV show details</span>
           <h1 className="text-2xl font-bold">{show?.title ?? "…"}</h1>
-          {show?.year && (
-            <p className="text-base-content/50 text-sm">{show.year}</p>
-          )}
+          {show?.year && <p className="text-base-content/50 text-sm">{show.year}</p>}
         </div>
       </div>
 
@@ -95,9 +87,7 @@ function ShowDetailPage() {
         : isError
         ? (
           <ErrorAlert
-            message={error instanceof Error
-              ? error.message
-              : "Failed to load show"}
+            message={error instanceof Error ? error.message : "Failed to load show"}
             onRetry={() => void refetch()}
           />
         )
@@ -107,10 +97,9 @@ function ShowDetailPage() {
               historySyncedAt={data.historySyncedAt}
               warningMessage={
                 <>
-                  Watch-history sync hasn't completed for this library yet —
-                  "Last viewed" below may show Unknown even if this show has
-                  been watched. Avoid deleting based on watch status until this
-                  clears.
+                  Watch-history sync hasn't completed for this library yet — "Last viewed" below may
+                  show Unknown even if this show has been watched. Avoid deleting based on watch
+                  status until this clears.
                 </>
               }
             />
@@ -125,9 +114,7 @@ function ShowDetailPage() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-8 gap-y-3">
                 <DetailStat
                   label="Total size"
-                  value={show?.fileSize != null
-                    ? formatKilobytes(show.fileSize)
-                    : "—"}
+                  value={show?.fileSize != null ? formatKilobytes(show.fileSize) : "—"}
                 />
                 <DetailStat label="Seasons" value={String(data.seasons.length)} />
                 <DetailStat
@@ -183,9 +170,7 @@ function SeasonRow({ season }: { season: Season }) {
         {season.fileSize != null ? formatKilobytes(season.fileSize) : "—"}
       </td>
       <td className="text-sm text-base-content/70 whitespace-nowrap">
-        {season.duration != null
-          ? formatDuration(Math.floor(season.duration / 1000))
-          : "—"}
+        {season.duration != null ? formatDuration(Math.floor(season.duration / 1000)) : "—"}
       </td>
       <td className="text-sm font-mono">{season.leafCount ?? 0}</td>
       <td className="text-sm font-mono">{season.viewCount ?? 0}</td>

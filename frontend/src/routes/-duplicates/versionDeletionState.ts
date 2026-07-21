@@ -1,7 +1,4 @@
-import type {
-  MediaVersion,
-  VersionDeletionPreviewResponse,
-} from "../../lib/api.ts";
+import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 
 export function largestVersionId(
   versions: readonly MediaVersion[],
@@ -26,9 +23,7 @@ export function versionSelectionSemantics(
   versions: readonly MediaVersion[],
   selectedMediaIds: ReadonlySet<number>,
 ) {
-  const selectedVersions = versions.filter((version) =>
-    selectedMediaIds.has(version.mediaId)
-  );
+  const selectedVersions = versions.filter((version) => selectedMediaIds.has(version.mediaId));
   const wouldDeleteAll = selectedVersions.length >= versions.length;
   return {
     selectedVersions,
@@ -78,9 +73,7 @@ export function versionDeletionPresentation(
   deleteFromArr: boolean,
   cleanupDownloads: boolean,
 ) {
-  const arrTargets = deleteFromArr && preview?.arrStatus === "resolved"
-    ? preview.arrTargets
-    : [];
+  const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
   const arrUnmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
     preview?.arrUnmonitorStatus === "resolved" && preview.arrUnmonitorNeeded;
   const downloadJobs = deleteFromArr && cleanupDownloads &&

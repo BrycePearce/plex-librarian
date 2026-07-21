@@ -1,7 +1,7 @@
-import type { MediaVersion } from "./types.ts";
+import type { MediaVersion } from './types.ts';
 
 export type DuplicateComparison = {
-  kind: "same-profile" | "different" | "unknown";
+  kind: 'same-profile' | 'different' | 'unknown';
   label: string;
   reasons: string[];
 };
@@ -11,7 +11,7 @@ export type DuplicateComparison = {
 // `reasons` for display, but is not itself a filterable bucket. Buckets are the three
 // decisions a user actually needs to make: safe-looking duplicate, needs judgment, or
 // not enough data to tell.
-export type DuplicateComparisonFilter = "all" | DuplicateComparison["kind"];
+export type DuplicateComparisonFilter = 'all' | DuplicateComparison['kind'];
 
 function normalized(value: string | null): string | null {
   const result = value?.trim().toLowerCase();
@@ -27,20 +27,16 @@ function numericRangeDiffers(
   values: Array<number | null>,
   ratio = 1.15,
 ): boolean {
-  const known = values.filter((value): value is number =>
-    value != null && value > 0
-  );
+  const known = values.filter((value): value is number => value != null && value > 0);
   return known.length >= 2 && Math.max(...known) / Math.min(...known) >= ratio;
 }
 
 function streamSignature(
   version: MediaVersion,
-  type: "audio" | "subtitle",
+  type: 'audio' | 'subtitle',
 ): string | null {
   if (!version.streamDetailsAvailable) return null;
-  const streams = type === "audio"
-    ? version.audioStreams
-    : version.subtitleStreams;
+  const streams = type === 'audio' ? version.audioStreams : version.subtitleStreams;
   return streams.map((stream) =>
     [
       normalized(stream.codec),
@@ -50,8 +46,8 @@ function streamSignature(
       normalized(stream.title),
       stream.forced,
       stream.default,
-    ].join("|")
-  ).sort().join(";");
+    ].join('|')
+  ).sort().join(';');
 }
 
 export function compareDuplicateVersions(
@@ -59,9 +55,9 @@ export function compareDuplicateVersions(
 ): DuplicateComparison {
   if (versions.length < 2) {
     return {
-      kind: "unknown",
-      label: "Needs review",
-      reasons: ["Only one version is available"],
+      kind: 'unknown',
+      label: 'Needs review',
+      reasons: ['Only one version is available'],
     };
   }
 
@@ -71,13 +67,13 @@ export function compareDuplicateVersions(
       ? `${version.width}x${version.height}`
       : normalized(version.videoResolution)
   );
-  if (knownValuesDiffer(dimensions)) differences.push("Resolution differs");
+  if (knownValuesDiffer(dimensions)) differences.push('Resolution differs');
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoDynamicRange)),
     )
   ) {
-    differences.push("HDR format differs");
+    differences.push('HDR format differs');
   }
   if (
     knownValuesDiffer(
@@ -88,29 +84,29 @@ export function compareDuplicateVersions(
     ) ||
     knownValuesDiffer(versions.map((version) => version.videoBitDepth))
   ) {
-    differences.push("Video encoding differs");
+    differences.push('Video encoding differs');
   }
   if (numericRangeDiffers(versions.map((version) => version.bitrate))) {
-    differences.push("Bitrate differs");
+    differences.push('Bitrate differs');
   }
   if (
     knownValuesDiffer(versions.map((version) => normalized(version.container)))
   ) {
-    differences.push("Container differs");
+    differences.push('Container differs');
   }
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoFrameRate)),
     )
   ) {
-    differences.push("Frame rate differs");
+    differences.push('Frame rate differs');
   }
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoScanType)),
     )
   ) {
-    differences.push("Interlacing differs");
+    differences.push('Interlacing differs');
   }
 
   const durations = versions.map((version) => version.duration).filter(
@@ -120,12 +116,10 @@ export function compareDuplicateVersions(
     durations.length >= 2 &&
     Math.max(...durations) - Math.min(...durations) > 2_000
   ) {
-    differences.push("Runtime differs");
+    differences.push('Runtime differs');
   }
 
-  const detailedAudioSignatures = versions.map((version) =>
-    streamSignature(version, "audio")
-  );
+  const detailedAudioSignatures = versions.map((version) => streamSignature(version, 'audio'));
   if (
     knownValuesDiffer(detailedAudioSignatures) ||
     knownValuesDiffer(
@@ -136,39 +130,29 @@ export function compareDuplicateVersions(
       versions.map((version) => normalized(version.audioProfile)),
     )
   ) {
-    differences.push("Audio tracks differ");
+    differences.push('Audio tracks differ');
   }
 
-  const subtitleSignatures = versions.map((version) =>
-    streamSignature(version, "subtitle")
-  );
+  const subtitleSignatures = versions.map((version) => streamSignature(version, 'subtitle'));
   if (knownValuesDiffer(subtitleSignatures)) {
-    differences.push("Subtitle tracks differ");
+    differences.push('Subtitle tracks differ');
   }
 
   if (differences.length > 0) {
     return {
-      kind: "different",
-      label: "Meaningful differences",
+      kind: 'different',
+      label: 'Meaningful differences',
       reasons: differences,
     };
   }
 
-  const hasCompleteDuration = versions.every((version) =>
-    version.duration != null
-  );
+  const hasCompleteDuration = versions.every((version) => version.duration != null);
   const hasCompleteDimensions = dimensions.every((value) => value != null);
-  const hasCompleteVideo = versions.every((version) =>
-    normalized(version.videoCodec) != null
-  );
-  const hasCompleteBitrate = versions.every((version) =>
-    version.bitrate != null
-  );
-  const hasCompleteContainer = versions.every((version) =>
-    normalized(version.container) != null
-  );
+  const hasCompleteVideo = versions.every((version) => normalized(version.videoCodec) != null);
+  const hasCompleteBitrate = versions.every((version) => version.bitrate != null);
+  const hasCompleteContainer = versions.every((version) => normalized(version.container) != null);
   const hasCompleteDetailedAudio = detailedAudioSignatures.every((value) =>
-    value != null && value !== ""
+    value != null && value !== ''
   );
   const hasCompleteBasicAudio = versions.every((version) =>
     normalized(version.audioCodec) != null && version.audioChannels != null
@@ -177,11 +161,9 @@ export function compareDuplicateVersions(
   const hasConsistentDynamicRange =
     versions.every((version) => version.videoDynamicRange == null) ||
     versions.every((version) => version.videoDynamicRange != null);
-  const hasConsistentFrameRate =
-    versions.every((version) => version.videoFrameRate == null) ||
+  const hasConsistentFrameRate = versions.every((version) => version.videoFrameRate == null) ||
     versions.every((version) => version.videoFrameRate != null);
-  const hasConsistentScanType =
-    versions.every((version) => version.videoScanType == null) ||
+  const hasConsistentScanType = versions.every((version) => version.videoScanType == null) ||
     versions.every((version) => version.videoScanType != null);
   if (
     hasCompleteDuration && hasCompleteDimensions && hasCompleteVideo &&
@@ -190,19 +172,19 @@ export function compareDuplicateVersions(
     hasConsistentFrameRate && hasConsistentScanType
   ) {
     return {
-      kind: "same-profile",
-      label: "Same technical profile",
+      kind: 'same-profile',
+      label: 'Same technical profile',
       reasons: [
-        "Plex reports matching runtime, video, and audio characteristics",
+        'Plex reports matching runtime, video, and audio characteristics',
       ],
     };
   }
 
   return {
-    kind: "unknown",
-    label: "Needs review",
+    kind: 'unknown',
+    label: 'Needs review',
     reasons: [
-      "Plex did not report enough technical metadata to compare safely",
+      'Plex did not report enough technical metadata to compare safely',
     ],
   };
 }

@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Info } from "lucide-react";
 
-
 export function ArrUrlHelp({ type }: { type: "radarr" | "sonarr" }) {
   const [open, setOpen] = useState(false);
   const helpRef = useRef<HTMLDivElement>(null);
   const appName = type === "radarr" ? "Radarr" : "Sonarr";
   const port = type === "radarr" ? "7878" : "8989";
-  const docsUrl =
-    type === "radarr"
-      ? "https://wiki.servarr.com/radarr/settings#host"
-      : "https://wiki.servarr.com/sonarr/settings#host";
+  const docsUrl = type === "radarr"
+    ? "https://wiki.servarr.com/radarr/settings#host"
+    : "https://wiki.servarr.com/sonarr/settings#host";
 
   useEffect(() => {
     if (!open) return;
@@ -60,32 +58,33 @@ export function ArrUrlHelp({ type }: { type: "radarr" | "sonarr" }) {
             Which URL should I use?
           </strong>
           <span className="mt-1 block">
-            Use an address Plex Librarian can reach from inside its container.
-            This may differ from the address in your browser.
+            Use an address Plex Librarian can reach from inside its container. This may differ from
+            the address in your browser.
           </span>
           <ul className="mt-3 list-disc space-y-1.5 pl-4">
             <li>
-              <strong>Unraid:</strong> find {appName} on the Docker tab and use
-              its <strong>LAN IP:PORT</strong> value, prefixed with{" "}
-              <code>http://</code>. Do not use the value in the{" "}
-              <strong>Container IP / MAC</strong> column.
+              <strong>Unraid:</strong> find {appName} on the Docker tab and use its{" "}
+              <strong>LAN IP:PORT</strong> value, prefixed with{" "}
+              <code>http://</code>. Do not use the value in the <strong>Container IP / MAC</strong>
+              {" "}
+              column.
             </li>
             <li>
-              <strong>Docker Compose or a shared Docker network:</strong> use
-              the service or container name, such as{" "}
+              <strong>Docker Compose or a shared Docker network:</strong>{" "}
+              use the service or container name, such as{" "}
               <code>
                 http://{type}:{port}
               </code>
               .
             </li>
             <li>
-              <strong>Another computer:</strong> use that computer's LAN
-              hostname or IP and the {appName} port.
+              <strong>Another computer:</strong> use that computer's LAN hostname or IP and the{" "}
+              {appName} port.
             </li>
           </ul>
           <span className="mt-3 block">
-            Avoid <code>localhost</code> and <code>127.0.0.1</code>; they point
-            back to the Plex Librarian container itself.
+            Avoid <code>localhost</code> and{" "}
+            <code>127.0.0.1</code>; they point back to the Plex Librarian container itself.
           </span>
           <a
             className="link link-primary mt-3 inline-block"

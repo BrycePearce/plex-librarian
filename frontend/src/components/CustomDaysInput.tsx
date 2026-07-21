@@ -45,9 +45,7 @@ export function CustomDaysInput({
         inputMode="numeric"
         pattern="[0-9]*"
         maxLength={String(maxDays).length}
-        className={`input input-bordered input-sm join-item w-24 ${
-          !valid ? "input-error" : ""
-        }`}
+        className={`input input-bordered input-sm join-item w-24 ${!valid ? "input-error" : ""}`}
         value={value}
         onChange={(event) =>
           setValue(

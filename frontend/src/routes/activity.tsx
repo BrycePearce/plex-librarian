@@ -1,13 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  CheckCircle,
-  Copy,
-  History,
-  Trash2,
-  UserX,
-} from "lucide-react";
+import { AlertCircle, CheckCircle, Copy, History, Trash2, UserX } from "lucide-react";
 import { api } from "../lib/api";
 import type { ActivityEvent, EventType } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
@@ -150,9 +143,7 @@ function describeEvent(
     case "sync.completed": {
       const { libraryKey, itemsProcessed } = event.payload;
       return libraryKey
-        ? `Synced ${
-          libraryLabel(libraryKey, titleByKey)
-        } — ${itemsProcessed} item(s)`
+        ? `Synced ${libraryLabel(libraryKey, titleByKey)} — ${itemsProcessed} item(s)`
         : `Full sync completed — ${itemsProcessed} item(s)`;
     }
     case "sync.failed": {
@@ -162,8 +153,7 @@ function describeEvent(
         : `Full sync failed: ${error}`;
     }
     case "items.deleted": {
-      const { libraryKey, deletedCount, failedCount, partialCount = 0 } =
-        event.payload;
+      const { libraryKey, deletedCount, failedCount, partialCount = 0 } = event.payload;
       const label = libraryLabel(libraryKey, titleByKey);
       if (failedCount === 0 && partialCount === 0) {
         return `Deleted ${deletedCount} item(s) from ${label}`;
@@ -179,13 +169,10 @@ function describeEvent(
     }
     case "media.deleted": {
       const { libraryKey, title } = event.payload;
-      return `Removed a duplicate version of ${title} from ${
-        libraryLabel(libraryKey, titleByKey)
-      }`;
+      return `Removed a duplicate version of ${title} from ${libraryLabel(libraryKey, titleByKey)}`;
     }
     case "deletion.completed": {
-      const { libraryKey, completedCount, failedCount, cancelledCount } =
-        event.payload;
+      const { libraryKey, completedCount, failedCount, cancelledCount } = event.payload;
       const label = libraryLabel(libraryKey, titleByKey);
       const suffix = [
         failedCount > 0 ? `${failedCount} failed` : null,
@@ -218,9 +205,7 @@ function EventRow(
     (event.type === "deletion.completed" && !!event.payload &&
       (event.payload.failedCount > 0 || event.payload.cancelledCount > 0));
   const Icon = hasFailedDelete ? AlertCircle : EVENT_ICON[event.type];
-  const iconClass = hasFailedDelete
-    ? "text-error"
-    : EVENT_ICON_CLASS[event.type];
+  const iconClass = hasFailedDelete ? "text-error" : EVENT_ICON_CLASS[event.type];
   // Only show "N freed" when something was actually deleted — otherwise a fully-failed
   // delete attempt renders a misleading "0 KB freed" next to its failure summary.
   const fileSizeFreed = event.type === "items.deleted" && event.payload &&

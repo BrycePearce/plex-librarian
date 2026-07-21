@@ -118,9 +118,7 @@ export function ExpandableSearch({
           maxLength={SEARCH_MAX_LENGTH}
           tabIndex={open ? 0 : -1}
           aria-label={label}
-          aria-describedby={waitingForMore
-            ? hintId
-            : undefined}
+          aria-describedby={waitingForMore ? hintId : undefined}
           onChange={(event) => update(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -144,9 +142,7 @@ export function ExpandableSearch({
       </div>
       <span
         id={hintId}
-        className={`expandable-search-hint ${
-          waitingForMore ? "is-visible" : ""
-        }`}
+        className={`expandable-search-hint ${waitingForMore ? "is-visible" : ""}`}
       >
         Enter at least {SEARCH_MIN_LENGTH} characters
       </span>

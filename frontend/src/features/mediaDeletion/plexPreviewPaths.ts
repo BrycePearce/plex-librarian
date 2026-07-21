@@ -17,10 +17,9 @@ export function plexPreviewPathEntries(
       return preview.plexPaths.map((path, index) => ({
         item,
         path,
-        note:
-          preview.plexPathsTruncated && index === preview.plexPaths.length - 1
-            ? `Showing the first ${preview.plexPaths.length.toLocaleString()} paths reported by Plex; additional paths may be removed`
-            : undefined,
+        note: preview.plexPathsTruncated && index === preview.plexPaths.length - 1
+          ? `Showing the first ${preview.plexPaths.length.toLocaleString()} paths reported by Plex; additional paths may be removed`
+          : undefined,
       }));
     }
     return [{

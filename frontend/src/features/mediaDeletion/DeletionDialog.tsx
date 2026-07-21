@@ -173,17 +173,12 @@ export function DeletionPreviewStatus({
     <div className="mt-2 space-y-1 text-xs">
       {loading && (
         <p className="flex items-center gap-2 text-base-content/50">
-          <span className="loading loading-spinner loading-xs" />{" "}
-          Verifying deletion paths…
+          <span className="loading loading-spinner loading-xs" /> Verifying deletion paths…
         </p>
       )}
-      {error && (
-        <p className="text-error">Could not verify deletion paths: {error}</p>
-      )}
+      {error && <p className="text-error">Could not verify deletion paths: {error}</p>}
       {!loading && !error &&
-        warnings.map((warning) => (
-          <p key={warning} className="text-warning">{warning}</p>
-        ))}
+        warnings.map((warning) => <p key={warning} className="text-warning">{warning}</p>)}
     </div>
   );
 }

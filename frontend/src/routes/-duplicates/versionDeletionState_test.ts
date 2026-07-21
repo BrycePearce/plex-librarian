@@ -1,8 +1,5 @@
 import { assertEquals } from "@std/assert";
-import type {
-  MediaVersion,
-  VersionDeletionPreviewResponse,
-} from "../../lib/api.ts";
+import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 import {
   defaultVersionSelection,
   versionDeletionExecutionTarget,

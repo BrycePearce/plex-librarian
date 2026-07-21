@@ -79,8 +79,7 @@ export function AutoSyncSettings({
   const [timeZone, setTimeZone] = useState(settings.autoSyncTimeZone);
   const [catchUp, setCatchUp] = useState(settings.autoSyncCatchUp);
   const [now, setNow] = useState(() => new Date());
-  const browserTimeZone =
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
@@ -93,8 +92,9 @@ export function AutoSyncSettings({
       // Merge only the field this request saved. Separate schedule controls can
       // change in quick succession, and an older full response must not overwrite
       // a newer optimistic choice from another control.
-      qc.setQueryData<Settings>(queryKeys.settings.all, (current) =>
-        current ? { ...current, ...partial } : updated,
+      qc.setQueryData<Settings>(
+        queryKeys.settings.all,
+        (current) => current ? { ...current, ...partial } : updated,
       );
       if (partial.autoSyncEnabled !== undefined) {
         setEnabled(updated.autoSyncEnabled);
@@ -123,20 +123,16 @@ export function AutoSyncSettings({
     },
   });
 
-  const eligibleAt =
-    lastSuccessfulSyncAt == null
-      ? now
-      : new Date(
-          Math.max(
-            now.getTime(),
-            lastSuccessfulSyncAt * 1000 + 23 * 60 * 60 * 1000 - 1,
-          ),
-        );
+  const eligibleAt = lastSuccessfulSyncAt == null ? now : new Date(
+    Math.max(
+      now.getTime(),
+      lastSuccessfulSyncAt * 1000 + 23 * 60 * 60 * 1000 - 1,
+    ),
+  );
   const timeZoneValid = isValidTimeZone(timeZone);
-  const nextRun =
-    enabled && timeZoneValid && lastSuccessfulSyncAt !== undefined
-      ? nextScheduledInstant(eligibleAt, hour, timeZone)
-      : null;
+  const nextRun = enabled && timeZoneValid && lastSuccessfulSyncAt !== undefined
+    ? nextScheduledInstant(eligibleAt, hour, timeZone)
+    : null;
   let nextRunLabel = "Automatic sync is off";
   if (enabled && !timeZoneValid) {
     nextRunLabel = "Enter a valid time zone";
@@ -247,9 +243,7 @@ export function AutoSyncSettings({
             <div className="auto-sync-time-zone-control">
               <input
                 id="auto-sync-time-zone"
-                className={`input input-bordered input-sm ${
-                  timeZoneValid ? "" : "input-error"
-                }`}
+                className={`input input-bordered input-sm ${timeZoneValid ? "" : "input-error"}`}
                 list="auto-sync-time-zones"
                 value={timeZone}
                 disabled={!enabled}
@@ -258,14 +252,10 @@ export function AutoSyncSettings({
                 onKeyDown={(event) => {
                   if (event.key === "Enter") event.currentTarget.blur();
                 }}
-                aria-describedby={
-                  !timeZoneValid ? "auto-sync-time-zone-error" : undefined
-                }
+                aria-describedby={!timeZoneValid ? "auto-sync-time-zone-error" : undefined}
               />
               <datalist id="auto-sync-time-zones">
-                {supportedTimeZones().map((zone) => (
-                  <option key={zone} value={zone} />
-                ))}
+                {supportedTimeZones().map((zone) => <option key={zone} value={zone} />)}
               </datalist>
               <button
                 type="button"
@@ -281,9 +271,7 @@ export function AutoSyncSettings({
             </div>
             <small
               id="auto-sync-time-zone-error"
-              className={`auto-sync-field-error ${
-                timeZoneValid ? "" : "is-visible"
-              }`}
+              className={`auto-sync-field-error ${timeZoneValid ? "" : "is-visible"}`}
               aria-hidden={timeZoneValid}
             >
               Enter a valid region, such as America/Los_Angeles.
@@ -298,8 +286,7 @@ export function AutoSyncSettings({
           <span>
             <strong>Catch up after downtime</strong>
             <small>
-              Sync on startup when the last successful refresh is more than 24
-              hours old.
+              Sync on startup when the last successful refresh is more than 24 hours old.
             </small>
           </span>
           <input
@@ -318,14 +305,12 @@ export function AutoSyncSettings({
 
         {update.isError && (
           <div className="auto-sync-save-error" role="alert">
-            {update.error instanceof Error
-              ? update.error.message
-              : "Failed to save schedule"}
+            {update.error instanceof Error ? update.error.message : "Failed to save schedule"}
           </div>
         )}
         <p className="auto-sync-footnote">
-          The scheduler checks once per minute during the selected hour. If
-          daylight saving removes that hour, the run resumes the following day.
+          The scheduler checks once per minute during the selected hour. If daylight saving removes
+          that hour, the run resumes the following day.
         </p>
       </div>
     </SettingsSection>

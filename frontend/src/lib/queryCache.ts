@@ -6,8 +6,7 @@ export function resetServerScopedQueries(
   queryClient: QueryClient,
 ): Promise<void> {
   return queryClient.resetQueries({
-    predicate: (query) =>
-      serverScopedQueryRoots.some((root) => query.queryKey[0] === root),
+    predicate: (query) => serverScopedQueryRoots.some((root) => query.queryKey[0] === root),
   });
 }
 
@@ -30,8 +29,6 @@ export async function invalidateSyncDerivedQueries(
   queryClient: QueryClient,
 ): Promise<void> {
   await Promise.all(
-    syncDerivedQueryRoots.map((root) =>
-      queryClient.invalidateQueries({ queryKey: [root] })
-    ),
+    syncDerivedQueryRoots.map((root) => queryClient.invalidateQueries({ queryKey: [root] })),
   );
 }

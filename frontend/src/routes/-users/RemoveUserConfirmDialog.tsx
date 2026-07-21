@@ -27,9 +27,9 @@ export function RemoveUserConfirmDialog({
         </h3>
         <p className="py-2 text-sm text-base-content/70">
           This revokes{" "}
-          <span className="font-semibold text-base-content">{user?.username}</span>'s
-          ability to see or stream from this server. This cannot be undone from here —
-          you'll need to re-invite them through Plex to restore access.
+          <span className="font-semibold text-base-content">{user?.username}</span>'s ability to see
+          or stream from this server. This cannot be undone from here — you'll need to re-invite
+          them through Plex to restore access.
         </p>
         {error != null && (
           <p className="text-error text-sm">

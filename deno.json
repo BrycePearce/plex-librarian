@@ -4,9 +4,41 @@
   "tasks": {
     "dev": "deno task --filter backend dev & deno task --filter frontend dev",
     "build": "deno task --filter frontend build",
-    "db:reset": "deno task --filter backend db:reset"
+    "db:reset": "deno task --filter backend db:reset",
+    "fmt": "deno fmt",
+    "fmt:check": "deno fmt --check",
+    "lint": "deno lint",
+    "check": "deno check --sloppy-imports backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/*.ts tools/**/*.ts",
+    "test": "deno test --sloppy-imports --allow-all backend/src frontend/src",
+    "precommit": "deno task fmt:check && deno task lint",
+    "verify": "deno task fmt:check && deno task lint && deno task check && deno task test && deno task build",
+    "hooks:install": "deno run --allow-run=git --allow-write=.githooks tools/install_hooks.ts"
+  },
+  "fmt": {
+    "include": [
+      "deno.json",
+      "backend/deno.json",
+      "backend/drizzle.config.ts",
+      "backend/src/**/*.ts",
+      "frontend/deno.json",
+      "frontend/vite.config.ts",
+      "frontend/src/**/*.ts",
+      "frontend/src/**/*.tsx",
+      "shared/deno.json",
+      "shared/*.ts",
+      "tools/**/*.ts"
+    ],
+    "exclude": ["frontend/src/routeTree.gen.ts"],
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "singleQuote": true,
+    "semiColons": true
   },
   "lint": {
-    "exclude": ["frontend/src/routeTree.gen.ts"]
+    "include": ["backend/src", "frontend/src", "shared", "tools"],
+    "exclude": ["frontend/src/routeTree.gen.ts"],
+    "rules": {
+      "tags": ["recommended", "react"]
+    }
   }
 }
