@@ -293,8 +293,10 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
 });
 
 Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Media id', async () => {
-  const mockFetch = (() =>
-    Promise.resolve(Response.json({
+  let requestedUrl = '';
+  const mockFetch = ((input: string | URL | Request) => {
+    requestedUrl = String(input);
+    return Promise.resolve(Response.json({
       MediaContainer: {
         Metadata: [{
           ratingKey: '10',
@@ -305,22 +307,34 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
               id: 11,
               audioCodec: 'aac',
               audioChannels: 2,
-              Part: [{ Stream: [{ streamType: 2, codec: 'aac', channels: 2 }] }],
+              Part: [{
+                Stream: [{
+                  streamType: 2,
+                  codec: 'aac',
+                  channels: 2,
+                  audioChannelLayout: 'stereo',
+                }],
+              }],
             },
             { id: 12, audioCodec: 'truehd', audioChannels: 8, Part: [{}] },
           ],
         }],
       },
-    }))) as typeof fetch;
+    }));
+  }) as typeof fetch;
   const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
 
   const details = await client.mediaVersionTechnicalDetails('10');
+  assertEquals(
+    new URL(requestedUrl).searchParams.get('includeOptionalElements'),
+    'Stream',
+  );
   assertEquals(details.get(11)?.streamDetailsAvailable, true);
   assertEquals(details.get(11)?.audioStreams, [{
     codec: 'aac',
     language: null,
     channels: 2,
-    channelLayout: null,
+    channelLayout: 'stereo',
     title: null,
     forced: false,
     default: false,

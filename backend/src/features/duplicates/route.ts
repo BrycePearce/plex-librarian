@@ -192,7 +192,7 @@ router.post('/movies/:ratingKey/media/technical-refresh', async (c) => {
   try {
     const client = await createPlexClient();
     const details = await client.mediaVersionTechnicalDetails(ratingKey);
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
     await Promise.all(
       versions
         .filter((version) => details.has(version.mediaId))
@@ -231,7 +231,7 @@ router.post('/episodes/:ratingKey/media/technical-refresh', async (c) => {
   try {
     const client = await createPlexClient();
     const details = await client.mediaVersionTechnicalDetails(ratingKey);
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 1000);
     await Promise.all(
       versions
         .filter((version) => details.has(version.mediaId))

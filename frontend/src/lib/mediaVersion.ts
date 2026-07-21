@@ -1,5 +1,11 @@
 import type { MediaVersion } from "./api";
 
+export function needsTechnicalDetailRefresh(
+  versions: readonly MediaVersion[],
+): boolean {
+  return versions.some((version) => !version.streamDetailsAvailable);
+}
+
 export function versionLabel(v: MediaVersion): string {
   const parts: string[] = [];
   if (v.videoResolution) parts.push(v.videoResolution);

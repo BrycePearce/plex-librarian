@@ -82,6 +82,7 @@ export interface PlexRawMetadata {
         languageCode?: string;
         channels?: number;
         channelLayout?: string;
+        audioChannelLayout?: string;
         title?: string;
         displayTitle?: string;
         forced?: boolean | number;

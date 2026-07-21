@@ -164,17 +164,32 @@ export async function syncShowSizes(
           bitrate: excl(episodeMediaVersions.bitrate),
           videoCodec: excl(episodeMediaVersions.videoCodec),
           videoProfile: excl(episodeMediaVersions.videoProfile),
-          videoBitDepth: excl(episodeMediaVersions.videoBitDepth),
+          videoBitDepth:
+            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(episodeMediaVersions.videoBitDepth)
+            } ELSE ${episodeMediaVersions.videoBitDepth} END`,
           videoDynamicRange: excl(episodeMediaVersions.videoDynamicRange),
           videoFrameRate: excl(episodeMediaVersions.videoFrameRate),
-          videoScanType: excl(episodeMediaVersions.videoScanType),
+          videoScanType:
+            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(episodeMediaVersions.videoScanType)
+            } ELSE ${episodeMediaVersions.videoScanType} END`,
           container: excl(episodeMediaVersions.container),
           audioCodec: excl(episodeMediaVersions.audioCodec),
           audioChannels: excl(episodeMediaVersions.audioChannels),
           audioProfile: excl(episodeMediaVersions.audioProfile),
-          audioStreamsJson: excl(episodeMediaVersions.audioStreamsJson),
-          subtitleStreamsJson: excl(episodeMediaVersions.subtitleStreamsJson),
-          streamDetailsAvailable: excl(episodeMediaVersions.streamDetailsAvailable),
+          audioStreamsJson:
+            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(episodeMediaVersions.audioStreamsJson)
+            } ELSE ${episodeMediaVersions.audioStreamsJson} END`,
+          subtitleStreamsJson:
+            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(episodeMediaVersions.subtitleStreamsJson)
+            } ELSE ${episodeMediaVersions.subtitleStreamsJson} END`,
+          streamDetailsAvailable:
+            sql`${episodeMediaVersions.streamDetailsAvailable} OR ${
+              excl(episodeMediaVersions.streamDetailsAvailable)
+            }`,
           fileSize: excl(episodeMediaVersions.fileSize),
           updatedAt: excl(episodeMediaVersions.updatedAt),
         },

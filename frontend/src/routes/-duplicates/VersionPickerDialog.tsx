@@ -5,7 +5,10 @@ import { Loader2 } from "lucide-react";
 import { api } from "../../lib/api";
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
-import { versionLabel } from "../../lib/mediaVersion";
+import {
+  needsTechnicalDetailRefresh,
+  versionLabel,
+} from "../../lib/mediaVersion";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation";
@@ -76,12 +79,11 @@ export function VersionPickerDialog({
     dialogRef,
     `${item?.mediaType ?? "none"}:${ratingKey}`,
   );
-  // The sync-time bulk listing can come back with thinner Media/Part/Stream detail than
-  // a single-item Plex lookup — that gap is exactly what pushes a group into "unknown"
-  // even when everything else about it matches. Only worth the extra Plex round trip
-  // when the group is already ambiguous, and only once (staleTime: Infinity — a stable
-  // per-item mediaId keeps this cache entry valid for the life of the session).
-  const baseComparison = item ? compareDuplicateVersions(item.versions) : null;
+  // The sync-time bulk listing can omit Part.Stream detail even when the single-item
+  // endpoint has it. Enrich any group with an incomplete version: a known video or
+  // bitrate difference can classify the group before audio/subtitle tracks are loaded.
+  const needsTechnicalRefresh = item !== null &&
+    needsTechnicalDetailRefresh(item.versions);
   const technicalRefresh = useQuery({
     queryKey: queryKeys.duplicates.technicalRefresh(
       item?.mediaType ?? "movie",
@@ -89,13 +91,15 @@ export function VersionPickerDialog({
     ),
     queryFn: () =>
       api.duplicates.refreshTechnicalDetails(item!.mediaType, ratingKey),
-    enabled: item !== null && baseComparison?.kind === "unknown",
+    enabled: needsTechnicalRefresh,
     staleTime: Infinity,
     retry: false,
   });
   useEffect(() => {
     if (!technicalRefresh.data) return;
-    void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates.all });
+    // Refresh the list projection without invalidating this active refresh query and
+    // creating a request loop.
+    void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates.lists });
   }, [technicalRefresh.data, queryClient]);
   const preview = useQuery({
     queryKey: queryKeys.versionDeletionPreview.forVersions(

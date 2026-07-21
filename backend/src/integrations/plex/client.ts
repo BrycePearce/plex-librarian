@@ -218,7 +218,7 @@ function streamSummary(stream: RawStream): PlexMediaStreamSummary {
     codec: stream.codec ?? null,
     language: stream.languageCode ?? stream.language ?? null,
     channels: stream.channels ?? null,
-    channelLayout: stream.channelLayout ?? null,
+    channelLayout: stream.channelLayout ?? stream.audioChannelLayout ?? null,
     title: stream.title ?? stream.displayTitle ?? null,
     forced: asFlag(stream.forced),
     default: asFlag(stream.default),
@@ -604,7 +604,7 @@ export class PlexClient {
     signal?: AbortSignal,
   ): Promise<Map<number, PlexMediaTechnicalDetails>> {
     const data = await this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[] } }>(
-      `/library/metadata/${encodeURIComponent(ratingKey)}`,
+      `/library/metadata/${encodeURIComponent(ratingKey)}?includeOptionalElements=Stream`,
       undefined,
       signal,
     );

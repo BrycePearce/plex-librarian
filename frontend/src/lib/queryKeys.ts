@@ -52,7 +52,8 @@ export const queryKeys = {
   },
   duplicates: {
     all: [roots.duplicates] as const,
-    list: <TParams>(params: TParams) => [roots.duplicates, params] as const,
+    lists: [roots.duplicates, "list"] as const,
+    list: <TParams>(params: TParams) => [roots.duplicates, "list", params] as const,
     technicalRefresh: (mediaType: "movie" | "episode", ratingKey: string) =>
       [roots.duplicates, "technical-refresh", mediaType, ratingKey] as const,
   },
