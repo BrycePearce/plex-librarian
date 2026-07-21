@@ -164,32 +164,31 @@ export async function syncShowSizes(
           bitrate: excl(episodeMediaVersions.bitrate),
           videoCodec: excl(episodeMediaVersions.videoCodec),
           videoProfile: excl(episodeMediaVersions.videoProfile),
-          videoBitDepth:
-            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
-              excl(episodeMediaVersions.videoBitDepth)
-            } ELSE ${episodeMediaVersions.videoBitDepth} END`,
+          videoBitDepth: sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+            excl(episodeMediaVersions.videoBitDepth)
+          } ELSE ${episodeMediaVersions.videoBitDepth} END`,
           videoDynamicRange: excl(episodeMediaVersions.videoDynamicRange),
           videoFrameRate: excl(episodeMediaVersions.videoFrameRate),
-          videoScanType:
-            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
-              excl(episodeMediaVersions.videoScanType)
-            } ELSE ${episodeMediaVersions.videoScanType} END`,
+          videoScanType: sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
+            excl(episodeMediaVersions.videoScanType)
+          } ELSE ${episodeMediaVersions.videoScanType} END`,
           container: excl(episodeMediaVersions.container),
           audioCodec: excl(episodeMediaVersions.audioCodec),
           audioChannels: excl(episodeMediaVersions.audioChannels),
           audioProfile: excl(episodeMediaVersions.audioProfile),
-          audioStreamsJson:
-            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
-              excl(episodeMediaVersions.audioStreamsJson)
-            } ELSE ${episodeMediaVersions.audioStreamsJson} END`,
-          subtitleStreamsJson:
-            sql`CASE WHEN ${excl(episodeMediaVersions.streamDetailsAvailable)} THEN ${
-              excl(episodeMediaVersions.subtitleStreamsJson)
-            } ELSE ${episodeMediaVersions.subtitleStreamsJson} END`,
-          streamDetailsAvailable:
-            sql`${episodeMediaVersions.streamDetailsAvailable} OR ${
-              excl(episodeMediaVersions.streamDetailsAvailable)
-            }`,
+          audioStreamsJson: sql`CASE WHEN ${
+            excl(episodeMediaVersions.streamDetailsAvailable)
+          } THEN ${
+            excl(episodeMediaVersions.audioStreamsJson)
+          } ELSE ${episodeMediaVersions.audioStreamsJson} END`,
+          subtitleStreamsJson: sql`CASE WHEN ${
+            excl(episodeMediaVersions.streamDetailsAvailable)
+          } THEN ${
+            excl(episodeMediaVersions.subtitleStreamsJson)
+          } ELSE ${episodeMediaVersions.subtitleStreamsJson} END`,
+          streamDetailsAvailable: sql`${episodeMediaVersions.streamDetailsAvailable} OR ${
+            excl(episodeMediaVersions.streamDetailsAvailable)
+          }`,
           fileSize: excl(episodeMediaVersions.fileSize),
           updatedAt: excl(episodeMediaVersions.updatedAt),
         },

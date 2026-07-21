@@ -224,6 +224,22 @@ async function ensureWholeItemDeleted(
   if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
     throw new Error('cannot delete media with active playback');
   }
+  if (snapshot.unmonitorFromArr) {
+    if (snapshot.type !== 'movie' || snapshot.tmdbId === null) {
+      throw new Error('Radarr movie identity is required before unmonitoring');
+    }
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    let matched = false;
+    for (const entry of arrTargets) {
+      const record = await entry.client.lookup(snapshot.tmdbId);
+      if (!record) continue;
+      const monitorTarget = await entry.client.monitorTarget(record.id);
+      if (!monitorTarget) continue;
+      matched = true;
+      await entry.client.setMonitorTarget(monitorTarget.id, false);
+    }
+    if (!matched) throw new Error('No matching Radarr movie was found to unmonitor');
+  }
   if (snapshot.mode === 'plex-only') {
     let removedByApp = true;
     try {
@@ -332,7 +348,7 @@ async function ensureVersionDeleted(
     throw new Error('cannot delete a media version during active playback');
   }
 
-  if (snapshot.deleteFromArr || snapshot.cleanupDownloads) {
+  if (snapshot.deleteFromArr || snapshot.unmonitorFromArr || snapshot.cleanupDownloads) {
     const item: CoordinatedDeleteItem = snapshot;
     const [liveVersions, arrTargets, downloadTargets, attemptedJobs, attemptedOrphans] =
       await Promise.all([
@@ -364,6 +380,14 @@ async function ensureVersionDeleted(
       resolvedCleanup,
       cleanupConfigured: downloadTargets.length > 0,
       attemptedArrInstanceIds: attemptedArr.get(snapshot.ratingKey),
+      ...(target.targetKind === 'episode_version'
+        ? {
+          episodeIdentity: {
+            seasonNumber: snapshot.seasonIndex!,
+            episodeNumber: snapshot.episodeIndex!,
+          },
+        }
+        : {}),
     });
     if (snapshot.cleanupDownloads) {
       if (!plan.cleanup) {
@@ -407,6 +431,16 @@ async function ensureVersionDeleted(
         throw new DeletionConvergenceError('Plex has not converged after the Radarr deletion');
       }
       return madeAttempt;
+    }
+    if (snapshot.unmonitorFromArr) {
+      if (plan.preview.arrUnmonitorStatus !== 'resolved') {
+        throw new Error(
+          plan.preview.arrUnmonitorReason ?? 'Arr monitoring target could not be verified',
+        );
+      }
+      for (const entry of plan.eligibleArrUnmonitorTargets) {
+        await entry.target.client.setMonitorTarget(entry.monitorTargetId, false);
+      }
     }
   }
 

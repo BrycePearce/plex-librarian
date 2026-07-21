@@ -35,6 +35,7 @@ export interface DurableTargetSnapshot {
   seasonIndex?: number | null;
   episodeIndex?: number | null;
   deleteFromArr?: boolean;
+  unmonitorFromArr?: boolean;
 }
 
 export class DeletionValidationError extends Error {}

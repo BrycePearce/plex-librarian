@@ -32,6 +32,11 @@ export interface ArrManagedFile {
   size: number | null;
 }
 
+export interface ArrMonitorTarget {
+  id: number;
+  monitored: boolean;
+}
+
 export class ArrApiError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message);
@@ -191,6 +196,45 @@ export class ArrClient {
         } satisfies ArrManagedFile,
       ];
     });
+  }
+
+  async monitorTarget(
+    mediaId: number,
+    episode?: { seasonNumber: number; episodeNumber: number },
+  ): Promise<ArrMonitorTarget | null> {
+    if (this.type === 'radarr') {
+      const record = await this.request<{ id?: number; monitored?: boolean }>(`/movie/${mediaId}`);
+      return Number.isInteger(record.id)
+        ? { id: record.id!, monitored: record.monitored === true }
+        : null;
+    }
+    if (!episode) throw new ArrApiError('Sonarr episode identity is required');
+    const records = await this.request<
+      Array<{ id?: number; seasonNumber?: number; episodeNumber?: number; monitored?: boolean }>
+    >(
+      `/episode?seriesId=${mediaId}&seasonNumber=${episode.seasonNumber}`,
+    );
+    const record = records.find((candidate) =>
+      candidate.seasonNumber === episode.seasonNumber &&
+      candidate.episodeNumber === episode.episodeNumber
+    );
+    return record && Number.isInteger(record.id)
+      ? { id: record.id!, monitored: record.monitored === true }
+      : null;
+  }
+
+  async setMonitorTarget(targetId: number, monitored: boolean): Promise<boolean> {
+    const resource = this.type === 'radarr' ? 'movie' : 'episode';
+    const record = await this.request<Record<string, unknown> & { monitored?: boolean }>(
+      `/${resource}/${targetId}`,
+    );
+    if (record.monitored === monitored) return false;
+    await this.request<void>(`/${resource}/${targetId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...record, monitored }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return true;
   }
 
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {

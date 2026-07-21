@@ -126,11 +126,13 @@ function DuplicatesPage() {
       mediaIds,
       arrMediaIds,
       cleanupMediaIds,
+      unmonitorFromArr,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
       arrMediaIds: number[];
       cleanupMediaIds: number[];
+      unmonitorFromArr: boolean;
     }) => {
       if (group.mediaType === "movie") {
         return await api.duplicates.deleteMovieMediaVersions(
@@ -138,11 +140,13 @@ function DuplicatesPage() {
           mediaIds,
           arrMediaIds,
           cleanupMediaIds,
+          unmonitorFromArr,
         );
       }
       return await api.duplicates.deleteEpisodeMediaVersions(
         group.episodeRatingKey,
         mediaIds,
+        unmonitorFromArr,
       );
     },
     onSuccess: (res) => {
@@ -168,6 +172,7 @@ function DuplicatesPage() {
       cleanupDownloads: boolean;
       arrMediaIds: number[];
       cleanupMediaIds: number[];
+      unmonitorFromArr: boolean;
     },
   ) {
     // A fully selected movie normally uses the whole-item workflow. Mixed destination
@@ -182,8 +187,9 @@ function DuplicatesPage() {
         {
           libraryKey: group.libraryKey,
           ratingKeys: [group.ratingKey],
-          coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
-          cleanupDownloads: plan.deleteFromArr && plan.cleanupDownloads,
+          coordinatedRatingKeys: [],
+          cleanupDownloads: false,
+          unmonitorRatingKeys: plan.unmonitorFromArr ? [group.ratingKey] : [],
         },
         {
           onSuccess: () => {
@@ -199,6 +205,7 @@ function DuplicatesPage() {
       mediaIds: plan.mediaIds,
       arrMediaIds: plan.arrMediaIds,
       cleanupMediaIds: plan.cleanupMediaIds,
+      unmonitorFromArr: plan.unmonitorFromArr,
     });
   }
 

@@ -55,6 +55,7 @@ export function VersionPickerDialog({
     cleanupDownloads: boolean;
     arrMediaIds: number[];
     cleanupMediaIds: number[];
+    unmonitorFromArr: boolean;
   }) => void;
   onCancel: () => void;
 }) {
@@ -129,6 +130,8 @@ export function VersionPickerDialog({
     mediaIds.join("|"),
     preview.data?.arrConfigured,
     preview.data?.arrStatus,
+    preview.data?.arrUnmonitorStatus,
+    preview.data?.arrUnmonitorNeeded,
   ]);
 
   if (!item) {
@@ -160,6 +163,8 @@ export function VersionPickerDialog({
     : "sonarr" as const;
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
+  const arrDeleteAvailable = destinations.arrDeleteAvailable;
+  const arrAction = destinations.arrAction;
   const cleanupAvailable = destinations.cleanupAvailable;
   const arrOptionVisible = destinations.arrVisible;
   const cleanupOptionVisible = destinations.cleanupVisible;
@@ -192,12 +197,13 @@ export function VersionPickerDialog({
     fallbackRequired,
     fallbackAcknowledged,
   });
-  const arrMediaIds = deleteFromArr
+  const arrMediaIds = deleteFromArr && arrDeleteAvailable
     ? preview.data?.versions.filter((version) =>
       mediaIds.includes(version.mediaId) && version.arrStatus === "resolved"
     ).map((version) => version.mediaId) ?? []
     : [];
-  const cleanupMediaIds = cleanupDownloads
+  const unmonitorFromArr = deleteFromArr && arrAction === "unmonitor";
+  const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable
     ? preview.data?.versions.filter((version) =>
       mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
       version.cleanupStatus === "resolved"
@@ -296,13 +302,16 @@ export function VersionPickerDialog({
         advanced={
           <AdvancedVersionDeletionTree
             title={item.mediaType === "movie" ? item.title : item.episodeTitle}
-            versions={selectedVersions.map((version) => ({
-              mediaId: version.mediaId,
-              label: versionLabel(
-                refreshedByMediaId.get(version.mediaId) ?? version,
-              ),
-              fileSize: version.fileSize,
-            }))}
+            versions={selectedVersions.map((version) => {
+              const displayVersion = refreshedByMediaId.get(version.mediaId) ??
+                version;
+              return {
+                mediaId: version.mediaId,
+                label: versionLabel(displayVersion),
+                fileSize: version.fileSize,
+                technicalInfo: <VersionTechnicalInfo version={displayVersion} />,
+              };
+            })}
             preview={preview.data}
             deleteFromArr={deleteFromArr}
             cleanupDownloads={cleanupDownloads}
@@ -318,12 +327,15 @@ export function VersionPickerDialog({
               ? [{
                 id: "arr" as const,
                 service: arrService,
-                label: arrLabel,
-                info: preview.data.arrReason ??
-                  `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
+                label: arrAction === "unmonitor"
+                  ? `Unmonitor in ${arrLabel}`
+                  : arrLabel,
+                info: arrAction === "unmonitor"
+                  ? `Keeps the ${arrLabel} record and files, but disables monitoring for this ${item.mediaType === "movie" ? "movie" : "episode"}.`
+                  : `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
                 checked: deleteFromArr,
-                disabled: pending || !arrAvailable,
-                warning: !arrAvailable,
+                disabled: pending,
+                warning: false,
                 onChange: (checked: boolean) => {
                   setDeleteFromArr(checked);
                   setFallbackAcknowledged(false);
@@ -399,6 +411,7 @@ export function VersionPickerDialog({
               cleanupDownloads,
             arrMediaIds,
             cleanupMediaIds,
+            unmonitorFromArr,
           })}
       />
     </DeletionModalShell>

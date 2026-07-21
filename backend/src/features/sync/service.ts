@@ -179,32 +179,31 @@ async function syncLibrary(
             bitrate: excl(itemMediaVersions.bitrate),
             videoCodec: excl(itemMediaVersions.videoCodec),
             videoProfile: excl(itemMediaVersions.videoProfile),
-            videoBitDepth:
-              sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
-                excl(itemMediaVersions.videoBitDepth)
-              } ELSE ${itemMediaVersions.videoBitDepth} END`,
+            videoBitDepth: sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(itemMediaVersions.videoBitDepth)
+            } ELSE ${itemMediaVersions.videoBitDepth} END`,
             videoDynamicRange: excl(itemMediaVersions.videoDynamicRange),
             videoFrameRate: excl(itemMediaVersions.videoFrameRate),
-            videoScanType:
-              sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
-                excl(itemMediaVersions.videoScanType)
-              } ELSE ${itemMediaVersions.videoScanType} END`,
+            videoScanType: sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
+              excl(itemMediaVersions.videoScanType)
+            } ELSE ${itemMediaVersions.videoScanType} END`,
             container: excl(itemMediaVersions.container),
             audioCodec: excl(itemMediaVersions.audioCodec),
             audioChannels: excl(itemMediaVersions.audioChannels),
             audioProfile: excl(itemMediaVersions.audioProfile),
-            audioStreamsJson:
-              sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
-                excl(itemMediaVersions.audioStreamsJson)
-              } ELSE ${itemMediaVersions.audioStreamsJson} END`,
-            subtitleStreamsJson:
-              sql`CASE WHEN ${excl(itemMediaVersions.streamDetailsAvailable)} THEN ${
-                excl(itemMediaVersions.subtitleStreamsJson)
-              } ELSE ${itemMediaVersions.subtitleStreamsJson} END`,
-            streamDetailsAvailable:
-              sql`${itemMediaVersions.streamDetailsAvailable} OR ${
-                excl(itemMediaVersions.streamDetailsAvailable)
-              }`,
+            audioStreamsJson: sql`CASE WHEN ${
+              excl(itemMediaVersions.streamDetailsAvailable)
+            } THEN ${
+              excl(itemMediaVersions.audioStreamsJson)
+            } ELSE ${itemMediaVersions.audioStreamsJson} END`,
+            subtitleStreamsJson: sql`CASE WHEN ${
+              excl(itemMediaVersions.streamDetailsAvailable)
+            } THEN ${
+              excl(itemMediaVersions.subtitleStreamsJson)
+            } ELSE ${itemMediaVersions.subtitleStreamsJson} END`,
+            streamDetailsAvailable: sql`${itemMediaVersions.streamDetailsAvailable} OR ${
+              excl(itemMediaVersions.streamDetailsAvailable)
+            }`,
             fileSize: excl(itemMediaVersions.fileSize),
             updatedAt: excl(itemMediaVersions.updatedAt),
           },

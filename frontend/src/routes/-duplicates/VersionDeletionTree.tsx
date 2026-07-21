@@ -1,4 +1,5 @@
 import type { VersionDeletionPreviewResponse } from "../../lib/api";
+import type { ReactNode } from "react";
 import { formatKilobytes } from "../../lib/format";
 import { InfoTip } from "../../features/mediaDeletion/InfoTip";
 import { PlannedServiceExceptions } from "../../features/mediaDeletion/DeletionPlanSummary";
@@ -16,6 +17,7 @@ interface SelectedVersion {
   mediaId: number;
   label: string;
   fileSize: number | null;
+  technicalInfo: ReactNode;
 }
 
 export function VersionDeletionServiceMarks({
@@ -42,7 +44,9 @@ export function VersionDeletionServiceMarks({
   const cleanupStatus = versionPreview?.cleanupStatus ?? preview?.cleanupStatus;
   const arrReason = versionPreview?.arrReason ?? preview?.arrReason;
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
-  const arrActive = deleteFromArr && arrStatus === "resolved";
+  const unmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
+    preview?.arrUnmonitorStatus === "resolved" && preview.arrUnmonitorNeeded;
+  const arrActive = deleteFromArr && (arrStatus === "resolved" || unmonitorActive);
   const cleanupResolved = cleanupDownloads && arrStatus === "resolved" &&
     cleanupStatus === "resolved";
   const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
@@ -59,7 +63,9 @@ export function VersionDeletionServiceMarks({
       {arrActive && (
         <ActiveServiceMark
           service={arrService}
-          label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} deletion`}
+          label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} ${
+            unmonitorActive ? "unmonitor" : "deletion"
+          }`}
         />
       )}
       {qbitActive && (
@@ -71,8 +77,8 @@ export function VersionDeletionServiceMarks({
       <PlannedServiceExceptions
         deleteFromArr={deleteFromArr}
         arrService={arrService}
-        arrStatus={arrStatus}
-        arrReason={arrReason}
+        arrStatus={unmonitorActive ? "resolved" : arrStatus}
+        arrReason={unmonitorActive ? undefined : arrReason}
         downloadJobCount={qbitActive ? 1 : 0}
         hardlinkFileCount={hardlinkActive ? 1 : 0}
         downloadCleanupResuming={downloadCleanupResuming}
@@ -157,8 +163,11 @@ export function AdvancedVersionDeletionTree({
               return (
                 <div key={version.mediaId} className="py-0.5">
                   <div className="flex min-w-0 items-center gap-2 pl-3 text-[11px] leading-5 text-base-content/55">
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {version.label}
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <span className="min-w-0 truncate font-medium">
+                        {version.label}
+                      </span>
+                      {version.technicalInfo}
                     </span>
                     {version.fileSize !== null && (
                       <span className="shrink-0 font-mono text-[10px] text-base-content/35">

@@ -68,6 +68,9 @@ function preview(
     arrConfigured: false,
     arrStatus: "unavailable",
     arrTargets: [],
+    arrUnmonitorStatus: "unavailable",
+    arrUnmonitorNeeded: false,
+    arrUnmonitorTargets: [],
     cleanupConfigured: false,
     cleanupStatus: "unavailable",
     downloadJobs: [],
@@ -106,26 +109,77 @@ Deno.test("unconfigured destinations stay hidden", () => {
   assertEquals(versionDestinationState(preview({})), {
     arrVisible: false,
     arrAvailable: false,
+    arrDeleteAvailable: false,
+    arrUnmonitorAvailable: false,
+    arrAction: "none",
     arrSelectedByDefault: false,
     cleanupAvailable: false,
     cleanupVisible: false,
   });
 });
 
-Deno.test("configured unavailable Arr follows whole-item warning behavior", () => {
+Deno.test("configured unavailable Arr stays hidden when it has no safe action", () => {
   assertEquals(
     versionDestinationState(preview({ arrConfigured: true })),
     {
-      arrVisible: true,
+      arrVisible: false,
       arrAvailable: false,
-      arrSelectedByDefault: true,
+      arrDeleteAvailable: false,
+      arrUnmonitorAvailable: false,
+      arrAction: "none",
+      arrSelectedByDefault: false,
       cleanupAvailable: false,
       cleanupVisible: false,
     },
   );
 });
 
-Deno.test("basic marks and advanced paths share one destination selection", () => {
+Deno.test("Arr destination falls back to unmonitor when deletion is unsafe", () => {
+  const unmonitorPreview = preview({
+    arrConfigured: true,
+    arrUnmonitorStatus: "resolved",
+    arrUnmonitorNeeded: true,
+  });
+  assertEquals(
+    versionDestinationState(unmonitorPreview),
+    {
+      arrVisible: true,
+      arrAvailable: true,
+      arrDeleteAvailable: false,
+      arrUnmonitorAvailable: true,
+      arrAction: "unmonitor",
+      arrSelectedByDefault: true,
+      cleanupAvailable: false,
+      cleanupVisible: false,
+    },
+  );
+  assertEquals(
+    versionDeletionPresentation(unmonitorPreview, true, false).services,
+    ["plex", "radarr"],
+  );
+});
+
+Deno.test("an already-unmonitored Arr item needs no destination or fallback warning", () => {
+  assertEquals(
+    versionDestinationState(preview({
+      arrConfigured: true,
+      arrUnmonitorStatus: "resolved",
+      arrUnmonitorNeeded: false,
+    })),
+    {
+      arrVisible: false,
+      arrAvailable: true,
+      arrDeleteAvailable: false,
+      arrUnmonitorAvailable: false,
+      arrAction: "none",
+      arrSelectedByDefault: false,
+      cleanupAvailable: false,
+      cleanupVisible: false,
+    },
+  );
+});
+
+Deno.test("advanced keeps Plex paths alongside selected deletion services", () => {
   const selected = versionDeletionPresentation(
     preview({
       arrConfigured: true,
@@ -153,7 +207,7 @@ Deno.test("basic marks and advanced paths share one destination selection", () =
   assertEquals(selected.services, ["plex", "radarr"]);
   assertEquals(selected.arrTargets.length, 1);
   assertEquals(selected.orphanFiles.length, 1);
-  assertEquals(selected.showPlexPaths, false);
+  assertEquals(selected.showPlexPaths, true);
 });
 
 Deno.test("cleanup cannot appear unless its destination is configured", () => {
@@ -161,6 +215,18 @@ Deno.test("cleanup cannot appear unless its destination is configured", () => {
     versionDestinationState(preview({ cleanupStatus: "resolved" }))
       .cleanupVisible,
     false,
+  );
+});
+
+Deno.test("verified cleanup makes the qBittorrent destination visible", () => {
+  assertEquals(
+    versionDestinationState(preview({
+      arrConfigured: true,
+      arrStatus: "resolved",
+      cleanupConfigured: true,
+      cleanupStatus: "resolved",
+    })).cleanupVisible,
+    true,
   );
 });
 

@@ -15,13 +15,21 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
 
   return useMutation({
     mutationFn: async (
-      { libraryKey, ratingKeys, mode, cleanupDownloads, coordinatedRatingKeys }:
+      {
+        libraryKey,
+        ratingKeys,
+        mode,
+        cleanupDownloads,
+        coordinatedRatingKeys,
+        unmonitorRatingKeys,
+      }:
         {
           libraryKey: string;
           ratingKeys: string[];
           mode?: "coordinated" | "plex-only";
           cleanupDownloads?: boolean;
           coordinatedRatingKeys?: string[];
+          unmonitorRatingKeys?: string[];
         },
     ) => {
       const coordinated = coordinatedRatingKeys ??
@@ -31,6 +39,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         ratingKeys,
         coordinated,
         cleanupDownloads,
+        unmonitorRatingKeys,
       );
     },
     onSuccess: (result) => {

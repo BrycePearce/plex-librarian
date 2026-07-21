@@ -56,6 +56,67 @@ Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', asyn
   ]);
 });
 
+Deno.test('ArrClient unmonitors a Radarr movie without deleting its record or files', async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const mockFetch = ((input: string | URL | Request, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    return Promise.resolve(Response.json({ id: 42, title: 'Movie', monitored: true }));
+  }) as typeof fetch;
+  const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
+
+  assertEquals(await client.monitorTarget(42), { id: 42, monitored: true });
+  assertEquals(await client.setMonitorTarget(42, false), true);
+  assertEquals(requests, [
+    { url: 'http://radarr:7878/api/v3/movie/42', method: 'GET', body: null },
+    { url: 'http://radarr:7878/api/v3/movie/42', method: 'GET', body: null },
+    {
+      url: 'http://radarr:7878/api/v3/movie/42',
+      method: 'PUT',
+      body: { id: 42, title: 'Movie', monitored: false },
+    },
+  ]);
+});
+
+Deno.test('ArrClient resolves and unmonitors one Sonarr episode', async () => {
+  const requests: Array<{ url: string; method: string }> = [];
+  const mockFetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, method: init?.method ?? 'GET' });
+    if (url.includes('/episode?')) {
+      return Promise.resolve(Response.json([
+        { id: 70, seasonNumber: 1, episodeNumber: 1, monitored: true },
+        { id: 71, seasonNumber: 1, episodeNumber: 2, monitored: true },
+      ]));
+    }
+    return Promise.resolve(Response.json({
+      id: 71,
+      seriesId: 7,
+      seasonNumber: 1,
+      episodeNumber: 2,
+      monitored: true,
+    }));
+  }) as typeof fetch;
+  const client = new ArrClient('sonarr', 'http://sonarr:8989', 'secret', mockFetch);
+
+  assertEquals(
+    await client.monitorTarget(7, { seasonNumber: 1, episodeNumber: 2 }),
+    { id: 71, monitored: true },
+  );
+  assertEquals(await client.setMonitorTarget(71, false), true);
+  assertEquals(requests, [
+    {
+      url: 'http://sonarr:8989/api/v3/episode?seriesId=7&seasonNumber=1',
+      method: 'GET',
+    },
+    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'GET' },
+    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'PUT' },
+  ]);
+});
+
 Deno.test('Sonarr lookup exposes bounded season summaries with managed files', async () => {
   const client = new ArrClient(
     'sonarr',

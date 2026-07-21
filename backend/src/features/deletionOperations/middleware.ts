@@ -55,11 +55,23 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           ? ratingKeys
           : [],
       );
+      const unmonitor = new Set(
+        Array.isArray(body.unmonitorRatingKeys)
+          ? body.unmonitorRatingKeys.filter((key): key is string => typeof key === 'string')
+          : [],
+      );
+      if (
+        [...coordinated, ...unmonitor].some((key) => !ratingKeys.includes(key)) ||
+        [...unmonitor].some((key) => coordinated.has(key))
+      ) {
+        return c.json({ error: 'invalid whole-item destinations' }, 400);
+      }
       const payload = {
         path,
         ratingKeys,
         coordinatedRatingKeys: [...coordinated].sort(),
         cleanupDownloads: body.cleanupDownloads === true,
+        unmonitorRatingKeys: [...unmonitor].sort(),
       };
       const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
       if (repeated) return c.json(repeated, 202);
@@ -102,6 +114,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             tvdbId: found.item[4],
             mode,
             cleanupDownloads: mode === 'coordinated' && body.cleanupDownloads === true,
+            unmonitorFromArr: mode === 'plex-only' && unmonitor.has(found.ratingKey),
             selectedRatingKeys: mode === 'coordinated' ? coordinatedKeys : plexOnlyKeys,
           },
         };
@@ -146,17 +159,20 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         ? mediaIds
         : [],
     );
+    const unmonitorFromArr = body.unmonitorFromArr === true;
     if (
       [...arrMediaIds, ...cleanupMediaIds].some((id) => !mediaIds.includes(id)) ||
-      [...cleanupMediaIds].some((id) => !arrMediaIds.has(id))
+      [...cleanupMediaIds].some((id) => !arrMediaIds.has(id)) ||
+      (unmonitorFromArr && arrMediaIds.size > 0)
     ) {
-      return c.json({ error: 'destination media IDs must be selected media IDs' }, 400);
+      return c.json({ error: 'invalid deletion destinations' }, 400);
     }
     const payload = {
       path,
       mediaIds,
       arrMediaIds: [...arrMediaIds].sort((a, b) => a - b),
       cleanupMediaIds: [...cleanupMediaIds].sort((a, b) => a - b),
+      unmonitorFromArr,
     };
     const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
     if (repeated) return c.json(repeated, 202);
@@ -284,6 +300,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           seasonIndex: target.seasonIndex,
           episodeIndex: target.episodeIndex,
           deleteFromArr: arrMediaIds.has(target.mediaId),
+          unmonitorFromArr: unmonitorFromArr && target.mediaId === mediaIds[0],
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
           selectedMediaIds: [target.mediaId],
         },

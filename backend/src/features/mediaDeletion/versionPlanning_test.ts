@@ -12,6 +12,7 @@ function target(files: string[]): ArrDeleteTarget {
       type: 'radarr',
       lookup: () =>
         Promise.resolve({ id: 7, title: 'Movie', path: '/movies/Movie', seasons: null }),
+      monitorTarget: () => Promise.resolve({ id: 7, monitored: true }),
       mediaFiles: () => Promise.resolve(files.map((relativePath) => ({ relativePath, size: 100 }))),
       extraFiles: () => Promise.resolve([]),
     },
@@ -94,9 +95,11 @@ Deno.test('episode version plan never authorizes series-wide Sonarr deletion', a
     arrTargets: [target(['Episode.mkv'])],
     resolvedCleanup: null,
     cleanupConfigured: true,
+    episodeIdentity: { seasonNumber: 1, episodeNumber: 1 },
   });
 
   assertEquals(plan.preview.arrStatus, 'unavailable');
   assertStringIncludes(plan.preview.arrReason ?? '', 'series-wide');
+  assertEquals(plan.preview.arrUnmonitorStatus, 'resolved');
   assertEquals(plan.preview.cleanupStatus, 'unavailable');
 });
