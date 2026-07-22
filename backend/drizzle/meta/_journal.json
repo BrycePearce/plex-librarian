@@ -288,6 +288,13 @@
       "when": 1784674564441,
       "tag": "0041_lazy_giant_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1784681177047,
+      "tag": "0042_great_captain_universe",
+      "breakpoints": true
     }
   ]
 }

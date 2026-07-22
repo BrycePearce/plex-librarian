@@ -226,6 +226,8 @@ export const seerrInstances = sqliteTable(
     name: text('name').notNull(),
     url: text('url').notNull(),
     apiKey: text('api_key').notNull(),
+    requestsSyncedAt: integer('requests_synced_at'),
+    requestsSyncError: text('requests_sync_error'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -307,6 +309,12 @@ export const settings = sqliteTable('settings', {
   // SQLite's historical column default remains 30; migration 0027 promotes the
   // singleton setting to the application default of 90 without rebuilding the table.
   inactiveUserDays: integer('inactive_user_days').notNull().default(30),
+  // Request follow-through is measured only after both the availability grace and
+  // minimum eligible sample have been met. These are app-managed UI settings.
+  requestFollowThroughGraceDays: integer('request_follow_through_grace_days').notNull().default(30),
+  requestFollowThroughMinRequests: integer('request_follow_through_min_requests').notNull().default(
+    5,
+  ),
   // Pending server invitations older than this are highlighted on the Users page.
   pendingInviteStaleDays: integer('pending_invite_stale_days').notNull().default(30),
   pendingInviteCriticalDays: integer('pending_invite_critical_days').notNull().default(90),
@@ -314,6 +322,60 @@ export const settings = sqliteTable('settings', {
   // disables automatic pruning.
   ipHistoryRetentionDays: integer('ip_history_retention_days').notNull().default(365),
 });
+
+// Durable, idempotent per-user/per-title watch facts built from Plex's cross-user
+// history stream. This is deliberately compact (one row per pair), unlike retaining
+// every play, and survives roster removal/re-addition until its server is removed.
+export const userItemActivity = sqliteTable(
+  'user_item_activity',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    accountId: integer('account_id').notNull(),
+    ratingKey: text('rating_key').notNull(),
+    firstViewedAt: integer('first_viewed_at').notNull(),
+    lastViewedAt: integer('last_viewed_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.accountId, table.ratingKey] }),
+    accountIdx: index('user_item_activity_account_idx').on(table.serverId, table.accountId),
+  }),
+);
+
+// One row per request-provider request. External identities and media IDs are resolved
+// during sync; unresolved rows remain stored so later roster/library syncs can heal them.
+export const seerrRequests = sqliteTable(
+  'seerr_requests',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    seerrInstanceId: integer('seerr_instance_id').notNull().references(() => seerrInstances.id, {
+      onDelete: 'cascade',
+    }),
+    requestId: integer('request_id').notNull(),
+    accountId: integer('account_id'),
+    requesterUsername: text('requester_username'),
+    requesterEmail: text('requester_email'),
+    ratingKey: text('rating_key'),
+    requestStatus: integer('request_status').notNull(),
+    mediaStatus: integer('media_status').notNull(),
+    requestedAt: integer('requested_at').notNull(),
+    availableAt: integer('available_at'),
+    availabilityEstimated: integer('availability_estimated', { mode: 'boolean' }).notNull()
+      .default(false),
+    syncedAt: integer('synced_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.seerrInstanceId, table.requestId] }),
+    accountAvailableIdx: index('seerr_requests_account_available_idx').on(
+      table.serverId,
+      table.accountId,
+      table.availableAt,
+    ),
+    instanceSyncIdx: index('seerr_requests_instance_sync_idx').on(
+      table.seerrInstanceId,
+      table.syncedAt,
+    ),
+  }),
+);
 
 // One row per Plex account with access to a server (owner + friends/Home members
 // actually shared to that server, per plex.tv's shared_servers listing) — the roster,

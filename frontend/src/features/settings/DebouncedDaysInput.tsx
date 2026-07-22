@@ -15,6 +15,8 @@ export function DebouncedDaysInput({
   invalidateQueryKey,
   maxDays,
   minimumNonZero,
+  suffix = "days",
+  min = 0,
 }: {
   initialDays: number;
   mutationFn: (value: number) => Promise<Settings>;
@@ -22,6 +24,8 @@ export function DebouncedDaysInput({
   invalidateQueryKey?: QueryKey;
   maxDays?: number;
   minimumNonZero?: number;
+  suffix?: string;
+  min?: number;
 }) {
   const qc = useQueryClient();
   const [days, setDays] = useState(String(initialDays));
@@ -50,7 +54,7 @@ export function DebouncedDaysInput({
   const parsed = Number(days);
   const valid = days !== "" &&
     Number.isInteger(parsed) &&
-    parsed >= 0 &&
+    parsed >= min &&
     (minimumNonZero === undefined ||
       parsed === 0 ||
       parsed >= minimumNonZero) &&
@@ -67,7 +71,7 @@ export function DebouncedDaysInput({
     <div className="flex items-center gap-2">
       <input
         type="number"
-        min={0}
+        min={min}
         max={maxDays}
         step={1}
         className={`input input-bordered input-sm w-24 ${!valid ? "input-error" : ""}`}
@@ -77,7 +81,7 @@ export function DebouncedDaysInput({
           ? undefined
           : `Enter 0 or at least ${minimumNonZero} days`}
       />
-      <span className="text-sm text-base-content/40">days</span>
+      <span className="text-sm text-base-content/40">{suffix}</span>
       {update.isPending && (
         <span className="loading loading-spinner loading-xs text-base-content/40" />
       )}

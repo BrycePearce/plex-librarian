@@ -1,7 +1,16 @@
 import { Hono } from 'hono';
 import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { libraries, servers, settings, userPlayObservations, users } from '../../db/schema.ts';
+import {
+  libraries,
+  seerrInstances,
+  seerrRequests,
+  servers,
+  settings,
+  userItemActivity,
+  userPlayObservations,
+  users,
+} from '../../db/schema.ts';
 import { userByAccountId, usersByServer } from '../../db/scope.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -26,6 +35,14 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
 import { userActivityStatus } from './activityStatus.ts';
+import {
+  assessRequestFollowThrough,
+  type RequestFollowThroughStats,
+} from './requestFollowThrough.ts';
+import {
+  SEERR_MEDIA_STATUS_AVAILABLE,
+  SEERR_REQUEST_STATUS_APPROVED,
+} from '../../integrations/seerr/client.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -40,6 +57,8 @@ type RiskFilter =
   | 'insufficient_data';
 
 const DEFAULT_INACTIVE_DAYS = 90;
+const DEFAULT_REQUEST_GRACE_DAYS = 30;
+const DEFAULT_REQUEST_MINIMUM = 5;
 const PENDING_INVITATION_CACHE_MS = 60_000;
 const pendingInvitationCache = new Map<
   number,
@@ -155,7 +174,11 @@ router.get('/', async (c) => {
     // settings is a singleton independent of server-connection state, so an admin who's
     // changed the threshold before finishing setup still sees their saved value here,
     // not the hardcoded default — matching the normal (serverId !== null) path below.
-    const [settingsRow] = await db.select({ inactiveUserDays: settings.inactiveUserDays })
+    const [settingsRow] = await db.select({
+      inactiveUserDays: settings.inactiveUserDays,
+      requestFollowThroughGraceDays: settings.requestFollowThroughGraceDays,
+      requestFollowThroughMinRequests: settings.requestFollowThroughMinRequests,
+    })
       .from(settings).where(eq(settings.id, 1)).limit(1);
     return c.json(
       {
@@ -181,7 +204,11 @@ router.get('/', async (c) => {
       eq(servers.id, serverId),
     )
       .limit(1),
-    db.select({ inactiveUserDays: settings.inactiveUserDays }).from(settings).where(
+    db.select({
+      inactiveUserDays: settings.inactiveUserDays,
+      requestFollowThroughGraceDays: settings.requestFollowThroughGraceDays,
+      requestFollowThroughMinRequests: settings.requestFollowThroughMinRequests,
+    }).from(settings).where(
       eq(settings.id, 1),
     )
       .limit(1),
@@ -245,6 +272,10 @@ router.get('/', async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - inactiveDays * 86400;
   const riskWindowCutoff = now - 30 * 86400;
+  const requestGraceDays = settingsRow?.requestFollowThroughGraceDays ??
+    DEFAULT_REQUEST_GRACE_DAYS;
+  const requestMinimum = settingsRow?.requestFollowThroughMinRequests ?? DEFAULT_REQUEST_MINIMUM;
+  const requestCutoff = now - requestGraceDays * 86400;
   // Sharing risk is derived from observation aggregates rather than stored on users.
   // Server rosters are naturally small, so assess the activity-filtered roster first,
   // then risk-filter, sort, and page it in memory to keep totals and pages correct.
@@ -278,6 +309,62 @@ router.get('/', async (c) => {
     riskWindowCutoff,
   );
 
+  const accountIds = activityFiltered.map((row) => row.accountId);
+  const [requestAggregates, requestConnections] = await Promise.all([
+    accountIds.length
+      ? db.select({
+        accountId: seerrRequests.accountId,
+        eligibleRequestCount: sql<
+          number
+        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} <= ${requestCutoff} THEN 1 ELSE 0 END)`,
+        watchedRequestCount: sql<
+          number
+        >`sum(CASE WHEN ${seerrRequests.availableAt} <= ${requestCutoff} AND ${userItemActivity.lastViewedAt} >= ${seerrRequests.availableAt} THEN 1 ELSE 0 END)`,
+        recentRequestCount: sql<
+          number
+        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} > ${requestCutoff} THEN 1 ELSE 0 END)`,
+        estimatedAvailabilityCount: sql<
+          number
+        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} <= ${requestCutoff} AND ${seerrRequests.availabilityEstimated} = 1 THEN 1 ELSE 0 END)`,
+        unmatchedMediaRequestCount: sql<
+          number
+        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NULL THEN 1 ELSE 0 END)`,
+      }).from(seerrRequests).leftJoin(
+        userItemActivity,
+        and(
+          eq(userItemActivity.serverId, seerrRequests.serverId),
+          eq(userItemActivity.accountId, seerrRequests.accountId),
+          eq(userItemActivity.ratingKey, seerrRequests.ratingKey),
+        ),
+      ).where(and(
+        eq(seerrRequests.serverId, serverId),
+        inArray(seerrRequests.accountId, accountIds),
+        eq(seerrRequests.requestStatus, SEERR_REQUEST_STATUS_APPROVED),
+        eq(seerrRequests.mediaStatus, SEERR_MEDIA_STATUS_AVAILABLE),
+        sql`${seerrRequests.availableAt} IS NOT NULL`,
+      )).groupBy(seerrRequests.accountId)
+      : Promise.resolve([]),
+    db.select({
+      requestsSyncedAt: seerrInstances.requestsSyncedAt,
+      requestsSyncError: seerrInstances.requestsSyncError,
+    }).from(seerrInstances).where(eq(seerrInstances.serverId, serverId)),
+  ]);
+  const requestStats = new Map<number, RequestFollowThroughStats>(requestAggregates.map((row) => [
+    row.accountId as number,
+    {
+      eligibleRequestCount: Number(row.eligibleRequestCount ?? 0),
+      watchedRequestCount: Number(row.watchedRequestCount ?? 0),
+      recentRequestCount: Number(row.recentRequestCount ?? 0),
+      estimatedAvailabilityCount: Number(row.estimatedAvailabilityCount ?? 0),
+      unmatchedMediaRequestCount: Number(row.unmatchedMediaRequestCount ?? 0),
+    },
+  ]));
+  const requestHealth = {
+    connectionCount: requestConnections.length,
+    successfulSyncCount: requestConnections.filter((row) => row.requestsSyncedAt !== null).length,
+    failedSyncCount: requestConnections.filter((row) => row.requestsSyncError !== null).length,
+  };
+
   const assessedUsers: PlexUser[] = activityFiltered.map(({ localAccountId: _, ...u }) => ({
     ...u,
     sharingRisk: assessUserSharingRisk(
@@ -292,6 +379,19 @@ router.get('/', async (c) => {
         maxRemoteNetworksPerHour30d: 0,
         concurrentRemotePlaybackDays30d: 0,
       },
+    ),
+    requestFollowThrough: assessRequestFollowThrough(
+      requestStats.get(u.accountId) ?? {
+        eligibleRequestCount: 0,
+        watchedRequestCount: 0,
+        recentRequestCount: 0,
+        estimatedAvailabilityCount: 0,
+        unmatchedMediaRequestCount: 0,
+      },
+      requestHealth,
+      historyComplete,
+      requestGraceDays,
+      requestMinimum,
     ),
   }));
 

@@ -21,6 +21,8 @@ router.get('/', async (c) => {
     autoSyncCatchUp: settings.autoSyncCatchUp,
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
+    requestFollowThroughGraceDays: settings.requestFollowThroughGraceDays,
+    requestFollowThroughMinRequests: settings.requestFollowThroughMinRequests,
     pendingInviteStaleDays: settings.pendingInviteStaleDays,
     pendingInviteCriticalDays: settings.pendingInviteCriticalDays,
     ipHistoryRetentionDays: settings.ipHistoryRetentionDays,
@@ -37,6 +39,8 @@ router.get('/', async (c) => {
       autoSyncCatchUp: row?.autoSyncCatchUp ?? true,
       staleMinAgeDays: row?.staleMinAgeDays ?? 90,
       inactiveUserDays: row?.inactiveUserDays ?? 90,
+      requestFollowThroughGraceDays: row?.requestFollowThroughGraceDays ?? 30,
+      requestFollowThroughMinRequests: row?.requestFollowThroughMinRequests ?? 5,
       pendingInviteStaleDays: row?.pendingInviteStaleDays ?? 30,
       pendingInviteCriticalDays: row?.pendingInviteCriticalDays ?? 90,
       ipHistoryRetentionDays: row?.ipHistoryRetentionDays ?? 365,
@@ -57,6 +61,8 @@ router.patch('/', async (c) => {
     autoSyncCatchUp?: unknown;
     staleMinAgeDays?: unknown;
     inactiveUserDays?: unknown;
+    requestFollowThroughGraceDays?: unknown;
+    requestFollowThroughMinRequests?: unknown;
     pendingInviteStaleDays?: unknown;
     pendingInviteCriticalDays?: unknown;
     ipHistoryRetentionDays?: unknown;
@@ -115,6 +121,34 @@ router.patch('/', async (c) => {
       }, 400);
     }
     set.inactiveUserDays = body.inactiveUserDays;
+  }
+
+  if (body.requestFollowThroughGraceDays !== undefined) {
+    if (
+      typeof body.requestFollowThroughGraceDays !== 'number' ||
+      !Number.isInteger(body.requestFollowThroughGraceDays) ||
+      body.requestFollowThroughGraceDays < 0 ||
+      body.requestFollowThroughGraceDays > MAX_INACTIVITY_DAYS
+    ) {
+      return c.json({
+        error:
+          `requestFollowThroughGraceDays must be an integer between 0 and ${MAX_INACTIVITY_DAYS}`,
+      }, 400);
+    }
+    set.requestFollowThroughGraceDays = body.requestFollowThroughGraceDays;
+  }
+
+  if (body.requestFollowThroughMinRequests !== undefined) {
+    if (
+      typeof body.requestFollowThroughMinRequests !== 'number' ||
+      !Number.isInteger(body.requestFollowThroughMinRequests) ||
+      body.requestFollowThroughMinRequests < 1 || body.requestFollowThroughMinRequests > 10_000
+    ) {
+      return c.json({
+        error: 'requestFollowThroughMinRequests must be an integer between 1 and 10000',
+      }, 400);
+    }
+    set.requestFollowThroughMinRequests = body.requestFollowThroughMinRequests;
   }
 
   if (body.pendingInviteStaleDays !== undefined) {
@@ -194,6 +228,8 @@ router.patch('/', async (c) => {
     autoSyncCatchUp: settings.autoSyncCatchUp,
     staleMinAgeDays: settings.staleMinAgeDays,
     inactiveUserDays: settings.inactiveUserDays,
+    requestFollowThroughGraceDays: settings.requestFollowThroughGraceDays,
+    requestFollowThroughMinRequests: settings.requestFollowThroughMinRequests,
     pendingInviteStaleDays: settings.pendingInviteStaleDays,
     pendingInviteCriticalDays: settings.pendingInviteCriticalDays,
     ipHistoryRetentionDays: settings.ipHistoryRetentionDays,
@@ -210,6 +246,8 @@ router.patch('/', async (c) => {
       autoSyncCatchUp: row!.autoSyncCatchUp,
       staleMinAgeDays: row!.staleMinAgeDays,
       inactiveUserDays: row!.inactiveUserDays,
+      requestFollowThroughGraceDays: row!.requestFollowThroughGraceDays,
+      requestFollowThroughMinRequests: row!.requestFollowThroughMinRequests,
       pendingInviteStaleDays: row!.pendingInviteStaleDays,
       pendingInviteCriticalDays: row!.pendingInviteCriticalDays,
       ipHistoryRetentionDays: row!.ipHistoryRetentionDays,

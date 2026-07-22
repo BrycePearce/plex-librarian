@@ -44,6 +44,8 @@ export interface Settings {
   autoSyncCatchUp: boolean;
   staleMinAgeDays: number;
   inactiveUserDays: number;
+  requestFollowThroughGraceDays: number;
+  requestFollowThroughMinRequests: number;
   pendingInviteStaleDays: number;
   pendingInviteCriticalDays: number;
   ipHistoryRetentionDays: number;
@@ -133,6 +135,8 @@ export interface SeerrInstance {
   name: string;
   url: string;
   apiKeyConfigured: boolean;
+  requestsSyncedAt: number | null;
+  requestsSyncError: string | null;
 }
 
 export interface SeerrIntegrationSettings {
@@ -440,6 +444,43 @@ export interface PlexUser {
   lastViewedAt: number | null;
   activityStatus: UserActivityStatus;
   sharingRisk: SharingRiskAssessment;
+  requestFollowThrough: RequestFollowThroughAssessment;
+}
+
+export type RequestFollowThroughStatus =
+  | 'unavailable'
+  | 'insufficient_data'
+  | 'measured';
+
+export type RequestFollowThroughReasonType =
+  | 'no_seerr_connection'
+  | 'seerr_not_synced'
+  | 'seerr_sync_error'
+  | 'plex_history_incomplete'
+  | 'minimum_not_met'
+  | 'grace_period_exclusions'
+  | 'availability_estimated'
+  | 'media_not_matched'
+  | 'followed_through'
+  | 'not_watched';
+
+export interface RequestFollowThroughReason {
+  type: RequestFollowThroughReasonType;
+  summary: string;
+}
+
+export interface RequestFollowThroughAssessment {
+  status: RequestFollowThroughStatus;
+  eligibleRequestCount: number;
+  watchedRequestCount: number;
+  unwatchedRequestCount: number;
+  followThroughPercent: number | null;
+  recentRequestCount: number;
+  estimatedAvailabilityCount: number;
+  unmatchedMediaRequestCount: number;
+  graceDays: number;
+  minimumRequests: number;
+  reasons: RequestFollowThroughReason[];
 }
 
 export type UserActivityStatus = 'watched' | 'never' | 'unknown';

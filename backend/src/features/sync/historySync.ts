@@ -14,6 +14,20 @@ export async function syncLibraryHistory(
 ): Promise<void> {
   if (lib.type === 'artist') return;
 
+  const roster = await db.select({
+    accountId: users.accountId,
+    localAccountId: users.localAccountId,
+  }).from(users).where(and(eq(users.serverId, serverId), isNotNull(users.localAccountId)));
+  const localToGlobal = new Map<number, number | null>();
+  for (const user of roster) {
+    const localId = user.localAccountId as number;
+    const existing = localToGlobal.get(localId);
+    localToGlobal.set(
+      localId,
+      existing === undefined || existing === user.accountId ? user.accountId : null,
+    );
+  }
+
   // Build ratingKey → max(viewedAt) across all users and all pages before writing.
   // The map is bounded by unique items in the library (not total play count).
   const maxViewedAt = new Map<string, number>();
@@ -26,6 +40,12 @@ export async function syncLibraryHistory(
   const maxViewedAtByAccount = new Map<number, number>();
 
   for await (const page of plex.libraryHistory(lib.key)) {
+    const pageActivity = new Map<string, {
+      accountId: number;
+      ratingKey: string;
+      firstViewedAt: number;
+      lastViewedAt: number;
+    }>();
     for (const entry of page) {
       if (!entry.viewedAt) continue;
       // Episodes carry grandparentKey ("/library/metadata/76749") — extract trailing numeric ID.
@@ -43,7 +63,47 @@ export async function syncLibraryHistory(
         if (!curAcct || entry.viewedAt > curAcct) {
           maxViewedAtByAccount.set(entry.accountID, entry.viewedAt);
         }
+        const accountId = localToGlobal.get(entry.accountID);
+        if (accountId && key) {
+          const pairKey = `${accountId}:${key}`;
+          const current = pageActivity.get(pairKey);
+          if (!current) {
+            pageActivity.set(pairKey, {
+              accountId,
+              ratingKey: key,
+              firstViewedAt: entry.viewedAt,
+              lastViewedAt: entry.viewedAt,
+            });
+          } else {
+            current.firstViewedAt = Math.min(current.firstViewedAt, entry.viewedAt);
+            current.lastViewedAt = Math.max(current.lastViewedAt, entry.viewedAt);
+          }
+        }
       }
+    }
+
+    // Write each history page immediately. Replaying a full sync is idempotent because
+    // first/last timestamps use min/max rather than accumulating play counts.
+    if (pageActivity.size > 0) {
+      withTransaction((client) => {
+        const stmt = client.prepare(
+          `INSERT INTO user_item_activity
+             (server_id, account_id, rating_key, first_viewed_at, last_viewed_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(server_id, account_id, rating_key) DO UPDATE SET
+             first_viewed_at = min(first_viewed_at, excluded.first_viewed_at),
+             last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)`,
+        );
+        for (const activity of pageActivity.values()) {
+          stmt.run(
+            serverId,
+            activity.accountId,
+            activity.ratingKey,
+            activity.firstViewedAt,
+            activity.lastViewedAt,
+          );
+        }
+      });
     }
   }
 

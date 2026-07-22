@@ -50,7 +50,7 @@ export function SeerrConnectionWizard({
             <span className="badge badge-warning badge-outline badge-sm">Beta</span>
           </h3>
           <p className="mt-1 text-sm text-base-content/60">
-            Connect the request API so Plex Librarian can add requester insights in a future sync.
+            Connect the request API to measure requester follow-through after a full sync.
           </p>
         </div>
       </div>

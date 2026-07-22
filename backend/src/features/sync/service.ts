@@ -13,6 +13,7 @@ import { syncLibraryHistory } from './historySync.ts';
 import { syncArtistSizes, syncShowSizes } from './mediaRollups.ts';
 import { syncUsers } from './userSync.ts';
 import { withLibraryOperation } from '../../services/libraryOperations.ts';
+import { syncSeerrRequests } from '../seerr/sync.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
@@ -318,6 +319,8 @@ export async function runSync(
 
   const workerCount = Math.min(LIBRARY_SYNC_CONCURRENCY, plexLibraries.length);
   await Promise.all(Array.from({ length: workerCount }, worker));
+
+  await syncSeerrRequests(serverId, now);
 
   return totalItems;
 }

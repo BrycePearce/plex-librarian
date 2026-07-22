@@ -81,4 +81,45 @@ export class SeerrClient {
       version: typeof status.version === 'string' ? status.version : null,
     };
   }
+
+  async requestsPage(take: number, skip: number): Promise<SeerrRequestsPage> {
+    const response = await this.request<SeerrRequestsPage>(
+      `/request?take=${encodeURIComponent(take)}&skip=${encodeURIComponent(skip)}&sort=added`,
+    );
+    if (!response.pageInfo || !Array.isArray(response.results)) {
+      throw new SeerrApiError('Seerr returned an invalid requests response');
+    }
+    return response;
+  }
+}
+
+// Seerr/Overseerr/Jellyseerr status codes, shared so callers never re-guess the enum.
+export const SEERR_REQUEST_STATUS_APPROVED = 2;
+export const SEERR_MEDIA_STATUS_AVAILABLE = 5;
+
+export interface SeerrRequestUser {
+  email?: unknown;
+  username?: unknown;
+  plexUsername?: unknown;
+}
+
+export interface SeerrRequestMedia {
+  tmdbId?: unknown;
+  tvdbId?: unknown;
+  mediaType?: unknown;
+  status?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface SeerrRequestRecord {
+  id?: unknown;
+  status?: unknown;
+  createdAt?: unknown;
+  requestedBy?: SeerrRequestUser | null;
+  media?: SeerrRequestMedia | null;
+}
+
+export interface SeerrRequestsPage {
+  pageInfo: { pages?: unknown; results?: unknown };
+  results: SeerrRequestRecord[];
 }

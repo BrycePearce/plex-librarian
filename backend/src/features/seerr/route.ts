@@ -19,6 +19,8 @@ function publicInstance(instance: typeof seerrInstances.$inferSelect) {
     name: instance.name,
     url: instance.url,
     apiKeyConfigured: instance.apiKey.length > 0,
+    requestsSyncedAt: instance.requestsSyncedAt,
+    requestsSyncError: instance.requestsSyncError,
   };
 }
 

@@ -120,6 +120,42 @@ function SettingsPage() {
               )
               : <LoadingDaysInput label="Loading user activity retention" />}
           </SettingRow>
+          <SettingRow
+            title="Request availability grace"
+            description="Wait this many days after requested media becomes available before measuring whether the requester watched it."
+          >
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.requestFollowThroughGraceDays}
+                  mutationFn={(value) =>
+                    api.settings.update({ requestFollowThroughGraceDays: value })}
+                  getSavedValue={(updated) => updated.requestFollowThroughGraceDays}
+                  invalidateQueryKey={queryKeys.users.all}
+                  maxDays={MAX_INACTIVITY_DAYS}
+                />
+              )
+              : <LoadingDaysInput label="Loading request availability grace" />}
+          </SettingRow>
+          <SettingRow
+            title="Minimum eligible requests"
+            description="Start reporting a follow-through percentage once a user has this many requests past the availability grace period."
+          >
+            {data
+              ? (
+                <DebouncedDaysInput
+                  initialDays={data.requestFollowThroughMinRequests}
+                  mutationFn={(value) =>
+                    api.settings.update({ requestFollowThroughMinRequests: value })}
+                  getSavedValue={(updated) => updated.requestFollowThroughMinRequests}
+                  invalidateQueryKey={queryKeys.users.all}
+                  min={1}
+                  maxDays={10_000}
+                  suffix="requests"
+                />
+              )
+              : <LoadingDaysInput label="Loading minimum eligible requests" />}
+          </SettingRow>
         </SettingsSection>
 
         <SettingsSection

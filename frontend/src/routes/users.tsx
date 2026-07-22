@@ -25,6 +25,7 @@ import { DeleteResultAlert } from "../components/DeleteResultAlert";
 import { Pagination } from "../components/Pagination";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
 import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog";
+import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog";
 import { UsersTableSkeleton } from "../components/Skeletons";
 import { EmptyState } from "../components/EmptyState";
 import "../components/dataSurfaces.css";
@@ -190,11 +191,13 @@ function UsersPage() {
 
   const [reviewUser, setReviewUser] = useState<PlexUser | null>(null);
   const [riskDetailsUser, setRiskDetailsUser] = useState<PlexUser | null>(null);
+  const [followThroughUser, setFollowThroughUser] = useState<PlexUser | null>(null);
   const [removeResult, setRemoveResult] = useState<{ username: string } | null>(
     null,
   );
   const dialogRef = useRef<HTMLDialogElement>(null);
   const riskDialogRef = useRef<HTMLDialogElement>(null);
+  const followThroughDialogRef = useRef<HTMLDialogElement>(null);
 
   const removeMutation = useMutation({
     mutationFn: (accountId: number) => api.users.remove(accountId),
@@ -225,6 +228,15 @@ function UsersPage() {
 
   function closeRiskDetails() {
     riskDialogRef.current?.close();
+  }
+
+  function openFollowThrough(user: PlexUser) {
+    setFollowThroughUser(user);
+    followThroughDialogRef.current?.showModal();
+  }
+
+  function closeFollowThrough() {
+    followThroughDialogRef.current?.close();
   }
 
   const page = Math.floor(offset / PAGE_SIZE);
@@ -471,6 +483,7 @@ function UsersPage() {
                           order={search.order}
                           onSort={toggleSort}
                         />
+                        <th>Request follow-through</th>
                         <th />
                       </tr>
                     </thead>
@@ -541,6 +554,12 @@ function UsersPage() {
                               onOpen={() => openRiskDetails(u)}
                             />
                           </td>
+                          <td>
+                            <RequestFollowThroughCell
+                              assessment={u.requestFollowThrough}
+                              onOpen={() => openFollowThrough(u)}
+                            />
+                          </td>
                           <td className="text-right">
                             {!u.isOwner && (
                               <button
@@ -582,6 +601,11 @@ function UsersPage() {
         user={riskDetailsUser}
         monitorStatus={data?.monitor.status ?? "starting"}
         onClose={closeRiskDetails}
+      />
+      <RequestFollowThroughDialog
+        dialogRef={followThroughDialogRef}
+        user={followThroughUser}
+        onClose={closeFollowThrough}
       />
     </div>
   );
@@ -1035,6 +1059,47 @@ function SharingRiskCell({
         </span>
       </span>
       <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-transform group-hover/risk:translate-x-0.5 group-hover/risk:text-base-content/60" />
+    </button>
+  );
+}
+
+function RequestFollowThroughCell({
+  assessment,
+  onOpen,
+}: {
+  assessment: PlexUser["requestFollowThrough"];
+  onOpen: () => void;
+}) {
+  const label = assessment.status === "measured"
+    ? `${assessment.followThroughPercent}%`
+    : assessment.status === "insufficient_data"
+    ? `${assessment.eligibleRequestCount}/${assessment.minimumRequests}`
+    : "No data";
+  const detail = assessment.status === "measured"
+    ? `${assessment.watchedRequestCount} watched · ${assessment.unwatchedRequestCount} not watched`
+    : assessment.status === "insufficient_data"
+    ? "eligible requests"
+    : "View reason";
+  return (
+    <button
+      type="button"
+      className="group/follow flex min-w-36 items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 text-left transition-colors hover:bg-base-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      onClick={onOpen}
+      aria-label={`View request follow-through details: ${label}`}
+    >
+      <span>
+        <span
+          className={`badge badge-sm badge-outline ${
+            assessment.status === "measured" ? "badge-primary" : "badge-ghost"
+          }`}
+        >
+          {label}
+        </span>
+        <span className="mt-0.5 block whitespace-nowrap text-[11px] text-base-content/45">
+          {detail}
+        </span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-transform group-hover/follow:translate-x-0.5" />
     </button>
   );
 }

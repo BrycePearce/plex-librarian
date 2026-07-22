@@ -35,8 +35,8 @@ export function SeerrConnections({
             <span className="badge badge-warning badge-outline badge-xs">Beta</span>
           </h3>
           <p className="mt-0.5 text-xs leading-relaxed text-base-content/50">
-            Seerr connection setup is available now; request syncing and insights are not active
-            yet.
+            Seerr requests are matched with Plex watch history after each full sync to provide
+            request follow-through insights.
           </p>
         </div>
         {!isEmpty && (
