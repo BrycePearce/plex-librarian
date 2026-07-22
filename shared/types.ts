@@ -534,6 +534,7 @@ export interface UsersResponse {
   usersSyncedAt: number | null;
   // True only after every video library has completed its current history walk.
   historyComplete: boolean;
+  requestFollowThroughAvailable: boolean;
   inactiveDays: number;
   defaultInactiveDays: number;
   search: string;

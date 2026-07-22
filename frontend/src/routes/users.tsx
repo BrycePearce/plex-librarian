@@ -483,7 +483,7 @@ function UsersPage() {
                           order={search.order}
                           onSort={toggleSort}
                         />
-                        <th>Request follow-through</th>
+                        {data!.requestFollowThroughAvailable && <th>Request follow-through</th>}
                         <th />
                       </tr>
                     </thead>
@@ -554,12 +554,14 @@ function UsersPage() {
                               onOpen={() => openRiskDetails(u)}
                             />
                           </td>
-                          <td>
-                            <RequestFollowThroughCell
-                              assessment={u.requestFollowThrough}
-                              onOpen={() => openFollowThrough(u)}
-                            />
-                          </td>
+                          {data!.requestFollowThroughAvailable && (
+                            <td>
+                              <RequestFollowThroughCell
+                                assessment={u.requestFollowThrough}
+                                onOpen={() => openFollowThrough(u)}
+                              />
+                            </td>
+                          )}
                           <td className="text-right">
                             {!u.isOwner && (
                               <button
@@ -1083,7 +1085,7 @@ function RequestFollowThroughCell({
     ? `${assessment.nonWatchPercent}% not watched`
     : assessment.status === "insufficient_data"
     ? "eligible requests"
-    : "Measurement paused";
+    : "Data unavailable";
   const badgeClass = assessment.status === "review"
     ? "badge-error"
     : assessment.status === "watch"

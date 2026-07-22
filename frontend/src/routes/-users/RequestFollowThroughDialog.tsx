@@ -64,7 +64,7 @@ export function RequestFollowThroughDialog({
                       </div>
                     )
                     : assessment.status === "unavailable"
-                    ? <div className="text-xs text-base-content/40">measurement paused</div>
+                    ? <div className="text-xs text-base-content/40">data unavailable</div>
                     : <div className="text-xs text-base-content/40">not watched</div>}
                 </div>
               </div>

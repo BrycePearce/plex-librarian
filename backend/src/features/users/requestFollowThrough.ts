@@ -65,7 +65,7 @@ export function assessRequestFollowThrough(
       type: 'seerr_sync_error',
       summary: `${health.failedSyncCount} Seerr connection${
         health.failedSyncCount === 1 ? '' : 's'
-      } could not refresh request data. Measurement is paused until all connections recover.`,
+      } could not refresh request data. Measurement is unavailable until all connections recover.`,
     });
   }
   if (!historyComplete) {
@@ -82,7 +82,7 @@ export function assessRequestFollowThrough(
         health.unmatchedUserRequestCount === 1 ? '' : 's'
       } could not be matched to a unique Plex user and ${
         health.unmatchedUserRequestCount === 1 ? 'is' : 'are'
-      } pausing assessment until requester coverage is complete.`,
+      } preventing assessment until requester coverage is complete.`,
     });
   }
   if (stats.recentRequestCount > 0) {
@@ -104,7 +104,7 @@ export function assessRequestFollowThrough(
         stats.uncertainAvailabilityOutcomeCount > 0
           ? `${stats.uncertainAvailabilityOutcomeCount} without a confirmed watch at or after the estimated date ${
             stats.uncertainAvailabilityOutcomeCount === 1 ? 'is' : 'are'
-          } unresolved, so assessment is paused.`
+          } unresolved, so assessment is unavailable.`
           : 'Every estimated request has a confirmed watch at or after the estimated date.'
       }`,
     });
@@ -116,7 +116,7 @@ export function assessRequestFollowThrough(
         stats.unmatchedMediaRequestCount === 1 ? ' could' : 's could'
       } not be matched to a synced Plex title and ${
         stats.unmatchedMediaRequestCount === 1 ? 'was' : 'were'
-      } left unresolved. Assessment is paused rather than assuming an outcome.`,
+      } left unresolved. Assessment is unavailable rather than assuming an outcome.`,
     });
   }
   if (stats.unknownRequestScopeCount > 0) {
@@ -126,7 +126,7 @@ export function assessRequestFollowThrough(
         stats.unknownRequestScopeCount === 1 ? '' : 's'
       } did not include a usable media type or requested-season scope and ${
         stats.unknownRequestScopeCount === 1 ? 'was' : 'were'
-      } left unresolved. Assessment is paused rather than matching unrelated show activity.`,
+      } left unresolved. Assessment is unavailable rather than matching unrelated show activity.`,
     });
   }
 

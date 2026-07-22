@@ -169,6 +169,7 @@ router.get('/', async (c) => {
       {
         usersSyncedAt: null,
         historyComplete: false,
+        requestFollowThroughAvailable: false,
         inactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
         defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
         search: '',
@@ -374,6 +375,7 @@ router.get('/', async (c) => {
     {
       usersSyncedAt,
       historyComplete,
+      requestFollowThroughAvailable: requestHealth.connectionCount > 0,
       inactiveDays,
       defaultInactiveDays: settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS,
       search,
