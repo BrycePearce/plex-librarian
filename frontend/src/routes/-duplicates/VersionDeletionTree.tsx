@@ -139,9 +139,7 @@ export function AdvancedVersionDeletionTree({
     <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
       <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
         <span className="font-medium text-base-content/60">Deletion tree</span>
-        <InfoTip
-          text="Shows Plex paths for the selected versions and any additional download-cleanup paths. Service icons indicate which systems act on each file. Plex paths are informational and never authorize direct filesystem deletion."
-        />
+        <InfoTip text="Shows Plex paths for the selected versions and any additional download-cleanup paths. Service icons indicate which systems act on each file. Plex paths are informational and never authorize direct filesystem deletion." />
         {loading
           ? <span className="loading loading-spinner loading-xs ml-auto" />
           : (
