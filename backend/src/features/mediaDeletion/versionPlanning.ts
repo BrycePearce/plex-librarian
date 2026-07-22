@@ -336,6 +336,10 @@ export async function buildVersionDeletionPlan({
     preview: {
       mediaType,
       arrService: mediaType === 'episode' ? 'sonarr' : 'radarr',
+      availableVersions: publicVersionPreviews(
+        liveVersions,
+        new Set(liveVersions.map((version) => version.mediaId)),
+      ),
       versions: versionsWithApplicability,
       arrConfigured: arrTargets.length > 0,
       arrStatus,

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api } from "../../lib/api";
-import type { DuplicateGroup } from "../../lib/api";
+import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo";
@@ -31,6 +31,36 @@ import {
 } from "./versionDeletionState";
 import "../../components/dataSurfaces.css";
 
+function useDelayedFlag(
+  active: boolean,
+  delayMs: number,
+  minimumVisibleMs = 300,
+): boolean {
+  const [visible, setVisible] = useState(false);
+  const shownAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (active && !visible) {
+      const timeout = setTimeout(() => {
+        shownAt.current = performance.now();
+        setVisible(true);
+      }, delayMs);
+      return () => clearTimeout(timeout);
+    }
+    if (active || !visible) {
+      return;
+    }
+    const elapsed = performance.now() - (shownAt.current ?? 0);
+    const timeout = setTimeout(() => {
+      shownAt.current = null;
+      setVisible(false);
+    }, Math.max(0, minimumVisibleMs - elapsed));
+    return () => clearTimeout(timeout);
+  }, [active, delayMs, minimumVisibleMs, visible]);
+
+  return visible;
+}
+
 export function VersionPickerDialog({
   dialogRef,
   item,
@@ -53,18 +83,39 @@ export function VersionPickerDialog({
   }) => void;
   onCancel: () => void;
 }) {
-  const [checked, setChecked] = useState<Set<number>>(new Set());
-  const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
+  const itemKey = item
+    ? `${item.mediaType}:${item.mediaType === "movie" ? item.ratingKey : item.episodeRatingKey}`
+    : "none";
+  const defaultChecked = useMemo(
+    () => item ? defaultVersionSelection(item.versions) : new Set<number>(),
+    [itemKey],
+  );
+  const [selectionState, setSelectionState] = useState<{
+    itemKey: string;
+    checked: Set<number>;
+  }>(() => ({
+    itemKey,
+    checked: defaultChecked,
+  }));
+  const checked = selectionState.itemKey === itemKey ? selectionState.checked : defaultChecked;
+  const [previewModeState, setPreviewModeState] = useState<{
+    itemKey: string;
+    mode: "basic" | "advanced";
+  }>({ itemKey, mode: "basic" });
+  const previewMode = previewModeState.itemKey === itemKey ? previewModeState.mode : "basic";
   const [deleteFromArr, setDeleteFromArr] = useState(false);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const [fallbackAcknowledged, setFallbackAcknowledged] = useState(false);
   const queryClient = useQueryClient();
 
+  useLayoutEffect(() => {
+    if (item && !dialogRef.current?.open) dialogRef.current?.showModal();
+  }, [dialogRef, item]);
+
   useEffect(() => {
-    if (!item) return;
-    setChecked(defaultVersionSelection(item.versions));
-    setPreviewMode("basic");
-  }, [item]);
+    setSelectionState({ itemKey, checked: defaultChecked });
+    setPreviewModeState({ itemKey, mode: "basic" });
+  }, [defaultChecked, itemKey]);
 
   const mediaIds = useMemo(() => [...checked].sort((a, b) => a - b), [checked]);
   const ratingKey = item?.mediaType === "movie" ? item.ratingKey : item?.episodeRatingKey ?? "";
@@ -109,6 +160,22 @@ export function VersionPickerDialog({
     retry: false,
     staleTime: 15_000,
   });
+  const showPreviewLoading = useDelayedFlag(preview.isLoading, 250);
+  const [pathContext, setPathContext] = useState<
+    {
+      itemKey: string;
+      versions: MediaVersionPathPreview[];
+    } | null
+  >(null);
+
+  useEffect(() => {
+    if (!preview.data?.availableVersions) return;
+    setPathContext({ itemKey, versions: preview.data.availableVersions });
+  }, [itemKey, preview.data?.availableVersions]);
+
+  const availableVersionPaths = preview.data?.availableVersions ??
+    (pathContext?.itemKey === itemKey ? pathContext.versions : undefined) ??
+    preview.data?.versions ?? [];
 
   useEffect(() => {
     setDeleteFromArr(
@@ -131,7 +198,7 @@ export function VersionPickerDialog({
     const next = new Set(checked);
     if (next.has(mediaId)) next.delete(mediaId);
     else next.add(mediaId);
-    setChecked(next);
+    setSelectionState({ itemKey, checked: next });
   }
 
   const selection = versionSelectionSemantics(
@@ -236,7 +303,7 @@ export function VersionPickerDialog({
       </div>
       <DeletionPreview
         mode={previewMode}
-        onModeChange={setPreviewMode}
+        onModeChange={(mode) => setPreviewModeState({ itemKey, mode })}
         basic={
           <BasicDeletionList>
             {displayVersions.map((version) => {
@@ -276,7 +343,7 @@ export function VersionPickerDialog({
         advanced={
           <AdvancedVersionDeletionTree
             title={item.mediaType === "movie" ? item.title : item.episodeTitle}
-            versions={selectedVersions.map((version) => {
+            versions={item.versions.map((version) => {
               const displayVersion = refreshedByMediaId.get(version.mediaId) ??
                 version;
               return {
@@ -284,12 +351,15 @@ export function VersionPickerDialog({
                 label: versionLabel(displayVersion),
                 fileSize: version.fileSize,
                 technicalInfo: <VersionTechnicalInfo version={displayVersion} />,
+                selected: checked.has(version.mediaId),
               };
             })}
             preview={preview.data}
+            availableVersions={availableVersionPaths}
             deleteFromArr={deleteFromArr}
             cleanupDownloads={cleanupDownloads}
             loading={preview.isLoading}
+            onToggleVersion={toggle}
           />
         }
       />
@@ -332,7 +402,7 @@ export function VersionPickerDialog({
       )}
 
       <DeletionPreviewStatus
-        loading={preview.isLoading}
+        loading={showPreviewLoading}
         error={preview.isError ? preview.error.message : null}
       />
       {fallbackRequired && (

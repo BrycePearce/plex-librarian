@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ReactNode, RefObject } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, Trash2 } from "lucide-react";
@@ -61,6 +61,10 @@ export function DeletionPreview({
   advanced: ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
+  const hasMounted = useRef(false);
+  useEffect(() => {
+    hasMounted.current = true;
+  }, []);
   return (
     <>
       <div className="mt-3 flex items-center justify-between gap-3">
@@ -91,7 +95,7 @@ export function DeletionPreview({
       </div>
       <motion.div
         key={mode}
-        initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+        initial={reduceMotion || !hasMounted.current ? false : { opacity: 0, y: 3 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{
           duration: reduceMotion ? 0 : 0.12,
@@ -236,7 +240,7 @@ export function DeletionDialogFooter({
       </button>
       <button
         type="button"
-        className="btn btn-sm btn-error gap-2"
+        className="btn btn-sm btn-error gap-2 transition-[color,background-color,border-color,opacity] duration-200"
         onClick={onConfirm}
         disabled={confirmDisabled}
       >

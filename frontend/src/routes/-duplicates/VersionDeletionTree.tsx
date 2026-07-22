@@ -1,4 +1,4 @@
-import type { VersionDeletionPreviewResponse } from "../../lib/api";
+import type { MediaVersionPathPreview, VersionDeletionPreviewResponse } from "../../lib/api";
 import type { ReactNode } from "react";
 import { formatKilobytes } from "../../lib/format";
 import { InfoTip } from "../../features/mediaDeletion/InfoTip";
@@ -12,11 +12,12 @@ import {
 } from "../../features/mediaDeletion/DeletionTree";
 import { versionArrDeletionActive, versionDeletionPresentation } from "./versionDeletionState";
 
-interface SelectedVersion {
+interface VersionTreeEntry {
   mediaId: number;
   label: string;
   fileSize: number | null;
   technicalInfo: ReactNode;
+  selected: boolean;
 }
 
 export function VersionDeletionServiceMarks({
@@ -99,19 +100,28 @@ export function AdvancedVersionDeletionTree({
   title,
   versions,
   preview,
+  availableVersions,
   deleteFromArr,
   cleanupDownloads,
   loading,
+  onToggleVersion,
 }: {
   title: string;
-  versions: SelectedVersion[];
+  versions: VersionTreeEntry[];
   preview?: VersionDeletionPreviewResponse;
+  availableVersions: MediaVersionPathPreview[];
   deleteFromArr: boolean;
   cleanupDownloads: boolean;
   loading: boolean;
+  onToggleVersion: (mediaId: number) => void;
 }) {
   const previewByMediaId = new Map(
-    preview?.versions.map((version) => [version.mediaId, version]) ?? [],
+    availableVersions.map((version) =>
+      [
+        version.mediaId,
+        version,
+      ] as const
+    ),
   );
   const presentation = versionDeletionPresentation(
     preview,
@@ -135,7 +145,7 @@ export function AdvancedVersionDeletionTree({
     <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
       <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
         <span className="font-medium text-base-content/60">Deletion tree</span>
-        <InfoTip text="Shows Plex paths for the selected versions and any additional download-cleanup paths. Service icons indicate which systems act on each file. Plex paths are informational and never authorize direct filesystem deletion." />
+        <InfoTip text="Shows Plex paths for every version and any additional download-cleanup paths. Service icons appear only on selected deletion targets. Plex paths are informational and never authorize direct filesystem deletion." />
         {loading
           ? <span className="loading loading-spinner loading-xs ml-auto" />
           : (
@@ -159,7 +169,20 @@ export function AdvancedVersionDeletionTree({
               const versionPreview = previewByMediaId.get(version.mediaId);
               return (
                 <div key={version.mediaId} className="py-0.5">
-                  <div className="flex min-w-0 items-center gap-2 pl-3 text-[11px] leading-5 text-base-content/55">
+                  <label
+                    className={`flex min-w-0 cursor-pointer items-center gap-2 rounded px-1 py-0.5 pl-3 text-[11px] leading-5 transition-colors hover:bg-primary/5 focus-within:bg-primary/5 ${
+                      version.selected
+                        ? "bg-primary/10 text-base-content/65"
+                        : "text-base-content/40"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-xs size-4 shrink-0 rounded-[4px]"
+                      checked={version.selected}
+                      onChange={() => onToggleVersion(version.mediaId)}
+                      aria-label={`Delete ${version.label}`}
+                    />
                     <span className="flex min-w-0 flex-1 items-center gap-1.5">
                       <span className="min-w-0 truncate font-medium">
                         {version.label}
@@ -171,24 +194,30 @@ export function AdvancedVersionDeletionTree({
                         {formatKilobytes(version.fileSize)}
                       </span>
                     )}
-                  </div>
+                  </label>
                   {versionPreview?.plexPaths.map((path, index) => (
                     <PathTreeRoot
                       key={`plex:${version.mediaId}:${path}:${index}`}
                       path={path}
-                      marks={
-                        <VersionDeletionServiceMarks
-                          preview={preview}
-                          mediaId={version.mediaId}
-                          path={path}
-                          deleteFromArr={deleteFromArr}
-                          cleanupDownloads={cleanupDownloads}
-                        />
-                      }
+                      marks={version.selected
+                        ? (
+                          <VersionDeletionServiceMarks
+                            preview={preview}
+                            mediaId={version.mediaId}
+                            path={path}
+                            deleteFromArr={deleteFromArr}
+                            cleanupDownloads={cleanupDownloads}
+                          />
+                        )
+                        : undefined}
                     />
                   ))}
                   {!loading && !versionPreview?.plexPaths.length && (
-                    <p className="pl-3 text-[10px] leading-4 text-warning/80">
+                    <p
+                      className={`pl-3 text-[10px] leading-4 ${
+                        version.selected ? "text-warning/80" : "text-base-content/35"
+                      }`}
+                    >
                       {versionPreview?.reason ??
                         "Plex returned no path for this version"}
                     </p>

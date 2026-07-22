@@ -66,6 +66,7 @@ export type {
   LibrarySyncProgress,
   MediaRemovalSummary,
   MediaVersion,
+  MediaVersionPathPreview,
   MovieDetail,
   PendingInvitation,
   PendingInvitationsResponse,

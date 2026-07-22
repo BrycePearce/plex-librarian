@@ -201,11 +201,11 @@ function DuplicatesPage() {
 
   function openReview(item: DuplicateGroup) {
     setReviewItem(item);
-    versionDialogRef.current?.showModal();
   }
 
   function closeReview() {
     versionDialogRef.current?.close();
+    setReviewItem(null);
   }
 
   const page = Math.floor(offset / PAGE_SIZE);
@@ -213,7 +213,7 @@ function DuplicatesPage() {
   const summary = duplicatePageSummary(data?.groups ?? []);
 
   return (
-    <div className="workspace-page workspace-tone-accent space-y-6">
+    <div className="duplicates-page workspace-page workspace-tone-accent space-y-6">
       <div className="workspace-sticky-header sticky top-0 z-20">
         <PageHeader
           eyebrow="Storage intelligence"
@@ -292,7 +292,7 @@ function DuplicatesPage() {
                 className="duplicates-summary"
                 aria-label="Duplicate storage summary"
               >
-                <div className="duplicates-summary-card">
+                <div className="duplicates-summary-card duplicates-summary-card-versions">
                   <span className="duplicates-summary-icon">
                     <Layers3 className="size-4" />
                   </span>
@@ -301,7 +301,7 @@ function DuplicatesPage() {
                     <strong>{summary.versionCount.toLocaleString()}</strong>
                   </span>
                 </div>
-                <div className="duplicates-summary-card">
+                <div className="duplicates-summary-card duplicates-summary-card-storage">
                   <span className="duplicates-summary-icon">
                     <HardDrive className="size-4" />
                   </span>
@@ -314,7 +314,7 @@ function DuplicatesPage() {
                     </strong>
                   </span>
                 </div>
-                <div className="duplicates-summary-card duplicates-summary-card-featured">
+                <div className="duplicates-summary-card duplicates-summary-card-reclaimable">
                   <span className="duplicates-summary-icon">
                     <Sparkles className="size-4" />
                   </span>

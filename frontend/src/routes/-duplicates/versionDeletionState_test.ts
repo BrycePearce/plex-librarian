@@ -63,6 +63,7 @@ function preview(
   return {
     mediaType: "movie",
     arrService: "radarr",
+    availableVersions: [],
     versions: [],
     arrConfigured: false,
     arrStatus: "unavailable",

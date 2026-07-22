@@ -1,18 +1,7 @@
 .duplicates-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid
-    color-mix(in oklab, var(--color-plex) 18%, var(--color-base-content) 7%);
-  border-radius: 17px;
-  background:
-    linear-gradient(
-    112deg,
-    color-mix(in oklab, var(--color-plex) 8%, transparent),
-    transparent 42%
-  ),
-    color-mix(in oklab, var(--color-base-200) 78%, transparent);
-  box-shadow: 0 14px 36px rgb(0 0 0 / 0.08);
+  gap: 0.75rem;
 }
 
 .workspace-collection-actions:has(.duplicates-comparison-filter) {
@@ -20,16 +9,59 @@
 }
 
 .duplicates-summary-card {
+  --summary-color: var(--color-accent);
+  position: relative;
+  overflow: hidden;
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 0.85rem;
   padding: 1rem 1.15rem;
+  border: 1px solid
+    color-mix(in oklab, var(--summary-color) 18%, var(--color-base-content) 7%);
+  border-radius: 16px;
+  background:
+    radial-gradient(
+      circle at 8% 50%,
+      color-mix(in oklab, var(--summary-color) 8%, transparent),
+      transparent 48%
+    ),
+    color-mix(in oklab, var(--color-base-200) 80%, transparent);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.07);
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
-.duplicates-summary-card + .duplicates-summary-card {
-  border-left: 1px solid
-    color-mix(in oklab, var(--color-base-content) 8%, transparent);
+.duplicates-summary-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: color-mix(in oklab, var(--summary-color) 68%, transparent);
+  opacity: 0.65;
+  transition: opacity 180ms ease, box-shadow 180ms ease;
+}
+
+.duplicates-summary-card:hover {
+  border-color: color-mix(in oklab, var(--summary-color) 31%, transparent);
+  background-color: color-mix(in oklab, var(--color-base-200) 94%, var(--summary-color) 6%);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.1);
+}
+
+.duplicates-summary-card:hover::after {
+  opacity: 1;
+  box-shadow: 0 0 16px color-mix(in oklab, var(--summary-color) 30%, transparent);
+}
+
+.duplicates-summary-card-versions {
+  --summary-color: var(--color-accent);
+}
+
+.duplicates-summary-card-storage {
+  --summary-color: var(--color-info);
+}
+
+.duplicates-summary-card-reclaimable {
+  --summary-color: var(--color-plex);
 }
 
 .duplicates-summary-icon {
@@ -38,11 +70,18 @@
   height: 38px;
   flex: 0 0 38px;
   place-items: center;
-  border: 1px solid color-mix(in oklab, var(--color-plex) 28%, transparent);
+  border: 1px solid color-mix(in oklab, var(--summary-color) 28%, transparent);
   border-radius: 12px;
-  color: var(--color-plex);
-  background: color-mix(in oklab, var(--color-plex) 11%, transparent);
-  box-shadow: 0 7px 20px color-mix(in oklab, var(--color-plex) 8%, transparent);
+  color: color-mix(in oklab, var(--summary-color) 82%, var(--color-base-content));
+  background: color-mix(in oklab, var(--summary-color) 11%, transparent);
+  box-shadow: 0 7px 20px color-mix(in oklab, var(--summary-color) 8%, transparent);
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.duplicates-summary-card:hover .duplicates-summary-icon {
+  border-color: color-mix(in oklab, var(--summary-color) 42%, transparent);
+  background-color: color-mix(in oklab, var(--summary-color) 15%, transparent);
+  box-shadow: 0 8px 22px color-mix(in oklab, var(--summary-color) 15%, transparent);
 }
 
 .duplicates-summary-copy {
@@ -66,8 +105,42 @@
   white-space: nowrap;
 }
 
-.duplicates-summary-card-featured strong {
-  color: color-mix(in oklab, var(--color-plex) 84%, var(--color-base-content));
+.duplicates-summary-card-reclaimable strong {
+  color: color-mix(in oklab, var(--summary-color) 84%, var(--color-base-content));
+}
+
+.duplicates-page .workspace-collection-meta {
+  border: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent);
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  background: color-mix(in oklab, var(--color-base-200) 68%, transparent);
+}
+
+.duplicates-group-row {
+  --comparison-color: var(--color-accent);
+}
+
+.duplicates-group-row-same-profile {
+  --comparison-color: var(--color-success);
+}
+
+.duplicates-group-row-different {
+  --comparison-color: var(--color-warning);
+}
+
+.duplicates-group-row-unknown {
+  --comparison-color: var(--color-secondary);
+}
+
+.duplicates-group-row.polished-row:hover,
+.duplicates-group-row.polished-row:focus-visible {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-accent) 7%, transparent),
+    color-mix(in oklab, var(--color-accent) 2%, transparent) 55%,
+    transparent
+  );
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--color-accent) 72%, transparent);
 }
 
 .duplicates-version-stack {
@@ -82,12 +155,12 @@
   width: 18px;
   height: 22px;
   border: 1px solid
-    color-mix(in oklab, var(--color-plex) 42%, var(--color-base-content) 12%);
+    color-mix(in oklab, var(--comparison-color) 42%, var(--color-base-content) 12%);
   border-radius: 4px;
   background: color-mix(
     in oklab,
     var(--color-base-200) 88%,
-    var(--color-plex) 12%
+    var(--comparison-color) 12%
   );
   box-shadow: 0 3px 8px rgb(0 0 0 / 0.12);
 }
@@ -162,7 +235,8 @@
   height: 3px;
   margin-top: 0.45rem;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--color-base-content) 10%, transparent);
+  background: color-mix(in oklab, var(--color-info) 20%, var(--color-base-300));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-info) 7%, transparent);
 }
 .duplicates-storage-fill {
   height: 100%;
@@ -179,9 +253,11 @@
   .duplicates-summary {
     grid-template-columns: 1fr;
   }
-  .duplicates-summary-card + .duplicates-summary-card {
-    border-top: 1px solid
-      color-mix(in oklab, var(--color-base-content) 8%, transparent);
-    border-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duplicates-summary-card,
+  .duplicates-summary-icon {
+    transition: none;
   }
 }

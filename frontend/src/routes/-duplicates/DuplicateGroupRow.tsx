@@ -1,5 +1,5 @@
-import { Link } from "@tanstack/react-router";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
+import { ChevronRight } from "lucide-react";
 import type { DuplicateGroup } from "../../lib/api";
 import { formatKilobytes } from "../../lib/format";
 import { PosterThumb } from "../../components/PosterThumb";
@@ -26,6 +26,9 @@ export function DuplicateGroupRow({
   const quality = versionQualityLabels(item.versions);
   const comparison = compareDuplicateVersions(item.versions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
+  const itemLabel = item.mediaType === "movie"
+    ? item.title
+    : `${item.showTitle}, season ${item.seasonIndex}, episode ${item.episodeIndex}`;
 
   const title = item.mediaType === "movie"
     ? (
@@ -45,30 +48,29 @@ export function DuplicateGroupRow({
 
   return (
     <tr
-      className="row-hover group polished-row cursor-pointer"
+      className={`duplicates-group-row duplicates-group-row-${comparison.kind} row-hover group polished-row cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary`}
       onClick={onReview}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onReview();
+        }
+      }}
+      tabIndex={0}
+      aria-label={`Review duplicate versions for ${itemLabel}`}
     >
       <td>
-        <Link
-          to={item.mediaType === "movie"
-            ? "/libraries/$key/movies/$ratingKey"
-            : "/libraries/$key/shows/$ratingKey"}
-          params={{
-            key: item.libraryKey,
-            ratingKey: item.mediaType === "movie" ? item.ratingKey : item.showRatingKey,
-          }}
-          onClick={(event) => event.stopPropagation()}
-          className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
-        >
+        <div className="inline-flex items-center gap-3 max-w-full">
           <PosterThumb
             thumb={item.mediaType === "movie" ? item.thumb : item.showThumb}
             width={60}
             height={90}
             className="w-10 h-14"
-            hoverScope="poster"
+            hoverScope="row"
           />
           {title}
-        </Link>
+        </div>
       </td>
       <td className="text-sm">
         <div className="flex items-center gap-2.5">
@@ -139,16 +141,10 @@ export function DuplicateGroupRow({
         )}
       </td>
       <td className="text-right">
-        <button
-          type="button"
-          className="btn btn-sm opacity-70 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
-          onClick={(event) => {
-            event.stopPropagation();
-            onReview();
-          }}
-        >
-          Review
-        </button>
+        <ChevronRight
+          className="ml-auto size-4 text-base-content/30 transition-all group-hover:translate-x-0.5 group-hover:text-base-content/70 group-focus-visible:translate-x-0.5 group-focus-visible:text-base-content/70"
+          aria-hidden="true"
+        />
       </td>
     </tr>
   );

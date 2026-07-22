@@ -406,6 +406,9 @@ export interface MediaVersionPathPreview {
 export interface VersionDeletionPreviewResponse {
   mediaType: 'movie' | 'episode';
   arrService: ArrType;
+  // Every live Plex version is included for advanced comparison context. `versions`
+  // remains limited to the selected deletion targets and carries destination applicability.
+  availableVersions: MediaVersionPathPreview[];
   versions: MediaVersionPathPreview[];
   arrConfigured: boolean;
   arrStatus: 'resolved' | 'unavailable' | 'error';
