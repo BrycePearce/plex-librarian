@@ -2,9 +2,9 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import { ArrowRight, Check, ExternalLink, Library, Radio, Server } from "lucide-react";
-import { usePlexSetupFlow } from "../features/setup/usePlexSetupFlow";
-import { api } from "../lib/api";
-import { queryKeys } from "../lib/queryKeys";
+import { usePlexSetupFlow } from "../features/setup/usePlexSetupFlow.ts";
+import { api } from "../lib/api.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
 import "../components/workspace.css";
 import "./setup.css";
 

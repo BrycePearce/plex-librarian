@@ -13,9 +13,9 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { ThemeSwitcher } from "./ThemeSwitcher";
-import { UserMenu } from "./UserMenu";
-import { StaleLibraryNav } from "./sidebar/StaleLibraryNav";
+import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
+import { UserMenu } from "./UserMenu.tsx";
+import { StaleLibraryNav } from "./sidebar/StaleLibraryNav.tsx";
 
 const navGroups = [
   {

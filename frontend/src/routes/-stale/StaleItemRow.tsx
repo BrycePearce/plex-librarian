@@ -1,9 +1,9 @@
 import { Link } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import { Copy, Trash2 } from "lucide-react";
-import type { StaleItem } from "../../lib/api";
-import { formatDate, formatKilobytes } from "../../lib/format";
-import { PosterThumb } from "../../components/PosterThumb";
+import type { StaleItem } from "../../lib/api.ts";
+import { formatDate, formatKilobytes } from "../../lib/format.ts";
+import { PosterThumb } from "../../components/PosterThumb.tsx";
 import "../../components/dataSurfaces.css";
 
 // `hidden` plays only on first mount, when `animateIn` is set.

@@ -2,15 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { PlugZap, Plus, Server, Trash2, X } from "lucide-react";
-import { api } from "../../lib/api";
-import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
-import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
-import { ArrConnectionWizard } from "./ArrConnectionWizard";
-import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections";
-import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard";
-import { SeerrConnections } from "../seerr/SeerrConnections";
-import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard";
+import { api } from "../../lib/api.ts";
+import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck.tsx";
+import { ArrConnectionWizard } from "./ArrConnectionWizard.tsx";
+import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections.tsx";
+import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard.tsx";
+import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
+import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard.tsx";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so

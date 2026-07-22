@@ -4,10 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
 import { ArchiveRestore, ChevronRight, Film, Music, Search, Tv, X } from "lucide-react";
-import type { Library } from "../../lib/api";
-import { api } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
-import { useLocalStorage } from "../../lib/useLocalStorage";
+import type { Library } from "../../lib/api.ts";
+import { api } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { useLocalStorage } from "../../lib/useLocalStorage.ts";
 import "./StaleLibraryNav.css";
 
 const INLINE_LIMIT = 8;

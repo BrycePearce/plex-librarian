@@ -1,16 +1,16 @@
-import type { MediaVersionPathPreview, VersionDeletionPreviewResponse } from "../../lib/api";
+import type { MediaVersionPathPreview, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 import type { ReactNode } from "react";
-import { formatKilobytes } from "../../lib/format";
-import { InfoTip } from "../../features/mediaDeletion/InfoTip";
-import { PlannedServiceExceptions } from "../../features/mediaDeletion/DeletionPlanSummary";
+import { formatKilobytes } from "../../lib/format.ts";
+import { InfoTip } from "../../features/mediaDeletion/InfoTip.tsx";
+import { PlannedServiceExceptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import {
   ActiveServiceMark,
   downloadJobFiles,
   downloadJobInfo,
   downloadJobRoot,
   PathTreeRoot,
-} from "../../features/mediaDeletion/DeletionTree";
-import { versionArrDeletionActive, versionDeletionPresentation } from "./versionDeletionState";
+} from "../../features/mediaDeletion/DeletionTree.tsx";
+import { versionArrDeletionActive, versionDeletionPresentation } from "./versionDeletionState.ts";
 
 interface VersionTreeEntry {
   mediaId: number;

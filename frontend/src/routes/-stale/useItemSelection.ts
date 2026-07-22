@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { StaleItem } from "../../lib/api";
+import type { StaleItem } from "../../lib/api.ts";
 
 export function useItemSelection(pageItems: StaleItem[]) {
   const [selected, setSelected] = useState<Map<string, StaleItem>>(new Map());

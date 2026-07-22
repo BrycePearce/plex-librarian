@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { StaleParams } from "../../lib/api";
-import { CustomDaysInput } from "../../components/CustomDaysInput";
+import type { StaleParams } from "../../lib/api.ts";
+import { CustomDaysInput } from "../../components/CustomDaysInput.tsx";
 
 const MAX_INACTIVITY_DAYS = 36_500;
 const INACTIVITY_PRESETS = [0, 90, 180, 365, 730, 1_095];

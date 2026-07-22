@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Download, Plus, Trash2 } from "lucide-react";
-import { api } from "../../lib/api";
-import type { QbittorrentInstance } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
-import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck";
+import { api } from "../../lib/api.ts";
+import type { QbittorrentInstance } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck.tsx";
 
 export function QbittorrentConnections({
   onConfigure,

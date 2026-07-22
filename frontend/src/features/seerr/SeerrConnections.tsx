@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ListPlus, Plus, Trash2 } from "lucide-react";
 import { useEffect } from "react";
-import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck";
-import { api } from "../../lib/api";
-import type { SeerrInstance } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
+import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck.tsx";
+import { api } from "../../lib/api.ts";
+import type { SeerrInstance } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 
 export function SeerrConnections({
   onConfigure,

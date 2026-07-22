@@ -3,10 +3,10 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import type { QueryClient } from "@tanstack/react-query";
 import { Library } from "lucide-react";
-import { AppSidebar } from "../components/AppSidebar";
-import { SyncCacheCoordinator } from "../features/sync/SyncCacheCoordinator";
-import { DeletionOperationCoordinator } from "../features/deletionOperations/DeletionOperationCoordinator";
-import { DisconnectTransitionProvider } from "../features/auth/DisconnectTransition";
+import { AppSidebar } from "../components/AppSidebar.tsx";
+import { SyncCacheCoordinator } from "../features/sync/SyncCacheCoordinator.tsx";
+import { DeletionOperationCoordinator } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
+import { DisconnectTransitionProvider } from "../features/auth/DisconnectTransition.tsx";
 import "./__root.css";
 
 interface RouterContext {

@@ -1,4 +1,4 @@
-import { isNotFoundError } from "./api";
+import { isNotFoundError } from "./api.ts";
 
 // A 404 on a per-library/per-item query only means "not synced yet" while a sync that
 // could plausibly produce this row is still running or hasn't been checked yet

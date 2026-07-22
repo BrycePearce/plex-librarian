@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { api } from "../lib/api";
-import { queryKeys } from "../lib/queryKeys";
+import { api } from "../lib/api.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
 
 export const Route = createFileRoute("/")({
   beforeLoad: async ({ context }) => {

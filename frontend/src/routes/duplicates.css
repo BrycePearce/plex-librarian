@@ -180,6 +180,37 @@
   transform: rotate(5deg);
 }
 
+.duplicates-version-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: -0.35rem;
+  padding: 0.35rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: help;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.duplicates-version-summary:hover,
+.duplicates-version-summary:focus-visible {
+  border-color: color-mix(in oklab, var(--comparison-color) 35%, transparent);
+  background: color-mix(in oklab, var(--comparison-color) 9%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--comparison-color) 8%, transparent);
+  outline: none;
+}
+
+.duplicates-version-summary:hover .duplicates-version-stack span,
+.duplicates-version-summary:focus-visible .duplicates-version-stack span {
+  border-color: color-mix(in oklab, var(--comparison-color) 72%, transparent);
+}
+
 .duplicates-version-count {
   font-size: 0.72rem;
   font-weight: 700;

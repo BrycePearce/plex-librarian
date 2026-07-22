@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { redirect } from "@tanstack/react-router";
-import { api } from "./api";
-import { queryKeys } from "./queryKeys";
+import { api } from "./api.ts";
+import { queryKeys } from "./queryKeys.ts";
 
 /** Shared protected-route guard. The query cache keeps normal navigations local while
  * still validating a hard refresh or an expired auth-status entry. */

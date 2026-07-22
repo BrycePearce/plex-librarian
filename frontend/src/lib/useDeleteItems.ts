@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { api } from "./api";
-import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator";
+import { api } from "./api.ts";
+import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
 
 // Shared between the stale page's bulk whole-item delete and the duplicates page's
 // "delete this movie entirely" escalation (see VersionPickerDialog) — both ultimately

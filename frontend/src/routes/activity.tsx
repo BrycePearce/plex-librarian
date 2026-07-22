@@ -1,15 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, Copy, History, Trash2, UserX } from "lucide-react";
-import { api } from "../lib/api";
-import type { ActivityEvent, EventType } from "../lib/api";
-import { queryKeys } from "../lib/queryKeys";
-import { formatKilobytes, formatRelativeTime } from "../lib/format";
-import { ActivityListSkeleton } from "../components/Skeletons";
-import { EmptyState } from "../components/EmptyState";
+import { api } from "../lib/api.ts";
+import type { ActivityEvent, EventType } from "../lib/api.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import { formatKilobytes, formatRelativeTime } from "../lib/format.ts";
+import { ActivityListSkeleton } from "../components/Skeletons.tsx";
+import { EmptyState } from "../components/EmptyState.tsx";
 import "../components/dataSurfaces.css";
-import { requireAuth } from "../lib/requireAuth";
-import { DataSurface, PageHeader } from "../components/Workspace";
+import { requireAuth } from "../lib/requireAuth.ts";
+import { DataSurface, PageHeader } from "../components/Workspace.tsx";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),

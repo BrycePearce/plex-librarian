@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { api } from "../../lib/api";
-import { resetServerScopedQueries } from "../../lib/queryCache";
-import { queryKeys } from "../../lib/queryKeys";
-import type { PlexServer } from "../../lib/api";
+import { api } from "../../lib/api.ts";
+import { resetServerScopedQueries } from "../../lib/queryCache.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import type { PlexServer } from "../../lib/api.ts";
 
 export type PlexSetupStep =
   | "initial"

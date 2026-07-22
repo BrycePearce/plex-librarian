@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import { AlertTriangle, UserX } from "lucide-react";
-import type { PlexUser } from "../../lib/api";
+import type { PlexUser } from "../../lib/api.ts";
 import "../../components/dataSurfaces.css";
 
 export function RemoveUserConfirmDialog({

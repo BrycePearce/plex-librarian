@@ -1,4 +1,4 @@
-import type { ArrInstance } from "../../lib/api";
+import type { ArrInstance } from "../../lib/api.ts";
 
 export function companionUrl(
   instances: readonly ArrInstance[],

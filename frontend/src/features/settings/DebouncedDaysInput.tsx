@@ -2,8 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Settings } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
+import type { Settings } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 
 // Only rendered once settings data has loaded, so local editing state can be
 // initialized directly from the server value on mount. The component is generic

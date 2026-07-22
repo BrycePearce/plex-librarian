@@ -1,16 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Clock3, RotateCcw, XCircle } from "lucide-react";
-import { api } from "../lib/api";
-import { formatKilobytes } from "../lib/format";
-import { requireAuth } from "../lib/requireAuth";
-import { queryKeys } from "../lib/queryKeys";
-import { ErrorAlert } from "../components/ErrorAlert";
+import { api } from "../lib/api.ts";
+import { formatKilobytes } from "../lib/format.ts";
+import { requireAuth } from "../lib/requireAuth.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
   deletionOperationTitle,
-} from "./-deletionOperationState";
+} from "./-deletionOperationState.ts";
 
 export const Route = createFileRoute("/deletion-operations/$id")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),

@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, SearchX, Sparkles } from "lucide-react";
-import type { SortKey, StaleItem, StaleParams } from "../../lib/api";
-import { StaleItemRow } from "./StaleItemRow";
-import { DataSurface } from "../../components/Workspace";
+import type { SortKey, StaleItem, StaleParams } from "../../lib/api.ts";
+import { StaleItemRow } from "./StaleItemRow.tsx";
+import { DataSurface } from "../../components/Workspace.tsx";
 
 function SortTh({
   label,

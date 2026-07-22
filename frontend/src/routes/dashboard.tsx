@@ -25,18 +25,22 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api } from "../lib/api";
-import { invalidateSyncDerivedQueries } from "../lib/queryCache";
-import { queryKeys } from "../lib/queryKeys";
-import type { Library, LibraryPhase, LibrarySyncProgress, SyncLog } from "../lib/api";
-import { formatDuration, formatKilobytes, formatRelativeTime } from "../lib/format";
-import { LibrarySyncProvider, useAnyLibrarySyncing, useSyncHistory } from "../lib/useLibrarySync";
-import { useSyncStream } from "../lib/useSyncStream";
-import { useLocalStorage } from "../lib/useLocalStorage";
-import { requireAuth } from "../lib/requireAuth";
-import { DashboardSkeleton } from "../components/Skeletons";
+import { api } from "../lib/api.ts";
+import { invalidateSyncDerivedQueries } from "../lib/queryCache.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import type { Library, LibraryPhase, LibrarySyncProgress, SyncLog } from "../lib/api.ts";
+import { formatDuration, formatKilobytes, formatRelativeTime } from "../lib/format.ts";
+import {
+  LibrarySyncProvider,
+  useAnyLibrarySyncing,
+  useSyncHistory,
+} from "../lib/useLibrarySync.tsx";
+import { useSyncStream } from "../lib/useSyncStream.ts";
+import { useLocalStorage } from "../lib/useLocalStorage.ts";
+import { requireAuth } from "../lib/requireAuth.ts";
+import { DashboardSkeleton } from "../components/Skeletons.tsx";
 import "./dashboard.css";
-import { SectionHeading } from "../components/Workspace";
+import { SectionHeading } from "../components/Workspace.tsx";
 
 // Shared orchestration for the stats strip and library grid: the container just declares
 // the stagger timing, each child only needs `variants={cardVariants}` to inherit the

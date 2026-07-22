@@ -2,10 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Clock3, Globe2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isValidTimeZone, nextScheduledInstant } from "@shared/schedule";
-import { api } from "../../lib/api";
-import type { Settings } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
-import { SettingsSection } from "./SettingsSection";
+import { api } from "../../lib/api.ts";
+import type { Settings } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { SettingsSection } from "./SettingsSection.tsx";
 
 export function LoadingAutoSyncSettings() {
   return (

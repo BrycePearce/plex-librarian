@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Check, ChevronUp, Palette } from "lucide-react";
-import { THEMES, useTheme } from "../lib/theme";
-import type { Theme } from "../lib/theme";
-import { useClickOutside } from "../lib/useClickOutside";
+import { THEMES, useTheme } from "../lib/theme.ts";
+import type { Theme } from "../lib/theme.ts";
+import { useClickOutside } from "../lib/useClickOutside.ts";
 
 const THEME_LABELS: Record<Theme, string> = {
   dark: "Dark",

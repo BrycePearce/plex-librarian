@@ -14,25 +14,30 @@ import {
   Users,
   UserX,
 } from "lucide-react";
-import { api } from "../lib/api";
-import type { PendingInvitation, PlexUser } from "../lib/api";
-import { queryKeys } from "../lib/queryKeys";
-import { avatarUrl } from "../lib/avatar";
-import { formatDate, formatRelativeTime } from "../lib/format";
-import { ErrorAlert } from "../components/ErrorAlert";
-import { HistorySyncWarning } from "../components/HistorySyncWarning";
-import { DeleteResultAlert } from "../components/DeleteResultAlert";
-import { Pagination } from "../components/Pagination";
-import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog";
-import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog";
-import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog";
-import { UsersTableSkeleton } from "../components/Skeletons";
-import { EmptyState } from "../components/EmptyState";
+import { api } from "../lib/api.ts";
+import type { PendingInvitation, PlexUser } from "../lib/api.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import { avatarUrl } from "../lib/avatar.ts";
+import { formatDate, formatRelativeTime } from "../lib/format.ts";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
+import { HistorySyncWarning } from "../components/HistorySyncWarning.tsx";
+import { DeleteResultAlert } from "../components/DeleteResultAlert.tsx";
+import { Pagination } from "../components/Pagination.tsx";
+import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog.tsx";
+import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog.tsx";
+import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog.tsx";
+import { UsersTableSkeleton } from "../components/Skeletons.tsx";
+import { EmptyState } from "../components/EmptyState.tsx";
 import "../components/dataSurfaces.css";
-import { requireAuth } from "../lib/requireAuth";
-import { CollectionToolbar, DataSurface, FilterSurface, PageHeader } from "../components/Workspace";
-import { ExpandableSearch } from "../components/ExpandableSearch";
-import { CustomDaysInput } from "../components/CustomDaysInput";
+import { requireAuth } from "../lib/requireAuth.ts";
+import {
+  CollectionToolbar,
+  DataSurface,
+  FilterSurface,
+  PageHeader,
+} from "../components/Workspace.tsx";
+import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
+import { CustomDaysInput } from "../components/CustomDaysInput.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 
 const PAGE_SIZE = 100;

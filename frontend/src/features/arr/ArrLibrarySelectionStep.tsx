@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import type { api } from "../../lib/api";
+import type { api } from "../../lib/api.ts";
 
 export function ArrLibrarySelectionStep({
   type,

@@ -2,11 +2,11 @@ import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { PlugZap } from "lucide-react";
-import { api } from "../../lib/api";
-import type { ArrIntegrationSettings, LibrariesResponse } from "../../lib/api";
-import { ArrLibrarySelectionStep } from "./ArrLibrarySelectionStep";
-import { ArrUrlHelp } from "./ArrUrlHelp";
-import { companionUrl } from "./companionUrl";
+import { api } from "../../lib/api.ts";
+import type { ArrIntegrationSettings, LibrariesResponse } from "../../lib/api.ts";
+import { ArrLibrarySelectionStep } from "./ArrLibrarySelectionStep.tsx";
+import { ArrUrlHelp } from "./ArrUrlHelp.tsx";
+import { companionUrl } from "./companionUrl.ts";
 
 type ArrType = "radarr" | "sonarr";
 

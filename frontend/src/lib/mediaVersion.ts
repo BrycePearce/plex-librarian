@@ -1,4 +1,4 @@
-import type { MediaVersion } from "./api";
+import type { MediaVersion } from "./api.ts";
 
 export function needsTechnicalDetailRefresh(
   versions: readonly MediaVersion[],

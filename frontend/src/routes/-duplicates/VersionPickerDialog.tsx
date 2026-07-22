@@ -2,16 +2,19 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { api } from "../../lib/api";
-import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api";
-import { formatKilobytes } from "../../lib/format";
-import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion";
-import { VersionTechnicalInfo } from "./VersionTechnicalInfo";
+import { api } from "../../lib/api.ts";
+import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api.ts";
+import { formatKilobytes } from "../../lib/format.ts";
+import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion.ts";
+import { VersionTechnicalInfo } from "./VersionTechnicalInfo.tsx";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
-import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation";
-import { queryKeys } from "../../lib/queryKeys";
-import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary";
-import { AdvancedVersionDeletionTree, VersionDeletionServiceMarks } from "./VersionDeletionTree";
+import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import {
+  AdvancedVersionDeletionTree,
+  VersionDeletionServiceMarks,
+} from "./VersionDeletionTree.tsx";
 import {
   BasicDeletionList,
   BasicDeletionRow,
@@ -21,14 +24,14 @@ import {
   DeletionPreviewStatus,
   PlexFallbackAcknowledgement,
   useDeletionDialogCancelFocus,
-} from "../../features/mediaDeletion/DeletionDialog";
-import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation";
+} from "../../features/mediaDeletion/DeletionDialog.tsx";
+import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
 import {
   defaultVersionSelection,
   versionDestinationState,
   versionPlexFallbackRequired,
   versionSelectionSemantics,
-} from "./versionDeletionState";
+} from "./versionDeletionState.ts";
 import "../../components/dataSurfaces.css";
 
 function useDelayedFlag(

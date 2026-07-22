@@ -1,18 +1,18 @@
 import { createFileRoute, Link, useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
-import { api } from "../lib/api";
-import { formatDate, formatDuration, formatKilobytes } from "../lib/format";
-import type { Season } from "../lib/api";
-import { ShowDetailSkeleton } from "../components/Skeletons";
-import { NotSyncedYetCard } from "../components/NotSyncedYetCard";
-import { ErrorAlert } from "../components/ErrorAlert";
-import { HistorySyncWarning } from "../components/HistorySyncWarning";
-import { PosterThumb } from "../components/PosterThumb";
-import { requireAuth } from "../lib/requireAuth";
-import { DetailStat } from "../components/DetailStat";
-import { useSyncedDetail } from "../lib/useSyncedDetail";
-import { queryKeys } from "../lib/queryKeys";
-import { DataSurface } from "../components/Workspace";
+import { api } from "../lib/api.ts";
+import { formatDate, formatDuration, formatKilobytes } from "../lib/format.ts";
+import type { Season } from "../lib/api.ts";
+import { ShowDetailSkeleton } from "../components/Skeletons.tsx";
+import { NotSyncedYetCard } from "../components/NotSyncedYetCard.tsx";
+import { ErrorAlert } from "../components/ErrorAlert.tsx";
+import { HistorySyncWarning } from "../components/HistorySyncWarning.tsx";
+import { PosterThumb } from "../components/PosterThumb.tsx";
+import { requireAuth } from "../lib/requireAuth.ts";
+import { DetailStat } from "../components/DetailStat.tsx";
+import { useSyncedDetail } from "../lib/useSyncedDetail.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import { DataSurface } from "../components/Workspace.tsx";
 
 export const Route = createFileRoute("/libraries/$key/shows/$ratingKey")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),

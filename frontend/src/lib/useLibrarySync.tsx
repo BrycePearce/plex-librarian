@@ -10,9 +10,9 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { api } from "./api";
-import { queryKeys } from "./queryKeys";
-import { useSyncStream } from "./useSyncStream";
+import { api } from "./api.ts";
+import { queryKeys } from "./queryKeys.ts";
+import { useSyncStream } from "./useSyncStream.ts";
 
 // A "Sync all" run finishing many libraries in a burst (small ones like Music/Podcasts
 // often land within milliseconds of each other) would otherwise fire one invalidate per

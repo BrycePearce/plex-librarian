@@ -1,5 +1,5 @@
 import { Info } from "lucide-react";
-import { HoverPopover } from "../../components/HoverPopover";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
 
 export function InfoTip({ text }: { text: string }) {
   return (

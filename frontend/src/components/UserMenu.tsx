@@ -3,13 +3,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronUp, ExternalLink, LogOut, User } from "lucide-react";
-import { api } from "../lib/api";
-import { clearServerScopedQueries } from "../lib/queryCache";
-import { queryKeys } from "../lib/queryKeys";
-import type { AuthStatus } from "../lib/api";
-import { avatarUrl } from "../lib/avatar";
-import { useClickOutside } from "../lib/useClickOutside";
-import { useDisconnectTransition } from "../features/auth/DisconnectTransition";
+import { api } from "../lib/api.ts";
+import { clearServerScopedQueries } from "../lib/queryCache.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import type { AuthStatus } from "../lib/api.ts";
+import { avatarUrl } from "../lib/avatar.ts";
+import { useClickOutside } from "../lib/useClickOutside.ts";
+import { useDisconnectTransition } from "../features/auth/DisconnectTransition.tsx";
 
 const DISCONNECT_LOADER_MIN_MS = 350;
 

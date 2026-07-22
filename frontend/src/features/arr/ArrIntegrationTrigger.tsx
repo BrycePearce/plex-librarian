@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Server } from "lucide-react";
-import { api } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
+import { api } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 
 // Pure navigation to /settings/sonarr-radarr — the dialog itself (ArrIntegrationDialog)
 // mounts only while that route is active, so there's no local open/close state here.

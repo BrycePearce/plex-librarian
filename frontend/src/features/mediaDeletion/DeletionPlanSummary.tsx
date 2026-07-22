@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Folder, X } from "lucide-react";
-import { HoverPopover } from "../../components/HoverPopover";
-import { ServiceIcon } from "../../components/ServiceIcons";
-import type { ServiceIconName } from "../../components/ServiceIcons";
-import { InfoTip } from "./InfoTip";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
+import { ServiceIcon } from "../../components/ServiceIcons.tsx";
+import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
+import { InfoTip } from "./InfoTip.tsx";
 
 export interface DeletionDestinationOption {
   id: "arr" | "cleanup";

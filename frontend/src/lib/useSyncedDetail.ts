@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { isNotFoundError } from "./api";
-import { useSyncHistory } from "./useLibrarySync";
-import { useNotSyncedYet } from "./useNotSyncedYet";
+import { isNotFoundError } from "./api.ts";
+import { useSyncHistory } from "./useLibrarySync.tsx";
+import { useNotSyncedYet } from "./useNotSyncedYet.ts";
 
 /**
  * Detail rows may legitimately 404 while their first full sync is still importing.

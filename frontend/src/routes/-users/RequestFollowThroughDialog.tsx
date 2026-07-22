@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import { CalendarClock, CheckCircle2, Clock3, Info, PlayCircle, XCircle } from "lucide-react";
-import type { PlexUser } from "../../lib/api";
+import type { PlexUser } from "../../lib/api.ts";
 
 export function RequestFollowThroughDialog({
   dialogRef,

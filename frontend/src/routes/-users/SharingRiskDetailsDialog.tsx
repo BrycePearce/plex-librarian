@@ -8,8 +8,8 @@ import {
   ShieldAlert,
   WifiOff,
 } from "lucide-react";
-import type { PlexUser } from "../../lib/api";
-import { formatDate } from "../../lib/format";
+import type { PlexUser } from "../../lib/api.ts";
+import { formatDate } from "../../lib/format.ts";
 import "../../components/dataSurfaces.css";
 
 type MonitorStatus = "starting" | "connected" | "polling" | "disconnected";

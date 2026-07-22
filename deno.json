@@ -8,8 +8,8 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
-    "check": "deno check --sloppy-imports backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/*.ts tools/**/*.ts",
-    "test": "deno test --sloppy-imports --allow-all backend/src frontend/src",
+    "check": "deno check backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/*.ts tools/**/*.ts",
+    "test": "deno test --allow-all backend/src frontend/src",
     "precommit": "deno task fmt:check && deno task lint",
     "verify": "deno task fmt:check && deno task lint && deno task check && deno task test && deno task build",
     "hooks:install": "deno run --allow-run=git --allow-write=.githooks tools/install_hooks.ts"

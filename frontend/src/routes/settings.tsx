@@ -1,18 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { Archive, Mail, Settings as SettingsIcon, Users } from "lucide-react";
-import { PageHeader } from "../components/Workspace";
-import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger";
-import { AutoSyncSettings, LoadingAutoSyncSettings } from "../features/settings/AutoSyncSettings";
-import { DebouncedDaysInput } from "../features/settings/DebouncedDaysInput";
+import { PageHeader } from "../components/Workspace.tsx";
+import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger.tsx";
+import {
+  AutoSyncSettings,
+  LoadingAutoSyncSettings,
+} from "../features/settings/AutoSyncSettings.tsx";
+import { DebouncedDaysInput } from "../features/settings/DebouncedDaysInput.tsx";
 import {
   LoadingDaysInput,
   SettingRow,
   SettingsSection,
-} from "../features/settings/SettingsSection";
-import { api } from "../lib/api";
-import { queryKeys } from "../lib/queryKeys";
-import { requireAuth } from "../lib/requireAuth";
+} from "../features/settings/SettingsSection.tsx";
+import { api } from "../lib/api.ts";
+import { queryKeys } from "../lib/queryKeys.ts";
+import { requireAuth } from "../lib/requireAuth.ts";
 
 const MAX_INACTIVITY_DAYS = 36_500;
 const MIN_USER_ACTIVITY_RETENTION_DAYS = 30;

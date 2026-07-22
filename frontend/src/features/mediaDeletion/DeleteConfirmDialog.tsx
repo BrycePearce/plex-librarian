@@ -3,15 +3,15 @@ import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Copy } from "lucide-react";
-import type { ServiceIconName } from "../../components/ServiceIcons";
-import { api } from "../../lib/api";
-import { queryKeys } from "../../lib/queryKeys";
-import { formatKilobytes } from "../../lib/format";
-import { DestinationOptions } from "./DeletionPlanSummary";
-import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree";
-import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState";
-import type { WholeItemDeletionCandidate } from "./types";
-import { deletionImpact } from "./deletionImpact";
+import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
+import { api } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import { formatKilobytes } from "../../lib/format.ts";
+import { DestinationOptions } from "./DeletionPlanSummary.tsx";
+import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
+import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState.ts";
+import type { WholeItemDeletionCandidate } from "./types.ts";
+import { deletionImpact } from "./deletionImpact.ts";
 import {
   BasicDeletionList,
   BasicDeletionRow,
@@ -21,8 +21,8 @@ import {
   DeletionPreviewStatus,
   PlexFallbackAcknowledgement,
   useDeletionDialogCancelFocus,
-} from "./DeletionDialog";
-import { deletionConfirmationBlocked } from "./deletionConfirmation";
+} from "./DeletionDialog.tsx";
+import { deletionConfirmationBlocked } from "./deletionConfirmation.ts";
 import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({

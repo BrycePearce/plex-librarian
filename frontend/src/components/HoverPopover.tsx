@@ -35,9 +35,11 @@ export function placePopover(
 export function HoverPopover({
   content,
   children,
+  openOnClick = false,
 }: {
   content: ReactNode;
   children: ReactNode;
+  openOnClick?: boolean;
 }) {
   const id = useId();
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -80,6 +82,15 @@ export function HoverPopover({
         onPointerLeave={() => setOpen(false)}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
+        onClick={openOnClick
+          ? (event) => {
+            event.stopPropagation();
+            setOpen(true);
+          }
+          : undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+        }}
       >
         {children}
       </span>

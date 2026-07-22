@@ -1,9 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
 import { ListPlus } from "lucide-react";
 import { useState } from "react";
-import { api } from "../../lib/api";
-import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api";
-import { suggestedSeerrUrl } from "./seerrUrl";
+import { api } from "../../lib/api.ts";
+import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api.ts";
+import { suggestedSeerrUrl } from "./seerrUrl.ts";
 
 export function SeerrConnectionWizard({
   instance,

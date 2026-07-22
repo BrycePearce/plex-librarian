@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { Trash2 } from "lucide-react";
-import { formatKilobytes } from "../../lib/format";
+import { formatKilobytes } from "../../lib/format.ts";
 
 export function SelectionActionBar({
   count,

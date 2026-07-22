@@ -1,15 +1,10 @@
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { ChevronRight } from "lucide-react";
-import type { DuplicateGroup } from "../../lib/api";
-import { formatKilobytes } from "../../lib/format";
-import { PosterThumb } from "../../components/PosterThumb";
-import { HoverPopover } from "../../components/HoverPopover";
-import {
-  comparisonIcon,
-  comparisonToneClass,
-  reclaimableKilobytes,
-  versionQualityLabels,
-} from "./duplicatePresentation";
+import type { DuplicateGroup } from "../../lib/api.ts";
+import { formatKilobytes } from "../../lib/format.ts";
+import { PosterThumb } from "../../components/PosterThumb.tsx";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
+import { reclaimableKilobytes, versionQualityLabels } from "./duplicatePresentation.ts";
 import "../../components/dataSurfaces.css";
 
 export function DuplicateGroupRow({
@@ -25,7 +20,6 @@ export function DuplicateGroupRow({
     : 0;
   const quality = versionQualityLabels(item.versions);
   const comparison = compareDuplicateVersions(item.versions);
-  const ComparisonIcon = comparisonIcon(comparison.kind);
   const itemLabel = item.mediaType === "movie"
     ? item.title
     : `${item.showTitle}, season ${item.seasonIndex}, episode ${item.episodeIndex}`;
@@ -73,47 +67,48 @@ export function DuplicateGroupRow({
         </div>
       </td>
       <td className="text-sm">
-        <div className="flex items-center gap-2.5">
-          <span className="duplicates-version-stack" aria-hidden="true">
-            {Array.from({ length: Math.min(3, item.versions.length) }).map(
-              (_, index) => <span key={index} />,
-            )}
-          </span>
-          <div>
-            <div className="duplicates-version-count flex items-center gap-1.5">
-              <span>{item.versions.length} versions</span>
-              <HoverPopover
-                content={
-                  <>
-                    <div className="font-semibold">{comparison.label}</div>
-                    <div className="mt-0.5 opacity-70">
-                      {comparison.reasons.join(" · ")}
-                    </div>
-                  </>
-                }
-              >
-                <ComparisonIcon
-                  className={`size-3.5 ${comparisonToneClass(comparison.kind)}`}
-                  aria-label={comparison.label}
-                />
-              </HoverPopover>
-            </div>
-            {quality.labels.length > 0 && (
-              <div className="duplicates-quality">
-                {quality.labels.map((label) => (
-                  <span key={label} className="duplicates-quality-chip">
-                    {label}
-                  </span>
-                ))}
-                {quality.remaining > 0 && (
-                  <span className="duplicates-quality-chip">
-                    +{quality.remaining}
-                  </span>
-                )}
+        <HoverPopover
+          openOnClick
+          content={
+            <>
+              <div className="font-semibold">{comparison.label}</div>
+              <div className="mt-0.5 opacity-70">
+                {comparison.reasons.join(" · ")}
               </div>
-            )}
-          </div>
-        </div>
+            </>
+          }
+        >
+          <button
+            type="button"
+            className="duplicates-version-summary"
+            aria-label={`${comparison.label}: ${comparison.reasons.join(", ")}`}
+          >
+            <span className="duplicates-version-stack" aria-hidden="true">
+              {Array.from({ length: Math.min(3, item.versions.length) }).map(
+                (_, index) => <span key={index} />,
+              )}
+            </span>
+            <div>
+              <div className="duplicates-version-count">
+                {item.versions.length} versions
+              </div>
+              {quality.labels.length > 0 && (
+                <div className="duplicates-quality">
+                  {quality.labels.map((label) => (
+                    <span key={label} className="duplicates-quality-chip">
+                      {label}
+                    </span>
+                  ))}
+                  {quality.remaining > 0 && (
+                    <span className="duplicates-quality-chip">
+                      +{quality.remaining}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </button>
+        </HoverPopover>
       </td>
       <td className="text-sm font-mono duplicates-storage">
         <div className="duplicates-storage-values">

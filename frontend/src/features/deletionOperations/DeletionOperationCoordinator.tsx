@@ -4,13 +4,13 @@ import type { QueryKey } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock3, TriangleAlert, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { api } from "../../lib/api";
-import { formatKilobytes } from "../../lib/format";
-import { queryKeys } from "../../lib/queryKeys";
+import { api } from "../../lib/api.ts";
+import { formatKilobytes } from "../../lib/format.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
-} from "../../routes/-deletionOperationState";
+} from "../../routes/-deletionOperationState.ts";
 
 interface TrackedDeletion {
   id: string;

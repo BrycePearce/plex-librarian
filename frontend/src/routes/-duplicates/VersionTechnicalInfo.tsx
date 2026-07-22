@@ -1,7 +1,7 @@
 import { Info } from "lucide-react";
 import type { MediaStreamSummary, MediaVersion } from "@shared/types";
-import { HoverPopover } from "../../components/HoverPopover";
-import { formatDuration, formatKilobytes } from "../../lib/format";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
+import { formatDuration, formatKilobytes } from "../../lib/format.ts";
 
 function text(value: string | null): string | null {
   const trimmed = value?.trim();

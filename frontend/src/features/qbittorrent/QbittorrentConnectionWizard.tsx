@@ -1,9 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Download } from "lucide-react";
-import { api } from "../../lib/api";
-import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
-import { suggestedQbittorrentUrl } from "./qbittorrentUrl";
+import { api } from "../../lib/api.ts";
+import type { ArrInstance, QbittorrentInstance } from "../../lib/api.ts";
+import { suggestedQbittorrentUrl } from "./qbittorrentUrl.ts";
 
 interface FormState {
   name: string;

@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { api } from "./api";
-import type { LibraryPhase, LibrarySyncProgress } from "./api";
+import { api } from "./api.ts";
+import type { LibraryPhase, LibrarySyncProgress } from "./api.ts";
 
 export type SyncStreamResult = {
   progress: LibrarySyncProgress[] | null;

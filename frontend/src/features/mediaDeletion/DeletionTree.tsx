@@ -5,14 +5,14 @@ import type {
   ArrCleanupTarget,
   DownloadCleanupJob,
   DownloadCleanupPreviewItem,
-} from "../../lib/api";
-import { formatDate, formatKilobytes } from "../../lib/format";
-import { ServiceIcon } from "../../components/ServiceIcons";
-import type { ServiceIconName } from "../../components/ServiceIcons";
-import { InfoTip } from "./InfoTip";
-import { PlannedServiceExceptions } from "./DeletionPlanSummary";
-import { plexPreviewPathEntries } from "./plexPreviewPaths";
-import type { WholeItemDeletionCandidate } from "./types";
+} from "../../lib/api.ts";
+import { formatDate, formatKilobytes } from "../../lib/format.ts";
+import { ServiceIcon } from "../../components/ServiceIcons.tsx";
+import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
+import { InfoTip } from "./InfoTip.tsx";
+import { PlannedServiceExceptions } from "./DeletionPlanSummary.tsx";
+import { plexPreviewPathEntries } from "./plexPreviewPaths.ts";
+import type { WholeItemDeletionCandidate } from "./types.ts";
 
 interface TreeFile {
   path: string;
