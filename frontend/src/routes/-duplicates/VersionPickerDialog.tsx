@@ -26,6 +26,7 @@ import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deleti
 import {
   defaultVersionSelection,
   versionDestinationState,
+  versionPlexFallbackRequired,
   versionSelectionSemantics,
 } from "./versionDeletionState";
 import "../../components/dataSurfaces.css";
@@ -49,7 +50,6 @@ export function VersionPickerDialog({
     cleanupDownloads: boolean;
     arrMediaIds: number[];
     cleanupMediaIds: number[];
-    unmonitorFromArr: boolean;
   }) => void;
   onCancel: () => void;
 }) {
@@ -121,8 +121,6 @@ export function VersionPickerDialog({
     mediaIds.join("|"),
     preview.data?.arrConfigured,
     preview.data?.arrStatus,
-    preview.data?.arrUnmonitorStatus,
-    preview.data?.arrUnmonitorNeeded,
   ]);
 
   if (!item) {
@@ -153,7 +151,6 @@ export function VersionPickerDialog({
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
   const arrDeleteAvailable = destinations.arrDeleteAvailable;
-  const arrAction = destinations.arrAction;
   const cleanupAvailable = destinations.cleanupAvailable;
   const arrOptionVisible = destinations.arrVisible;
   const cleanupOptionVisible = destinations.cleanupVisible;
@@ -172,8 +169,7 @@ export function VersionPickerDialog({
   );
   const comparison = compareDuplicateVersions(displayVersions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
-  const fallbackRequired = preview.data?.arrConfigured === true &&
-    !arrAvailable;
+  const fallbackRequired = versionPlexFallbackRequired(preview.data);
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: checkedCount > 0,
@@ -187,7 +183,6 @@ export function VersionPickerDialog({
       mediaIds.includes(version.mediaId) && version.arrStatus === "resolved"
     ).map((version) => version.mediaId) ?? []
     : [];
-  const unmonitorFromArr = deleteFromArr && arrAction === "unmonitor";
   const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable
     ? preview.data?.versions.filter((version) =>
       mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
@@ -306,12 +301,9 @@ export function VersionPickerDialog({
               ? [{
                 id: "arr" as const,
                 service: arrService,
-                label: arrAction === "unmonitor" ? `Unmonitor in ${arrLabel}` : arrLabel,
-                info: arrAction === "unmonitor"
-                  ? `Keeps the ${arrLabel} record and files, but disables monitoring for this ${
-                    item.mediaType === "movie" ? "movie" : "episode"
-                  }.`
-                  : `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
+                label: arrLabel,
+                info:
+                  `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
                 checked: deleteFromArr,
                 disabled: pending,
                 warning: false,
@@ -386,7 +378,6 @@ export function VersionPickerDialog({
               cleanupDownloads,
             arrMediaIds,
             cleanupMediaIds,
-            unmonitorFromArr,
           })}
       />
     </DeletionModalShell>

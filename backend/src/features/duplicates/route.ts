@@ -164,10 +164,6 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
       resolvedCleanup: null,
       cleanupConfigured: downloadTargets.length > 0,
       allowPartialCoverage: true,
-      episodeIdentity: {
-        seasonNumber: target.seasonIndex,
-        episodeNumber: target.episodeIndex,
-      },
     });
     return c.json(plan.preview satisfies VersionDeletionPreviewResponse);
   } catch (error) {

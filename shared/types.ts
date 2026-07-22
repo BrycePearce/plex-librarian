@@ -411,10 +411,7 @@ export interface VersionDeletionPreviewResponse {
   arrStatus: 'resolved' | 'unavailable' | 'error';
   arrReason?: string;
   arrTargets: ArrCleanupTarget[];
-  arrUnmonitorStatus: 'resolved' | 'unavailable' | 'error';
-  arrUnmonitorNeeded: boolean;
-  arrUnmonitorReason?: string;
-  arrUnmonitorTargets: ArrCleanupTarget[];
+  arrSelectionMatched: boolean;
   cleanupConfigured: boolean;
   cleanupStatus: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;

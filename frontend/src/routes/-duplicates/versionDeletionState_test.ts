@@ -6,6 +6,7 @@ import {
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
   versionDestinationState,
+  versionPlexFallbackRequired,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 
@@ -66,9 +67,7 @@ function preview(
     arrConfigured: false,
     arrStatus: "unavailable",
     arrTargets: [],
-    arrUnmonitorStatus: "unavailable",
-    arrUnmonitorNeeded: false,
-    arrUnmonitorTargets: [],
+    arrSelectionMatched: false,
     cleanupConfigured: false,
     cleanupStatus: "unavailable",
     downloadJobs: [],
@@ -108,8 +107,6 @@ Deno.test("unconfigured destinations stay hidden", () => {
     arrVisible: false,
     arrAvailable: false,
     arrDeleteAvailable: false,
-    arrUnmonitorAvailable: false,
-    arrAction: "none",
     arrSelectedByDefault: false,
     cleanupAvailable: false,
     cleanupVisible: false,
@@ -123,8 +120,6 @@ Deno.test("configured unavailable Arr stays hidden when it has no safe action", 
       arrVisible: false,
       arrAvailable: false,
       arrDeleteAvailable: false,
-      arrUnmonitorAvailable: false,
-      arrAction: "none",
       arrSelectedByDefault: false,
       cleanupAvailable: false,
       cleanupVisible: false,
@@ -132,52 +127,37 @@ Deno.test("configured unavailable Arr stays hidden when it has no safe action", 
   );
 });
 
-Deno.test("Arr destination falls back to unmonitor when deletion is unsafe", () => {
-  const unmonitorPreview = preview({
+Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => {
+  const unsafePreview = preview({
     arrConfigured: true,
-    arrUnmonitorStatus: "resolved",
-    arrUnmonitorNeeded: true,
+    arrSelectionMatched: true,
   });
   assertEquals(
-    versionDestinationState(unmonitorPreview),
-    {
-      arrVisible: true,
-      arrAvailable: true,
-      arrDeleteAvailable: false,
-      arrUnmonitorAvailable: true,
-      arrAction: "unmonitor",
-      arrSelectedByDefault: true,
-      cleanupAvailable: false,
-      cleanupVisible: false,
-    },
-  );
-  assertEquals(
-    versionDeletionPresentation(unmonitorPreview, true, false).services,
-    ["plex", "radarr"],
-  );
-  assertEquals(
-    versionArrDeletionActive(true, unmonitorPreview.arrStatus),
-    false,
-  );
-});
-
-Deno.test("an already-unmonitored Arr item needs no destination or fallback warning", () => {
-  assertEquals(
-    versionDestinationState(preview({
-      arrConfigured: true,
-      arrUnmonitorStatus: "resolved",
-      arrUnmonitorNeeded: false,
-    })),
+    versionDestinationState(unsafePreview),
     {
       arrVisible: false,
-      arrAvailable: true,
+      arrAvailable: false,
       arrDeleteAvailable: false,
-      arrUnmonitorAvailable: false,
-      arrAction: "none",
       arrSelectedByDefault: false,
       cleanupAvailable: false,
       cleanupVisible: false,
     },
+  );
+  assertEquals(
+    versionDeletionPresentation(unsafePreview, true, false).services,
+    ["plex"],
+  );
+  assertEquals(
+    versionArrDeletionActive(true, unsafePreview.arrStatus),
+    false,
+  );
+  assertEquals(versionPlexFallbackRequired(unsafePreview), true);
+});
+
+Deno.test("an unmanaged Plex copy needs no Arr fallback acknowledgement", () => {
+  assertEquals(
+    versionPlexFallbackRequired(preview({ arrConfigured: true })),
+    false,
   );
 });
 

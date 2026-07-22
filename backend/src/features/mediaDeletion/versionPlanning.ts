@@ -4,7 +4,6 @@ import type {
   VersionDeletionPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
-import type { ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
@@ -17,18 +16,9 @@ export interface EligibleVersionArrTarget {
   preview: ArrCleanupTarget;
 }
 
-export interface EligibleVersionArrUnmonitorTarget {
-  target: ArrDeleteTarget;
-  recordId: number;
-  monitorTargetId: number;
-  alreadyUnmonitored: boolean;
-  preview: ArrCleanupTarget;
-}
-
 export interface VersionDeletionPlan {
   preview: VersionDeletionPreviewResponse;
   eligibleArrTargets: EligibleVersionArrTarget[];
-  eligibleArrUnmonitorTargets: EligibleVersionArrUnmonitorTarget[];
   cleanup: ResolvedCleanupItem | null;
 }
 
@@ -134,7 +124,6 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured,
   attemptedArrInstanceIds = new Set<number>(),
   allowPartialCoverage = false,
-  episodeIdentity,
 }: {
   mediaType: 'movie' | 'episode';
   item: CoordinatedDeleteItem;
@@ -145,7 +134,6 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured: boolean;
   attemptedArrInstanceIds?: ReadonlySet<number>;
   allowPartialCoverage?: boolean;
-  episodeIdentity?: { seasonNumber: number; episodeNumber: number };
 }): Promise<VersionDeletionPlan> {
   const versions = publicVersionPreviews(liveVersions, selectedMediaIds);
   const selectedPaths = new Set(
@@ -161,47 +149,10 @@ export async function buildVersionDeletionPlan({
     versions.every((version) => version.status === 'resolved' && !version.truncated);
 
   const eligibleArrTargets: EligibleVersionArrTarget[] = [];
-  const eligibleArrUnmonitorTargets: EligibleVersionArrUnmonitorTarget[] = [];
   const arrErrors: string[] = [];
   const arrUnsafeReasons: string[] = [];
   const arrCoveredPaths = new Set<string>();
-  const recordsByInstance = new Map<number, ArrMediaRecord | null>();
-  const externalId = mediaType === 'movie' ? item.tmdbId : item.tvdbId;
-
-  if (externalId !== null) {
-    for (const target of arrTargets) {
-      try {
-        const record = await target.client.lookup(externalId);
-        recordsByInstance.set(target.instanceId, record);
-        if (!record) continue;
-        const monitorTarget = await target.client.monitorTarget(
-          record.id,
-          mediaType === 'episode' ? episodeIdentity : undefined,
-        );
-        if (!monitorTarget) continue;
-        eligibleArrUnmonitorTargets.push({
-          target,
-          recordId: record.id,
-          monitorTargetId: monitorTarget.id,
-          alreadyUnmonitored: !monitorTarget.monitored,
-          preview: {
-            instanceName: target.instanceName,
-            type: target.client.type,
-            title: record.title,
-            path: record.path,
-            seasons: record.seasons,
-            mediaFiles: [],
-            extraFiles: [],
-          },
-        });
-      } catch (error) {
-        recordsByInstance.set(target.instanceId, null);
-        arrErrors.push(
-          `${target.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
-        );
-      }
-    }
-  }
+  let arrSelectionMatched = false;
 
   if (mediaType === 'episode') {
     arrUnsafeReasons.push(
@@ -218,9 +169,7 @@ export async function buildVersionDeletionPlan({
   } else {
     for (const target of arrTargets) {
       try {
-        const record = recordsByInstance.has(target.instanceId)
-          ? recordsByInstance.get(target.instanceId)!
-          : await target.client.lookup(item.tmdbId);
+        const record = await target.client.lookup(item.tmdbId);
         if (!record) {
           if (attemptedArrInstanceIds.has(target.instanceId)) {
             const preview = {
@@ -262,6 +211,7 @@ export async function buildVersionDeletionPlan({
         });
         const matchesSelected = managedPaths.some((path) => selectedPaths.has(path));
         if (!matchesSelected) continue;
+        arrSelectionMatched = true;
         const hasNonSelectedManagedPath = managedPaths.some((path) => !selectedPaths.has(path));
         const hasNonSelectedPlexPathInFolder = unselectedPlexPaths.some((path) =>
           pathIsWithin(path, record.path!)
@@ -313,20 +263,6 @@ export async function buildVersionDeletionPlan({
     : arrStatus === 'unavailable'
     ? arrUnsafeReasons[0] ??
       'No Radarr record could be matched exactly to only the selected Plex version paths'
-    : undefined;
-  const arrUnmonitorStatus = eligibleArrUnmonitorTargets.length > 0
-    ? 'resolved' as const
-    : arrErrors.length > 0
-    ? 'error' as const
-    : 'unavailable' as const;
-  const arrUnmonitorReason = arrUnmonitorStatus === 'error'
-    ? arrErrors.join('; ')
-    : arrUnmonitorStatus === 'unavailable'
-    ? externalId === null
-      ? `No ${mediaType === 'movie' ? 'TMDB' : 'TVDB'} ID is available for Arr lookup`
-      : mediaType === 'episode' && !episodeIdentity
-      ? 'Episode identity is unavailable for Sonarr monitoring'
-      : `No matching ${mediaType === 'movie' ? 'Radarr movie' : 'Sonarr episode'} was found`
     : undefined;
   const cleanupStatus = cleanup
     ? 'resolved' as const
@@ -396,7 +332,6 @@ export async function buildVersionDeletionPlan({
 
   return {
     eligibleArrTargets,
-    eligibleArrUnmonitorTargets,
     cleanup,
     preview: {
       mediaType,
@@ -406,10 +341,7 @@ export async function buildVersionDeletionPlan({
       arrStatus,
       arrReason,
       arrTargets: eligibleArrTargets.map((entry) => entry.preview),
-      arrUnmonitorStatus,
-      arrUnmonitorNeeded: eligibleArrUnmonitorTargets.some((entry) => !entry.alreadyUnmonitored),
-      arrUnmonitorReason,
-      arrUnmonitorTargets: eligibleArrUnmonitorTargets.map((entry) => entry.preview),
+      arrSelectionMatched,
       cleanupConfigured,
       cleanupStatus,
       cleanupReason,

@@ -28,9 +28,7 @@ const live = new Map<string, PlexRawMetadata>();
 let loseDeleteResponse = false;
 let coordinatedRatingKey: string | null = null;
 let arrPresent = false;
-let arrMonitored = true;
 let arrDeleteCount = 0;
-let arrUnmonitorCount = 0;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
 const torrentHash = 'a'.repeat(40);
@@ -96,12 +94,10 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         id: 7,
         title: 'Coordinated movie',
         path: '/library/Coordinated',
-        monitored: arrMonitored,
+        monitored: true,
       }));
     }
     if (url.pathname === '/api/v3/movie/7' && init?.method === 'PUT') {
-      arrMonitored = false;
-      arrUnmonitorCount++;
       return Promise.resolve(Response.json({ id: 7, monitored: false }));
     }
   }
@@ -182,9 +178,7 @@ function reset(): void {
   loseDeleteResponse = false;
   coordinatedRatingKey = null;
   arrPresent = false;
-  arrMonitored = true;
   arrDeleteCount = 0;
-  arrUnmonitorCount = 0;
   qbitPresent = false;
   qbitDeleteCount = 0;
   wholeDeleteOrder.length = 0;
@@ -862,63 +856,6 @@ Deno.test('mixed version batch waits for a Plex-only retry before running Radarr
     ),
     0,
   );
-});
-
-Deno.test('unmonitor fallback keeps the Radarr record while deleting one Plex version', async () => {
-  reset();
-  configureRadarr();
-  addMovie('unmonitor-version', [11, 12], 10);
-  arrPresent = true;
-
-  const result = await enqueueDeletionOperation({
-    clientRequestId: crypto.randomUUID(),
-    serverId: 1,
-    libraryKey: 'movies',
-    kind: 'movie_version',
-    payload: {
-      ratingKey: 'unmonitor-version',
-      mediaIds: [11],
-      arrMediaIds: [],
-      cleanupMediaIds: [],
-      unmonitorFromArr: true,
-    },
-    targets: [{
-      kind: 'movie_version',
-      key: 'unmonitor-version:11',
-      title: 'Movie unmonitor-version',
-      logicalSize: 50,
-      snapshot: {
-        machineIdentifier: 'machine-1',
-        serverUrl: 'http://plex',
-        libraryKey: 'movies',
-        ratingKey: 'unmonitor-version',
-        mediaId: 11,
-        selectedMediaIds: [11],
-        title: 'Movie unmonitor-version',
-        type: 'movie',
-        tmdbId: 10,
-        tvdbId: null,
-        fileSize: 50,
-        videoResolution: null,
-        bitrate: null,
-        videoCodec: null,
-        container: null,
-        deleteFromArr: false,
-        unmonitorFromArr: true,
-        cleanupDownloads: false,
-      },
-      reservation: { mediaKind: 'movie', mediaId: 11, ratingKey: 'unmonitor-version' },
-    }],
-  });
-
-  await settle();
-
-  assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'completed');
-  assertEquals(arrPresent, true);
-  assertEquals(arrMonitored, false);
-  assertEquals(arrDeleteCount, 0);
-  assertEquals(arrUnmonitorCount, 1);
-  assertEquals(live.get('unmonitor-version')?.Media?.map((media) => media.id), [12]);
 });
 
 Deno.test('lost destructive response retains projection and reservation until replay confirms absence', async () => {

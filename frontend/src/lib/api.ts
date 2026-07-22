@@ -292,7 +292,6 @@ export const api = {
       mediaIds: number[],
       arrMediaIds: number[],
       cleanupMediaIds: number[],
-      unmonitorFromArr: boolean,
     ) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media`,
@@ -303,7 +302,6 @@ export const api = {
             mediaIds,
             arrMediaIds,
             cleanupMediaIds,
-            unmonitorFromArr,
           }),
         },
       ),
@@ -322,7 +320,6 @@ export const api = {
     deleteEpisodeMediaVersions: (
       episodeRatingKey: string,
       mediaIds: number[],
-      unmonitorFromArr: boolean,
     ) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media`,
@@ -331,7 +328,6 @@ export const api = {
           body: JSON.stringify({
             clientRequestId: uuidv4(),
             mediaIds,
-            unmonitorFromArr,
           }),
         },
       ),

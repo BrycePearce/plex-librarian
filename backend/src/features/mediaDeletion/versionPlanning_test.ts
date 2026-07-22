@@ -62,6 +62,25 @@ Deno.test('version plan rejects Radarr when an unselected Plex version shares it
 
   assertEquals(plan.preview.arrStatus, 'unavailable');
   assertStringIncludes(plan.preview.arrReason ?? '', 'unselected version');
+  assertEquals(plan.preview.arrSelectionMatched, true);
+});
+
+Deno.test('version plan reports no Radarr match for an unmanaged Plex copy', async () => {
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/unmanaged/Movie/copy.mkv'], truncated: false },
+      { mediaId: 2, paths: ['/movies/Movie/managed.mkv'], truncated: false },
+    ],
+    arrTargets: [target(['managed.mkv'])],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+  });
+
+  assertEquals(plan.preview.arrStatus, 'unavailable');
+  assertEquals(plan.preview.arrSelectionMatched, false);
 });
 
 Deno.test('version plan reports Radarr applicability per selected version in a mixed batch', async () => {
@@ -97,11 +116,10 @@ Deno.test('episode version plan never authorizes series-wide Sonarr deletion', a
     arrTargets: [target(['Episode.mkv'])],
     resolvedCleanup: null,
     cleanupConfigured: true,
-    episodeIdentity: { seasonNumber: 1, episodeNumber: 1 },
   });
 
   assertEquals(plan.preview.arrStatus, 'unavailable');
   assertStringIncludes(plan.preview.arrReason ?? '', 'series-wide');
-  assertEquals(plan.preview.arrUnmonitorStatus, 'resolved');
+  assertEquals(plan.preview.arrSelectionMatched, false);
   assertEquals(plan.preview.cleanupStatus, 'unavailable');
 });

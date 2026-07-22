@@ -44,28 +44,26 @@ export function versionDestinationState(
   preview: VersionDeletionPreviewResponse | undefined,
 ) {
   const arrDeleteAvailable = preview?.arrStatus === "resolved";
-  const arrUnmonitorResolved = preview?.arrUnmonitorStatus === "resolved";
-  const arrUnmonitorAvailable = arrUnmonitorResolved &&
-    preview?.arrUnmonitorNeeded === true;
-  const arrAvailable = arrDeleteAvailable || arrUnmonitorResolved;
-  const arrVisible = preview?.arrConfigured === true &&
-    (arrDeleteAvailable || arrUnmonitorAvailable);
+  const arrAvailable = arrDeleteAvailable;
+  const arrVisible = preview?.arrConfigured === true && arrDeleteAvailable;
   const cleanupAvailable = preview?.cleanupStatus === "resolved";
   return {
     arrVisible,
     arrAvailable,
     arrDeleteAvailable,
-    arrUnmonitorAvailable,
-    arrAction: arrDeleteAvailable
-      ? "delete" as const
-      : arrUnmonitorAvailable
-      ? "unmonitor" as const
-      : "none" as const,
     arrSelectedByDefault: arrVisible,
     cleanupAvailable,
     cleanupVisible: arrDeleteAvailable && preview?.cleanupConfigured === true &&
       cleanupAvailable,
   };
+}
+
+export function versionPlexFallbackRequired(
+  preview: VersionDeletionPreviewResponse | undefined,
+): boolean {
+  if (preview?.arrConfigured !== true || preview.arrStatus === "resolved") return false;
+  return preview.arrStatus === "error" || preview.arrSelectionMatched ||
+    preview.mediaType === "episode";
 }
 
 export function versionDeletionPresentation(
@@ -74,8 +72,6 @@ export function versionDeletionPresentation(
   cleanupDownloads: boolean,
 ) {
   const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
-  const arrUnmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
-    preview?.arrUnmonitorStatus === "resolved" && preview.arrUnmonitorNeeded;
   const downloadJobs = deleteFromArr && cleanupDownloads &&
       preview?.cleanupStatus === "resolved"
     ? preview.downloadJobs
@@ -87,7 +83,7 @@ export function versionDeletionPresentation(
   return {
     services: [
       "plex" as const,
-      ...(arrTargets.length > 0 || arrUnmonitorActive ? [preview!.arrService] : []),
+      ...(arrTargets.length > 0 ? [preview!.arrService] : []),
       ...(downloadJobs.length > 0 ? ["qbittorrent" as const] : []),
     ],
     arrTargets,

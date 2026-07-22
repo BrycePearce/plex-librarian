@@ -159,11 +159,12 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         ? mediaIds
         : [],
     );
-    const unmonitorFromArr = body.unmonitorFromArr === true;
+    if (body.unmonitorFromArr === true) {
+      return c.json({ error: 'unmonitorFromArr is no longer supported for media versions' }, 400);
+    }
     if (
       [...arrMediaIds, ...cleanupMediaIds].some((id) => !mediaIds.includes(id)) ||
-      [...cleanupMediaIds].some((id) => !arrMediaIds.has(id)) ||
-      (unmonitorFromArr && arrMediaIds.size > 0)
+      [...cleanupMediaIds].some((id) => !arrMediaIds.has(id))
     ) {
       return c.json({ error: 'invalid deletion destinations' }, 400);
     }
@@ -172,7 +173,6 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       mediaIds,
       arrMediaIds: [...arrMediaIds].sort((a, b) => a - b),
       cleanupMediaIds: [...cleanupMediaIds].sort((a, b) => a - b),
-      unmonitorFromArr,
     };
     const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
     if (repeated) return c.json(repeated, 202);
@@ -300,7 +300,6 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           seasonIndex: target.seasonIndex,
           episodeIndex: target.episodeIndex,
           deleteFromArr: arrMediaIds.has(target.mediaId),
-          unmonitorFromArr: unmonitorFromArr && target.mediaId === mediaIds[0],
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
           selectedMediaIds: [target.mediaId],
         },

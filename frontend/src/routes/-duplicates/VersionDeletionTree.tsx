@@ -53,8 +53,6 @@ export function VersionDeletionServiceMarks({
     : "unavailable";
   const arrReason = versionPreview?.arrReason ?? preview?.arrReason;
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
-  const unmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
-    preview?.arrUnmonitorStatus === "resolved" && preview.arrUnmonitorNeeded;
   const arrActive = versionArrDeletionActive(deleteFromArr, arrStatus);
   const cleanupResolved = cleanupDownloads && arrStatus === "resolved" &&
     cleanupStatus === "resolved";
@@ -84,8 +82,8 @@ export function VersionDeletionServiceMarks({
       <PlannedServiceExceptions
         deleteFromArr={deleteFromArr}
         arrService={arrService}
-        arrStatus={unmonitorActive ? "resolved" : arrStatus}
-        arrReason={unmonitorActive ? undefined : arrReason}
+        arrStatus={arrStatus}
+        arrReason={arrReason}
         downloadJobCount={qbitActive ? 1 : 0}
         hardlinkFileCount={hardlinkActive ? 1 : 0}
         downloadCleanupResuming={downloadCleanupResuming}
