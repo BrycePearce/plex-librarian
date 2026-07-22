@@ -10,7 +10,7 @@ import {
   downloadJobRoot,
   PathTreeRoot,
 } from "../../features/mediaDeletion/DeletionTree";
-import { versionDeletionPresentation } from "./versionDeletionState";
+import { versionArrDeletionActive, versionDeletionPresentation } from "./versionDeletionState";
 
 interface SelectedVersion {
   mediaId: number;
@@ -55,7 +55,7 @@ export function VersionDeletionServiceMarks({
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
   const unmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
     preview?.arrUnmonitorStatus === "resolved" && preview.arrUnmonitorNeeded;
-  const arrActive = deleteFromArr && (arrStatus === "resolved" || unmonitorActive);
+  const arrActive = versionArrDeletionActive(deleteFromArr, arrStatus);
   const cleanupResolved = cleanupDownloads && arrStatus === "resolved" &&
     cleanupStatus === "resolved";
   const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
@@ -72,9 +72,7 @@ export function VersionDeletionServiceMarks({
       {arrActive && (
         <ActiveServiceMark
           service={arrService}
-          label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} ${
-            unmonitorActive ? "unmonitor" : "deletion"
-          }`}
+          label={`${arrService === "sonarr" ? "Sonarr" : "Radarr"} deletion`}
         />
       )}
       {qbitActive && (

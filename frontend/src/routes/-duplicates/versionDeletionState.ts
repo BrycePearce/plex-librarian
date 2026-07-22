@@ -98,3 +98,10 @@ export function versionDeletionPresentation(
     showPlexPaths: true,
   };
 }
+
+export function versionArrDeletionActive(
+  deleteFromArr: boolean,
+  arrStatus: "resolved" | "unavailable" | "error" | undefined,
+): boolean {
+  return deleteFromArr && arrStatus === "resolved";
+}

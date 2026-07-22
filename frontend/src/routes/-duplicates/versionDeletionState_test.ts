@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 import {
   defaultVersionSelection,
+  versionArrDeletionActive,
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
   versionDestinationState,
@@ -153,6 +154,10 @@ Deno.test("Arr destination falls back to unmonitor when deletion is unsafe", () 
   assertEquals(
     versionDeletionPresentation(unmonitorPreview, true, false).services,
     ["plex", "radarr"],
+  );
+  assertEquals(
+    versionArrDeletionActive(true, unmonitorPreview.arrStatus),
+    false,
   );
 });
 
