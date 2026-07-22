@@ -260,4 +260,11 @@ hooks once after cloning:
 deno task hooks:install
 ```
 
+## Development transparency
+
+AI-assisted development tools are used in this project. AI-assisted changes
+are reviewed, tested, and maintained under the same standards as other
+contributions. Project maintainers remain responsible for the resulting code,
+documentation, and releases.
+
 Plex Librarian is open-source software available under the [MIT License](LICENSE).
