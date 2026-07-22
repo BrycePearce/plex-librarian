@@ -36,6 +36,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'media_version_reservations_rating_idx',
         'qbittorrent_instances',
         'qbittorrent_instances_server_url_unique',
+        'seerr_instances',
+        'seerr_instances_server_url_unique',
         'torrent_delete_attempts',
         'user_play_observations_session_idx'
       ) ORDER BY name
@@ -59,6 +61,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'media_version_reservations_rating_idx',
         'qbittorrent_instances',
         'qbittorrent_instances_server_url_unique',
+        'seerr_instances',
+        'seerr_instances_server_url_unique',
         'torrent_delete_attempts',
         'user_play_observations_session_idx',
       ],

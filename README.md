@@ -27,13 +27,13 @@ terabytes of storage in as few clicks as possible, using sensible defaults.
 
 ## What it does
 
-| | Capability | What you get |
-| --- | --- | --- |
-| 🧹 | **Stale media discovery** | Find unwatched or long-unwatched movies, shows, and music; filter and sort by age, size, play count, and more. |
-| 💾 | **Duplicate detection** | Surface duplicate movie and episode versions and see how much space each copy consumes. |
-| 👥 | **User insights** | Review viewing activity, inactive accounts, and signals that may indicate account sharing. |
-| 🔗 | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported. |
-| 🌱 | **Hardlink & torrent cleanup** | Delete verified qBittorrent files and the library hardlink created by an Arr import in one guided workflow. Plex Librarian can also clean up orphaned download-side hardlinks after the torrent is gone. |
+|     | Capability                       | What you get                                                                                                                                                                                             |
+| --- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, and music; filter and sort by age, size, play count, and more.                                                                                           |
+| 💾  | **Duplicate detection**          | Surface duplicate movie and episode versions and see how much space each copy consumes.                                                                                                                  |
+| 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing.                                                                                                               |
+| 🔗  | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported.                                                                                   |
+| 🌱  | **Hardlink & torrent cleanup**   | Delete verified qBittorrent files and the library hardlink created by an Arr import in one guided workflow. Plex Librarian can also clean up orphaned download-side hardlinks after the torrent is gone. |
 
 ## Installation
 
@@ -87,7 +87,7 @@ equivalent GHCR image is `ghcr.io/brycepearce/plex-librarian`. The `edge` tag
 tracks the latest successful build from `main` and may contain unreleased
 changes.
 
-## Sonarr, Radarr, and qBittorrent
+## Sonarr, Radarr, Seerr, and qBittorrent
 
 ### Connect Sonarr and Radarr
 
@@ -179,19 +179,19 @@ local hour, that day's scheduled run is skipped.
 These environment variables are available for Docker and advanced Unraid
 installations:
 
-| Variable | Required | Description |
-| --- | :---: | --- |
-| `DB_PATH` | No | SQLite database path. Default: `/data/librarian.db` |
-| `PORT` | No | Container HTTP port. Default: `8080` |
-| `PLEX_URL` | No | Direct Plex server URL; use with `PLEX_TOKEN` to skip the setup wizard |
-| `PLEX_TOKEN` | No | Plex authentication token; use with `PLEX_URL` |
-| `QBITTORRENT_URL` | No | qBittorrent Web UI URL; overrides connections saved in the web UI |
-| `QBITTORRENT_USERNAME` | No | qBittorrent Web UI username; omit only when authentication bypass trusts this container |
-| `QBITTORRENT_PASSWORD` | No | qBittorrent Web UI password; omit only when authentication bypass trusts this container |
-| `LIBRARY_SYNC_CONCURRENCY` | No | Maximum libraries synced in parallel. Default: `3` |
-| `FETCH_CONCURRENCY` | No | Maximum concurrent Plex page requests per library. Default: `8` |
-| `SYNC_STALL_TIMEOUT_MINUTES` | No | Abort a sync after this many minutes without progress. Default: `15` |
-| `LOG_RETENTION_DAYS` | No | Days to retain sync history and activity; use `0` to retain indefinitely. Default: `180` |
+| Variable                     | Required | Description                                                                              |
+| ---------------------------- | :------: | ---------------------------------------------------------------------------------------- |
+| `DB_PATH`                    |    No    | SQLite database path. Default: `/data/librarian.db`                                      |
+| `PORT`                       |    No    | Container HTTP port. Default: `8080`                                                     |
+| `PLEX_URL`                   |    No    | Direct Plex server URL; use with `PLEX_TOKEN` to skip the setup wizard                   |
+| `PLEX_TOKEN`                 |    No    | Plex authentication token; use with `PLEX_URL`                                           |
+| `QBITTORRENT_URL`            |    No    | qBittorrent Web UI URL; overrides connections saved in the web UI                        |
+| `QBITTORRENT_USERNAME`       |    No    | qBittorrent Web UI username; omit only when authentication bypass trusts this container  |
+| `QBITTORRENT_PASSWORD`       |    No    | qBittorrent Web UI password; omit only when authentication bypass trusts this container  |
+| `LIBRARY_SYNC_CONCURRENCY`   |    No    | Maximum libraries synced in parallel. Default: `3`                                       |
+| `FETCH_CONCURRENCY`          |    No    | Maximum concurrent Plex page requests per library. Default: `8`                          |
+| `SYNC_STALL_TIMEOUT_MINUTES` |    No    | Abort a sync after this many minutes without progress. Default: `15`                     |
+| `LOG_RETENTION_DAYS`         |    No    | Days to retain sync history and activity; use `0` to retain indefinitely. Default: `180` |
 
 The concurrency defaults are intentionally conservative because Plex Librarian
 often shares a host with Plex. Raise them only when the host has capacity to
@@ -201,8 +201,8 @@ For a bind mount instead of the Docker-managed volume shown above, map any
 persistent host directory to `/data`. This makes the database easy to include
 in a file-based backup routine.
 
-Sonarr and Radarr are configured in the web UI so multiple instances can be
-managed independently. qBittorrent can also be configured there; the
+Sonarr, Radarr, and Seerr are configured in the web UI so multiple instances can
+be managed independently. qBittorrent can also be configured there; the
 `QBITTORRENT_*` variables are power-user overrides and take precedence over
 database-backed connections.
 

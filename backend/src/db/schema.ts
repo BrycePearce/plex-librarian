@@ -213,6 +213,31 @@ export const qbittorrentInstances = sqliteTable(
   }),
 );
 
+// Request-manager connections are server-scoped because one Plex Librarian install
+// can switch between unrelated Plex servers. The API key is intentionally never
+// returned by the public integration route; only a configured boolean crosses the API.
+export const seerrInstances = sqliteTable(
+  'seerr_instances',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, {
+      onDelete: 'cascade',
+    }),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    apiKey: text('api_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    serverIdx: index('seerr_instances_server_idx').on(table.serverId),
+    serverUrlUnique: uniqueIndex('seerr_instances_server_url_unique').on(
+      table.serverId,
+      table.url,
+    ),
+  }),
+);
+
 // Written immediately before asking qBittorrent to remove a torrent. Its instance key
 // supports both DB-backed connections (db:<id>) and the env override (env:<url>).
 // If the API response is lost, a retry can safely treat an absent hash as completed.

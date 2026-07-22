@@ -281,6 +281,13 @@
       "when": 1784604931482,
       "tag": "0040_sad_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1784674564441,
+      "tag": "0041_lazy_giant_girl",
+      "breakpoints": true
     }
   ]
 }

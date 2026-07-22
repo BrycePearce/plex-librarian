@@ -128,6 +128,29 @@ export interface UpdateQbittorrentInstanceRequest {
   password?: string;
 }
 
+export interface SeerrInstance {
+  id: number;
+  name: string;
+  url: string;
+  apiKeyConfigured: boolean;
+}
+
+export interface SeerrIntegrationSettings {
+  instances: SeerrInstance[];
+}
+
+export interface SaveSeerrInstanceRequest {
+  name: string;
+  url: string;
+  apiKey: string;
+}
+
+export interface UpdateSeerrInstanceRequest {
+  name: string;
+  url: string;
+  apiKey?: string;
+}
+
 // --- Libraries ---
 
 export interface Library {

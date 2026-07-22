@@ -14,6 +14,7 @@ const roots = {
   mediaRemovals: "media-removals",
   arrIntegrations: "arr-integrations",
   qbittorrentIntegrations: "qbittorrent-integrations",
+  seerrIntegrations: "seerr-integrations",
   downloadCleanupPreview: "download-cleanup-preview",
   versionDeletionPreview: "version-deletion-preview",
   deletionOperations: "deletion-operations",
@@ -72,6 +73,7 @@ export const queryKeys = {
   qbittorrentIntegrations: {
     all: [roots.qbittorrentIntegrations] as const,
   },
+  seerrIntegrations: { all: [roots.seerrIntegrations] as const },
   downloadCleanupPreview: {
     all: [roots.downloadCleanupPreview] as const,
     forItems: (libraryKey: string, ratingKeys: readonly string[]) =>
@@ -114,6 +116,7 @@ const rootPolicies = {
   mediaRemovals: { serverScoped: true, syncDerived: false },
   arrIntegrations: { serverScoped: true, syncDerived: true },
   qbittorrentIntegrations: { serverScoped: true, syncDerived: false },
+  seerrIntegrations: { serverScoped: true, syncDerived: false },
   downloadCleanupPreview: { serverScoped: true, syncDerived: true },
   versionDeletionPreview: { serverScoped: true, syncDerived: true },
   deletionOperations: { serverScoped: true, syncDerived: false },

@@ -21,6 +21,9 @@ import type {
   RemoveUserResponse,
   SaveArrInstanceRequest,
   SaveQbittorrentInstanceRequest,
+  SaveSeerrInstanceRequest,
+  SeerrInstance,
+  SeerrIntegrationSettings,
   Settings,
   ShowDetail,
   StaleResponse,
@@ -28,6 +31,7 @@ import type {
   SyncTriggerResponse,
   UpdateArrInstanceRequest,
   UpdateQbittorrentInstanceRequest,
+  UpdateSeerrInstanceRequest,
   UsersResponse,
   VersionDeletionPreviewResponse,
 } from "@shared/types";
@@ -74,6 +78,8 @@ export type {
   QbittorrentIntegrationSettings,
   RemoveUserResponse,
   Season,
+  SeerrInstance,
+  SeerrIntegrationSettings,
   Settings,
   ShowDetail,
   StaleItem,
@@ -420,6 +426,28 @@ export const api = {
       ),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/qbittorrent/instances/${id}`, {
+        method: "DELETE",
+      }),
+  },
+  seerr: {
+    get: () => apiFetch<SeerrIntegrationSettings>("/integrations/seerr"),
+    createInstance: (instance: SaveSeerrInstanceRequest) =>
+      apiFetch<SeerrInstance>("/integrations/seerr/instances", {
+        method: "POST",
+        body: JSON.stringify(instance),
+      }),
+    updateInstance: (id: number, instance: UpdateSeerrInstanceRequest) =>
+      apiFetch<SeerrInstance>(`/integrations/seerr/instances/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(instance),
+      }),
+    testInstance: (id: number) =>
+      apiFetch<{ version: string | null }>(
+        `/integrations/seerr/instances/${id}/test`,
+        { method: "POST" },
+      ),
+    deleteInstance: (id: number) =>
+      apiFetch<{ ok: true }>(`/integrations/seerr/instances/${id}`, {
         method: "DELETE",
       }),
   },

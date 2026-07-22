@@ -3,12 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { PlugZap, Plus, Server, Trash2, X } from "lucide-react";
 import { api } from "../../lib/api";
-import type { ArrInstance, QbittorrentInstance } from "../../lib/api";
+import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api";
 import { queryKeys } from "../../lib/queryKeys";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck";
 import { ArrConnectionWizard } from "./ArrConnectionWizard";
 import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections";
 import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard";
+import { SeerrConnections } from "../seerr/SeerrConnections";
+import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -28,13 +30,19 @@ export function ArrIntegrationDialog() {
     queryKey: queryKeys.libraries.arrSettings,
     queryFn: api.libraries.listAll,
   });
+  const { data: qbittorrentData } = useQuery({
+    queryKey: queryKeys.qbittorrentIntegrations.all,
+    queryFn: api.qbittorrent.get,
+  });
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [view, setView] = useState<
     | "manager"
     | "connection"
     | "qbittorrent"
+    | "seerr"
     | "remove"
     | "remove-qbittorrent"
+    | "remove-seerr"
   >("manager");
   const [initialType, setInitialType] = useState<"radarr" | "sonarr">("radarr");
   const [editingInstanceId, setEditingInstanceId] = useState<number | null>(
@@ -49,8 +57,11 @@ export function ArrIntegrationDialog() {
   const [pendingQbittorrentRemoval, setPendingQbittorrentRemoval] = useState<
     QbittorrentInstance | null
   >(null);
+  const [editingSeerr, setEditingSeerr] = useState<SeerrInstance | null>(null);
+  const [pendingSeerrRemoval, setPendingSeerrRemoval] = useState<SeerrInstance | null>(null);
   const [wizardKey, setWizardKey] = useState(0);
   const [qbittorrentWizardKey, setQbittorrentWizardKey] = useState(0);
+  const [seerrWizardKey, setSeerrWizardKey] = useState(0);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -75,6 +86,14 @@ export function ArrIntegrationDialog() {
       setView("manager");
     },
   });
+  const removeSeerr = useMutation({
+    mutationFn: api.seerr.deleteInstance,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.seerrIntegrations.all });
+      setPendingSeerrRemoval(null);
+      setView("manager");
+    },
+  });
 
   useEffect(() => {
     if (!test.isSuccess) return;
@@ -96,6 +115,12 @@ export function ArrIntegrationDialog() {
     setView("qbittorrent");
   }
 
+  function openSeerrWizard(instance?: SeerrInstance) {
+    setEditingSeerr(instance ?? null);
+    setSeerrWizardKey((key) => key + 1);
+    setView("seerr");
+  }
+
   const removalMappingCount = data?.mappings.filter(
     (mapping) => mapping.instanceId === pendingRemoval?.id,
   ).length ?? 0;
@@ -105,9 +130,11 @@ export function ArrIntegrationDialog() {
       ref={dialogRef}
       className="modal"
       onCancel={(event) => {
-        if (remove.isPending || removeQbittorrent.isPending) {
+        if (remove.isPending || removeQbittorrent.isPending || removeSeerr.isPending) {
           event.preventDefault();
-        } else if (view === "remove" || view === "remove-qbittorrent") {
+        } else if (
+          view === "remove" || view === "remove-qbittorrent" || view === "remove-seerr"
+        ) {
           event.preventDefault();
           setView("manager");
         }
@@ -129,8 +156,8 @@ export function ArrIntegrationDialog() {
                 Media connections
               </h2>
               <p className="mt-1 max-w-2xl text-sm leading-relaxed text-base-content/55">
-                Connect Sonarr and Radarr for managed deletion, plus qBittorrent for optional
-                torrent cleanup.
+                Connect Sonarr and Radarr for managed deletion, qBittorrent for optional torrent
+                cleanup, and Seerr for request insights.
               </p>
             </div>
             <button
@@ -254,6 +281,14 @@ export function ArrIntegrationDialog() {
                 setView("remove-qbittorrent");
               }}
             />
+            <SeerrConnections
+              onConfigure={openSeerrWizard}
+              onRemove={(instance) => {
+                removeSeerr.reset();
+                setPendingSeerrRemoval(instance);
+                setView("remove-seerr");
+              }}
+            />
           </div>
         </div>
       )}
@@ -287,6 +322,20 @@ export function ArrIntegrationDialog() {
             void qc.invalidateQueries({
               queryKey: queryKeys.qbittorrentIntegrations.all,
             });
+            dialogRef.current?.close();
+          }}
+        />
+      )}
+
+      {view === "seerr" && (
+        <SeerrConnectionWizard
+          key={seerrWizardKey}
+          instance={editingSeerr}
+          arrInstances={data?.instances ?? []}
+          qbittorrentInstances={qbittorrentData?.instances ?? []}
+          onCancel={() => dialogRef.current?.close()}
+          onSaved={() => {
+            void qc.invalidateQueries({ queryKey: queryKeys.seerrIntegrations.all });
             dialogRef.current?.close();
           }}
         />
@@ -370,19 +419,54 @@ export function ArrIntegrationDialog() {
         </div>
       )}
 
+      {view === "remove-seerr" && (
+        <div className="modal-box polished-modal">
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <Trash2 className="size-5 text-error" /> Remove connection?
+          </h3>
+          <p className="py-3 text-sm text-base-content/70">
+            Remove <strong>{pendingSeerrRemoval?.name}</strong>{" "}
+            from Plex Librarian? It does not change requests, users, or settings in Seerr.
+          </p>
+          {removeSeerr.isError && <p className="text-sm text-error">{removeSeerr.error.message}</p>}
+          <div className="modal-action">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setView("manager")}
+              disabled={removeSeerr.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-error btn-sm"
+              onClick={() => pendingSeerrRemoval && removeSeerr.mutate(pendingSeerrRemoval.id)}
+              disabled={!pendingSeerrRemoval || removeSeerr.isPending}
+            >
+              {removeSeerr.isPending
+                ? <span className="loading loading-spinner loading-xs" />
+                : <Trash2 className="size-4" />} Remove connection
+            </button>
+          </div>
+        </div>
+      )}
+
       <form
         className="modal-backdrop"
         onSubmit={(event) => {
           event.preventDefault();
-          if (remove.isPending || removeQbittorrent.isPending) return;
-          if (view === "remove" || view === "remove-qbittorrent") {
+          if (remove.isPending || removeQbittorrent.isPending || removeSeerr.isPending) return;
+          if (
+            view === "remove" || view === "remove-qbittorrent" || view === "remove-seerr"
+          ) {
             setView("manager");
           } else dialogRef.current?.close();
         }}
       >
         <button
           type="submit"
-          disabled={remove.isPending || removeQbittorrent.isPending}
+          disabled={remove.isPending || removeQbittorrent.isPending || removeSeerr.isPending}
         >
           close
         </button>
