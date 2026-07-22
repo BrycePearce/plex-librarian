@@ -1070,16 +1070,27 @@ function RequestFollowThroughCell({
   assessment: PlexUser["requestFollowThrough"];
   onOpen: () => void;
 }) {
-  const label = assessment.status === "measured"
-    ? `${assessment.followThroughPercent}%`
+  const label = assessment.status === "healthy"
+    ? "Healthy"
+    : assessment.status === "watch"
+    ? "Watch"
+    : assessment.status === "review"
+    ? "Review"
     : assessment.status === "insufficient_data"
     ? `${assessment.eligibleRequestCount}/${assessment.minimumRequests}`
-    : "No data";
-  const detail = assessment.status === "measured"
-    ? `${assessment.watchedRequestCount} watched · ${assessment.unwatchedRequestCount} not watched`
+    : "Unavailable";
+  const detail = assessment.nonWatchPercent !== null
+    ? `${assessment.nonWatchPercent}% not watched`
     : assessment.status === "insufficient_data"
     ? "eligible requests"
-    : "View reason";
+    : "Measurement paused";
+  const badgeClass = assessment.status === "review"
+    ? "badge-error"
+    : assessment.status === "watch"
+    ? "badge-warning"
+    : assessment.status === "healthy"
+    ? "badge-success"
+    : "badge-ghost";
   return (
     <button
       type="button"
@@ -1089,9 +1100,7 @@ function RequestFollowThroughCell({
     >
       <span>
         <span
-          className={`badge badge-sm badge-outline ${
-            assessment.status === "measured" ? "badge-primary" : "badge-ghost"
-          }`}
+          className={`badge badge-sm badge-outline ${badgeClass}`}
         >
           {label}
         </span>

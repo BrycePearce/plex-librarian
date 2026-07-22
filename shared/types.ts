@@ -449,19 +449,24 @@ export interface PlexUser {
 export type RequestFollowThroughStatus =
   | 'unavailable'
   | 'insufficient_data'
-  | 'measured';
+  | 'healthy'
+  | 'watch'
+  | 'review';
 
 export type RequestFollowThroughReasonType =
   | 'no_seerr_connection'
   | 'seerr_not_synced'
   | 'seerr_sync_error'
   | 'plex_history_incomplete'
+  | 'requester_not_matched'
   | 'minimum_not_met'
   | 'grace_period_exclusions'
   | 'availability_estimated'
   | 'media_not_matched'
+  | 'request_scope_unknown'
   | 'followed_through'
-  | 'not_watched';
+  | 'not_watched'
+  | 'habit_assessment';
 
 export interface RequestFollowThroughReason {
   type: RequestFollowThroughReasonType;
@@ -471,14 +476,16 @@ export interface RequestFollowThroughReason {
 export interface RequestFollowThroughAssessment {
   status: RequestFollowThroughStatus;
   eligibleRequestCount: number;
-  watchedRequestCount: number;
-  unwatchedRequestCount: number;
-  followThroughPercent: number | null;
+  watchedRequestCount: number | null;
+  unwatchedRequestCount: number | null;
+  nonWatchPercent: number | null;
   recentRequestCount: number;
-  estimatedAvailabilityCount: number;
+  uncertainAvailabilityOutcomeCount: number;
   unmatchedMediaRequestCount: number;
+  unknownRequestScopeCount: number;
   graceDays: number;
   minimumRequests: number;
+  windowDays: number;
   reasons: RequestFollowThroughReason[];
 }
 

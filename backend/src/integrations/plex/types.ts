@@ -32,6 +32,7 @@ export interface PlexWebhookPayload {
     type: string;
     title: string;
     grandparentRatingKey?: string; // show ratingKey when type === 'episode'
+    parentIndex?: number; // season number when type === 'episode'
     viewCount?: number;
     lastViewedAt?: number;
     duration?: number; // ms — used to accumulate users.totalDuration on scrobble
@@ -248,7 +249,9 @@ export interface PlexEpisodeMediaVersion {
 // this is a different id space than the plex.tv global account id used elsewhere).
 export interface PlexHistoryEntry {
   ratingKey: string;
+  historyKey?: string; // unique "/status/sessions/history/<id>" identity when supplied by PMS
   grandparentKey?: string; // "/library/metadata/<showRatingKey>" when type === 'episode'
+  parentIndex?: number; // season number when type === 'episode'
   viewedAt?: number;
   accountID?: number;
 }

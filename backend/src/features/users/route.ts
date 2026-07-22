@@ -1,16 +1,7 @@
 import { Hono } from 'hono';
 import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import {
-  libraries,
-  seerrInstances,
-  seerrRequests,
-  servers,
-  settings,
-  userItemActivity,
-  userPlayObservations,
-  users,
-} from '../../db/schema.ts';
+import { libraries, servers, settings, userPlayObservations, users } from '../../db/schema.ts';
 import { userByAccountId, usersByServer } from '../../db/scope.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -35,14 +26,8 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
 import { userActivityStatus } from './activityStatus.ts';
-import {
-  assessRequestFollowThrough,
-  type RequestFollowThroughStats,
-} from './requestFollowThrough.ts';
-import {
-  SEERR_MEDIA_STATUS_AVAILABLE,
-  SEERR_REQUEST_STATUS_APPROVED,
-} from '../../integrations/seerr/client.ts';
+import { assessRequestFollowThrough, requestFollowThroughWindow } from './requestFollowThrough.ts';
+import { queryRequestFollowThrough } from './requestFollowThroughQuery.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -218,7 +203,7 @@ router.get('/', async (c) => {
   ]);
   const usersSyncedAt = serverRow?.usersSyncedAt ?? null;
   const videoLibraryHistory = libraryHistoryRows.filter((library) => library.type !== 'artist');
-  const historyComplete = videoLibraryHistory.length > 0 &&
+  const historyComplete = usersSyncedAt !== null && videoLibraryHistory.length > 0 &&
     videoLibraryHistory.every((library) => library.historySyncedAt !== null);
 
   const rawInactiveDays = c.req.query('inactiveDays');
@@ -275,7 +260,11 @@ router.get('/', async (c) => {
   const requestGraceDays = settingsRow?.requestFollowThroughGraceDays ??
     DEFAULT_REQUEST_GRACE_DAYS;
   const requestMinimum = settingsRow?.requestFollowThroughMinRequests ?? DEFAULT_REQUEST_MINIMUM;
-  const requestCutoff = now - requestGraceDays * 86400;
+  const requestWindow = requestFollowThroughWindow(now, requestGraceDays);
+  const requestCutoff = requestWindow.cutoff;
+  // The rolling window is anchored to grace completion, not raw availability. This
+  // remains a valid interval even when an admin chooses a grace longer than one year.
+  const requestWindowStart = requestWindow.start;
   // Sharing risk is derived from observation aggregates rather than stored on users.
   // Server rosters are naturally small, so assess the activity-filtered roster first,
   // then risk-filter, sort, and page it in memory to keep totals and pages correct.
@@ -310,60 +299,12 @@ router.get('/', async (c) => {
   );
 
   const accountIds = activityFiltered.map((row) => row.accountId);
-  const [requestAggregates, requestConnections] = await Promise.all([
-    accountIds.length
-      ? db.select({
-        accountId: seerrRequests.accountId,
-        eligibleRequestCount: sql<
-          number
-        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} <= ${requestCutoff} THEN 1 ELSE 0 END)`,
-        watchedRequestCount: sql<
-          number
-        >`sum(CASE WHEN ${seerrRequests.availableAt} <= ${requestCutoff} AND ${userItemActivity.lastViewedAt} >= ${seerrRequests.availableAt} THEN 1 ELSE 0 END)`,
-        recentRequestCount: sql<
-          number
-        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} > ${requestCutoff} THEN 1 ELSE 0 END)`,
-        estimatedAvailabilityCount: sql<
-          number
-        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NOT NULL AND ${seerrRequests.availableAt} <= ${requestCutoff} AND ${seerrRequests.availabilityEstimated} = 1 THEN 1 ELSE 0 END)`,
-        unmatchedMediaRequestCount: sql<
-          number
-        >`sum(CASE WHEN ${seerrRequests.ratingKey} IS NULL THEN 1 ELSE 0 END)`,
-      }).from(seerrRequests).leftJoin(
-        userItemActivity,
-        and(
-          eq(userItemActivity.serverId, seerrRequests.serverId),
-          eq(userItemActivity.accountId, seerrRequests.accountId),
-          eq(userItemActivity.ratingKey, seerrRequests.ratingKey),
-        ),
-      ).where(and(
-        eq(seerrRequests.serverId, serverId),
-        inArray(seerrRequests.accountId, accountIds),
-        eq(seerrRequests.requestStatus, SEERR_REQUEST_STATUS_APPROVED),
-        eq(seerrRequests.mediaStatus, SEERR_MEDIA_STATUS_AVAILABLE),
-        sql`${seerrRequests.availableAt} IS NOT NULL`,
-      )).groupBy(seerrRequests.accountId)
-      : Promise.resolve([]),
-    db.select({
-      requestsSyncedAt: seerrInstances.requestsSyncedAt,
-      requestsSyncError: seerrInstances.requestsSyncError,
-    }).from(seerrInstances).where(eq(seerrInstances.serverId, serverId)),
-  ]);
-  const requestStats = new Map<number, RequestFollowThroughStats>(requestAggregates.map((row) => [
-    row.accountId as number,
-    {
-      eligibleRequestCount: Number(row.eligibleRequestCount ?? 0),
-      watchedRequestCount: Number(row.watchedRequestCount ?? 0),
-      recentRequestCount: Number(row.recentRequestCount ?? 0),
-      estimatedAvailabilityCount: Number(row.estimatedAvailabilityCount ?? 0),
-      unmatchedMediaRequestCount: Number(row.unmatchedMediaRequestCount ?? 0),
-    },
-  ]));
-  const requestHealth = {
-    connectionCount: requestConnections.length,
-    successfulSyncCount: requestConnections.filter((row) => row.requestsSyncedAt !== null).length,
-    failedSyncCount: requestConnections.filter((row) => row.requestsSyncError !== null).length,
-  };
+  const { statsByAccount: requestStats, health: requestHealth } = await queryRequestFollowThrough({
+    serverId,
+    accountIds,
+    windowStart: requestWindowStart,
+    graceCutoff: requestCutoff,
+  }, db);
 
   const assessedUsers: PlexUser[] = activityFiltered.map(({ localAccountId: _, ...u }) => ({
     ...u,
@@ -386,7 +327,9 @@ router.get('/', async (c) => {
         watchedRequestCount: 0,
         recentRequestCount: 0,
         estimatedAvailabilityCount: 0,
+        uncertainAvailabilityOutcomeCount: 0,
         unmatchedMediaRequestCount: 0,
+        unknownRequestScopeCount: 0,
       },
       requestHealth,
       historyComplete,

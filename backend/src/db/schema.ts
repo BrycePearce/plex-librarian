@@ -341,6 +341,32 @@ export const userItemActivity = sqliteTable(
   }),
 );
 
+// Compact season-level companion to userItemActivity used only where a request targets
+// specific TV seasons. This deliberately stops at one row per user/show/season rather
+// than retaining episodes or individual plays, preserving the app's bounded-history
+// model while avoiding show-wide follow-through false positives.
+export const userSeasonActivity = sqliteTable(
+  'user_season_activity',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    accountId: integer('account_id').notNull(),
+    showRatingKey: text('show_rating_key').notNull(),
+    seasonNumber: integer('season_number').notNull(),
+    firstViewedAt: integer('first_viewed_at').notNull(),
+    lastViewedAt: integer('last_viewed_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.serverId, table.accountId, table.showRatingKey, table.seasonNumber],
+    }),
+    accountShowIdx: index('user_season_activity_account_show_idx').on(
+      table.serverId,
+      table.accountId,
+      table.showRatingKey,
+    ),
+  }),
+);
+
 // One row per request-provider request. External identities and media IDs are resolved
 // during sync; unresolved rows remain stored so later roster/library syncs can heal them.
 export const seerrRequests = sqliteTable(
@@ -355,10 +381,15 @@ export const seerrRequests = sqliteTable(
     requesterUsername: text('requester_username'),
     requesterEmail: text('requester_email'),
     ratingKey: text('rating_key'),
+    mediaType: text('media_type', { enum: ['movie', 'tv'] }),
     requestStatus: integer('request_status').notNull(),
     mediaStatus: integer('media_status').notNull(),
     requestedAt: integer('requested_at').notNull(),
     availableAt: integer('available_at'),
+    // First unconfirmed AVAILABLE observation. A second consecutive successful sync
+    // promotes it to availableAt; any intervening unavailable state clears it.
+    availabilityObservedAt: integer('availability_observed_at'),
+    availabilityObservedSyncAt: integer('availability_observed_sync_at'),
     availabilityEstimated: integer('availability_estimated', { mode: 'boolean' }).notNull()
       .default(false),
     syncedAt: integer('synced_at').notNull(),
@@ -374,6 +405,25 @@ export const seerrRequests = sqliteTable(
       table.seerrInstanceId,
       table.syncedAt,
     ),
+  }),
+);
+
+// Requested TV scope is normalized instead of stored as JSON so follow-through can be
+// evaluated with an indexed EXISTS join. Movies have no rows here. A TV request with no
+// rows has unknown scope and is excluded rather than falling back to any show episode.
+export const seerrRequestSeasons = sqliteTable(
+  'seerr_request_seasons',
+  {
+    seerrInstanceId: integer('seerr_instance_id').notNull(),
+    requestId: integer('request_id').notNull(),
+    seasonNumber: integer('season_number').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.seerrInstanceId, table.requestId, table.seasonNumber] }),
+    requestFk: foreignKey({
+      columns: [table.seerrInstanceId, table.requestId],
+      foreignColumns: [seerrRequests.seerrInstanceId, seerrRequests.requestId],
+    }).onDelete('cascade'),
   }),
 );
 

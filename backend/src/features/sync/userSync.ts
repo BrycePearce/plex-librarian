@@ -70,9 +70,11 @@ async function syncUsersOnce(plex: PlexClient, serverId: number, now: number): P
     // rather than discarding an already-successful roster fetch. Local ids simply stay
     // unreconciled this cycle and self-heal on the next successful sync or webhook.
     let localAccounts: Awaited<ReturnType<typeof plex.localAccounts>> = [];
+    let localAccountCoverageComplete = true;
     try {
       localAccounts = await plex.localAccounts();
     } catch (err) {
+      localAccountCoverageComplete = false;
       console.error(
         `syncUsers: failed to fetch local accounts for server ${serverId}, skipping local id reconciliation this cycle:`,
         err,
@@ -139,7 +141,13 @@ async function syncUsersOnce(plex: PlexClient, serverId: number, now: number): P
       await db.delete(users).where(and(eq(users.serverId, serverId), lt(users.updatedAt, now)));
     }
 
-    await db.update(servers).set({ usersSyncedAt: now }).where(eq(servers.id, serverId));
+    // The plex.tv roster is still useful when /accounts is temporarily unavailable, so
+    // keep its upserts above. Do not publish complete identity coverage, though: history
+    // entries use PMS-local ids and would otherwise be silently skipped and classified
+    // as unwatched by request follow-through.
+    if (localAccountCoverageComplete) {
+      await db.update(servers).set({ usersSyncedAt: now }).where(eq(servers.id, serverId));
+    }
   } catch (err) {
     console.error(`syncUsers failed for server ${serverId}:`, err);
   }

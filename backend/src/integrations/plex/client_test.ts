@@ -87,6 +87,106 @@ Deno.test('item sync requests external GUIDs without adding them to episode stre
   ]);
 });
 
+Deno.test('history sync rejects a short page instead of publishing partial coverage', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 2,
+        Metadata: [{ ratingKey: '1', viewedAt: 100, accountID: 1 }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.libraryHistory('7').next(),
+    Error,
+    'received 1 of 2 entries at offset 0',
+  );
+});
+
+Deno.test('history sync keeps its stable prefix when new plays arrive between pages', async () => {
+  const mockFetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const start = new Headers(init?.headers).get('X-Plex-Container-Start') ?? '0';
+    const first = start === '0';
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: first ? 301 : 302,
+        Metadata: first
+          ? Array.from({ length: 300 }, (_, index) => ({
+            ratingKey: String(index + 1),
+            viewedAt: 100,
+            accountID: 1,
+          }))
+          : [
+            { ratingKey: '300', viewedAt: 100, accountID: 1 },
+            { ratingKey: '301', viewedAt: 100, accountID: 1 },
+          ],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  const history = client.libraryHistory('7');
+
+  assertEquals((await history.next()).value?.length, 300);
+  assertEquals(
+    (await history.next()).value?.map((entry: { ratingKey: string }) => entry.ratingKey),
+    ['301'],
+  );
+});
+
+Deno.test('history sync rejects a same-count delete and append that shifts an offset', async () => {
+  const mockFetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const start = new Headers(init?.headers).get('X-Plex-Container-Start') ?? '0';
+    const first = start === '0';
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 301,
+        Metadata: first
+          ? Array.from({ length: 300 }, (_, index) => ({
+            ratingKey: String(index + 1),
+            viewedAt: 100,
+            accountID: 1,
+          }))
+          : [
+            // Entry 1 disappeared and entry 302 was appended. Offset 299 now starts
+            // at 301 instead of the expected overlap entry 300.
+            { ratingKey: '301', viewedAt: 100, accountID: 1 },
+            { ratingKey: '302', viewedAt: 101, accountID: 1 },
+          ],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  const history = client.libraryHistory('7');
+
+  assertEquals((await history.next()).value?.length, 300);
+  await assertRejects(() => history.next(), Error, 'history ordering changed during sync');
+});
+
+Deno.test('history sync rejects a count that shrinks between pages', async () => {
+  const mockFetch = ((_input: string | URL | Request, init?: RequestInit) => {
+    const start = new Headers(init?.headers).get('X-Plex-Container-Start') ?? '0';
+    const first = start === '0';
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: first ? 301 : 300,
+        Metadata: first
+          ? Array.from({ length: 300 }, (_, index) => ({
+            ratingKey: String(index + 1),
+            viewedAt: 100,
+            accountID: 1,
+          }))
+          : [],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  const history = client.libraryHistory('7');
+
+  assertEquals((await history.next()).value?.length, 300);
+  await assertRejects(() => history.next(), Error, 'history count shrank during sync');
+});
+
 Deno.test('movie sync captures technical and stream metadata for version comparison', async () => {
   const mockFetch = (() =>
     Promise.resolve(Response.json({

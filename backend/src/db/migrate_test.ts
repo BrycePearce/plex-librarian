@@ -38,8 +38,13 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'qbittorrent_instances_server_url_unique',
         'seerr_instances',
         'seerr_instances_server_url_unique',
+        'seerr_request_season_sync_stage',
+        'seerr_request_seasons',
+        'seerr_request_sync_stage',
         'torrent_delete_attempts',
-        'user_play_observations_session_idx'
+        'user_play_observations_session_idx',
+        'user_season_activity',
+        'user_season_activity_account_show_idx'
       ) ORDER BY name
     `);
     assertEquals(
@@ -63,8 +68,13 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'qbittorrent_instances_server_url_unique',
         'seerr_instances',
         'seerr_instances_server_url_unique',
+        'seerr_request_season_sync_stage',
+        'seerr_request_seasons',
+        'seerr_request_sync_stage',
         'torrent_delete_attempts',
         'user_play_observations_session_idx',
+        'user_season_activity',
+        'user_season_activity_account_show_idx',
       ],
     );
     objects.finalize();
@@ -87,6 +97,15 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       false,
     );
     targetColumns.finalize();
+    const requestColumns = sqlite.prepare("PRAGMA table_info('seerr_requests')");
+    assertEquals(
+      requestColumns.values().map((column) => column[1]).filter((name) =>
+        name === 'media_type' || name === 'availability_observed_at' ||
+        name === 'availability_observed_sync_at'
+      ),
+      ['media_type', 'availability_observed_at', 'availability_observed_sync_at'],
+    );
+    requestColumns.finalize();
     sqlite.close();
   } finally {
     // @db/sqlite's native Windows handle can outlive close() briefly; the OS temp
@@ -151,6 +170,74 @@ Deno.test('0032 consolidates duplicate Arr instances without dropping mappings',
       'SELECT arr_instance_id, add_import_exclusion FROM arr_library_mappings',
     ).values(),
     [[2, 1]],
+  );
+  sqlite.close();
+});
+
+Deno.test('0043 backfills request types and initializes season-scoped evidence', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE servers (id INTEGER PRIMARY KEY);
+    CREATE TABLE libraries (
+      type TEXT NOT NULL,
+      history_synced_at INTEGER
+    );
+    CREATE TABLE seerr_instances (
+      id INTEGER PRIMARY KEY,
+      requests_synced_at INTEGER
+    );
+    CREATE TABLE items (
+      server_id INTEGER NOT NULL,
+      rating_key TEXT NOT NULL,
+      type TEXT NOT NULL,
+      PRIMARY KEY (server_id, rating_key)
+    );
+    CREATE TABLE seerr_requests (
+      server_id INTEGER NOT NULL,
+      seerr_instance_id INTEGER NOT NULL,
+      request_id INTEGER NOT NULL,
+      rating_key TEXT,
+      available_at INTEGER,
+      synced_at INTEGER NOT NULL,
+      PRIMARY KEY (seerr_instance_id, request_id)
+    );
+    INSERT INTO servers VALUES (1);
+    INSERT INTO libraries VALUES ('movie', 100), ('show', 100), ('artist', 100);
+    INSERT INTO seerr_instances VALUES (10, 100);
+    INSERT INTO items VALUES (1, 'movie-1', 'movie'), (1, 'show-1', 'show');
+    INSERT INTO seerr_requests VALUES
+      (1, 10, 1, 'movie-1', 50, 100),
+      (1, 10, 2, 'show-1', NULL, 100),
+      (1, 10, 3, NULL, 70, 100);
+  `);
+
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0043_melodic_proteus.sql')),
+  );
+
+  assertEquals(
+    sqlite.prepare('SELECT request_id, media_type FROM seerr_requests ORDER BY request_id')
+      .values(),
+    [[1, 'movie'], [2, 'tv'], [3, null]],
+  );
+  assertEquals(
+    sqlite.prepare(
+      `SELECT request_id, available_at, availability_observed_at,
+              availability_observed_sync_at
+       FROM seerr_requests ORDER BY request_id`,
+    ).values(),
+    [[1, null, 50, 100], [2, null, null, null], [3, null, 70, 100]],
+  );
+  sqlite.prepare(
+    'INSERT INTO seerr_request_seasons (seerr_instance_id, request_id, season_number) VALUES (?, ?, ?)',
+  ).run(10, 2, 0);
+  assertEquals(sqlite.prepare('SELECT season_number FROM seerr_request_seasons').values(), [[0]]);
+  assertEquals(sqlite.prepare('SELECT requests_synced_at FROM seerr_instances').values(), [[null]]);
+  assertEquals(
+    sqlite.prepare('SELECT type, history_synced_at FROM libraries ORDER BY type').values(),
+    [['artist', 100], ['movie', null], ['show', null]],
   );
   sqlite.close();
 });

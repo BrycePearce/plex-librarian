@@ -139,7 +139,7 @@ function SettingsPage() {
           </SettingRow>
           <SettingRow
             title="Minimum eligible requests"
-            description="Start reporting a follow-through percentage once a user has this many requests past the availability grace period."
+            description="Start assessing a user's request habit once this many requests have passed the availability grace period."
           >
             {data
               ? (

@@ -1,7 +1,7 @@
 import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
 import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db, withTransaction } from '../../db/index.ts';
-import { itemMediaVersions, items, libraries } from '../../db/schema.ts';
+import { itemMediaVersions, items, libraries, servers } from '../../db/schema.ts';
 import { itemsByLibrary, libraryByKey, mediaVersionsByLibrary } from '../../db/scope.ts';
 import {
   deletionRecoveryLibraryKeys,
@@ -266,6 +266,16 @@ export async function runSync(
   serverId: number,
   reporter?: SyncReporter,
 ): Promise<number> {
+  // Invalidate every coverage marker before the first Plex request. Failures in
+  // libraries() or roster reconciliation must not leave a previous successful run
+  // publicly classified as current, especially for request follow-through.
+  await Promise.all([
+    db.update(servers).set({ usersSyncedAt: null }).where(eq(servers.id, serverId)),
+    db.update(libraries).set({ historySyncedAt: null }).where(and(
+      eq(libraries.serverId, serverId),
+      sql`${libraries.type} <> 'artist'`,
+    )),
+  ]);
   const plexLibraries = await plex.libraries();
   const now = Math.floor(Date.now() / 1000);
 
@@ -341,6 +351,15 @@ export async function runLibrarySync(
     .where(libraryByKey(serverId, libraryKey))
     .limit(1);
   if (!lib) throw new Error(`Library ${libraryKey} not found`);
+
+  await Promise.all([
+    db.update(servers).set({ usersSyncedAt: null }).where(eq(servers.id, serverId)),
+    lib.type === 'artist'
+      ? Promise.resolve()
+      : db.update(libraries).set({ historySyncedAt: null }).where(
+        libraryByKey(serverId, libraryKey),
+      ),
+  ]);
 
   reporter?.onLibraries?.([{ key: lib.key, title: lib.title }]);
 

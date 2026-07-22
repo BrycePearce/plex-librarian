@@ -94,7 +94,9 @@ export class SeerrClient {
 }
 
 // Seerr/Overseerr/Jellyseerr status codes, shared so callers never re-guess the enum.
+// COMPLETED was added after the original three-state Overseerr request enum.
 export const SEERR_REQUEST_STATUS_APPROVED = 2;
+export const SEERR_REQUEST_STATUS_COMPLETED = 5;
 export const SEERR_MEDIA_STATUS_AVAILABLE = 5;
 
 export interface SeerrRequestUser {
@@ -108,6 +110,16 @@ export interface SeerrRequestMedia {
   tvdbId?: unknown;
   mediaType?: unknown;
   status?: unknown;
+  status4k?: unknown;
+  mediaAddedAt?: unknown;
+  updatedAt?: unknown;
+  seasons?: unknown;
+}
+
+export interface SeerrRequestSeason {
+  seasonNumber?: unknown;
+  status?: unknown;
+  status4k?: unknown;
   updatedAt?: unknown;
 }
 
@@ -115,6 +127,8 @@ export interface SeerrRequestRecord {
   id?: unknown;
   status?: unknown;
   createdAt?: unknown;
+  is4k?: unknown;
+  seasons?: unknown;
   requestedBy?: SeerrRequestUser | null;
   media?: SeerrRequestMedia | null;
 }

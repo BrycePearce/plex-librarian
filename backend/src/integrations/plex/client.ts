@@ -768,14 +768,28 @@ export class PlexClient {
   // Streams all play history for a library section across ALL users.
   // Episodes are returned at episode granularity; use grandparentRatingKey to attribute to show.
   async *libraryHistory(libraryKey: string): AsyncGenerator<PlexHistoryEntry[]> {
-    const fetchPage = (start: number) =>
+    const fetchPage = (start: number, size = ITEMS_PAGE_SIZE) =>
       this.get<{ MediaContainer: { Metadata?: PlexHistoryEntry[]; totalSize?: number } }>(
-        `/status/sessions/history/all?librarySectionID=${libraryKey}&sort=viewedAt:desc`,
+        // Oldest-first makes the initial `totalSize` a stable prefix: plays added while
+        // this walk is running append after that prefix instead of shifting offsets and
+        // causing duplicate/missed history. They are picked up by the next full sync.
+        `/status/sessions/history/all?librarySectionID=${libraryKey}&sort=viewedAt:asc`,
         {
           'X-Plex-Container-Start': String(start),
-          'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
+          'X-Plex-Container-Size': String(size),
         },
       );
+
+    const sameHistoryEntry = (left: PlexHistoryEntry, right: PlexHistoryEntry): boolean => {
+      if (left.historyKey !== undefined || right.historyKey !== undefined) {
+        return left.historyKey !== undefined && left.historyKey === right.historyKey;
+      }
+      return left.ratingKey === right.ratingKey &&
+        left.grandparentKey === right.grandparentKey &&
+        left.parentIndex === right.parentIndex &&
+        left.viewedAt === right.viewedAt &&
+        left.accountID === right.accountID;
+    };
 
     const first = await fetchPage(0);
     const total = first.MediaContainer.totalSize;
@@ -783,18 +797,59 @@ export class PlexClient {
       throw new Error(`Plex did not return totalSize for history of library ${libraryKey}`);
     }
 
-    yield first.MediaContainer.Metadata ?? [];
-
-    const remainingStarts: number[] = [];
-    for (let s = ITEMS_PAGE_SIZE; s < total; s += ITEMS_PAGE_SIZE) {
-      remainingStarts.push(s);
-    }
-
-    for (let i = 0; i < remainingStarts.length; i += FETCH_CONCURRENCY) {
-      const batch = await Promise.all(
-        remainingStarts.slice(i, i + FETCH_CONCURRENCY).map(fetchPage),
+    const firstPage = first.MediaContainer.Metadata ?? [];
+    const expectedFirstPageSize = Math.min(ITEMS_PAGE_SIZE, total);
+    if (firstPage.length !== expectedFirstPageSize) {
+      throw new Error(
+        `Plex history sync was incomplete for library ${libraryKey}: received ${firstPage.length} of ${expectedFirstPageSize} entries at offset 0`,
       );
-      yield batch.flatMap((d) => d.MediaContainer.Metadata ?? []);
+    }
+    yield firstPage;
+    let previousBoundary = firstPage.at(-1);
+
+    for (
+      let batchStart = ITEMS_PAGE_SIZE;
+      batchStart < total;
+      batchStart += ITEMS_PAGE_SIZE * FETCH_CONCURRENCY
+    ) {
+      const starts: number[] = Array.from(
+        { length: FETCH_CONCURRENCY },
+        (_, index) => batchStart + index * ITEMS_PAGE_SIZE,
+      ).filter((start) => start < total);
+      const batch = await Promise.all(starts.map((start) => {
+        const expectedPageSize = Math.min(ITEMS_PAGE_SIZE, total - start);
+        return fetchPage(start - 1, expectedPageSize + 1);
+      }));
+      const entries: PlexHistoryEntry[] = [];
+      for (let pageIndex = 0; pageIndex < batch.length; pageIndex++) {
+        const start = starts[pageIndex];
+        const page = batch[pageIndex].MediaContainer;
+        if (page.totalSize === undefined || page.totalSize < total) {
+          throw new Error(
+            `Plex history count shrank during sync for library ${libraryKey} (${total} to ${
+              page.totalSize ?? 'missing'
+            })`,
+          );
+        }
+        const metadata = page.Metadata ?? [];
+        const expectedPageSize = Math.min(ITEMS_PAGE_SIZE, total - start);
+        if (metadata.length < expectedPageSize + 1) {
+          throw new Error(
+            `Plex history sync was incomplete for library ${libraryKey}: received ${
+              Math.max(0, metadata.length - 1)
+            } of ${expectedPageSize} entries at offset ${start}`,
+          );
+        }
+        if (!previousBoundary || !sameHistoryEntry(previousBoundary, metadata[0])) {
+          throw new Error(
+            `Plex history ordering changed during sync for library ${libraryKey} at offset ${start}`,
+          );
+        }
+        const logicalPage = metadata.slice(1, expectedPageSize + 1);
+        entries.push(...logicalPage);
+        previousBoundary = logicalPage.at(-1);
+      }
+      yield entries;
     }
   }
 }

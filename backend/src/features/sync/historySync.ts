@@ -1,7 +1,23 @@
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { users } from '../../db/schema.ts';
-import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
+import type { PlexClient, PlexHistoryEntry, PlexLibrary } from '../../integrations/plex/index.ts';
+
+function nonNegativeInteger(value: unknown): number | null {
+  const number = typeof value === 'string' && value.trim() ? Number(value) : value;
+  return typeof number === 'number' && Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+export function historySeasonNumber(entry: PlexHistoryEntry): number | null {
+  if (!entry.grandparentKey) return null;
+  const seasonNumber = nonNegativeInteger(entry.parentIndex);
+  if (seasonNumber === null) {
+    throw new Error(
+      `Plex omitted the season number for episode history entry ${entry.ratingKey}`,
+    );
+  }
+  return seasonNumber;
+}
 
 // Walks /status/sessions/history/all?librarySectionID=<key> to get cross-user play history
 // for the entire library in one paginated stream instead of one request per item.
@@ -28,10 +44,9 @@ export async function syncLibraryHistory(
     );
   }
 
-  // Build ratingKey → max(viewedAt) across all users and all pages before writing.
-  // The map is bounded by unique items in the library (not total play count).
-  const maxViewedAt = new Map<string, number>();
-  // Same idea, keyed by the history entry's PMS-LOCAL accountID (see
+  // Item and season facts are flushed page-by-page. Only per-account maxima cross page
+  // boundaries, so memory is bounded by the roster rather than library/history size.
+  // Keyed by the history entry's PMS-LOCAL accountID (see
   // PlexHistoryEntry.accountID in integrations/plex/types.ts) — bounded by unique users, not play count.
   // Written to users.last_viewed_at via local_account_id, which syncUsers() is expected
   // to have already reconciled for every currently-known local account by the time this
@@ -40,9 +55,17 @@ export async function syncLibraryHistory(
   const maxViewedAtByAccount = new Map<number, number>();
 
   for await (const page of plex.libraryHistory(lib.key)) {
+    const pageMaxViewedAt = new Map<string, number>();
     const pageActivity = new Map<string, {
       accountId: number;
       ratingKey: string;
+      firstViewedAt: number;
+      lastViewedAt: number;
+    }>();
+    const pageSeasonActivity = new Map<string, {
+      accountId: number;
+      showRatingKey: string;
+      seasonNumber: number;
       firstViewedAt: number;
       lastViewedAt: number;
     }>();
@@ -55,8 +78,8 @@ export async function syncLibraryHistory(
         ? entry.grandparentKey.match(/(\d+)\/?$/)?.[1]
         : entry.ratingKey;
       if (key) {
-        const cur = maxViewedAt.get(key);
-        if (!cur || entry.viewedAt > cur) maxViewedAt.set(key, entry.viewedAt);
+        const cur = pageMaxViewedAt.get(key);
+        if (!cur || entry.viewedAt > cur) pageMaxViewedAt.set(key, entry.viewedAt);
       }
       if (entry.accountID != null) {
         const curAcct = maxViewedAtByAccount.get(entry.accountID);
@@ -78,15 +101,52 @@ export async function syncLibraryHistory(
             current.firstViewedAt = Math.min(current.firstViewedAt, entry.viewedAt);
             current.lastViewedAt = Math.max(current.lastViewedAt, entry.viewedAt);
           }
+
+          // Season-scoped request attribution cannot safely fall back to show-wide
+          // activity. Abort the library history sync if Plex omits this field for a
+          // currently matched user; service.ts will leave historySyncedAt null.
+          const seasonNumber = historySeasonNumber(entry);
+          if (seasonNumber !== null) {
+            const seasonPairKey = `${accountId}:${key}:${seasonNumber}`;
+            const currentSeason = pageSeasonActivity.get(seasonPairKey);
+            if (!currentSeason) {
+              pageSeasonActivity.set(seasonPairKey, {
+                accountId,
+                showRatingKey: key,
+                seasonNumber,
+                firstViewedAt: entry.viewedAt,
+                lastViewedAt: entry.viewedAt,
+              });
+            } else {
+              currentSeason.firstViewedAt = Math.min(
+                currentSeason.firstViewedAt,
+                entry.viewedAt,
+              );
+              currentSeason.lastViewedAt = Math.max(
+                currentSeason.lastViewedAt,
+                entry.viewedAt,
+              );
+            }
+          }
         }
       }
     }
 
     // Write each history page immediately. Replaying a full sync is idempotent because
     // first/last timestamps use min/max rather than accumulating play counts.
-    if (pageActivity.size > 0) {
+    if (pageMaxViewedAt.size > 0 || pageActivity.size > 0 || pageSeasonActivity.size > 0) {
       withTransaction((client) => {
-        const stmt = client.prepare(
+        const itemViewStmt = client.prepare(
+          `UPDATE items SET last_viewed_at = ?
+           WHERE server_id = ? AND rating_key = ? AND library_key = ?
+             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+        );
+        for (const [ratingKey, viewedAt] of pageMaxViewedAt) {
+          itemViewStmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
+        }
+        itemViewStmt.finalize();
+
+        const itemStmt = client.prepare(
           `INSERT INTO user_item_activity
              (server_id, account_id, rating_key, first_viewed_at, last_viewed_at)
            VALUES (?, ?, ?, ?, ?)
@@ -95,7 +155,7 @@ export async function syncLibraryHistory(
              last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)`,
         );
         for (const activity of pageActivity.values()) {
-          stmt.run(
+          itemStmt.run(
             serverId,
             activity.accountId,
             activity.ratingKey,
@@ -103,6 +163,28 @@ export async function syncLibraryHistory(
             activity.lastViewedAt,
           );
         }
+        itemStmt.finalize();
+
+        const seasonStmt = client.prepare(
+          `INSERT INTO user_season_activity
+             (server_id, account_id, show_rating_key, season_number,
+              first_viewed_at, last_viewed_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(server_id, account_id, show_rating_key, season_number) DO UPDATE SET
+             first_viewed_at = min(first_viewed_at, excluded.first_viewed_at),
+             last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)`,
+        );
+        for (const activity of pageSeasonActivity.values()) {
+          seasonStmt.run(
+            serverId,
+            activity.accountId,
+            activity.showRatingKey,
+            activity.seasonNumber,
+            activity.firstViewedAt,
+            activity.lastViewedAt,
+          );
+        }
+        seasonStmt.finalize();
       });
     }
   }
@@ -125,33 +207,19 @@ export async function syncLibraryHistory(
     )
     : null;
 
-  // Both UPDATEs run in the same transaction — one commit instead of two, so a crash
-  // mid-sync can't leave item-level and per-account history backfills inconsistent
-  // with each other.
-  if (maxViewedAt.size > 0 || maxViewedAtByAccount.size > 0) {
+  // Item maxima were already applied page-by-page; finish the roster-level aggregate.
+  if (maxViewedAtByAccount.size > 0) {
     withTransaction((client) => {
-      if (maxViewedAt.size > 0) {
-        const stmt = client.prepare(
-          `UPDATE items SET last_viewed_at = ?
-           WHERE server_id = ? AND rating_key = ? AND library_key = ?
-             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
-        );
-        for (const [ratingKey, viewedAt] of maxViewedAt) {
-          stmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
-        }
+      const stmt = client.prepare(
+        `UPDATE users SET last_viewed_at = ?
+         WHERE server_id = ? AND local_account_id = ?
+           AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+      );
+      for (const [localAccountId, viewedAt] of maxViewedAtByAccount) {
+        if (ambiguousLocalIds!.has(localAccountId)) continue;
+        stmt.run(viewedAt, serverId, localAccountId, viewedAt);
       }
-
-      if (maxViewedAtByAccount.size > 0) {
-        const stmt = client.prepare(
-          `UPDATE users SET last_viewed_at = ?
-           WHERE server_id = ? AND local_account_id = ?
-             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
-        );
-        for (const [localAccountId, viewedAt] of maxViewedAtByAccount) {
-          if (ambiguousLocalIds!.has(localAccountId)) continue;
-          stmt.run(viewedAt, serverId, localAccountId, viewedAt);
-        }
-      }
+      stmt.finalize();
     });
   }
 }

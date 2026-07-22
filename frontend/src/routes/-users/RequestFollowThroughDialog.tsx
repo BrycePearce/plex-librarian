@@ -12,6 +12,22 @@ export function RequestFollowThroughDialog({
   onClose: () => void;
 }) {
   const assessment = user?.requestFollowThrough;
+  const statusLabel = assessment?.status === "healthy"
+    ? "Healthy"
+    : assessment?.status === "watch"
+    ? "Watch"
+    : assessment?.status === "review"
+    ? "Review"
+    : assessment?.status === "insufficient_data"
+    ? "Collecting data"
+    : "Unavailable";
+  const badgeClass = assessment?.status === "review"
+    ? "badge-error"
+    : assessment?.status === "watch"
+    ? "badge-warning"
+    : assessment?.status === "healthy"
+    ? "badge-success"
+    : "badge-ghost";
   return (
     <dialog ref={dialogRef} className="modal" onClose={onClose}>
       <div className="modal-box polished-modal max-w-xl p-0">
@@ -29,31 +45,27 @@ export function RequestFollowThroughDialog({
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <span
-                    className={`badge badge-outline ${
-                      assessment.status === "measured" ? "badge-primary" : "badge-ghost"
-                    }`}
+                    className={`badge badge-outline ${badgeClass}`}
                   >
-                    {assessment.status === "measured"
-                      ? "Measured"
-                      : assessment.status === "insufficient_data"
-                      ? "Collecting data"
-                      : "Unavailable"}
+                    {statusLabel}
                   </span>
                   <p className="mt-2 text-sm text-base-content/55">
-                    Watched after the requested title became available
+                    Requests not watched after becoming available
                   </p>
                 </div>
                 <div className="text-right">
                   <span className="text-3xl font-semibold tabular-nums">
-                    {assessment.followThroughPercent === null
-                      ? "—"
-                      : `${assessment.followThroughPercent}%`}
+                    {assessment.nonWatchPercent === null ? "—" : `${assessment.nonWatchPercent}%`}
                   </span>
-                  {assessment.status !== "measured" && (
-                    <div className="text-xs text-base-content/40">
-                      starts at {assessment.minimumRequests} requests
-                    </div>
-                  )}
+                  {assessment.status === "insufficient_data"
+                    ? (
+                      <div className="text-xs text-base-content/40">
+                        starts at {assessment.minimumRequests} requests
+                      </div>
+                    )
+                    : assessment.status === "unavailable"
+                    ? <div className="text-xs text-base-content/40">measurement paused</div>
+                    : <div className="text-xs text-base-content/40">not watched</div>}
                 </div>
               </div>
             </div>
@@ -63,6 +75,14 @@ export function RequestFollowThroughDialog({
               <Stat icon={CheckCircle2} value={assessment.watchedRequestCount} label="watched" />
               <Stat icon={XCircle} value={assessment.unwatchedRequestCount} label="not watched" />
             </div>
+
+            {assessment.status !== "unavailable" &&
+              assessment.status !== "insufficient_data" && (
+              <p className="text-sm text-base-content/70">
+                {assessment.unwatchedRequestCount} of {assessment.eligibleRequestCount}{" "}
+                eligible requests were not watched.
+              </p>
+            )}
 
             <section aria-labelledby="follow-through-reasons-heading">
               <h4 id="follow-through-reasons-heading" className="font-semibold">
@@ -85,7 +105,11 @@ export function RequestFollowThroughDialog({
               <CalendarClock className="mt-0.5 size-4 shrink-0" />
               <p>
                 Requests enter the measurement {assessment.graceDays}{" "}
-                days after availability. Availability dates imported from Seerr may be estimates.
+                days after availability. The assessment uses requests whose grace period ended in
+                the latest {assessment.windowDays}{" "}
+                days. If an estimated availability date has no confirmed watch at or after it, the
+                assessment pauses instead of treating the request as not watched. For TV requests,
+                watching an episode from any requested season counts as follow-through.
               </p>
             </div>
           </div>
@@ -104,13 +128,15 @@ export function RequestFollowThroughDialog({
 
 function Stat({ icon: Icon, value, label }: {
   icon: typeof Clock3;
-  value: number;
+  value: number | null;
   label: string;
 }) {
   return (
     <div className="rounded-lg border border-base-300 px-3 py-2.5">
       <Icon className="mb-1 size-3.5 text-base-content/35" />
-      <div className="font-semibold tabular-nums">{value.toLocaleString()}</div>
+      <div className="font-semibold tabular-nums">
+        {value === null ? "—" : value.toLocaleString()}
+      </div>
       <div className="text-[11px] text-base-content/45">{label}</div>
     </div>
   );
