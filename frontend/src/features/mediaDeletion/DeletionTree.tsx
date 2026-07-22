@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Check, Copy, File, Folder, X } from "lucide-react";
 import type {
   ArrCleanupTarget,
@@ -99,6 +100,7 @@ function TreeNodes(
 export function PathTreeRoot({
   path,
   source,
+  marks,
   files,
   totalFiles,
   note,
@@ -107,7 +109,8 @@ export function PathTreeRoot({
   warning = false,
 }: {
   path: string;
-  source: string;
+  source?: string;
+  marks?: ReactNode;
   files?: TreeFile[];
   totalFiles?: number;
   note?: string;
@@ -129,7 +132,7 @@ export function PathTreeRoot({
         <Folder
           className={`size-3.5 shrink-0 ${warning ? "text-warning" : "text-primary"}`}
         />
-        <span className="min-w-0 flex-1 truncate font-mono" title={path}>
+        <span className="min-w-0 truncate font-mono" title={path}>
           {path}
         </span>
         <button
@@ -163,7 +166,12 @@ export function PathTreeRoot({
             : <Copy className="size-3 text-base-content/45" />}
         </button>
         {info && <InfoTip text={info} />}
-        <span className="badge badge-ghost badge-xs shrink-0">{source}</span>
+        {(marks || source) && (
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {marks}
+            {source && <span className="badge badge-ghost badge-xs shrink-0">{source}</span>}
+          </span>
+        )}
       </div>
       {visibleFiles.length > 0 && <TreeNodes nodes={buildTree(visibleFiles)} />}
       {(note || hiddenCount > 0) && (

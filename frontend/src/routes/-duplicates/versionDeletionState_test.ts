@@ -234,6 +234,8 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
       versions: [{
         mediaId: 1,
         plexPaths: [],
+        arrPaths: [],
+        cleanupPaths: [],
         status: "unavailable",
         reason: "Plex did not report a path",
         truncated: false,

@@ -58,6 +58,8 @@ function publicVersionPreviews(
       return {
         mediaId,
         plexPaths: [],
+        arrPaths: [],
+        cleanupPaths: [],
         status: 'unavailable' as const,
         reason: 'This Media version is no longer reported by Plex',
         truncated: false,
@@ -66,6 +68,8 @@ function publicVersionPreviews(
     return {
       mediaId,
       plexPaths: version.paths,
+      arrPaths: [],
+      cleanupPaths: [],
       status: version.paths.length > 0 ? 'resolved' as const : 'unavailable' as const,
       ...(version.paths.length === 0
         ? { reason: 'Plex did not report an underlying path for this Media version' }
@@ -356,11 +360,21 @@ export async function buildVersionDeletionPlan({
       const normalized = normalizedComparison(path);
       return normalized ? [normalized] : [];
     });
-    const arrApplies = paths.length > 0 && paths.every((path) => arrCoveredPaths.has(path));
+    const arrPaths = version.plexPaths.filter((path) => {
+      const normalized = normalizedComparison(path);
+      return normalized !== null && arrCoveredPaths.has(normalized);
+    });
+    const cleanupPaths = version.plexPaths.filter((path) => {
+      const normalized = normalizedComparison(path);
+      return normalized !== null && cleanupCoveredPaths.has(normalized);
+    });
+    const arrApplies = paths.length > 0 && arrPaths.length === paths.length;
     const cleanupApplies = arrApplies && paths.length > 0 &&
-      paths.every((path) => cleanupCoveredPaths.has(path));
+      cleanupPaths.length === paths.length;
     return {
       ...version,
+      arrPaths,
+      cleanupPaths,
       arrStatus: arrApplies
         ? 'resolved' as const
         : arrStatus === 'error'

@@ -392,6 +392,8 @@ export interface DeletionOperation {
 export interface MediaVersionPathPreview {
   mediaId: number;
   plexPaths: string[];
+  arrPaths: string[];
+  cleanupPaths: string[];
   status: 'resolved' | 'unavailable' | 'error';
   reason?: string;
   truncated: boolean;

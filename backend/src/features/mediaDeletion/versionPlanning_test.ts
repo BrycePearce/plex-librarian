@@ -42,6 +42,8 @@ Deno.test('version plan enables Radarr only when its complete folder maps to sel
 
   assertEquals(plan.preview.arrStatus, 'resolved');
   assertEquals(plan.eligibleArrTargets.length, 1);
+  assertEquals(plan.preview.versions[0]?.arrPaths, ['/movies/Movie/selected.mkv']);
+  assertEquals(plan.preview.versions[0]?.cleanupPaths, []);
 });
 
 Deno.test('version plan rejects Radarr when an unselected Plex version shares its folder', async () => {

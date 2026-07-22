@@ -8,7 +8,6 @@ import {
   downloadJobFiles,
   downloadJobInfo,
   downloadJobRoot,
-  managedFiles,
   PathTreeRoot,
 } from "../../features/mediaDeletion/DeletionTree";
 import { versionDeletionPresentation } from "./versionDeletionState";
@@ -23,11 +22,13 @@ interface SelectedVersion {
 export function VersionDeletionServiceMarks({
   preview,
   mediaId,
+  path,
   deleteFromArr,
   cleanupDownloads,
 }: {
   preview?: VersionDeletionPreviewResponse;
   mediaId?: number;
+  path?: string;
   deleteFromArr: boolean;
   cleanupDownloads: boolean;
 }) {
@@ -40,8 +41,16 @@ export function VersionDeletionServiceMarks({
   const versionPreview = mediaId === undefined
     ? undefined
     : preview?.versions.find((version) => version.mediaId === mediaId);
-  const arrStatus = versionPreview?.arrStatus ?? preview?.arrStatus;
-  const cleanupStatus = versionPreview?.cleanupStatus ?? preview?.cleanupStatus;
+  const arrStatus = path === undefined
+    ? versionPreview?.arrStatus ?? preview?.arrStatus
+    : versionPreview?.arrPaths.includes(path)
+    ? "resolved"
+    : "unavailable";
+  const cleanupStatus = path === undefined
+    ? versionPreview?.cleanupStatus ?? preview?.cleanupStatus
+    : versionPreview?.cleanupPaths.includes(path)
+    ? "resolved"
+    : "unavailable";
   const arrReason = versionPreview?.arrReason ?? preview?.arrReason;
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
   const unmonitorActive = deleteFromArr && preview?.arrStatus !== "resolved" &&
@@ -114,7 +123,6 @@ export function AdvancedVersionDeletionTree({
     cleanupDownloads,
   );
   const {
-    arrTargets,
     downloadJobs,
     orphanFiles,
     showPlexPaths,
@@ -125,14 +133,15 @@ export function AdvancedVersionDeletionTree({
       0,
     )
     : 0;
-  const pathCount = plexPathCount + arrTargets.length + downloadJobs.length +
-    orphanFiles.length;
+  const pathCount = plexPathCount + downloadJobs.length + orphanFiles.length;
 
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
       <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
         <span className="font-medium text-base-content/60">Deletion tree</span>
-        <InfoTip text="Shows paths reported by Plex and configured deletion services. Plex paths are informational and never authorize direct filesystem deletion." />
+        <InfoTip
+          text="Shows Plex paths for the selected versions and any additional download-cleanup paths. Service icons indicate which systems act on each file. Plex paths are informational and never authorize direct filesystem deletion."
+        />
         {loading
           ? <span className="loading loading-spinner loading-xs ml-auto" />
           : (
@@ -150,11 +159,6 @@ export function AdvancedVersionDeletionTree({
             >
               {title}
             </span>
-            <VersionDeletionServiceMarks
-              preview={preview}
-              deleteFromArr={deleteFromArr}
-              cleanupDownloads={cleanupDownloads}
-            />
           </div>
           <div className="ml-1.5">
             {showPlexPaths && versions.map((version) => {
@@ -178,7 +182,15 @@ export function AdvancedVersionDeletionTree({
                     <PathTreeRoot
                       key={`plex:${version.mediaId}:${path}:${index}`}
                       path={path}
-                      source="Plex"
+                      marks={
+                        <VersionDeletionServiceMarks
+                          preview={preview}
+                          mediaId={version.mediaId}
+                          path={path}
+                          deleteFromArr={deleteFromArr}
+                          cleanupDownloads={cleanupDownloads}
+                        />
+                      }
                     />
                   ))}
                   {!loading && !versionPreview?.plexPaths.length && (
@@ -190,15 +202,6 @@ export function AdvancedVersionDeletionTree({
                 </div>
               );
             })}
-            {arrTargets.map((target) => (
-              <PathTreeRoot
-                key={`arr:${target.instanceName}:${target.path}`}
-                path={target.path ?? target.title}
-                source={target.instanceName}
-                files={managedFiles(target)}
-                itemName={target.type === "sonarr" ? "season" : "file"}
-              />
-            ))}
             {downloadJobs.map((job) => (
               <PathTreeRoot
                 key={`job:${job.instanceKey}:${job.jobId}`}
