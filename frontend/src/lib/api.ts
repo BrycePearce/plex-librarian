@@ -32,7 +32,10 @@ import type {
   UpdateArrInstanceRequest,
   UpdateQbittorrentInstanceRequest,
   UpdateSeerrInstanceRequest,
+  UsersActivityFilter,
   UsersResponse,
+  UsersRiskFilter,
+  UsersSortKey,
   VersionDeletionPreviewResponse,
 } from "@shared/types";
 import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
@@ -87,7 +90,10 @@ export type {
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
+  UsersActivityFilter,
   UsersResponse,
+  UsersRiskFilter,
+  UsersSortKey,
   VersionDeletionPreviewResponse,
 } from "@shared/types";
 
@@ -108,6 +114,17 @@ export interface StaleParams {
   filter?: "all" | "watched" | "unwatched";
   duplicatesOnly?: boolean;
   sort?: SortKey;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface UsersParams {
+  search?: string;
+  filter?: UsersActivityFilter;
+  inactiveDays?: number;
+  risk?: UsersRiskFilter;
+  sort?: UsersSortKey;
   order?: "asc" | "desc";
   limit?: number;
   offset?: number;
@@ -476,22 +493,7 @@ export const api = {
         },
       ),
     list: (
-      params: {
-        inactiveDays?: number;
-        search?: string;
-        filter?: "all" | "inactive" | "never" | "unknown";
-        risk?:
-          | "all"
-          | "attention"
-          | "review"
-          | "watch"
-          | "low"
-          | "insufficient_data";
-        sort?: "lastViewedAt" | "username" | "sharingRisk";
-        order?: "asc" | "desc";
-        limit?: number;
-        offset?: number;
-      } = {},
+      params: UsersParams = {},
     ) => {
       const q = new URLSearchParams();
       for (const [k, v] of Object.entries(params)) {

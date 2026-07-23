@@ -528,6 +528,14 @@ export interface SessionMonitorHealth {
   message: string | null;
 }
 
+// Query-param unions for GET /api/users. Shared (rather than "frontend-only" like
+// StaleParams/SortKey) because, unlike the stale endpoint's SortKey — which the backend
+// derives mechanically from a SQL-column-mapping object — these are hand-written literal
+// unions on both sides, so keeping one copy avoids the two silently drifting apart.
+export type UsersActivityFilter = 'all' | 'inactive' | 'never' | 'unknown';
+export type UsersRiskFilter = 'all' | 'attention' | SharingRiskLevel;
+export type UsersSortKey = 'username' | 'lastViewedAt' | 'sharingRisk';
+
 export interface UsersResponse {
   // Null until the roster has synced at least once for the current server — while
   // null, this list may be incomplete or stale, same contract as Library.historySyncedAt.
@@ -538,8 +546,8 @@ export interface UsersResponse {
   inactiveDays: number;
   defaultInactiveDays: number;
   search: string;
-  risk: 'all' | 'attention' | SharingRiskLevel;
-  sort: 'username' | 'lastViewedAt' | 'sharingRisk';
+  risk: UsersRiskFilter;
+  sort: UsersSortKey;
   order: 'asc' | 'desc';
   limit: number;
   offset: number;

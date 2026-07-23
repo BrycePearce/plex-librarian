@@ -22,7 +22,10 @@ import type {
   PendingInvitationsResponse,
   PlexUser,
   RemoveUserResponse,
+  UsersActivityFilter,
   UsersResponse,
+  UsersRiskFilter,
+  UsersSortKey,
 } from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
 import { userActivityStatus } from './activityStatus.ts';
@@ -31,15 +34,6 @@ import { queryRequestFollowThrough } from './requestFollowThroughQuery.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
-
-type SortKey = 'username' | 'lastViewedAt' | 'sharingRisk';
-type RiskFilter =
-  | 'all'
-  | 'attention'
-  | 'review'
-  | 'watch'
-  | 'low'
-  | 'insufficient_data';
 
 const DEFAULT_INACTIVE_DAYS = 90;
 const DEFAULT_REQUEST_GRACE_DAYS = 30;
@@ -222,12 +216,13 @@ router.get('/', async (c) => {
     settingsRow?.inactiveUserDays ?? DEFAULT_INACTIVE_DAYS;
 
   const rawFilter = c.req.query('filter');
-  const filter = rawFilter === 'inactive' || rawFilter === 'never' || rawFilter === 'unknown'
-    ? rawFilter
-    : 'all';
+  const filter: UsersActivityFilter =
+    rawFilter === 'inactive' || rawFilter === 'never' || rawFilter === 'unknown'
+      ? rawFilter
+      : 'all';
 
   const rawRisk = c.req.query('risk') ?? 'all';
-  const risk: RiskFilter = [
+  const risk: UsersRiskFilter = [
       'all',
       'attention',
       'review',
@@ -235,12 +230,12 @@ router.get('/', async (c) => {
       'low',
       'insufficient_data',
     ].includes(rawRisk)
-    ? rawRisk as RiskFilter
+    ? rawRisk as UsersRiskFilter
     : 'all';
 
   const rawSort = c.req.query('sort') ?? 'username';
-  const sort: SortKey = ['username', 'lastViewedAt', 'sharingRisk'].includes(rawSort)
-    ? rawSort as SortKey
+  const sort: UsersSortKey = ['username', 'lastViewedAt', 'sharingRisk'].includes(rawSort)
+    ? rawSort as UsersSortKey
     : 'username';
   // Owner-first alphabetical is the stable directory default. Other sorts use the
   // requested direction and username as a deterministic tie-breaker.

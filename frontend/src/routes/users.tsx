@@ -1,24 +1,10 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import {
-  Activity,
-  AlertTriangle,
-  ArrowDown,
-  ArrowUp,
-  ChevronRight,
-  Mail,
-  MailX,
-  User,
-  UserCheck,
-  Users,
-  UserX,
-} from "lucide-react";
+import { useRef, useState } from "react";
+import { Activity, AlertTriangle, UserCheck, Users } from "lucide-react";
 import { api } from "../lib/api.ts";
-import type { PendingInvitation, PlexUser } from "../lib/api.ts";
+import type { PlexUser, UsersActivityFilter, UsersRiskFilter, UsersSortKey } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
-import { avatarUrl } from "../lib/avatar.ts";
-import { formatDate, formatRelativeTime } from "../lib/format.ts";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { HistorySyncWarning } from "../components/HistorySyncWarning.tsx";
 import { DeleteResultAlert } from "../components/DeleteResultAlert.tsx";
@@ -26,47 +12,34 @@ import { Pagination } from "../components/Pagination.tsx";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog.tsx";
 import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog.tsx";
 import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog.tsx";
-import { getRequestFollowThroughPresentation } from "./-users/requestFollowThroughPresentation.ts";
+import { PendingInvitationsPanel } from "./-users/PendingInvitationsPanel.tsx";
+import { UsersFilters } from "./-users/UsersFilters.tsx";
+import { UsersTable } from "./-users/UsersTable.tsx";
 import { UsersTableSkeleton } from "../components/Skeletons.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import "../components/dataSurfaces.css";
 import { requireAuth } from "../lib/requireAuth.ts";
-import {
-  CollectionToolbar,
-  DataSurface,
-  FilterSurface,
-  PageHeader,
-} from "../components/Workspace.tsx";
+import { CollectionToolbar, PageHeader } from "../components/Workspace.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
-import { CustomDaysInput } from "../components/CustomDaysInput.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 
 const PAGE_SIZE = 100;
 const MAX_INACTIVITY_DAYS = 36_500;
 
-type ActivityFilter = "all" | "inactive" | "never" | "unknown";
-type RiskFilter =
-  | "all"
-  | "attention"
-  | "review"
-  | "watch"
-  | "low"
-  | "insufficient_data";
-type SortKey = "username" | "lastViewedAt" | "sharingRisk";
 type SortOrder = "asc" | "desc";
 
 interface UsersSearch {
   search?: string;
-  filter?: ActivityFilter;
+  filter?: UsersActivityFilter;
   inactiveDays?: number;
-  risk?: RiskFilter;
-  sort?: SortKey;
+  risk?: UsersRiskFilter;
+  sort?: UsersSortKey;
   order?: SortOrder;
 }
 
 function validateUsersSearch(search: Record<string, unknown>): UsersSearch {
   const inactiveDays = Number(search.inactiveDays);
-  const riskValues: RiskFilter[] = [
+  const riskValues: UsersRiskFilter[] = [
     "all",
     "attention",
     "review",
@@ -74,7 +47,7 @@ function validateUsersSearch(search: Record<string, unknown>): UsersSearch {
     "low",
     "insufficient_data",
   ];
-  const sortValues: SortKey[] = ["username", "lastViewedAt", "sharingRisk"];
+  const sortValues: UsersSortKey[] = ["username", "lastViewedAt", "sharingRisk"];
   return {
     search: normalizeSearchQuery(search.search),
     filter: search.filter === "inactive" ||
@@ -87,8 +60,12 @@ function validateUsersSearch(search: Record<string, unknown>): UsersSearch {
         inactiveDays <= MAX_INACTIVITY_DAYS
       ? { inactiveDays }
       : {}),
-    risk: riskValues.includes(search.risk as RiskFilter) ? (search.risk as RiskFilter) : "all",
-    sort: sortValues.includes(search.sort as SortKey) ? (search.sort as SortKey) : "username",
+    risk: riskValues.includes(search.risk as UsersRiskFilter)
+      ? (search.risk as UsersRiskFilter)
+      : "all",
+    sort: sortValues.includes(search.sort as UsersSortKey)
+      ? (search.sort as UsersSortKey)
+      : "username",
     order: search.order === "desc" ? "desc" : "asc",
   };
 }
@@ -130,62 +107,16 @@ function UsersPage() {
     void navigate({ search: { ...search, ...next }, replace: true });
   }
 
-  function setSort(sort: SortKey) {
+  function setSort(sort: UsersSortKey) {
     updateSearch({ sort, order: sort === "sharingRisk" ? "desc" : "asc" });
   }
 
-  function toggleSort(sort: SortKey) {
+  function toggleSort(sort: UsersSortKey) {
     if (search.sort === sort) {
       updateSearch({ order: search.order === "asc" ? "desc" : "asc" });
       return;
     }
     setSort(sort);
-  }
-
-  const inactivePresets = [30, 60, 90, 180, 365];
-  const [customActivityFilter, setCustomActivityFilter] = useState<
-    ActivityFilter | null
-  >(null);
-  const activityMode = search.filter === "all"
-    ? "all"
-    : search.filter === "never"
-    ? "never"
-    : search.filter === "unknown"
-    ? "unknown"
-    : customActivityFilter === search.filter ||
-        (search.inactiveDays !== undefined &&
-          !inactivePresets.includes(search.inactiveDays))
-    ? `${search.filter}:custom`
-    : search.inactiveDays === undefined
-    ? `${search.filter}:default`
-    : `${search.filter}:${search.inactiveDays}`;
-
-  function setActivityMode(value: string) {
-    if (value === "all") {
-      setCustomActivityFilter(null);
-      updateSearch({ filter: "all", inactiveDays: undefined });
-      return;
-    }
-    if (value === "never") {
-      setCustomActivityFilter(null);
-      updateSearch({ filter: "never", inactiveDays: undefined });
-      return;
-    }
-    if (value === "unknown") {
-      setCustomActivityFilter(null);
-      updateSearch({ filter: "unknown", inactiveDays: undefined });
-      return;
-    }
-    const [filter, threshold] = value.split(":") as [
-      Exclude<ActivityFilter, "all">,
-      string,
-    ];
-    setCustomActivityFilter(threshold === "custom" ? filter : null);
-    if (threshold === "default" || threshold === "custom") {
-      updateSearch({ filter, inactiveDays: undefined });
-      return;
-    }
-    updateSearch({ filter, inactiveDays: Number(threshold) });
   }
 
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
@@ -267,101 +198,19 @@ function UsersPage() {
             : <span className="skeleton inline-block h-3 w-40 align-middle" />}
         />
 
-        <FilterSurface>
-          <label className="form-control gap-1">
-            <span className="label-text text-xs">Activity</span>
-            <select
-              className="select select-bordered select-sm"
-              value={activityMode}
-              onChange={(e) => setActivityMode(e.target.value)}
-            >
-              <option value="all">Any activity</option>
-              <option value="never">Never watched</option>
-              <option value="unknown">Unknown activity</option>
-              <optgroup label="Inactive">
-                <option value="inactive:default">
-                  Default{data ? ` (${data.defaultInactiveDays} days)` : ""}
-                </option>
-                <option value="inactive:30">30 days</option>
-                <option value="inactive:60">60 days</option>
-                <option value="inactive:90">90 days</option>
-                <option value="inactive:180">180 days</option>
-                <option value="inactive:365">1 year</option>
-                <option value="inactive:custom">Custom…</option>
-              </optgroup>
-            </select>
-          </label>
-          {activityMode.endsWith(":custom") && (
-            <label className="flex flex-col items-start gap-1">
-              <span className="label-text text-xs">Custom days</span>
-              <CustomDaysInput
-                initialDays={search.inactiveDays ?? data?.inactiveDays ?? 90}
-                maxDays={MAX_INACTIVITY_DAYS}
-                label="Custom inactivity threshold in days"
-                onChange={(inactiveDays) => {
-                  setCustomActivityFilter(null);
-                  updateSearch({ inactiveDays });
-                }}
-              />
-            </label>
-          )}
-          <label className="form-control gap-1">
-            <span className="label-text text-xs">Sharing risk</span>
-            <select
-              className="select select-bordered select-sm"
-              value={search.risk}
-              onChange={(e) => updateSearch({ risk: e.target.value as RiskFilter })}
-            >
-              <option value="all">Any risk</option>
-              <option value="attention">Needs attention</option>
-              <option value="review">Review</option>
-              <option value="watch">Watch</option>
-              <option value="low">Low</option>
-              <option value="insufficient_data">Insufficient data</option>
-            </select>
-          </label>
-          <label className="form-control gap-1">
-            <span className="label-text text-xs">Sort by</span>
-            <select
-              className="select select-bordered select-sm"
-              value={search.sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
-            >
-              <option value="username">User</option>
-              <option value="lastViewedAt">Last watched</option>
-              <option value="sharingRisk">Sharing risk</option>
-            </select>
-          </label>
-          <label className="form-control gap-1">
-            <span className="label-text text-xs">Order</span>
-            <select
-              className="select select-bordered select-sm"
-              value={search.order}
-              onChange={(e) => updateSearch({ order: e.target.value as SortOrder })}
-            >
-              {search.sort === "username"
-                ? (
-                  <>
-                    <option value="asc">A–Z</option>
-                    <option value="desc">Z–A</option>
-                  </>
-                )
-                : search.sort === "lastViewedAt"
-                ? (
-                  <>
-                    <option value="asc">Oldest first</option>
-                    <option value="desc">Newest first</option>
-                  </>
-                )
-                : (
-                  <>
-                    <option value="desc">Highest first</option>
-                    <option value="asc">Lowest first</option>
-                  </>
-                )}
-            </select>
-          </label>
-        </FilterSurface>
+        <UsersFilters
+          filter={search.filter}
+          inactiveDays={search.inactiveDays}
+          risk={search.risk}
+          sort={search.sort}
+          order={search.order}
+          defaultInactiveDays={data?.defaultInactiveDays}
+          resolvedInactiveDays={data?.inactiveDays}
+          onActivityChange={updateSearch}
+          onRiskChange={(risk) => updateSearch({ risk })}
+          onSortChange={setSort}
+          onOrderChange={(order) => updateSearch({ order })}
+        />
       </div>
 
       {data && (
@@ -464,130 +313,19 @@ function UsersPage() {
                 />
               )
               : (
-                <DataSurface className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <UserSortTh
-                          label="User"
-                          field="username"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        <UserSortTh
-                          label="Last watched"
-                          field="lastViewedAt"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        <UserSortTh
-                          label="Sharing risk"
-                          field="sharingRisk"
-                          sort={search.sort}
-                          order={search.order}
-                          onSort={toggleSort}
-                        />
-                        {data!.requestFollowThroughAvailable && (
-                          <th className="normal-case">Request follow-through</th>
-                        )}
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data!.users.map((u) => (
-                        <tr key={u.accountId} className="group polished-row">
-                          <td>
-                            <div className="flex items-center gap-3">
-                              {u.thumb
-                                ? (
-                                  <img
-                                    loading="lazy"
-                                    src={avatarUrl(u.thumb)}
-                                    alt=""
-                                    className="w-8 h-8 rounded-full object-cover bg-base-300 shrink-0"
-                                  />
-                                )
-                                : (
-                                  <div className="w-8 h-8 rounded-full bg-base-300 shrink-0 flex items-center justify-center">
-                                    <User className="w-4 h-4 text-base-content/40" />
-                                  </div>
-                                )}
-                              <div className="min-w-0">
-                                <div className="font-medium flex items-center gap-1.5">
-                                  <span className="truncate">{u.username}</span>
-                                  {u.isOwner && (
-                                    <span className="badge badge-outline badge-sm shrink-0">
-                                      Owner
-                                    </span>
-                                  )}
-                                </div>
-                                {u.email && (
-                                  <div className="text-xs text-base-content/40 truncate">
-                                    {u.email}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="text-sm text-base-content/70">
-                            {u.activityStatus === "watched" && u.lastViewedAt
-                              ? (
-                                formatDate(u.lastViewedAt)
-                              )
-                              : u.activityStatus === "never"
-                              ? (
-                                <span className="badge badge-error badge-outline badge-sm">
-                                  never
-                                </span>
-                              )
-                              : (
-                                <span
-                                  className="tooltip tooltip-right activity-status-tooltip"
-                                  data-tip="Activity unknown — Plex hasn't provided enough information to match this user with their playback history."
-                                  tabIndex={0}
-                                  aria-label="Activity unknown. Plex hasn't provided enough information to match this user with their playback history."
-                                >
-                                  <span className="badge badge-warning badge-outline badge-sm">
-                                    unknown
-                                  </span>
-                                </span>
-                              )}
-                          </td>
-                          <td>
-                            <SharingRiskCell
-                              assessment={u.sharingRisk}
-                              monitorStatus={data!.monitor.status}
-                              onOpen={() => openRiskDetails(u)}
-                            />
-                          </td>
-                          {data!.requestFollowThroughAvailable && (
-                            <td>
-                              <RequestFollowThroughCell
-                                assessment={u.requestFollowThrough}
-                                onOpen={() => openFollowThrough(u)}
-                              />
-                            </td>
-                          )}
-                          <td className="text-right">
-                            {!u.isOwner && (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-square size-10 min-h-10 rounded-lg text-error/70 transition-colors hover:bg-error/10 hover:text-error group-hover:text-error group-focus-within:text-error"
-                                onClick={() => openReview(u)}
-                                aria-label={`Remove ${u.username}'s access`}
-                                title="Remove access"
-                              >
-                                <UserX className="w-4 h-4" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </DataSurface>
+                data && (
+                  <UsersTable
+                    users={data.users}
+                    sort={search.sort}
+                    order={search.order}
+                    onSort={toggleSort}
+                    requestFollowThroughAvailable={data.requestFollowThroughAvailable}
+                    monitorStatus={data.monitor.status}
+                    onOpenRiskDetails={openRiskDetails}
+                    onOpenFollowThrough={openFollowThrough}
+                    onRemove={openReview}
+                  />
+                )
               )}
 
             <Pagination
@@ -618,487 +356,5 @@ function UsersPage() {
         onClose={closeFollowThrough}
       />
     </div>
-  );
-}
-
-type InvitationFilter = "all" | "attention" | "current" | "stale" | "critical";
-type InvitationSort = "createdAt" | "username" | "libraryCount";
-const INVITATION_PAGE_SIZE = 25;
-
-function PendingInvitationsPanel() {
-  const qc = useQueryClient();
-  const [filter, setFilter] = useState<InvitationFilter>("all");
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<InvitationSort>("createdAt");
-  const [order, setOrder] = useState<"asc" | "desc">("asc");
-  const [offset, setOffset] = useState(0);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearch(searchInput);
-      setOffset(0);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
-  const query = useQuery({
-    queryKey: queryKeys.users.invitationList({
-      filter,
-      search,
-      sort,
-      order,
-      offset,
-    }),
-    queryFn: () =>
-      api.users.invitations({
-        filter,
-        search,
-        sort,
-        order,
-        limit: INVITATION_PAGE_SIZE,
-        offset,
-      }),
-    placeholderData: (previous) => previous,
-    staleTime: 60_000,
-  });
-  const { data, isLoading: loading, error } = query;
-  const [revokeInvitation, setRevokeInvitation] = useState<
-    PendingInvitation | null
-  >(null);
-  const revokeDialogRef = useRef<HTMLDialogElement>(null);
-  const revokeMutation = useMutation({
-    mutationFn: api.users.cancelInvitation,
-    onSuccess: () => {
-      revokeDialogRef.current?.close();
-      setRevokeInvitation(null);
-      if (data?.invitations.length === 1 && offset > 0) {
-        setOffset(Math.max(0, offset - INVITATION_PAGE_SIZE));
-      }
-      void qc.invalidateQueries({ queryKey: queryKeys.users.invitations });
-    },
-  });
-
-  function openRevoke(invitation: PendingInvitation) {
-    revokeMutation.reset();
-    setRevokeInvitation(invitation);
-    revokeDialogRef.current?.showModal();
-  }
-
-  if (loading) {
-    return (
-      <DataSurface className="p-4" aria-label="Loading pending invitations">
-        <div className="skeleton h-5 w-44" />
-      </DataSurface>
-    );
-  }
-  if (error) {
-    return (
-      <ErrorAlert
-        message="Pending invitations could not be loaded from Plex."
-        onRetry={() => void query.refetch()}
-      />
-    );
-  }
-  if (!data) return null;
-
-  if (data.serverMatch !== "matched") {
-    return (
-      <div className="alert border border-warning/30 bg-warning/5 text-sm">
-        <AlertTriangle className="h-4 w-4 text-warning" />
-        <span>
-          {data.serverMatch === "ambiguous"
-            ? "Pending invitations could not be assigned because multiple owned Plex servers share this server's name."
-            : "Plex did not provide enough server identity information to assign pending invitations."}
-        </span>
-      </div>
-    );
-  }
-  if (data.overallTotal === 0) return null;
-
-  const page = Math.floor(offset / INVITATION_PAGE_SIZE);
-  const totalPages = Math.ceil(data.total / INVITATION_PAGE_SIZE);
-
-  return (
-    <DataSurface className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-base-content/10 px-4 py-3">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-warning/10 text-warning">
-            <Mail className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="font-medium">Pending invitations</h2>
-            <p className="text-xs text-base-content/45">
-              {data.overallTotal} awaiting acceptance
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {data.staleCount > 0 && (
-            <span className="badge badge-warning badge-outline badge-sm">
-              {data.staleCount} over {data.staleAfterDays} days
-            </span>
-          )}
-          {data.criticalCount > 0 && (
-            <span className="badge badge-error badge-outline badge-sm">
-              {data.criticalCount} over {data.criticalAfterDays} days
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-end gap-3 border-b border-base-content/10 bg-base-200/35 px-4 py-3">
-        <label className="form-control gap-1">
-          <span className="label-text text-xs">Status</span>
-          <select
-            className="select select-bordered select-sm"
-            value={filter}
-            onChange={(event) => {
-              setFilter(event.target.value as InvitationFilter);
-              setOffset(0);
-            }}
-          >
-            <option value="all">All invitations</option>
-            <option value="attention">Needs attention</option>
-            <option value="current">Current</option>
-            <option value="stale">Aging</option>
-            <option value="critical">Overdue</option>
-          </select>
-        </label>
-        <label className="form-control min-w-52 flex-1 gap-1">
-          <span className="label-text text-xs">Search</span>
-          <input
-            type="search"
-            className="input input-bordered input-sm w-full"
-            placeholder="Username or email"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-          />
-        </label>
-        <label className="form-control gap-1">
-          <span className="label-text text-xs">Sort by</span>
-          <select
-            className="select select-bordered select-sm"
-            value={`${sort}:${order}`}
-            onChange={(event) => {
-              const [nextSort, nextOrder] = event.target.value.split(":") as [
-                InvitationSort,
-                "asc" | "desc",
-              ];
-              setSort(nextSort);
-              setOrder(nextOrder);
-              setOffset(0);
-            }}
-          >
-            <option value="createdAt:asc">Oldest first</option>
-            <option value="createdAt:desc">Newest first</option>
-            <option value="username:asc">Name A–Z</option>
-            <option value="username:desc">Name Z–A</option>
-            <option value="libraryCount:desc">Most libraries</option>
-            <option value="libraryCount:asc">Fewest libraries</option>
-          </select>
-        </label>
-      </div>
-      <div className="overflow-x-auto">
-        {data.invitations.length === 0
-          ? (
-            <div className="px-4 py-8 text-center text-sm text-base-content/45">
-              No pending invitations match these filters.
-            </div>
-          )
-          : (
-            <table className="table table-sm">
-              <thead>
-                <tr>
-                  <th>Invitee</th>
-                  <th>Libraries</th>
-                  <th>Invitation sent</th>
-                  <th>Status</th>
-                  <th className="w-14 pr-4 text-right">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.invitations.map((invitation) => (
-                  <PendingInvitationRow
-                    key={invitation.inviteId}
-                    invitation={invitation}
-                    onRevoke={openRevoke}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-      </div>
-      {totalPages > 1 && (
-        <div className="border-t border-base-content/10 px-4 py-2">
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            onPageChange={(nextPage) => setOffset(nextPage * INVITATION_PAGE_SIZE)}
-          />
-        </div>
-      )}
-      <dialog ref={revokeDialogRef} className="modal">
-        <div className="modal-box polished-modal max-w-md">
-          <h3 className="text-lg font-semibold">Revoke invitation?</h3>
-          <p className="mt-2 text-sm text-base-content/60">
-            Cancel the pending Plex invitation for{" "}
-            <strong className="text-base-content">
-              {revokeInvitation?.username ||
-                revokeInvitation?.email ||
-                "this user"}
-            </strong>
-            ? This cancels the pending Plex invitation. They will need a new invitation to gain
-            access.
-          </p>
-          {revokeMutation.isError && (
-            <div className="alert alert-error mt-4 text-sm">
-              {revokeMutation.error instanceof Error
-                ? revokeMutation.error.message
-                : "Unable to revoke invitation"}
-            </div>
-          )}
-          <div className="modal-action">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={revokeMutation.isPending}
-              onClick={() => revokeDialogRef.current?.close()}
-            >
-              Keep invitation
-            </button>
-            <button
-              type="button"
-              className="btn btn-error"
-              disabled={!revokeInvitation || revokeMutation.isPending}
-              onClick={() =>
-                revokeInvitation &&
-                revokeMutation.mutate(revokeInvitation.inviteId)}
-            >
-              {revokeMutation.isPending && <span className="loading loading-spinner loading-xs" />}
-              Revoke invitation
-            </button>
-          </div>
-        </div>
-        <form method="dialog" className="modal-backdrop">
-          <button type="submit" disabled={revokeMutation.isPending}>
-            Close
-          </button>
-        </form>
-      </dialog>
-    </DataSurface>
-  );
-}
-
-function PendingInvitationRow({
-  invitation,
-  onRevoke,
-}: {
-  invitation: PendingInvitation;
-  onRevoke: (invitation: PendingInvitation) => void;
-}) {
-  const displayName = invitation.username || invitation.email ||
-    "Plex invitation";
-  return (
-    <tr className="polished-row">
-      <td>
-        <div className="flex min-w-0 items-center gap-3">
-          {invitation.thumb
-            ? (
-              <img
-                loading="lazy"
-                src={avatarUrl(invitation.thumb)}
-                alt=""
-                className="h-8 w-8 shrink-0 rounded-full bg-base-300 object-cover"
-              />
-            )
-            : (
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-base-300">
-                <Mail className="h-3.5 w-3.5 text-base-content/40" />
-              </div>
-            )}
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{displayName}</div>
-            {invitation.username && invitation.email && (
-              <div className="truncate text-xs text-base-content/40">
-                {invitation.email}
-              </div>
-            )}
-          </div>
-        </div>
-      </td>
-      <td className="text-sm text-base-content/60">
-        {invitation.libraryCount ?? "Unknown"}
-      </td>
-      <td>
-        <div
-          className="min-w-20 whitespace-nowrap tabular-nums"
-          title={`Invited ${formatDate(invitation.createdAt)}`}
-        >
-          <div
-            className={`text-sm ${
-              invitation.ageStatus === "critical"
-                ? "font-semibold text-error"
-                : invitation.ageStatus === "stale"
-                ? "font-medium text-warning"
-                : ""
-            }`}
-          >
-            {formatRelativeTime(invitation.createdAt)}
-          </div>
-          <div className="text-xs text-base-content/40">invitation sent</div>
-        </div>
-      </td>
-      <td>
-        <span
-          className={`badge badge-sm badge-outline ${
-            invitation.ageStatus === "critical"
-              ? "badge-error"
-              : invitation.ageStatus === "stale"
-              ? "badge-warning"
-              : "badge-ghost"
-          }`}
-        >
-          {invitation.ageStatus === "critical"
-            ? "Overdue"
-            : invitation.ageStatus === "stale"
-            ? "Aging"
-            : "Current"}
-        </span>
-      </td>
-      <td className="w-14 pr-4 text-right">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs btn-square shrink-0 text-error"
-          onClick={() => onRevoke(invitation)}
-          aria-label={`Revoke invitation for ${displayName}`}
-          title="Revoke invitation"
-        >
-          <MailX className="h-4 w-4" />
-        </button>
-      </td>
-    </tr>
-  );
-}
-
-function UserSortTh({
-  label,
-  field,
-  sort,
-  order,
-  onSort,
-}: {
-  label: string;
-  field: SortKey;
-  sort: SortKey;
-  order: SortOrder;
-  onSort: (field: SortKey) => void;
-}) {
-  const active = sort === field;
-  return (
-    <th>
-      <button
-        type="button"
-        className="flex items-center gap-1 hover:text-primary transition-colors"
-        onClick={() => onSort(field)}
-      >
-        {label}
-        {active
-          ? (
-            order === "desc" ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />
-          )
-          : (
-            <span className="w-3 h-3 opacity-0">
-              <ArrowDown className="w-3 h-3" />
-            </span>
-          )}
-      </button>
-    </th>
-  );
-}
-
-function SharingRiskCell({
-  assessment,
-  monitorStatus,
-  onOpen,
-}: {
-  assessment: PlexUser["sharingRisk"];
-  monitorStatus: "starting" | "connected" | "polling" | "disconnected";
-  onOpen: () => void;
-}) {
-  const label = assessment.riskLevel === "insufficient_data"
-    ? assessment.observationCount > 0 ? "Limited data" : "Not enough data"
-    : assessment.riskLevel === "review"
-    ? "Review"
-    : assessment.riskLevel === "watch"
-    ? "Watch"
-    : "Low";
-  const badgeClass = assessment.riskLevel === "review"
-    ? "badge-error"
-    : assessment.riskLevel === "watch"
-    ? "badge-warning"
-    : assessment.riskLevel === "low"
-    ? "badge-success"
-    : "badge-ghost";
-  const supportingText = assessment.dataConfidence === "none"
-    ? monitorStatus === "disconnected" ? "Monitoring disconnected" : "No observations yet"
-    : `${assessment.dataConfidence} confidence · ${assessment.signals.length} ${
-      assessment.signals.length === 1 ? "signal" : "signals"
-    }`;
-
-  return (
-    <button
-      type="button"
-      className="group/risk flex min-h-12 w-full min-w-48 items-center justify-between gap-3 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-left transition-colors hover:border-base-300 hover:bg-base-200/55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-      onClick={onOpen}
-      aria-label={`View sharing risk details: ${label}, score ${assessment.riskScore} out of 100`}
-    >
-      <span className="min-w-0">
-        <span className="flex items-center gap-2">
-          <span className={`badge badge-sm badge-outline ${badgeClass}`}>
-            {label}
-          </span>
-          {assessment.riskLevel !== "insufficient_data" && (
-            <span className="text-xs font-semibold tabular-nums text-base-content/70">
-              {assessment.riskScore}
-              <span className="font-normal text-base-content/35">/100</span>
-            </span>
-          )}
-        </span>
-        <span className="mt-0.5 block text-[11px] capitalize text-base-content/45 whitespace-nowrap">
-          {supportingText}
-        </span>
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-all group-hover/risk:translate-x-0.5 group-hover/risk:text-base-content/65" />
-    </button>
-  );
-}
-
-function RequestFollowThroughCell({
-  assessment,
-  onOpen,
-}: {
-  assessment: PlexUser["requestFollowThrough"];
-  onOpen: () => void;
-}) {
-  const { label, detail, badgeClass } = getRequestFollowThroughPresentation(assessment);
-  return (
-    <button
-      type="button"
-      className="group/follow flex min-h-12 w-full min-w-48 items-center justify-between gap-3 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-left transition-colors hover:border-base-300 hover:bg-base-200/55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-      onClick={onOpen}
-      aria-label={`View request follow-through details: ${label}`}
-    >
-      <span className="min-w-0">
-        <span
-          className={`badge badge-sm badge-outline ${badgeClass}`}
-        >
-          {label}
-        </span>
-        <span className="mt-0.5 block whitespace-nowrap text-[11px] text-base-content/45">
-          {detail}
-        </span>
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-all group-hover/follow:translate-x-0.5 group-hover/follow:text-base-content/65" />
-    </button>
   );
 }
