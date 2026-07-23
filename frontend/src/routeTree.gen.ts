@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root.tsx'
 import { Route as IndexRouteImport } from './routes/index.tsx'
 import { Route as ActivityRouteImport } from './routes/activity.tsx'
+import { Route as ArcadeRouteImport } from './routes/arcade.tsx'
 import { Route as DashboardRouteImport } from './routes/dashboard.tsx'
 import { Route as DuplicatesRouteImport } from './routes/duplicates.tsx'
 import { Route as SettingsRouteImport } from './routes/settings.tsx'
@@ -30,6 +31,11 @@ const IndexRoute = IndexRouteImport.update({
 const ActivityRoute = ActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArcadeRoute = ArcadeRouteImport.update({
+  id: '/arcade',
+  path: '/arcade',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -88,6 +94,7 @@ const LibrariesKeyShowsRatingKeyRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/arcade': typeof ArcadeRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -102,6 +109,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/arcade': typeof ArcadeRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/activity': typeof ActivityRoute
+  '/arcade': typeof ArcadeRoute
   '/dashboard': typeof DashboardRoute
   '/duplicates': typeof DuplicatesRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/activity'
+    | '/arcade'
     | '/dashboard'
     | '/duplicates'
     | '/settings'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/activity'
+    | '/arcade'
     | '/dashboard'
     | '/duplicates'
     | '/settings'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/activity'
+    | '/arcade'
     | '/dashboard'
     | '/duplicates'
     | '/settings'
@@ -176,6 +188,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
+  ArcadeRoute: typeof ArcadeRoute
   DashboardRoute: typeof DashboardRoute
   DuplicatesRoute: typeof DuplicatesRoute
   SettingsRoute: typeof SettingsRouteWithChildren
@@ -201,6 +214,13 @@ declare module '@tanstack/react-router' {
       path: '/activity'
       fullPath: '/activity'
       preLoaderRoute: typeof ActivityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/arcade': {
+      id: '/arcade'
+      path: '/arcade'
+      fullPath: '/arcade'
+      preLoaderRoute: typeof ArcadeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -291,6 +311,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
+  ArcadeRoute: ArcadeRoute,
   DashboardRoute: DashboardRoute,
   DuplicatesRoute: DuplicatesRoute,
   SettingsRoute: SettingsRouteWithChildren,

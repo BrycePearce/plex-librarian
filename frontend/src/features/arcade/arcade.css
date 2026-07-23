@@ -1,0 +1,143 @@
+.arcade-page {
+  min-height: min(760px, calc(100vh - 4rem));
+}
+
+.arcade-hud,
+.arcade-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: color-mix(in oklab, currentColor 68%, transparent);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.arcade-hud strong {
+  color: var(--color-primary);
+  font-size: 1rem;
+}
+
+.arcade-combo {
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.arcade-combo.is-active {
+  color: #f8d477;
+  transform: scale(1.04);
+}
+
+.arcade-combo.is-active strong {
+  color: #f8d477;
+}
+
+.arcade-health {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.arcade-health svg {
+  width: 1rem;
+  fill: transparent;
+  color: color-mix(in oklab, currentColor 24%, transparent);
+}
+
+.arcade-health svg.is-full {
+  fill: var(--color-error);
+  color: var(--color-error);
+}
+
+.arcade-cabinet {
+  position: relative;
+  flex: 1;
+  min-height: 430px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 28%, transparent);
+  border-radius: 1rem;
+  background: #07101a;
+  box-shadow: inset 0 0 60px rgb(0 0 0 / 35%), 0 22px 60px rgb(0 0 0 / 16%);
+}
+
+.arcade-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.arcade-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(3 8 14 / 58%);
+  backdrop-filter: blur(2px);
+}
+
+.arcade-overlay-card {
+  width: min(100%, 22rem);
+  padding: 1.5rem;
+  border: 1px solid rgb(104 211 181 / 32%);
+  border-radius: 1rem;
+  background: rgb(10 20 31 / 94%);
+  color: #e9f3f1;
+  text-align: center;
+  box-shadow: 0 20px 50px rgb(0 0 0 / 42%);
+}
+
+.arcade-overlay-card h2 {
+  margin-bottom: 0.35rem;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.arcade-overlay-card p {
+  margin-bottom: 1rem;
+  color: rgb(233 243 241 / 68%);
+}
+
+.arcade-controls kbd {
+  min-width: 2rem;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  border-radius: 0.3rem;
+  background: color-mix(in oklab, currentColor 7%, transparent);
+  font: inherit;
+}
+
+.arcade-volume {
+  display: inline-flex;
+  width: 5.5rem;
+  align-items: center;
+}
+
+.arcade-volume input:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.arcade-volume-input {
+  width: 100%;
+  cursor: pointer;
+  accent-color: var(--color-primary);
+}
+
+@media (max-width: 640px) {
+  .arcade-page {
+    min-height: calc(100dvh - 4rem);
+  }
+
+  .arcade-hud,
+  .arcade-controls {
+    flex-wrap: wrap;
+  }
+
+  .arcade-cabinet {
+    min-height: 360px;
+  }
+}

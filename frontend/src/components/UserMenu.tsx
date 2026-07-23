@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronUp, ExternalLink, LogOut, User } from "lucide-react";
+import { ChevronUp, ExternalLink, Gamepad2, LogOut, User } from "lucide-react";
 import { api } from "../lib/api.ts";
 import { clearServerScopedQueries } from "../lib/queryCache.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
@@ -59,6 +59,13 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
   const requestDisconnect = () => {
     disconnect.reset();
     disconnect.mutate();
+  };
+
+  const openArcade = () => {
+    setOpen(false);
+    // Deliberately navigate from the click instead of rendering a Link. The router's
+    // global intent preloading would otherwise fetch the game chunk on hover/focus.
+    void navigate({ to: "/arcade" });
   };
 
   // Same footprint as the real button below — this query resolves after first paint (it
@@ -139,6 +146,17 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
                 <ExternalLink className="w-4 h-4" />
                 Open Plex
               </a>
+            </li>
+            <li>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex items-center gap-2 leading-none"
+                onClick={openArcade}
+              >
+                <Gamepad2 className="w-4 h-4" />
+                ???
+              </button>
             </li>
             {authStatus.source !== "env" && (
               <>
