@@ -83,7 +83,6 @@ router.post('/plex', async (c) => {
     serverId,
     plexAccountId: payload.Account?.id ?? null,
     accountIdKind: 'local',
-    username: payload.Account?.title ?? null,
     observedAt: now,
     event: payload.event,
     ratingKey: Metadata.ratingKey,

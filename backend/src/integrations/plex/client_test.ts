@@ -59,6 +59,119 @@ Deno.test('mapActiveSessions normalizes Plex user, player, and network fields', 
   );
 });
 
+Deno.test('local accounts expose PMS SystemAccount ids and names', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        size: 5,
+        Account: [
+          { id: 0, key: '/accounts/0', name: 'System' },
+          { id: 1, key: '/accounts/1', name: 'Owner' },
+          { id: 7, key: '/accounts/700', name: 'Local display name' },
+          { id: 8, name: 'Legacy account' },
+          { id: 9, key: '/accounts/not-a-number' },
+        ],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  assertEquals(await client.localAccounts(), [
+    { id: 1, name: 'Owner' },
+    { id: 7, name: 'Local display name' },
+    { id: 8, name: 'Legacy account' },
+    { id: 9, name: null },
+  ]);
+});
+
+Deno.test('local accounts reject a response without the mandatory owner', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        size: 1,
+        Account: [{ id: 700, name: 'Friend' }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.localAccounts(),
+    Error,
+    'omitted the server owner',
+  );
+});
+
+Deno.test('local accounts reject a missing account collection', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {},
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.localAccounts(),
+    Error,
+    'omitted the account collection',
+  );
+});
+
+Deno.test('local accounts reject a partially malformed account collection', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        size: 2,
+        Account: [
+          { id: 1, name: 'Owner' },
+          { id: 'not-a-number', name: 'Friend' },
+        ],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.localAccounts(),
+    Error,
+    'contained an invalid account id',
+  );
+});
+
+Deno.test('local accounts reject a structurally incomplete collection', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        size: 2,
+        Account: [{ id: 1, name: 'Owner' }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.localAccounts(),
+    Error,
+    'incomplete account collection',
+  );
+});
+
+Deno.test('local accounts reject duplicate numeric identities', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        size: 3,
+        Account: [
+          { id: 0, name: 'System' },
+          { id: 1, name: 'Owner' },
+          { id: 1, name: 'Conflicting owner' },
+        ],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.localAccounts(),
+    Error,
+    'duplicate account id',
+  );
+});
+
 Deno.test('item sync requests external GUIDs without adding them to episode streams', async () => {
   const urls: string[] = [];
   const mockFetch = ((input: string | URL | Request) => {
@@ -101,6 +214,45 @@ Deno.test('history sync rejects a short page instead of publishing partial cover
     () => client.libraryHistory('7').next(),
     Error,
     'received 1 of 2 entries at offset 0',
+  );
+});
+
+Deno.test('history sync normalizes numeric account ids and rejects malformed identities', async () => {
+  const numericStringFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{ ratingKey: '1', viewedAt: 100, accountID: '700' }],
+      },
+    }))) as typeof fetch;
+  const numericStringClient = new PlexClient(
+    'http://plex:32400',
+    'token',
+    undefined,
+    numericStringFetch,
+  );
+  assertEquals(
+    (await numericStringClient.libraryHistory('7').next()).value?.[0].accountID,
+    700,
+  );
+
+  const malformedFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{ ratingKey: '1', viewedAt: 100, accountID: 'not-an-id' }],
+      },
+    }))) as typeof fetch;
+  const malformedClient = new PlexClient(
+    'http://plex:32400',
+    'token',
+    undefined,
+    malformedFetch,
+  );
+  await assertRejects(
+    () => malformedClient.libraryHistory('7').next(),
+    Error,
+    'history contained an invalid account id',
   );
 });
 

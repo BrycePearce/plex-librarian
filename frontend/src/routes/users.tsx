@@ -215,8 +215,10 @@ function UsersPage() {
 
       {data && (
         <HistorySyncWarning
-          historySyncedAt={data.usersSyncedAt}
-          warningMessage="The user roster hasn't synced yet — this list may be incomplete or stale. Run a sync to populate it."
+          historySyncedAt={data.historyComplete ? data.usersSyncedAt : null}
+          warningMessage={data.usersSyncedAt === null
+            ? "The user roster hasn't synced yet — this list may be incomplete or stale. Run a sync to populate it."
+            : "Cross-user watch history is incomplete. Last-watched values marked pending will update after a successful sync."}
         />
       )}
 
@@ -295,7 +297,7 @@ function UsersPage() {
                     : search.filter === "never"
                     ? "Everyone has watched something"
                     : search.filter === "unknown"
-                    ? "All user activity is resolved"
+                    ? "No activity needs resolution"
                     : search.filter === "inactive"
                     ? "Everyone looks active"
                     : "No users found"}
@@ -306,7 +308,7 @@ function UsersPage() {
                     : search.filter === "never"
                     ? "No users with access are currently marked as never watched."
                     : search.filter === "unknown"
-                    ? "Every user's Plex identity and watch history could be reconciled."
+                    ? "Every user's Plex identity and watch history is resolved."
                     : search.filter === "inactive"
                     ? "No one has crossed your inactive-user threshold."
                     : "Users with access will appear here after the roster syncs."}

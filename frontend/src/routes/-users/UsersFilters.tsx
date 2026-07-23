@@ -87,7 +87,7 @@ export function UsersFilters({
         >
           <option value="all">Any activity</option>
           <option value="never">Never watched</option>
-          <option value="unknown">Unknown activity</option>
+          <option value="unknown">Pending or unresolved</option>
           <optgroup label="Inactive">
             <option value="inactive:default">
               Default{defaultInactiveDays !== undefined ? ` (${defaultInactiveDays} days)` : ""}

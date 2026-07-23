@@ -440,13 +440,36 @@ export class PlexClient {
   // plex.tv roster). id 0's nameless placeholder is filtered out here so callers never
   // have to remember to skip it.
   async localAccounts(): Promise<PlexLocalAccount[]> {
-    const data = await this.get<
-      { MediaContainer: { Account?: Array<{ id: number; name?: string }> } }
-    >(
+    const data = await this.get<{
+      MediaContainer: {
+        size?: number;
+        Account?: Array<{ id: number; name?: string }>;
+      };
+    }>(
       '/accounts',
     );
-    return (data.MediaContainer.Account ?? [])
-      .filter((a): a is { id: number; name: string } => a.id !== 0 && !!a.name);
+    const { Account: accounts, size } = data.MediaContainer;
+    if (!Array.isArray(accounts)) {
+      throw new Error('Plex /accounts response omitted the account collection');
+    }
+    if (!Number.isSafeInteger(size) || size !== accounts.length) {
+      throw new Error('Plex /accounts response contained an incomplete account collection');
+    }
+    if (
+      accounts.some((account) => !Number.isSafeInteger(account.id) || account.id < 0)
+    ) {
+      throw new Error('Plex /accounts response contained an invalid account id');
+    }
+    if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
+      throw new Error('Plex /accounts response contained a duplicate account id');
+    }
+    const normalized = accounts
+      .filter((account) => account.id > 0)
+      .map(({ id, name }) => ({ id, name: name || null }));
+    if (!normalized.some((account) => account.id === 1)) {
+      throw new Error('Plex /accounts response omitted the server owner');
+    }
+    return normalized;
   }
 
   async activeSessions(): Promise<PlexActiveSession[]> {
@@ -768,8 +791,11 @@ export class PlexClient {
   // Streams all play history for a library section across ALL users.
   // Episodes are returned at episode granularity; use grandparentRatingKey to attribute to show.
   async *libraryHistory(libraryKey: string): AsyncGenerator<PlexHistoryEntry[]> {
+    type RawHistoryEntry = Omit<PlexHistoryEntry, 'accountID'> & {
+      accountID?: number | string | null;
+    };
     const fetchPage = (start: number, size = ITEMS_PAGE_SIZE) =>
-      this.get<{ MediaContainer: { Metadata?: PlexHistoryEntry[]; totalSize?: number } }>(
+      this.get<{ MediaContainer: { Metadata?: RawHistoryEntry[]; totalSize?: number } }>(
         // Oldest-first makes the initial `totalSize` a stable prefix: plays added while
         // this walk is running append after that prefix instead of shifting offsets and
         // causing duplicate/missed history. They are picked up by the next full sync.
@@ -779,6 +805,20 @@ export class PlexClient {
           'X-Plex-Container-Size': String(size),
         },
       );
+
+    const normalizeHistoryPage = (entries: RawHistoryEntry[]): PlexHistoryEntry[] =>
+      entries.map((entry) => {
+        const rawAccountId = entry.accountID;
+        const accountID = typeof rawAccountId === 'string' && /^\d+$/.test(rawAccountId)
+          ? Number(rawAccountId)
+          : rawAccountId;
+        if (!Number.isSafeInteger(accountID) || Number(accountID) <= 0) {
+          throw new Error(
+            `Plex history contained an invalid account id for library ${libraryKey}`,
+          );
+        }
+        return { ...entry, accountID: accountID as number };
+      });
 
     const sameHistoryEntry = (left: PlexHistoryEntry, right: PlexHistoryEntry): boolean => {
       if (left.historyKey !== undefined || right.historyKey !== undefined) {
@@ -797,7 +837,7 @@ export class PlexClient {
       throw new Error(`Plex did not return totalSize for history of library ${libraryKey}`);
     }
 
-    const firstPage = first.MediaContainer.Metadata ?? [];
+    const firstPage = normalizeHistoryPage(first.MediaContainer.Metadata ?? []);
     const expectedFirstPageSize = Math.min(ITEMS_PAGE_SIZE, total);
     if (firstPage.length !== expectedFirstPageSize) {
       throw new Error(
@@ -831,7 +871,7 @@ export class PlexClient {
             })`,
           );
         }
-        const metadata = page.Metadata ?? [];
+        const metadata = normalizeHistoryPage(page.Metadata ?? []);
         const expectedPageSize = Math.min(ITEMS_PAGE_SIZE, total - start);
         if (metadata.length < expectedPageSize + 1) {
           throw new Error(

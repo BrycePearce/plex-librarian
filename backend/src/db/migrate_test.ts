@@ -241,3 +241,63 @@ Deno.test('0043 backfills request types and initializes season-scoped evidence',
   );
   sqlite.close();
 });
+
+Deno.test('0044 invalidates legacy name-derived identity attribution', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE servers (
+      id INTEGER PRIMARY KEY,
+      users_synced_at INTEGER
+    );
+    CREATE TABLE users (
+      server_id INTEGER NOT NULL,
+      account_id INTEGER NOT NULL,
+      local_account_id INTEGER,
+      last_viewed_at INTEGER,
+      last_ip TEXT,
+      last_player TEXT,
+      total_plays INTEGER NOT NULL,
+      total_duration INTEGER NOT NULL,
+      last_scrobbled_at INTEGER,
+      PRIMARY KEY (server_id, account_id)
+    );
+    CREATE TABLE user_item_activity (server_id INTEGER, account_id INTEGER);
+    CREATE TABLE user_season_activity (server_id INTEGER, account_id INTEGER);
+    CREATE TABLE user_ip_history (server_id INTEGER, account_id INTEGER);
+    CREATE TABLE user_play_observations (server_id INTEGER, account_id INTEGER);
+
+    INSERT INTO servers VALUES (1, 100);
+    INSERT INTO users VALUES
+      (1, 700, 800, 90, '203.0.113.1', 'TV', 3, 3000, 90);
+    INSERT INTO user_item_activity VALUES (1, 700);
+    INSERT INTO user_season_activity VALUES (1, 700);
+    INSERT INTO user_ip_history VALUES (1, 700);
+    INSERT INTO user_play_observations VALUES (1, 700);
+  `);
+
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0044_numeric_user_identity.sql')),
+  );
+
+  assertEquals(sqlite.prepare('SELECT users_synced_at FROM servers').values(), [[null]]);
+  assertEquals(
+    sqlite.prepare(
+      `SELECT local_account_id, last_viewed_at, last_ip, last_player,
+              total_plays, total_duration, last_scrobbled_at
+       FROM users`,
+    ).values(),
+    [[null, null, null, null, 0, 0, null]],
+  );
+  for (
+    const table of [
+      'user_item_activity',
+      'user_season_activity',
+      'user_ip_history',
+      'user_play_observations',
+    ]
+  ) {
+    assertEquals(sqlite.prepare(`SELECT count(*) FROM ${table}`).values(), [[0]]);
+  }
+  sqlite.close();
+});

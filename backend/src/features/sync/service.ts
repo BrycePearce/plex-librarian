@@ -53,6 +53,33 @@ function buildCallbacks(
   };
 }
 
+async function stageLibraryHistoryCoverage(
+  plexLibraries: PlexLibrary[],
+  serverId: number,
+  now: number,
+): Promise<void> {
+  for (const batch of sqliteWriteBatches(plexLibraries)) {
+    await db.insert(libraries)
+      .values(batch.map((lib) => ({
+        serverId,
+        key: lib.key,
+        title: lib.title,
+        type: lib.type,
+        syncedAt: now,
+        historySyncedAt: null,
+      })))
+      .onConflictDoUpdate({
+        target: [libraries.serverId, libraries.key],
+        set: {
+          title: excl(libraries.title),
+          type: excl(libraries.type),
+          syncedAt: excl(libraries.syncedAt),
+          historySyncedAt: null,
+        },
+      });
+  }
+}
+
 async function syncLibrary(
   plex: PlexClient,
   lib: PlexLibrary,
@@ -301,6 +328,12 @@ export async function runSync(
     );
   }
 
+  // Publish every discovered video library as history-pending before user identity
+  // coverage can become complete. Without this staging pass, a first-ever sync has a
+  // window where the database contains no video rows and the music-only empty-set rule
+  // can incorrectly classify users as never watched.
+  await stageLibraryHistoryCoverage(plexLibraries, serverId, now);
+
   // Roster is a per-server concern, not per-library — refresh it once, before any
   // library's own syncLibraryHistory call needs already-reconciled local account ids
   // to attribute activity to (see syncUsers' comment above).
@@ -352,23 +385,19 @@ export async function runLibrarySync(
     .limit(1);
   if (!lib) throw new Error(`Library ${libraryKey} not found`);
 
-  await Promise.all([
-    db.update(servers).set({ usersSyncedAt: null }).where(eq(servers.id, serverId)),
-    lib.type === 'artist'
-      ? Promise.resolve()
-      : db.update(libraries).set({ historySyncedAt: null }).where(
-        libraryByKey(serverId, libraryKey),
-      ),
-  ]);
+  if (lib.type !== 'artist') {
+    await db.update(libraries).set({ historySyncedAt: null }).where(
+      libraryByKey(serverId, libraryKey),
+    );
+  }
 
   reporter?.onLibraries?.([{ key: lib.key, title: lib.title }]);
 
   const now = Math.floor(Date.now() / 1000);
 
-  // Same reconciliation this library's own syncLibraryHistory call needs (see syncUsers'
-  // comment above) — a per-library resync is its own sync pass just like runSync(), so
-  // it needs local account ids reconciled going in too, not just full syncs.
-  await syncUsers(plex, serverId, now);
+  // A library-only sync uses the last confirmed identity mappings. Publishing a newer
+  // server-wide reconciliation here would make every other video library's older
+  // history generation incomplete until a full sync walked them as well.
 
   let itemCount = 0;
   await withLibraryOperation(serverId, libraryKey, 'sync', () =>

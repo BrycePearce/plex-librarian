@@ -492,7 +492,11 @@ export interface RequestFollowThroughAssessment {
   reasons: RequestFollowThroughReason[];
 }
 
-export type UserActivityStatus = 'watched' | 'never' | 'unknown';
+export type UserActivityStatus =
+  | 'watched'
+  | 'never'
+  | 'history_pending'
+  | 'identity_unresolved';
 
 export type SharingDataConfidence = 'none' | 'low' | 'medium' | 'high';
 export type SharingRiskLevel = 'insufficient_data' | 'low' | 'watch' | 'review';
@@ -540,7 +544,9 @@ export interface UsersResponse {
   // Null until the roster has synced at least once for the current server — while
   // null, this list may be incomplete or stale, same contract as Library.historySyncedAt.
   usersSyncedAt: number | null;
-  // True only after every video library has completed its current history walk.
+  // True after every video library has completed a history walk at least as new as the
+  // current identity reconciliation. Vacuously true when the server has no video
+  // libraries, because there is no video history pending.
   historyComplete: boolean;
   requestFollowThroughAvailable: boolean;
   inactiveDays: number;

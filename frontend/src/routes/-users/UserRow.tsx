@@ -67,15 +67,28 @@ export function UserRow({
               never
             </span>
           )
+          : user.activityStatus === "history_pending"
+          ? (
+            <span
+              className="tooltip tooltip-right activity-status-tooltip"
+              data-tip="Watch history is still syncing. This status will update when the history walk finishes."
+              tabIndex={0}
+              aria-label="Watch history is still syncing."
+            >
+              <span className="badge badge-info badge-outline badge-sm">
+                pending
+              </span>
+            </span>
+          )
           : (
             <span
               className="tooltip tooltip-right activity-status-tooltip"
-              data-tip="Activity unknown — Plex hasn't provided enough information to match this user with their playback history."
+              data-tip="Plex has not exposed a playback identity that can be matched to this user."
               tabIndex={0}
-              aria-label="Activity unknown. Plex hasn't provided enough information to match this user with their playback history."
+              aria-label="Playback identity unresolved. Plex has not exposed an identity that can be matched to this user."
             >
               <span className="badge badge-warning badge-outline badge-sm">
-                unknown
+                unresolved
               </span>
             </span>
           )}

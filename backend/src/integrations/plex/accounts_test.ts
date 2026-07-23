@@ -1,4 +1,9 @@
-import { parsePendingInvitationsXml, resolvePendingInvitationServer } from './accounts.ts';
+import { assertRejects } from '@std/assert';
+import {
+  fetchServerRoster,
+  parsePendingInvitationsXml,
+  resolvePendingInvitationServer,
+} from './accounts.ts';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -41,4 +46,111 @@ Deno.test('server resolution ignores unowned and non-server resources', () => {
   ];
   const result = resolvePendingInvitationServer(resources, 'active');
   assert(result.serverMatch === 'matched' && result.serverName === 'Main', 'match should be safe');
+});
+
+async function withRosterResponses(
+  owner: unknown,
+  friendsXml: string,
+  run: () => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request) =>
+    Promise.resolve(
+      String(input).includes('/api/v2/user')
+        ? Response.json(owner)
+        : new Response(friendsXml, { status: 200 }),
+    )) as typeof fetch;
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+Deno.test('roster rejects a malformed owner account id', async () => {
+  await withRosterResponses(
+    { id: -1, username: 'owner' },
+    '<MediaContainer size="0"/>',
+    async () => {
+      await assertRejects(
+        () => fetchServerRoster('client', 'token', 'machine'),
+        Error,
+        'owner profile contained an invalid account id',
+      );
+    },
+  );
+});
+
+Deno.test('roster rejects a malformed target-server friend instead of pruning it', async () => {
+  await withRosterResponses(
+    { id: 700, username: 'owner' },
+    `<MediaContainer size="1">
+      <User id="not-a-number" username="friend">
+        <Server id="12" machineIdentifier="machine"/>
+      </User>
+    </MediaContainer>`,
+    async () => {
+      await assertRejects(
+        () => fetchServerRoster('client', 'token', 'machine'),
+        Error,
+        'friends response contained an invalid account id',
+      );
+    },
+  );
+});
+
+Deno.test('roster rejects an incomplete declared account collection', async () => {
+  await withRosterResponses(
+    { id: 700, username: 'owner' },
+    `<MediaContainer size="2">
+      <User id="701" username="friend">
+        <Server id="12" machineIdentifier="machine"/>
+      </User>
+    </MediaContainer>`,
+    async () => {
+      await assertRejects(
+        () => fetchServerRoster('client', 'token', 'machine'),
+        Error,
+        'incomplete account collection',
+      );
+    },
+  );
+});
+
+Deno.test('roster rejects a structurally truncated account collection', async () => {
+  await withRosterResponses(
+    { id: 700, username: 'owner' },
+    `<MediaContainer size="1">
+      <User id="701" username="friend">
+        <Server id="12" machineIdentifier="machine"/>
+      </User>`,
+    async () => {
+      await assertRejects(
+        () => fetchServerRoster('client', 'token', 'machine'),
+        Error,
+        'incomplete account collection',
+      );
+    },
+  );
+});
+
+Deno.test('roster rejects duplicate target-server account ids', async () => {
+  await withRosterResponses(
+    { id: 700, username: 'owner' },
+    `<MediaContainer size="2">
+      <User id="701" username="first">
+        <Server id="12" machineIdentifier="machine"/>
+      </User>
+      <User id="701" username="conflicting">
+        <Server id="13" machineIdentifier="machine"/>
+      </User>
+    </MediaContainer>`,
+    async () => {
+      await assertRejects(
+        () => fetchServerRoster('client', 'token', 'machine'),
+        Error,
+        'duplicate account id',
+      );
+    },
+  );
 });

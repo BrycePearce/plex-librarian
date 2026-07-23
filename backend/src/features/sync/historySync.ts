@@ -1,5 +1,5 @@
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
-import { db, withTransaction } from '../../db/index.ts';
+import { and, eq, isNotNull } from 'drizzle-orm';
+import { db, type SqliteClient, withTransaction } from '../../db/index.ts';
 import { users } from '../../db/schema.ts';
 import type { PlexClient, PlexHistoryEntry, PlexLibrary } from '../../integrations/plex/index.ts';
 
@@ -17,6 +17,34 @@ export function historySeasonNumber(entry: PlexHistoryEntry): number | null {
     );
   }
   return seasonNumber;
+}
+
+interface UserHistoryMaximum {
+  accountId: number;
+  localAccountId: number;
+  viewedAt: number;
+}
+
+export function applyUserHistoryMaxima(
+  client: SqliteClient,
+  serverId: number,
+  maxima: Iterable<UserHistoryMaximum>,
+): void {
+  const stmt = client.prepare(
+    `UPDATE users SET last_viewed_at = ?
+     WHERE server_id = ? AND account_id = ? AND local_account_id = ?
+       AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+  );
+  for (const maximum of maxima) {
+    stmt.run(
+      maximum.viewedAt,
+      serverId,
+      maximum.accountId,
+      maximum.localAccountId,
+      maximum.viewedAt,
+    );
+  }
+  stmt.finalize();
 }
 
 // Walks /status/sessions/history/all?librarySectionID=<key> to get cross-user play history
@@ -46,24 +74,25 @@ export async function syncLibraryHistory(
 
   // Item and season facts are flushed page-by-page. Only per-account maxima cross page
   // boundaries, so memory is bounded by the roster rather than library/history size.
-  // Keyed by the history entry's PMS-LOCAL accountID (see
-  // PlexHistoryEntry.accountID in integrations/plex/types.ts) — bounded by unique users, not play count.
-  // Written to users.last_viewed_at via local_account_id, which syncUsers() is expected
-  // to have already reconciled for every currently-known local account by the time this
-  // runs (see runSync's call ordering) — an entry for a not-yet-reconciled account
-  // simply matches zero rows below and is picked up on the next sync instead.
-  const maxViewedAtByAccount = new Map<number, number>();
+  // Keyed by the history entry's PMS SystemAccount accountID (see
+  // PlexHistoryEntry.accountID in integrations/plex/types.ts), so it is bounded by
+  // unique users rather than play count. syncUsers() confirms those numeric ids before
+  // this runs; a not-yet-confirmed account simply matches no row and is picked up by a
+  // later sync.
+  const maxViewedAtByAccount = new Map<number, UserHistoryMaximum>();
 
   for await (const page of plex.libraryHistory(lib.key)) {
     const pageMaxViewedAt = new Map<string, number>();
     const pageActivity = new Map<string, {
       accountId: number;
+      localAccountId: number;
       ratingKey: string;
       firstViewedAt: number;
       lastViewedAt: number;
     }>();
     const pageSeasonActivity = new Map<string, {
       accountId: number;
+      localAccountId: number;
       showRatingKey: string;
       seasonNumber: number;
       firstViewedAt: number;
@@ -82,17 +111,24 @@ export async function syncLibraryHistory(
         if (!cur || entry.viewedAt > cur) pageMaxViewedAt.set(key, entry.viewedAt);
       }
       if (entry.accountID != null) {
-        const curAcct = maxViewedAtByAccount.get(entry.accountID);
-        if (!curAcct || entry.viewedAt > curAcct) {
-          maxViewedAtByAccount.set(entry.accountID, entry.viewedAt);
-        }
         const accountId = localToGlobal.get(entry.accountID);
+        if (accountId) {
+          const currentMaximum = maxViewedAtByAccount.get(entry.accountID);
+          if (!currentMaximum || entry.viewedAt > currentMaximum.viewedAt) {
+            maxViewedAtByAccount.set(entry.accountID, {
+              accountId,
+              localAccountId: entry.accountID,
+              viewedAt: entry.viewedAt,
+            });
+          }
+        }
         if (accountId && key) {
           const pairKey = `${accountId}:${key}`;
           const current = pageActivity.get(pairKey);
           if (!current) {
             pageActivity.set(pairKey, {
               accountId,
+              localAccountId: entry.accountID,
               ratingKey: key,
               firstViewedAt: entry.viewedAt,
               lastViewedAt: entry.viewedAt,
@@ -112,6 +148,7 @@ export async function syncLibraryHistory(
             if (!currentSeason) {
               pageSeasonActivity.set(seasonPairKey, {
                 accountId,
+                localAccountId: entry.accountID,
                 showRatingKey: key,
                 seasonNumber,
                 firstViewedAt: entry.viewedAt,
@@ -136,6 +173,14 @@ export async function syncLibraryHistory(
     // first/last timestamps use min/max rather than accumulating play counts.
     if (pageMaxViewedAt.size > 0 || pageActivity.size > 0 || pageSeasonActivity.size > 0) {
       withTransaction((client) => {
+        // A different library sync can reconcile identities while this long history
+        // walk is in flight. Re-check the exact mapping inside the write transaction:
+        // activity written before a mapping change is cleared by reconciliation, and
+        // activity reaching this point afterward is skipped instead of resurrected.
+        const mappingStmt = client.prepare(
+          `SELECT 1 FROM users
+           WHERE server_id = ? AND account_id = ? AND local_account_id = ?`,
+        );
         const itemViewStmt = client.prepare(
           `UPDATE items SET last_viewed_at = ?
            WHERE server_id = ? AND rating_key = ? AND library_key = ?
@@ -155,6 +200,7 @@ export async function syncLibraryHistory(
              last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)`,
         );
         for (const activity of pageActivity.values()) {
+          if (!mappingStmt.get(serverId, activity.accountId, activity.localAccountId)) continue;
           itemStmt.run(
             serverId,
             activity.accountId,
@@ -175,6 +221,7 @@ export async function syncLibraryHistory(
              last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)`,
         );
         for (const activity of pageSeasonActivity.values()) {
+          if (!mappingStmt.get(serverId, activity.accountId, activity.localAccountId)) continue;
           seasonStmt.run(
             serverId,
             activity.accountId,
@@ -185,41 +232,18 @@ export async function syncLibraryHistory(
           );
         }
         seasonStmt.finalize();
+        mappingStmt.finalize();
       });
     }
   }
 
-  // A local_account_id shared by more than one roster row (e.g. two accounts both
-  // falling back to accounts.ts's UNKNOWN_USERNAME_PLACEHOLDER) must not have this
-  // history activity blindly applied to every row that shares it — same "ambiguous
-  // match behaves like no match" rule webhook.ts enforces when resolving a single
-  // event to a unique row before writing to it. Resolved before entering the
-  // transaction below since withTransaction's callback runs synchronously and can't
-  // await this query itself.
-  const ambiguousLocalIds = maxViewedAtByAccount.size > 0
-    ? new Set(
-      (await db.select({ localAccountId: users.localAccountId })
-        .from(users)
-        .where(and(eq(users.serverId, serverId), isNotNull(users.localAccountId)))
-        .groupBy(users.localAccountId)
-        .having(sql`count(*) > 1`))
-        .map((r) => r.localAccountId as number),
-    )
-    : null;
-
   // Item maxima were already applied page-by-page; finish the roster-level aggregate.
+  // Re-check the exact mapping in the write transaction, just like the page-level
+  // activity writes above. A reconciliation that cleared or reassigned a local id while
+  // this history walk was running must not resurrect or transfer the old attribution.
   if (maxViewedAtByAccount.size > 0) {
-    withTransaction((client) => {
-      const stmt = client.prepare(
-        `UPDATE users SET last_viewed_at = ?
-         WHERE server_id = ? AND local_account_id = ?
-           AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
-      );
-      for (const [localAccountId, viewedAt] of maxViewedAtByAccount) {
-        if (ambiguousLocalIds!.has(localAccountId)) continue;
-        stmt.run(viewedAt, serverId, localAccountId, viewedAt);
-      }
-      stmt.finalize();
-    });
+    withTransaction((client) =>
+      applyUserHistoryMaxima(client, serverId, maxViewedAtByAccount.values())
+    );
   }
 }

@@ -203,8 +203,14 @@ function findSharedServerId(inner: string, machineIdentifier: string): number | 
   while ((m = serverTagRe.exec(inner))) {
     const attrs = parseAttrs(m[1]);
     if (attrs.machineIdentifier !== machineIdentifier) continue;
+    if (!attrs.id || !/^\d+$/.test(attrs.id)) {
+      throw new Error('Plex friends response contained an invalid shared-server id');
+    }
     const id = Number(attrs.id);
-    return Number.isFinite(id) ? id : null;
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error('Plex friends response contained an invalid shared-server id');
+    }
+    return id;
   }
   return null;
 }
@@ -221,17 +227,44 @@ function findSharedServerId(inner: string, machineIdentifier: string): number | 
 // Filtering each <User>'s nested <Server> children to our own machineIdentifier gives
 // the exact roster for this server directly — no separate shared_servers call needed.
 function parseFriendsXml(xml: string, machineIdentifier: string): PlexRosterUser[] {
+  const container = xml.match(
+    /^\s*(?:<\?xml[^>]*\?>\s*)?<MediaContainer\b([^>]*?)(?:\/>|>([\s\S]*)<\/MediaContainer>)\s*$/,
+  );
+  if (!container) {
+    throw new Error('Plex friends response contained an incomplete account collection');
+  }
+  const containerAttrs = parseAttrs(container[1]);
+  if (!containerAttrs.size || !/^\d+$/.test(containerAttrs.size)) {
+    throw new Error('Plex friends response omitted a valid account collection size');
+  }
+  const declaredSize = Number(containerAttrs.size);
+  if (!Number.isSafeInteger(declaredSize)) {
+    throw new Error('Plex friends response omitted a valid account collection size');
+  }
+
   const users: PlexRosterUser[] = [];
+  const seenAccountIds = new Set<number>();
+  let returnedSize = 0;
   const userBlockRe = /<User\b([^>]*?)(?:\/>|>([\s\S]*?)<\/User>)/g;
   let m: RegExpExecArray | null;
-  while ((m = userBlockRe.exec(xml))) {
+  while ((m = userBlockRe.exec(container[2] ?? ''))) {
+    returnedSize++;
     const attrs = parseAttrs(m[1]);
     const inner = m[2] ?? '';
     const sharedServerId = findSharedServerId(inner, machineIdentifier);
     if (sharedServerId === null) continue;
 
+    if (!attrs.id || !/^\d+$/.test(attrs.id)) {
+      throw new Error('Plex friends response contained an invalid account id');
+    }
     const accountId = Number(attrs.id);
-    if (!Number.isFinite(accountId)) continue;
+    if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+      throw new Error('Plex friends response contained an invalid account id');
+    }
+    if (seenAccountIds.has(accountId)) {
+      throw new Error('Plex friends response contained a duplicate account id');
+    }
+    seenAccountIds.add(accountId);
 
     users.push({
       accountId,
@@ -241,6 +274,9 @@ function parseFriendsXml(xml: string, machineIdentifier: string): PlexRosterUser
       isOwner: false,
       sharedServerId,
     });
+  }
+  if (returnedSize !== declaredSize) {
+    throw new Error('Plex friends response contained an incomplete account collection');
   }
   return users;
 }
@@ -303,6 +339,10 @@ export async function fetchServerRoster(
     email?: string;
     thumb?: string;
   };
+  if (!Number.isSafeInteger(owner.id) || owner.id <= 0) {
+    friendsRes.body?.cancel();
+    throw new Error('Plex owner profile contained an invalid account id');
+  }
 
   if (!friendsRes.ok) {
     friendsRes.body?.cancel();

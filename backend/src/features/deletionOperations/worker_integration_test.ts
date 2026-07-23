@@ -31,6 +31,7 @@ let arrPresent = false;
 let arrDeleteCount = 0;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
+let historyAccountId: unknown = null;
 const torrentHash = 'a'.repeat(40);
 const wholeDeleteOrder: string[] = [];
 setAutomaticDeletionWorkerForTest(false);
@@ -50,7 +51,12 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }));
   }
   if (url.pathname === '/status/sessions/history/all') {
-    return Promise.resolve(Response.json({ MediaContainer: { Metadata: [], totalSize: 0 } }));
+    const metadata = historyAccountId === null
+      ? []
+      : [{ ratingKey: 'history-item', viewedAt: 100, accountID: historyAccountId }];
+    return Promise.resolve(Response.json({
+      MediaContainer: { Metadata: metadata, totalSize: metadata.length },
+    }));
   }
   if (url.hostname === 'plex.tv' && url.pathname === '/api/v2/user') {
     return Promise.resolve(Response.json({ id: 1, username: 'owner' }));
@@ -181,6 +187,7 @@ function reset(): void {
   arrDeleteCount = 0;
   qbitPresent = false;
   qbitDeleteCount = 0;
+  historyAccountId = null;
   wholeDeleteOrder.length = 0;
   live.clear();
   withTransaction((client) => {
@@ -967,6 +974,62 @@ Deno.test('sync preserves a needs-attention version projection until manual retr
       ).value<[number]>(operationId)?.[0]
     ),
     0,
+  );
+});
+
+Deno.test('library-only sync preserves the server-wide identity generation', async () => {
+  reset();
+  addMovie('targeted-sync');
+  withTransaction((client) => {
+    client.prepare('UPDATE servers SET users_synced_at = 123 WHERE id = 1').run();
+    client.prepare(
+      'UPDATE libraries SET history_synced_at = 123 WHERE server_id = 1',
+    ).run();
+  });
+
+  const active = await resolveActiveServer();
+  await runLibrarySync(active.client, active.serverId, 'movies');
+
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT users_synced_at FROM servers WHERE id = 1')
+        .value<[number]>()?.[0]
+    ),
+    123,
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT history_synced_at FROM libraries WHERE server_id = 1 AND key = 'shows'",
+      ).value<[number]>()?.[0]
+    ),
+    123,
+  );
+});
+
+Deno.test('malformed history leaves library coverage incomplete', async () => {
+  reset();
+  addMovie('history-item');
+  historyAccountId = 'not-an-id';
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE libraries SET history_synced_at = 123 WHERE server_id = 1 AND key = 'movies'",
+    ).run();
+  });
+
+  const active = await resolveActiveServer();
+  await assertRejects(
+    () => runLibrarySync(active.client, active.serverId, 'movies'),
+    Error,
+    'history contained an invalid account id',
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT history_synced_at FROM libraries WHERE server_id = 1 AND key = 'movies'",
+      ).value<[number | null]>()?.[0]
+    ),
+    null,
   );
 });
 

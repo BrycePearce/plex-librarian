@@ -254,9 +254,9 @@ export function triggerLibrarySync(
   const result = withTransaction((client): { conflict: number } | { id: number } => {
     const existing = client
       .prepare(
-        "SELECT id FROM sync_log WHERE status = 'pending' AND server_id = ? AND (library_key IS NULL OR library_key = ?) LIMIT 1",
+        "SELECT id FROM sync_log WHERE status = 'pending' AND server_id = ? LIMIT 1",
       )
-      .value<[number]>(serverId, libraryKey);
+      .value<[number]>(serverId);
     if (existing) return { conflict: existing[0] };
     const deletion = client
       .prepare(

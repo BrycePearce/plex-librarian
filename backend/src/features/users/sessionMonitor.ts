@@ -112,7 +112,6 @@ export function startPlexSessionMonitor(): void {
             serverId: target.serverId,
             plexAccountId: session.accountId,
             accountIdKind: 'session',
-            username: session.username,
             observedAt: now,
             event,
             ratingKey: session.ratingKey,

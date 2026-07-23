@@ -28,7 +28,11 @@ import type {
   UsersSortKey,
 } from '@plex-librarian/shared/types.ts';
 import { MAX_INACTIVITY_DAYS } from '../../configLimits.ts';
-import { userActivityStatus } from './activityStatus.ts';
+import {
+  userActivityStatus,
+  userHistoryCanBeAttributed,
+  userHistoryIsComplete,
+} from './activityStatus.ts';
 import { assessRequestFollowThrough, requestFollowThroughWindow } from './requestFollowThrough.ts';
 import { queryRequestFollowThrough } from './requestFollowThroughQuery.ts';
 
@@ -198,8 +202,7 @@ router.get('/', async (c) => {
   ]);
   const usersSyncedAt = serverRow?.usersSyncedAt ?? null;
   const videoLibraryHistory = libraryHistoryRows.filter((library) => library.type !== 'artist');
-  const historyComplete = usersSyncedAt !== null && videoLibraryHistory.length > 0 &&
-    videoLibraryHistory.every((library) => library.historySyncedAt !== null);
+  const historyComplete = userHistoryIsComplete(usersSyncedAt, videoLibraryHistory);
 
   const rawInactiveDays = c.req.query('inactiveDays');
   const parsedInactiveDays = rawInactiveDays !== undefined ? Number(rawInactiveDays) : null;
@@ -285,6 +288,8 @@ router.get('/', async (c) => {
     filter === 'all' ||
     (filter === 'inactive'
       ? user.lastViewedAt !== null && user.lastViewedAt < cutoff
+      : filter === 'unknown'
+      ? user.activityStatus === 'history_pending' || user.activityStatus === 'identity_unresolved'
       : user.activityStatus === filter)
   );
 
@@ -302,7 +307,7 @@ router.get('/', async (c) => {
     graceCutoff: requestCutoff,
   }, db);
 
-  const assessedUsers: PlexUser[] = activityFiltered.map(({ localAccountId: _, ...u }) => ({
+  const assessedUsers: PlexUser[] = activityFiltered.map(({ localAccountId, ...u }) => ({
     ...u,
     sharingRisk: assessUserSharingRisk(
       sharingStats.get(u.accountId) ?? {
@@ -328,7 +333,7 @@ router.get('/', async (c) => {
         unknownRequestScopeCount: 0,
       },
       requestHealth,
-      historyComplete,
+      userHistoryCanBeAttributed(historyComplete, localAccountId),
       requestGraceDays,
       requestMinimum,
     ),

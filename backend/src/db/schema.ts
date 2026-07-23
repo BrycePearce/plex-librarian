@@ -429,22 +429,17 @@ export const seerrRequestSeasons = sqliteTable(
 
 // One row per Plex account with access to a server (owner + friends/Home members
 // actually shared to that server, per plex.tv's shared_servers listing) — the roster,
-// refreshed by syncUsers() on every full sync. Deliberately keyed by the GLOBAL
-// plex.tv account id (`accountId`), not the PMS-local account id: the global id is the
-// only identifier guaranteed to exist for a user who has access but has never
-// connected/watched anything, which is exactly the "never watched" case this feature
-// exists to surface. Empirically verified (see plan) that these two id spaces are
-// genuinely different — e.g. the server owner is always local id 1 on the PMS's own
-// /accounts endpoint, but has a distinct, much larger global plex.tv account id.
+// refreshed by syncUsers() on every full sync. Deliberately keyed by the stable plex.tv/
+// Home account id (`accountId`), which exists even before a user has connected or
+// watched anything. PMS SystemAccount/history ids use that same value for non-owners.
+// The server owner is the deliberate exception: PMS always represents the owner as id 1.
 //
 // Webhook payloads (Account.id) and /status/sessions/history/all entries (accountID)
-// both report the PMS-LOCAL id, not the global one, so they can't be joined against
-// `accountId` directly. `localAccountId` bridges the gap: syncUsers() reconciles it by
-// matching username against the PMS's own /accounts endpoint. It's nullable and starts
-// out unset for a user who has access but has never actually connected to the PMS
-// (Plex doesn't allocate them a local id until they do) — activity writes fall back to
-// a username match to self-heal that mapping the first time such a user is ever seen
-// (see webhook.ts and syncLibraryHistory).
+// both report that PMS SystemAccount id. `localAccountId` records the confirmed value
+// and bridges the owner's id=1 exception. It's nullable and starts out unset for a user
+// who has access but has never actually connected to the PMS
+// (Plex doesn't allocate them a local id until they do). Activity remains unattributed
+// until a later authoritative /accounts snapshot confirms the numeric identity.
 export const users = sqliteTable(
   'users',
   {

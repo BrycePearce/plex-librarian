@@ -245,8 +245,8 @@ export interface PlexEpisodeMediaVersion {
 
 // History entry returned by /status/sessions/history/all — cross-user, all accounts.
 // grandparentKey is a path ("/library/metadata/76749"), not a bare ratingKey.
-// accountID is the PMS-LOCAL account id (see users.localAccountId in schema.ts for why
-// this is a different id space than the plex.tv global account id used elsewhere).
+// accountID is the PMS SystemAccount id. It matches users.accountId for non-owners;
+// the server owner is the deliberate local id=1 exception.
 export interface PlexHistoryEntry {
   ratingKey: string;
   historyKey?: string; // unique "/status/sessions/history/<id>" identity when supplied by PMS
@@ -259,12 +259,12 @@ export interface PlexHistoryEntry {
 // One row per account the PMS itself knows about — allocated lazily the first time
 // that account actually connects/plays something, NOT at share-grant time. id 0 is
 // always a nameless system/placeholder account; id 1 is always the server owner. Used
-// only to reconcile the PMS-local id (which webhook/history events report) against the
-// plex.tv global account id (which the roster in plexUsers.ts reports) by username
-// match — see users.localAccountId in schema.ts.
+// only to confirm which plex.tv/Home account ids the PMS currently knows. For non-owner
+// users, `id` is also the global roster id; the owner is the deliberate id=1 exception.
+// `key` is merely the navigational path for this same id.
 export interface PlexLocalAccount {
   id: number;
-  name: string;
+  name: string | null;
 }
 
 // Current playback returned by /status/sessions. Plex's session response is less

@@ -55,21 +55,16 @@ export const episodeVersionsByShow = (serverId: number, showRatingKey: string) =
 
 export const usersByServer = (serverId: number) => eq(users.serverId, serverId);
 
-// Matches on the GLOBAL plex.tv account id — users.accountId's primary key, distinct
-// from userByLocalAccountId below. Used once a webhook has already resolved which
-// roster row it's dealing with (via local-id/username match) and needs to write to it
-// by its real key — see webhook.ts's IP-change handling.
+// Matches on users.accountId, the stable plex.tv/Home roster id. For non-owners this
+// is also the PMS SystemAccount/history id; the owner's PMS id is the reserved value 1.
 export const userByAccountId = (serverId: number, accountId: number) =>
   and(eq(users.serverId, serverId), eq(users.accountId, accountId));
 
-// Matches on the PMS-LOCAL account id — what webhook payloads (Account.id) and
-// history entries (accountID) actually carry, distinct from users.accountId's global
-// plex.tv id. See users.localAccountId in schema.ts.
+// Matches on the PMS SystemAccount id carried by webhook payloads (Account.id) and
+// history entries (accountID). This equals users.accountId for non-owners; the owner
+// is always represented as local id 1. See users.localAccountId in schema.ts.
 export const userByLocalAccountId = (serverId: number, localAccountId: number) =>
   and(eq(users.serverId, serverId), eq(users.localAccountId, localAccountId));
-
-export const userByUsername = (serverId: number, username: string) =>
-  and(eq(users.serverId, serverId), eq(users.username, username));
 
 // The single definition of "these grouped Media versions constitute a genuine
 // duplicate" (see Duplicate detection in CLAUDE.md) — shared by the global
