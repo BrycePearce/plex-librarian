@@ -26,6 +26,7 @@ import { Pagination } from "../components/Pagination.tsx";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog.tsx";
 import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog.tsx";
 import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog.tsx";
+import { getRequestFollowThroughPresentation } from "./-users/requestFollowThroughPresentation.ts";
 import { UsersTableSkeleton } from "../components/Skeletons.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import "../components/dataSurfaces.css";
@@ -488,7 +489,9 @@ function UsersPage() {
                           order={search.order}
                           onSort={toggleSort}
                         />
-                        {data!.requestFollowThroughAvailable && <th>Request follow-through</th>}
+                        {data!.requestFollowThroughAvailable && (
+                          <th className="normal-case">Request follow-through</th>
+                        )}
                         <th />
                       </tr>
                     </thead>
@@ -571,7 +574,7 @@ function UsersPage() {
                             {!u.isOwner && (
                               <button
                                 type="button"
-                                className="btn btn-ghost btn-xs btn-square text-error opacity-60 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+                                className="btn btn-ghost btn-square size-10 min-h-10 rounded-lg text-error/70 transition-colors hover:bg-error/10 hover:text-error group-hover:text-error group-focus-within:text-error"
                                 onClick={() => openReview(u)}
                                 aria-label={`Remove ${u.username}'s access`}
                                 title="Remove access"
@@ -1045,7 +1048,7 @@ function SharingRiskCell({
   return (
     <button
       type="button"
-      className="group/risk flex min-w-44 items-center justify-between gap-3 rounded-lg px-2 py-1.5 -mx-2 text-left transition-colors hover:bg-base-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      className="group/risk flex min-h-12 w-full min-w-48 items-center justify-between gap-3 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-left transition-colors hover:border-base-300 hover:bg-base-200/55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       onClick={onOpen}
       aria-label={`View sharing risk details: ${label}, score ${assessment.riskScore} out of 100`}
     >
@@ -1065,7 +1068,7 @@ function SharingRiskCell({
           {supportingText}
         </span>
       </span>
-      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-transform group-hover/risk:translate-x-0.5 group-hover/risk:text-base-content/60" />
+      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-all group-hover/risk:translate-x-0.5 group-hover/risk:text-base-content/65" />
     </button>
   );
 }
@@ -1077,35 +1080,15 @@ function RequestFollowThroughCell({
   assessment: PlexUser["requestFollowThrough"];
   onOpen: () => void;
 }) {
-  const label = assessment.status === "healthy"
-    ? "Healthy"
-    : assessment.status === "watch"
-    ? "Watch"
-    : assessment.status === "review"
-    ? "Review"
-    : assessment.status === "insufficient_data"
-    ? `${assessment.eligibleRequestCount}/${assessment.minimumRequests}`
-    : "Unavailable";
-  const detail = assessment.nonWatchPercent !== null
-    ? `${assessment.nonWatchPercent}% not watched`
-    : assessment.status === "insufficient_data"
-    ? "eligible requests"
-    : "Data unavailable";
-  const badgeClass = assessment.status === "review"
-    ? "badge-error"
-    : assessment.status === "watch"
-    ? "badge-warning"
-    : assessment.status === "healthy"
-    ? "badge-success"
-    : "badge-ghost";
+  const { label, detail, badgeClass } = getRequestFollowThroughPresentation(assessment);
   return (
     <button
       type="button"
-      className="group/follow flex min-w-36 items-center justify-between gap-2 rounded-lg px-2 py-1.5 -mx-2 text-left transition-colors hover:bg-base-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      className="group/follow flex min-h-12 w-full min-w-48 items-center justify-between gap-3 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-left transition-colors hover:border-base-300 hover:bg-base-200/55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       onClick={onOpen}
       aria-label={`View request follow-through details: ${label}`}
     >
-      <span>
+      <span className="min-w-0">
         <span
           className={`badge badge-sm badge-outline ${badgeClass}`}
         >
@@ -1115,7 +1098,7 @@ function RequestFollowThroughCell({
           {detail}
         </span>
       </span>
-      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-transform group-hover/follow:translate-x-0.5" />
+      <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-all group-hover/follow:translate-x-0.5 group-hover/follow:text-base-content/65" />
     </button>
   );
 }

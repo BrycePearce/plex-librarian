@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { CalendarClock, CheckCircle2, Clock3, Info, PlayCircle, XCircle } from "lucide-react";
 import type { PlexUser } from "../../lib/api.ts";
+import { getRequestFollowThroughPresentation } from "./requestFollowThroughPresentation.ts";
 
 export function RequestFollowThroughDialog({
   dialogRef,
@@ -12,22 +13,7 @@ export function RequestFollowThroughDialog({
   onClose: () => void;
 }) {
   const assessment = user?.requestFollowThrough;
-  const statusLabel = assessment?.status === "healthy"
-    ? "Healthy"
-    : assessment?.status === "watch"
-    ? "Watch"
-    : assessment?.status === "review"
-    ? "Review"
-    : assessment?.status === "insufficient_data"
-    ? "Collecting data"
-    : "Unavailable";
-  const badgeClass = assessment?.status === "review"
-    ? "badge-error"
-    : assessment?.status === "watch"
-    ? "badge-warning"
-    : assessment?.status === "healthy"
-    ? "badge-success"
-    : "badge-ghost";
+  const presentation = assessment ? getRequestFollowThroughPresentation(assessment) : null;
   return (
     <dialog ref={dialogRef} className="modal" onClose={onClose}>
       <div className="modal-box polished-modal max-w-xl p-0">
@@ -45,9 +31,9 @@ export function RequestFollowThroughDialog({
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <span
-                    className={`badge badge-outline ${badgeClass}`}
+                    className={`badge badge-outline ${presentation!.badgeClass}`}
                   >
-                    {statusLabel}
+                    {presentation!.label}
                   </span>
                   <p className="mt-2 text-sm text-base-content/55">
                     Requests not watched after becoming available
@@ -57,14 +43,12 @@ export function RequestFollowThroughDialog({
                   <span className="text-3xl font-semibold tabular-nums">
                     {assessment.nonWatchPercent === null ? "—" : `${assessment.nonWatchPercent}%`}
                   </span>
-                  {assessment.status === "insufficient_data"
+                  {assessment.nonWatchPercent === null
                     ? (
                       <div className="text-xs text-base-content/40">
-                        starts at {assessment.minimumRequests} requests
+                        {presentation!.detail}
                       </div>
                     )
-                    : assessment.status === "unavailable"
-                    ? <div className="text-xs text-base-content/40">data unavailable</div>
                     : <div className="text-xs text-base-content/40">not watched</div>}
                 </div>
               </div>
