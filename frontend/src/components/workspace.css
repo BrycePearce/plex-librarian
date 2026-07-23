@@ -200,13 +200,13 @@
   visibility: hidden;
 }
 .auto-sync-field-error {
+  display: none;
   grid-column: 2 / -1;
   color: var(--color-error);
   font-size: 0.62rem;
-  visibility: hidden;
 }
 .auto-sync-field-error.is-visible {
-  visibility: visible;
+  display: block;
 }
 .auto-sync-catch-up {
   display: grid;
