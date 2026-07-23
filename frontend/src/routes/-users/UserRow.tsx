@@ -71,12 +71,12 @@ export function UserRow({
           ? (
             <span
               className="tooltip tooltip-right activity-status-tooltip"
-              data-tip="Watch history is still syncing. This status will update when the history walk finishes."
+              data-tip="Watch history isn't complete yet. This status will update after a successful full sync."
               tabIndex={0}
-              aria-label="Watch history is still syncing."
+              aria-label="Watch history needs a successful full sync."
             >
               <span className="badge badge-info badge-outline badge-sm">
-                pending
+                needs sync
               </span>
             </span>
           )

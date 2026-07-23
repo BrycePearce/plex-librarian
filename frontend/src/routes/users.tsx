@@ -218,7 +218,17 @@ function UsersPage() {
           historySyncedAt={data.historyComplete ? data.usersSyncedAt : null}
           warningMessage={data.usersSyncedAt === null
             ? "The user roster hasn't synced yet — this list may be incomplete or stale. Run a sync to populate it."
-            : "Cross-user watch history is incomplete. Last-watched values marked pending will update after a successful sync."}
+            : (
+              <>
+                Watch-history sync hasn't completed for every video library yet, so users showing
+                {" "}
+                <span className="badge badge-outline badge-sm align-middle">
+                  needs sync
+                </span>{" "}
+                may have watched. The "never watched" data isn't reliable until a full sync
+                finishes.
+              </>
+            )}
         />
       )}
 
