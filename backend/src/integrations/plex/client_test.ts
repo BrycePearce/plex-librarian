@@ -448,6 +448,7 @@ Deno.test('metadata identity captures immutable item, ancestry, and media fields
           Media: [{
             id: 44,
             videoResolution: '1080',
+            height: 1080,
             bitrate: 8000,
             videoCodec: 'h264',
             container: 'mkv',
@@ -471,6 +472,7 @@ Deno.test('metadata identity captures immutable item, ancestry, and media fields
     media: [{
       mediaId: 44,
       videoResolution: '1080',
+      height: 1080,
       bitrate: 8000,
       videoCodec: 'h264',
       container: 'mkv',
@@ -524,7 +526,7 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
           title: 'Example',
           type: 'movie',
           Media: [
-            { id: 11, Part: [{ file: '/movies/Example-1080p.mkv' }] },
+            { id: 11, Part: [{ file: '/movies/Example-1080p.mkv', size: 100_000 }] },
             {
               id: 12,
               Part: [
@@ -539,8 +541,8 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
   const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
 
   assertEquals(await client.mediaVersionPathPreviews('10'), [
-    { mediaId: 11, paths: ['/movies/Example-1080p.mkv'], truncated: false },
-    { mediaId: 12, paths: ['/movies/Example-4k.mkv'], truncated: false },
+    { mediaId: 11, paths: ['/movies/Example-1080p.mkv'], truncated: false, fileSize: 100_000 },
+    { mediaId: 12, paths: ['/movies/Example-4k.mkv'], truncated: false, fileSize: null },
   ]);
 });
 

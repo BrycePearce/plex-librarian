@@ -32,9 +32,20 @@ export interface ArrManagedFile {
   size: number | null;
 }
 
+export interface ArrManagedVersionFile extends ArrManagedFile {
+  id: number;
+  path: string | null;
+}
+
 export interface ArrMonitorTarget {
   id: number;
   monitored: boolean;
+}
+
+export interface ArrEpisodeManagedFile {
+  episodeId: number;
+  file: ArrManagedVersionFile | null;
+  shared?: boolean;
 }
 
 export class ArrApiError extends Error {
@@ -130,30 +141,49 @@ export class ArrClient {
         }>;
       }>
     >(path);
+    if (!Array.isArray(records)) {
+      throw new ArrApiError(
+        `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned an invalid lookup response`,
+      );
+    }
+    if (records.length > 1) {
+      throw new ArrApiError(
+        `${
+          this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+        } returned multiple records for external ID ${externalId}`,
+      );
+    }
     const record = records[0];
-    return record
-      ? {
-        id: record.id,
-        title: record.title ?? String(record.id),
-        path: record.path?.trim() || null,
-        seasons: this.type === 'sonarr'
-          ? (record.seasons ?? []).flatMap((season) => {
-            const seasonNumber = Number(season.seasonNumber);
-            if (!Number.isInteger(seasonNumber) || seasonNumber < 0) return [];
-            const rawFileCount = Number(season.statistics?.episodeFileCount);
-            const episodeFileCount = Number.isInteger(rawFileCount) && rawFileCount >= 0
-              ? rawFileCount
-              : null;
-            const rawSize = Number(season.statistics?.sizeOnDisk);
-            const size = Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null;
-            // Sonarr also returns future/empty season metadata. Only show seasons with
-            // managed files so the deletion tree describes disk contents being removed.
-            if (episodeFileCount === 0 && (size === null || size === 0)) return [];
-            return [{ seasonNumber, episodeFileCount, size } satisfies ArrSeasonSummary];
-          }).sort((a, b) => a.seasonNumber - b.seasonNumber)
-          : null,
-      }
-      : null;
+    if (record === undefined) return null;
+    if (
+      record === null || typeof record !== 'object' || Array.isArray(record) ||
+      !Number.isInteger(record.id) || record.id <= 0
+    ) {
+      throw new ArrApiError(
+        `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned an invalid managed record`,
+      );
+    }
+    return {
+      id: record.id,
+      title: record.title ?? String(record.id),
+      path: record.path?.trim() || null,
+      seasons: this.type === 'sonarr'
+        ? (record.seasons ?? []).flatMap((season) => {
+          const seasonNumber = Number(season.seasonNumber);
+          if (!Number.isInteger(seasonNumber) || seasonNumber < 0) return [];
+          const rawFileCount = Number(season.statistics?.episodeFileCount);
+          const episodeFileCount = Number.isInteger(rawFileCount) && rawFileCount >= 0
+            ? rawFileCount
+            : null;
+          const rawSize = Number(season.statistics?.sizeOnDisk);
+          const size = Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null;
+          // Sonarr also returns future/empty season metadata. Only show seasons with
+          // managed files so the deletion tree describes disk contents being removed.
+          if (episodeFileCount === 0 && (size === null || size === 0)) return [];
+          return [{ seasonNumber, episodeFileCount, size } satisfies ArrSeasonSummary];
+        }).sort((a, b) => a.seasonNumber - b.seasonNumber)
+        : null,
+    };
   }
 
   async extraFiles(mediaId: number): Promise<ArrExtraFile[]> {
@@ -195,6 +225,149 @@ export class ArrClient {
           size: Number.isFinite(size) && size >= 0 ? size : null,
         } satisfies ArrManagedFile,
       ];
+    });
+  }
+
+  async radarrManagedFile(mediaId: number): Promise<ArrManagedVersionFile | null> {
+    if (this.type !== 'radarr') return null;
+    const records = await this.request<
+      Array<{ id?: number; relativePath?: string; path?: string; size?: number }>
+    >(`/moviefile?movieId=${mediaId}`);
+    if (!Array.isArray(records)) {
+      throw new ArrApiError('Radarr returned an invalid managed-file response');
+    }
+    if (records.length > 1) {
+      throw new ArrApiError('Radarr returned multiple managed files for one movie');
+    }
+    const record = records[0];
+    if (record === undefined) return null;
+    if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+      throw new ArrApiError('Radarr returned an invalid managed movie file');
+    }
+    const absolutePath = record.path?.trim() || null;
+    const relativePath = record.relativePath?.trim() ||
+      absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
+    if (!Number.isInteger(record.id) || record.id! <= 0 || !relativePath) {
+      throw new ArrApiError('Radarr returned an invalid managed movie file');
+    }
+    const size = Number(record.size);
+    return {
+      id: record.id!,
+      relativePath,
+      path: absolutePath,
+      size: Number.isFinite(size) && size >= 0 ? size : null,
+    };
+  }
+
+  async episodeManagedFile(
+    seriesId: number,
+    seasonNumber: number,
+    episodeNumber: number,
+  ): Promise<ArrEpisodeManagedFile | null> {
+    if (this.type !== 'sonarr') return null;
+    const episodes = await this.request<
+      Array<{
+        id?: number;
+        seasonNumber?: number;
+        episodeNumber?: number;
+        episodeFileId?: number;
+      }>
+    >(`/episode?seriesId=${seriesId}`);
+    if (!Array.isArray(episodes)) {
+      throw new ArrApiError('Sonarr returned an invalid episode response');
+    }
+    const matchingEpisodes = episodes.filter((candidate) =>
+      candidate.seasonNumber === seasonNumber && candidate.episodeNumber === episodeNumber
+    );
+    if (matchingEpisodes.length > 1) {
+      throw new ArrApiError('Sonarr returned multiple records for the requested episode');
+    }
+    const episode = matchingEpisodes[0];
+    if (!episode) return null;
+    if (!Number.isInteger(episode.id) || episode.id! <= 0) {
+      throw new ArrApiError('Sonarr returned an invalid managed episode');
+    }
+    if (episode.episodeFileId === undefined || episode.episodeFileId === 0) {
+      return { episodeId: episode.id!, file: null, shared: false };
+    }
+    if (!Number.isInteger(episode.episodeFileId) || episode.episodeFileId! < 0) {
+      throw new ArrApiError('Sonarr returned an invalid episode file identity');
+    }
+    const shared = episodes.some((candidate) =>
+      candidate.id !== episode.id && candidate.episodeFileId === episode.episodeFileId
+    );
+    const record = await this.request<{
+      id?: number;
+      relativePath?: string;
+      path?: string;
+      size?: number;
+    }>(`/episodefile/${episode.episodeFileId}`);
+    const absolutePath = record.path?.trim() || null;
+    const relativePath = record.relativePath?.trim() ||
+      absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
+    if (
+      !Number.isInteger(record.id) || record.id !== episode.episodeFileId ||
+      !relativePath
+    ) {
+      throw new ArrApiError('Sonarr returned an invalid managed episode file');
+    }
+    const size = Number(record.size);
+    return {
+      episodeId: episode.id!,
+      shared,
+      file: {
+        id: record.id!,
+        relativePath,
+        path: absolutePath,
+        size: Number.isFinite(size) && size >= 0 ? size : null,
+      },
+    };
+  }
+
+  async deleteManagedFile(fileId: number): Promise<void> {
+    const resource = this.type === 'radarr' ? 'moviefile' : 'episodefile';
+    await this.request<void>(`/${resource}/${fileId}`, { method: 'DELETE' });
+  }
+
+  async updateMoviePath(
+    mediaId: number,
+    expectedPath: string,
+    desiredPath: string,
+  ): Promise<boolean> {
+    if (this.type !== 'radarr') {
+      throw new ArrApiError('Movie path updates require Radarr');
+    }
+    const record = await this.request<Record<string, unknown> & { id?: number; path?: string }>(
+      `/movie/${mediaId}`,
+    );
+    if (
+      !record || typeof record !== 'object' || Array.isArray(record) ||
+      !Number.isInteger(record.id) || record.id !== mediaId ||
+      typeof record.path !== 'string' || record.path.trim().length === 0
+    ) {
+      throw new ArrApiError('Radarr returned an invalid movie record for path reassignment');
+    }
+    const currentPath = record.path.trim();
+    if (currentPath === desiredPath) return false;
+    if (currentPath !== expectedPath) {
+      throw new ArrApiError('Radarr changed the movie path before reassignment');
+    }
+    await this.request<void>(`/movie/${mediaId}?moveFiles=false`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...record, path: desiredPath }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return true;
+  }
+
+  async rescanMedia(mediaId: number): Promise<void> {
+    const body = this.type === 'radarr'
+      ? { name: 'RescanMovie', movieId: mediaId }
+      : { name: 'RescanSeries', seriesId: mediaId };
+    await this.request<void>('/command', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
     });
   }
 

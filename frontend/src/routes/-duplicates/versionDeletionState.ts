@@ -44,13 +44,15 @@ export function versionDestinationState(
   preview: VersionDeletionPreviewResponse | undefined,
 ) {
   const arrDeleteAvailable = preview?.arrStatus === "resolved";
-  const arrAvailable = arrDeleteAvailable;
-  const arrVisible = preview?.arrConfigured === true && arrDeleteAvailable;
+  const arrReassignAvailable = preview?.arrReassignStatus === "resolved";
+  const arrAvailable = arrDeleteAvailable || arrReassignAvailable;
+  const arrVisible = preview?.arrConfigured === true && arrAvailable;
   const cleanupAvailable = preview?.cleanupStatus === "resolved";
   return {
     arrVisible,
     arrAvailable,
     arrDeleteAvailable,
+    arrReassignAvailable,
     arrSelectedByDefault: arrVisible,
     cleanupAvailable,
     cleanupVisible: arrDeleteAvailable && preview?.cleanupConfigured === true &&
@@ -61,7 +63,10 @@ export function versionDestinationState(
 export function versionPlexFallbackRequired(
   preview: VersionDeletionPreviewResponse | undefined,
 ): boolean {
-  if (preview?.arrConfigured !== true || preview.arrStatus === "resolved") return false;
+  if (
+    preview?.arrConfigured !== true || preview.arrStatus === "resolved" ||
+    preview.arrReassignStatus === "resolved"
+  ) return false;
   return preview.arrStatus === "error" || preview.arrSelectionMatched ||
     preview.mediaType === "episode";
 }

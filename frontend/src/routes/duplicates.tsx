@@ -120,19 +120,16 @@ function DuplicatesPage() {
     mutationFn: async ({
       group,
       mediaIds,
-      arrMediaIds,
       cleanupMediaIds,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
-      arrMediaIds: number[];
       cleanupMediaIds: number[];
     }) => {
       if (group.mediaType === "movie") {
         return await api.duplicates.deleteMovieMediaVersions(
           group.ratingKey,
           mediaIds,
-          arrMediaIds,
           cleanupMediaIds,
         );
       }
@@ -162,24 +159,19 @@ function DuplicatesPage() {
       deleteWholeItem: boolean;
       deleteFromArr: boolean;
       cleanupDownloads: boolean;
-      arrMediaIds: number[];
       cleanupMediaIds: number[];
     },
   ) {
-    // A fully selected movie normally uses the whole-item workflow. Mixed destination
-    // support is the exception: Plex-only copies run first and the Radarr copy runs last.
     if (
       group.mediaType === "movie" &&
-      versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) ===
-        "whole-item" &&
-      plan.arrMediaIds.length === 0
+      versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) === "whole-item"
     ) {
       deleteWholeItemMutation.mutate(
         {
           libraryKey: group.libraryKey,
           ratingKeys: [group.ratingKey],
-          coordinatedRatingKeys: [],
-          cleanupDownloads: false,
+          coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
+          cleanupDownloads: plan.deleteFromArr && plan.cleanupDownloads,
           unmonitorRatingKeys: [],
         },
         {
@@ -194,7 +186,6 @@ function DuplicatesPage() {
     deleteVersionsMutation.mutate({
       group,
       mediaIds: plan.mediaIds,
-      arrMediaIds: plan.arrMediaIds,
       cleanupMediaIds: plan.cleanupMediaIds,
     });
   }

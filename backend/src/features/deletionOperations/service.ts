@@ -4,12 +4,9 @@ import { activeServerMatches } from './coordination.ts';
 import { isRetryableDeletionFailure } from './policy.ts';
 import { recoverInterruptedDeletionWork } from './recovery.ts';
 import { refreshDeletionOperation } from './state.ts';
+import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
 import { DeletionValidationError } from './validation.ts';
-import {
-  DeletionConvergenceError,
-  type DeletionWorkTarget,
-  ensureDeletionTarget,
-} from './workflow.ts';
+import { ensureDeletionTarget } from './workflow.ts';
 
 export type DeletionKind = 'whole_item' | 'movie_version' | 'episode_version';
 export type DeletionOperationStatus =
@@ -88,7 +85,7 @@ export async function repeatedDeletionOperation(
 function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation): void {
   const groups = new Map<
     string,
-    { kind: 'movie' | 'episode'; ratingKey: string; ids: number[]; hasFinalArrTarget: boolean }
+    { kind: 'movie' | 'episode'; ratingKey: string; ids: number[] }
   >();
   for (const target of input.targets) {
     if (!target.reservation) continue;
@@ -98,11 +95,8 @@ function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation
       kind: reservation.mediaKind,
       ratingKey: reservation.ratingKey,
       ids: [],
-      hasFinalArrTarget: false,
     };
     group.ids.push(reservation.mediaId);
-    group.hasFinalArrTarget ||= target.kind === 'movie_version' &&
-      target.snapshot.deleteFromArr === true;
     groups.set(key, group);
   }
   for (const group of groups.values()) {
@@ -114,13 +108,63 @@ function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation
     const reserved = client.prepare(
       'SELECT COUNT(*) FROM media_version_reservations WHERE server_id = ? AND media_kind = ? AND rating_key = ?',
     ).value<[number]>(input.serverId, group.kind, group.ratingKey)?.[0] ?? 0;
-    if (total - reserved - group.ids.length < 1 && !group.hasFinalArrTarget) {
+    if (total - reserved - group.ids.length < 1) {
       throw new DeletionConflictError(
         'at least one version must remain; delete the item instead',
         400,
       );
     }
   }
+}
+
+function snapshotArrMappingIdentities(
+  client: SqliteClient,
+  serverId: number,
+  libraryKey: string,
+  kind: 'movie_version' | 'episode_version',
+): Array<Record<string, unknown>> {
+  const expectedType = kind === 'movie_version' ? 'radarr' : 'sonarr';
+  const rows = client.prepare(
+    `SELECT i.id, i.type, i.url, i.updated_at, m.add_import_exclusion
+     FROM arr_library_mappings m
+     JOIN arr_instances i ON i.id = m.arr_instance_id
+     WHERE m.server_id = ? AND m.library_key = ?
+       AND i.server_id = ? AND i.type = ?
+     ORDER BY i.id`,
+  ).values<[number, 'radarr' | 'sonarr', string, number, number]>(
+    serverId,
+    libraryKey,
+    serverId,
+    expectedType,
+  );
+  return rows.map(([instanceId, instanceType, instanceUrl, configurationUpdatedAt, exclusion]) => {
+    const pathMappings = client.prepare(
+      `SELECT kind, arr_path, local_path
+       FROM arr_path_mappings
+       WHERE arr_instance_id = ?
+       ORDER BY kind, arr_path, local_path`,
+    ).values<['library' | 'download', string, string]>(instanceId).map(
+      ([mappingKind, arrPath, localPath]) => ({
+        kind: mappingKind,
+        arrPath,
+        localPath,
+      }),
+    ).sort((left, right) =>
+      `${left.kind}\0${left.arrPath}\0${left.localPath}`.localeCompare(
+        `${right.kind}\0${right.arrPath}\0${right.localPath}`,
+      )
+    );
+    return {
+      instanceId,
+      instanceType,
+      instanceUrl,
+      configurationUpdatedAt,
+      mappingIdentity: JSON.stringify({
+        addImportExclusion: Boolean(exclusion),
+        pathMappings,
+      }),
+    };
+  });
 }
 
 function projectionRoot(target: NewDeletionTarget): string | null {
@@ -141,16 +185,24 @@ function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperati
     const root = row[0] === 'episode_version'
       ? (typeof snapshot.showRatingKey === 'string' ? snapshot.showRatingKey : null)
       : (typeof snapshot.ratingKey === 'string' ? snapshot.ratingKey : null);
-    return { kind: row[0], key: row[1], root };
+    const reassignments = Array.isArray(snapshot.arrReassignments)
+      ? snapshot.arrReassignments as Array<Record<string, unknown>>
+      : [];
+    const protectedMediaId = typeof reassignments[0]?.retainedMediaId === 'number'
+      ? reassignments[0].retainedMediaId as number
+      : null;
+    return { kind: row[0], key: row[1], root, protectedMediaId };
   });
 
   for (const target of input.targets) {
     const root = projectionRoot(target);
+    const mediaId = target.reservation?.mediaId ?? null;
     if (
       unresolved.some((existing) =>
         existing.key === target.key ||
         (root !== null && existing.root === root &&
-          (existing.kind === 'whole_item' || target.kind === 'whole_item'))
+          (existing.kind === 'whole_item' || target.kind === 'whole_item' ||
+            (mediaId !== null && existing.protectedMediaId === mediaId)))
       )
     ) {
       throw new DeletionConflictError(
@@ -211,6 +263,15 @@ export async function enqueueDeletionOperation(
     }
     ensureNoRecoveryOverlap(client, input);
     ensureVersionCapacity(client, input);
+    for (const target of input.targets) {
+      if (target.kind === 'whole_item') continue;
+      target.snapshot.arrReassignmentMappings = snapshotArrMappingIdentities(
+        client,
+        input.serverId,
+        input.libraryKey,
+        target.kind,
+      );
+    }
     client.prepare(
       "INSERT INTO deletion_operations (id, client_request_id, request_hash, server_id, library_key, kind, status, target_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
     ).run(
@@ -267,7 +328,7 @@ function claimTarget(): DeletionWorkTarget | null {
        FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id
        WHERE (t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?))
          AND (
-           COALESCE(json_extract(t.snapshot, '$.deleteFromArr'), 0) <> 1
+           json_extract(t.snapshot, '$.arrReassignments') IS NULL
            OR NOT EXISTS (
              SELECT 1 FROM deletion_targets prior
              WHERE prior.operation_id = t.operation_id
@@ -320,10 +381,8 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
       client.prepare(
         "UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'running'",
       ).run(message, now, target.id);
-      // A coordinated version target is deliberately ordered after Plex-only targets.
-      // If an earlier target cannot complete, do not let the coordinated target run
-      // against a live/projection state that no longer matches that ordering. Mark it
-      // for attention too so retrying the operation requeues the dependency chain.
+      // A target with a persisted reassignment depends on the preceding targets'
+      // projected state. Keep that dependency chain together for manual retry.
       client.prepare(
         `UPDATE deletion_targets
          SET status = 'needs_attention', next_retry_at = NULL,
@@ -331,7 +390,7 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
          WHERE operation_id = ?
            AND ordinal > (SELECT ordinal FROM deletion_targets WHERE id = ?)
            AND status IN ('queued', 'waiting_retry')
-           AND COALESCE(json_extract(snapshot, '$.deleteFromArr'), 0) = 1`,
+           AND json_extract(snapshot, '$.arrReassignments') IS NOT NULL`,
       ).run(now, target.operationId, target.id);
     }
     refreshDeletionOperation(client, target.operationId);

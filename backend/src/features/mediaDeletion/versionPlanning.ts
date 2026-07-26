@@ -5,9 +5,23 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
+import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
-import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
+import {
+  buildArrReassignmentPlan,
+  type EligibleArrReassignment,
+  type PersistedArrMappingIdentity,
+  type PersistedArrOwnership,
+  type PersistedArrReassignment,
+} from './arrReassignmentPlanning.ts';
+
+export type {
+  EligibleArrReassignment,
+  PersistedArrMappingIdentity,
+  PersistedArrOwnership,
+  PersistedArrReassignment,
+} from './arrReassignmentPlanning.ts';
 
 export interface EligibleVersionArrTarget {
   target: ArrDeleteTarget;
@@ -19,6 +33,13 @@ export interface EligibleVersionArrTarget {
 export interface VersionDeletionPlan {
   preview: VersionDeletionPreviewResponse;
   eligibleArrTargets: EligibleVersionArrTarget[];
+  eligibleArrReassignments: EligibleArrReassignment[];
+  arrMappingIdentities: PersistedArrMappingIdentity[];
+  arrOwnerships: PersistedArrOwnership[];
+  arrOwnershipValid: boolean;
+  arrOwnershipReason?: string;
+  arrManagedMediaIds: number[];
+  arrReassignCandidateMediaIds: number[];
   cleanup: ResolvedCleanupItem | null;
 }
 
@@ -124,6 +145,11 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured,
   attemptedArrInstanceIds = new Set<number>(),
   allowPartialCoverage = false,
+  episodeIdentity,
+  excludedReassignMediaIds = selectedMediaIds,
+  requiredMappingIdentities,
+  requiredReassignments = new Map<number, PersistedArrReassignment>(),
+  requiredOwnerships = new Map<number, PersistedArrOwnership>(),
 }: {
   mediaType: 'movie' | 'episode';
   item: CoordinatedDeleteItem;
@@ -134,6 +160,11 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured: boolean;
   attemptedArrInstanceIds?: ReadonlySet<number>;
   allowPartialCoverage?: boolean;
+  episodeIdentity?: { seasonNumber: number; episodeNumber: number };
+  excludedReassignMediaIds?: ReadonlySet<number>;
+  requiredMappingIdentities?: readonly PersistedArrMappingIdentity[];
+  requiredReassignments?: ReadonlyMap<number, PersistedArrReassignment>;
+  requiredOwnerships?: ReadonlyMap<number, PersistedArrOwnership>;
 }): Promise<VersionDeletionPlan> {
   const versions = publicVersionPreviews(liveVersions, selectedMediaIds);
   const selectedPaths = new Set(
@@ -147,7 +178,6 @@ export async function buildVersionDeletionPlan({
     .flatMap((version) => version.paths);
   const pathsComplete = liveVersions.every((version) => !version.truncated) &&
     versions.every((version) => version.status === 'resolved' && !version.truncated);
-
   const eligibleArrTargets: EligibleVersionArrTarget[] = [];
   const arrErrors: string[] = [];
   const arrUnsafeReasons: string[] = [];
@@ -249,6 +279,29 @@ export async function buildVersionDeletionPlan({
     );
   }
 
+  const {
+    eligibleArrReassignments,
+    arrMappingIdentities,
+    arrOwnerships,
+    arrOwnershipValid,
+    arrOwnershipReason,
+    arrManagedMediaIds,
+    arrReassignCandidateMediaIds,
+    arrReassignStatus,
+    arrReassignReason,
+  } = await buildArrReassignmentPlan({
+    mediaType,
+    item,
+    selectedMediaIds,
+    liveVersions,
+    arrTargets,
+    episodeIdentity,
+    excludedReassignMediaIds,
+    requiredMappingIdentities,
+    requiredReassignments,
+    requiredOwnerships,
+  });
+
   const cleanup = mediaType === 'movie' && pathsComplete
     ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths, allowPartialCoverage)
     : null;
@@ -332,6 +385,13 @@ export async function buildVersionDeletionPlan({
 
   return {
     eligibleArrTargets,
+    eligibleArrReassignments,
+    arrMappingIdentities,
+    arrOwnerships: arrOwnerships.sort((left, right) => left.instanceId - right.instanceId),
+    arrOwnershipValid,
+    ...(arrOwnershipReason ? { arrOwnershipReason } : {}),
+    arrManagedMediaIds,
+    arrReassignCandidateMediaIds,
     cleanup,
     preview: {
       mediaType,
@@ -346,6 +406,8 @@ export async function buildVersionDeletionPlan({
       arrReason,
       arrTargets: eligibleArrTargets.map((entry) => entry.preview),
       arrSelectionMatched,
+      arrReassignStatus,
+      arrReassignReason,
       cleanupConfigured,
       cleanupStatus,
       cleanupReason,

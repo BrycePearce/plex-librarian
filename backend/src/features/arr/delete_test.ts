@@ -16,6 +16,10 @@ function target(
   return {
     instanceId: instanceName.length,
     instanceName,
+    instanceType: 'radarr',
+    instanceUrl: `http://${instanceName}`,
+    configurationUpdatedAt: 1,
+    mappingIdentity: '{"addImportExclusion":true,"pathMappings":[]}',
     client: new ArrClient('radarr', `http://${instanceName}`, 'key', fetchImpl),
     addImportExclusion: true,
     pathMappings: [],

@@ -2,6 +2,11 @@ import { withTransaction } from '../../db/index.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { PlexMetadataIdentity } from '../../integrations/plex/types.ts';
+import type {
+  PersistedArrMappingIdentity,
+  PersistedArrOwnership,
+  PersistedArrReassignment,
+} from '../mediaDeletion/arrReassignmentPlanning.ts';
 
 export interface DurableTargetRecord {
   id: number;
@@ -22,6 +27,7 @@ export interface DurableTargetSnapshot {
   cleanupDownloads?: boolean;
   selectedRatingKeys?: string[];
   selectedMediaIds?: number[];
+  operationMediaIds?: number[];
   mediaId?: number;
   fileSize?: number | null;
   videoResolution?: string | null;
@@ -34,7 +40,9 @@ export interface DurableTargetSnapshot {
   seasonRatingKey?: string | null;
   seasonIndex?: number | null;
   episodeIndex?: number | null;
-  deleteFromArr?: boolean;
+  arrReassignmentMappings?: PersistedArrMappingIdentity[];
+  arrOwnerships?: PersistedArrOwnership[];
+  arrReassignments?: PersistedArrReassignment[];
   unmonitorFromArr?: boolean;
 }
 

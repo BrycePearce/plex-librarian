@@ -52,10 +52,14 @@ export function VersionDeletionServiceMarks({
     : versionPreview?.cleanupPaths.includes(path)
     ? "resolved"
     : "unavailable";
-  const arrReason = versionPreview?.arrReason ?? preview?.arrReason;
+  const automaticReassignment = deleteFromArr && preview?.arrReassignStatus === "resolved";
+  const effectiveArrStatus = automaticReassignment ? "resolved" : arrStatus;
+  const arrReason = automaticReassignment
+    ? undefined
+    : versionPreview?.arrReason ?? preview?.arrReason;
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
   const arrActive = versionArrDeletionActive(deleteFromArr, arrStatus);
-  const cleanupResolved = cleanupDownloads && arrStatus === "resolved" &&
+  const cleanupResolved = cleanupDownloads && effectiveArrStatus === "resolved" &&
     cleanupStatus === "resolved";
   const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
   const hardlinkActive = cleanupResolved &&
@@ -83,7 +87,7 @@ export function VersionDeletionServiceMarks({
       <PlannedServiceExceptions
         deleteFromArr={deleteFromArr}
         arrService={arrService}
-        arrStatus={arrStatus}
+        arrStatus={effectiveArrStatus}
         arrReason={arrReason}
         downloadJobCount={qbitActive ? 1 : 0}
         hardlinkFileCount={hardlinkActive ? 1 : 0}

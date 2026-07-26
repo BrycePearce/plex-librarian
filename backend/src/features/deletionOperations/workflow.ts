@@ -6,7 +6,6 @@ import {
   items,
   torrentDeleteAttempts,
 } from '../../db/schema.ts';
-import { ArrApiError } from '../../integrations/arr/client.ts';
 import { PlexDeleteError } from '../../integrations/plex/client.ts';
 import { tryAcquireLibraryOperation } from '../../services/libraryOperations.ts';
 import {
@@ -18,10 +17,7 @@ import {
   findAmbiguousExternalIds,
   getArrDeleteTargets,
 } from '../arr/delete.ts';
-import {
-  activeWholeItemRatingKeys,
-  mediaRatingKeyIsPlaying,
-} from '../mediaDeletion/activePlayback.ts';
+import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import {
   executeDownloadedFileCleanup,
   reconcileSharedDownloadCleanups,
@@ -38,20 +34,20 @@ import {
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
-import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
+import {
+  assertAcceptedArrMappingsUnchanged,
+  assertVersionIsNotPlaying,
+  bestLiveReassignmentCandidate,
+  directPlexDeletionStillSafe,
+  persistArrOwnershipPlan,
+  persistedArrOwnershipMap,
+  persistedArrReassignmentMap,
+  persistedRetainedMediaId,
+  waitForArrManagedPath,
+} from './arrReassignment.ts';
 import { refreshDeletionOperation } from './state.ts';
-
-export interface DeletionWorkTarget {
-  id: number;
-  operationId: string;
-  serverId: number;
-  targetKind: 'whole_item' | 'movie_version' | 'episode_version';
-  targetKey: string;
-  snapshot: string;
-  logicalSize: number | null;
-}
-
-export class DeletionConvergenceError extends Error {}
+import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
+import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
 
 function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
@@ -164,22 +160,9 @@ function finalizeTarget(
     removed = client.prepare(
       'DELETE FROM item_media_versions WHERE server_id = ? AND item_rating_key = ? AND media_id = ?',
     ).run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
-    const remainingVersions = client.prepare(
-      'SELECT COUNT(*) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?',
-    ).value<[number]>(target.serverId, snapshot.ratingKey)?.[0] ?? 0;
-    if (snapshot.deleteFromArr && remainingVersions === 0) {
-      // Radarr removes the movie, not an individual Media entry. When this was the
-      // final selected target, keep the local projection aligned immediately instead
-      // of waiting for the next library sync to prune the now-absent title.
-      client.prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?').run(
-        target.serverId,
-        snapshot.ratingKey,
-      );
-    } else {
-      client.prepare(
-        'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
-      ).run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
-    }
+    client.prepare(
+      'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
+    ).run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
   } else {
     removed = client.prepare(
       'DELETE FROM episode_media_versions WHERE server_id = ? AND episode_rating_key = ? AND media_id = ?',
@@ -334,21 +317,145 @@ async function ensureVersionDeleted(
   liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
 ): Promise<boolean> {
   const selectedIds = new Set(snapshot.selectedMediaIds ?? [snapshot.mediaId!]);
-  if (!liveAtStart || !liveAtStart.media.some((media) => media.mediaId === snapshot.mediaId)) {
+  const excludedReassignIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
+  let retainedMediaId = persistedRetainedMediaId(snapshot);
+  if (!liveAtStart) {
+    if (retainedMediaId !== null) {
+      throw new Error('The retained Plex item disappeared during Arr reassignment');
+    }
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
+      if (snapshot.arrOwnerships === undefined) {
+        throw new Error('The Plex source disappeared before Arr ownership was persisted');
+      }
+      const plan = await buildVersionDeletionPlan({
+        mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
+        item: snapshot,
+        selectedMediaIds: selectedIds,
+        liveVersions: [],
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        excludedReassignMediaIds: excludedReassignIds,
+        requiredMappingIdentities: snapshot.arrReassignmentMappings,
+        requiredOwnerships: persistedArrOwnershipMap(snapshot),
+        ...(snapshot.type === 'episode' &&
+            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+          ? {
+            episodeIdentity: {
+              seasonNumber: snapshot.seasonIndex,
+              episodeNumber: snapshot.episodeIndex,
+            },
+          }
+          : {}),
+      });
+      if (!plan.arrOwnershipValid) {
+        throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
+      }
+    }
     return false;
   }
+  const sourceVersionIsLive = liveAtStart.media.some((media) => media.mediaId === snapshot.mediaId);
   const liveIds = new Set(liveAtStart.media.map((media) => media.mediaId));
-  if (
-    !snapshot.deleteFromArr &&
-    ![...liveIds].some((id) => !selectedIds.has(id))
-  ) {
+  const hasRemainingVersion = [...liveIds].some((id) => !excludedReassignIds.has(id));
+  if (!sourceVersionIsLive && retainedMediaId === null) {
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    if (arrTargets.length === 0 && snapshot.arrOwnerships === undefined) return false;
+    if (snapshot.arrOwnerships === undefined) {
+      throw new Error('The Plex source disappeared before Arr ownership was persisted');
+    }
+    const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
+    const plan = await buildVersionDeletionPlan({
+      mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
+      item: snapshot,
+      selectedMediaIds: selectedIds,
+      liveVersions,
+      arrTargets,
+      resolvedCleanup: null,
+      cleanupConfigured: false,
+      excludedReassignMediaIds: excludedReassignIds,
+      requiredMappingIdentities: snapshot.arrReassignmentMappings,
+      requiredOwnerships: persistedArrOwnershipMap(snapshot),
+      ...(snapshot.type === 'episode' &&
+          snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
+          snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+        ? {
+          episodeIdentity: {
+            seasonNumber: snapshot.seasonIndex,
+            episodeNumber: snapshot.episodeIndex,
+          },
+        }
+        : {}),
+    });
+    if (!plan.arrOwnershipValid) {
+      throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
+    }
+    return false;
+  }
+  if (!hasRemainingVersion) {
     throw new Error('at least one unselected live Plex version must remain');
   }
-  if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await client.activeSessions())) {
-    throw new Error('cannot delete a media version during active playback');
+  await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+
+  if (hasRemainingVersion && retainedMediaId === null) {
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
+      const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
+      const plan = await buildVersionDeletionPlan({
+        mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
+        item: snapshot,
+        selectedMediaIds: selectedIds,
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        excludedReassignMediaIds: excludedReassignIds,
+        requiredMappingIdentities: snapshot.arrReassignmentMappings,
+        requiredOwnerships: persistedArrOwnershipMap(snapshot),
+        ...(snapshot.type === 'episode' &&
+            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+          ? {
+            episodeIdentity: {
+              seasonNumber: snapshot.seasonIndex,
+              episodeNumber: snapshot.episodeIndex,
+            },
+          }
+          : {}),
+      });
+      if (!plan.arrOwnershipValid) {
+        throw new Error(
+          plan.arrOwnershipReason ?? 'Arr ownership could not be verified',
+        );
+      }
+      if (plan.arrManagedMediaIds.includes(snapshot.mediaId!)) {
+        if (plan.preview.arrReassignStatus !== 'resolved') {
+          throw new Error(
+            plan.preview.arrReassignReason ??
+              'The Arr-managed version cannot be safely reassigned',
+          );
+        }
+        const candidateMediaId = bestLiveReassignmentCandidate(
+          liveAtStart,
+          plan.arrReassignCandidateMediaIds,
+        );
+        if (candidateMediaId === null) {
+          throw new Error('No deterministic retained Arr version is available');
+        }
+        retainedMediaId = candidateMediaId;
+      } else {
+        persistArrOwnershipPlan(target.id, snapshot, plan);
+      }
+    }
   }
 
-  if (snapshot.deleteFromArr || snapshot.cleanupDownloads) {
+  if (
+    snapshot.cleanupDownloads || retainedMediaId !== null
+  ) {
     const item: CoordinatedDeleteItem = snapshot;
     const [liveVersions, arrTargets, downloadTargets, attemptedJobs, attemptedOrphans] =
       await Promise.all([
@@ -380,54 +487,145 @@ async function ensureVersionDeleted(
       resolvedCleanup,
       cleanupConfigured: downloadTargets.length > 0,
       attemptedArrInstanceIds: attemptedArr.get(snapshot.ratingKey),
+      excludedReassignMediaIds: excludedReassignIds,
+      requiredMappingIdentities: snapshot.arrReassignmentMappings,
+      requiredReassignments: persistedArrReassignmentMap(snapshot),
+      requiredOwnerships: persistedArrOwnershipMap(snapshot),
+      ...(snapshot.type === 'episode' &&
+          snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
+          snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+        ? {
+          episodeIdentity: {
+            seasonNumber: snapshot.seasonIndex,
+            episodeNumber: snapshot.episodeIndex,
+          },
+        }
+        : {}),
     });
     if (snapshot.cleanupDownloads) {
       if (!plan.cleanup) {
         throw new Error(plan.preview.cleanupReason ?? 'cleanup could not be verified');
       }
+      await assertVersionIsNotPlaying(client, snapshot.ratingKey);
       await executeCleanup(
         target.serverId,
         new Map([[snapshot.ratingKey, plan.cleanup]]),
         plan.cleanup,
       );
     }
-    if (snapshot.deleteFromArr) {
-      if (plan.preview.arrStatus !== 'resolved') {
-        const id = externalId(item);
-        if (id === null) throw new Error('the target has no Radarr external ID');
-        const records = await Promise.all(arrTargets.map((entry) => entry.client.lookup(id)));
-        if (records.some((record) => record !== null)) {
-          throw new Error(plan.preview.arrReason ?? 'Radarr deletion could not be verified');
-        }
-        await client.refreshLibrary(snapshot.libraryKey);
-        const after = await client.metadataIdentity(snapshot.ratingKey);
-        if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
-          throw new DeletionConvergenceError('Plex has not converged after Radarr was absent');
-        }
-        return false;
+    if (retainedMediaId !== null) {
+      if (plan.preview.arrReassignStatus !== 'resolved') {
+        throw new Error(
+          plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified',
+        );
       }
-      let madeAttempt = false;
-      for (const entry of plan.eligibleArrTargets) {
-        if (entry.alreadyAbsent) continue;
-        await markArrAttempt(target.serverId, snapshot, entry.target);
-        try {
-          await entry.target.client.deleteMedia(entry.recordId!, entry.target.addImportExclusion);
-          madeAttempt = true;
-        } catch (error) {
-          if (!(error instanceof ArrApiError) || error.status !== 404) throw error;
-        }
-      }
+      await waitForArrManagedPath(
+        target,
+        plan,
+        snapshot,
+        client,
+        retainedMediaId,
+      );
       await client.refreshLibrary(snapshot.libraryKey);
       const after = await client.metadataIdentity(snapshot.ratingKey);
       if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
-        throw new DeletionConvergenceError('Plex has not converged after the Radarr deletion');
+        throw new DeletionConvergenceError(
+          'Plex has not converged after the Arr file reassignment',
+        );
       }
-      return madeAttempt;
+      if (!after?.media.some((media) => media.mediaId === retainedMediaId)) {
+        throw new Error('The retained Plex version disappeared during Arr reassignment');
+      }
+      return true;
     }
   }
 
   let removedByApp = true;
   try {
+    await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
+      const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
+      const planInput = {
+        mediaType: target.targetKind === 'movie_version' ? 'movie' as const : 'episode' as const,
+        item: snapshot,
+        selectedMediaIds: selectedIds,
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        excludedReassignMediaIds: excludedReassignIds,
+        requiredMappingIdentities: snapshot.arrReassignmentMappings,
+        ...(snapshot.type === 'episode' &&
+            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+          ? {
+            episodeIdentity: {
+              seasonNumber: snapshot.seasonIndex,
+              episodeNumber: snapshot.episodeIndex,
+            },
+          }
+          : {}),
+      };
+      let finalPlan = await buildVersionDeletionPlan({
+        ...planInput,
+        requiredOwnerships: persistedArrOwnershipMap(snapshot),
+      });
+      if (!finalPlan.arrOwnershipValid) {
+        const currentPlan = await buildVersionDeletionPlan(planInput);
+        if (
+          !currentPlan.arrOwnershipValid ||
+          !currentPlan.arrManagedMediaIds.includes(snapshot.mediaId!) ||
+          currentPlan.preview.arrReassignStatus !== 'resolved'
+        ) {
+          throw new Error(
+            finalPlan.arrOwnershipReason ?? 'Arr ownership changed before Plex deletion',
+          );
+        }
+        finalPlan = currentPlan;
+      }
+      if (finalPlan.arrManagedMediaIds.includes(snapshot.mediaId!)) {
+        if (finalPlan.preview.arrReassignStatus !== 'resolved') {
+          throw new Error(
+            finalPlan.preview.arrReassignReason ??
+              'The Arr-managed version cannot be safely reassigned',
+          );
+        }
+        const validation = await validateDeletionTarget(target.serverId, target);
+        if (!validation.live) {
+          throw new Error('The retained Plex item disappeared during Arr reassignment');
+        }
+        const candidateMediaId = bestLiveReassignmentCandidate(
+          validation.live,
+          finalPlan.arrReassignCandidateMediaIds,
+        );
+        if (candidateMediaId === null) {
+          throw new Error('No deterministic retained Arr version is available');
+        }
+        await waitForArrManagedPath(
+          target,
+          finalPlan,
+          snapshot,
+          client,
+          candidateMediaId,
+        );
+        await client.refreshLibrary(snapshot.libraryKey);
+        const after = await client.metadataIdentity(snapshot.ratingKey);
+        if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
+          throw new DeletionConvergenceError(
+            'Plex has not converged after the Arr file reassignment',
+          );
+        }
+        if (!after?.media.some((media) => media.mediaId === candidateMediaId)) {
+          throw new Error('The retained Plex version disappeared during Arr reassignment');
+        }
+        return true;
+      }
+    }
+    if (!await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds)) {
+      return false;
+    }
     await client.deleteMedia(snapshot.ratingKey, snapshot.mediaId!);
   } catch (error) {
     if (!(error instanceof PlexDeleteError) || error.status !== 404) throw error;

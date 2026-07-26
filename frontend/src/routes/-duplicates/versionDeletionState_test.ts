@@ -69,6 +69,7 @@ function preview(
     arrStatus: "unavailable",
     arrTargets: [],
     arrSelectionMatched: false,
+    arrReassignStatus: "unavailable",
     cleanupConfigured: false,
     cleanupStatus: "unavailable",
     downloadJobs: [],
@@ -108,6 +109,7 @@ Deno.test("unconfigured destinations stay hidden", () => {
     arrVisible: false,
     arrAvailable: false,
     arrDeleteAvailable: false,
+    arrReassignAvailable: false,
     arrSelectedByDefault: false,
     cleanupAvailable: false,
     cleanupVisible: false,
@@ -121,11 +123,29 @@ Deno.test("configured unavailable Arr stays hidden when it has no safe action", 
       arrVisible: false,
       arrAvailable: false,
       arrDeleteAvailable: false,
+      arrReassignAvailable: false,
       arrSelectedByDefault: false,
       cleanupAvailable: false,
       cleanupVisible: false,
     },
   );
+});
+
+Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsafe", () => {
+  const reassignment = preview({
+    arrConfigured: true,
+    arrReassignStatus: "resolved",
+  });
+  assertEquals(versionDestinationState(reassignment), {
+    arrVisible: true,
+    arrAvailable: true,
+    arrDeleteAvailable: false,
+    arrReassignAvailable: true,
+    arrSelectedByDefault: true,
+    cleanupAvailable: false,
+    cleanupVisible: false,
+  });
+  assertEquals(versionPlexFallbackRequired(reassignment), false);
 });
 
 Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => {
@@ -139,6 +159,7 @@ Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => 
       arrVisible: false,
       arrAvailable: false,
       arrDeleteAvailable: false,
+      arrReassignAvailable: false,
       arrSelectedByDefault: false,
       cleanupAvailable: false,
       cleanupVisible: false,

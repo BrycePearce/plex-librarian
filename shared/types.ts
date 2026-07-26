@@ -415,6 +415,10 @@ export interface VersionDeletionPreviewResponse {
   arrReason?: string;
   arrTargets: ArrCleanupTarget[];
   arrSelectionMatched: boolean;
+  // When the selected deletion includes Arr's managed file, the record can be
+  // retained and reassigned to an unselected Plex version.
+  arrReassignStatus: 'resolved' | 'unavailable' | 'error';
+  arrReassignReason?: string;
   cleanupConfigured: boolean;
   cleanupStatus: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;

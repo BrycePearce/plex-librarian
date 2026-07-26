@@ -11,7 +11,8 @@ export function isRetryableDeletionFailure(
   ) return true;
   if (effectiveStatus !== null && effectiveStatus >= 400) return false;
   if (transportFailure) return true;
-  return /\b(timeout|timed out|network|connection|temporar|unavailable|fetch failed)\b/i.test(
-    message,
-  );
+  return /\b(timeout|timed out|network|connection|temporar|unavailable|unreachable|fetch failed)\b/i
+    .test(
+      message,
+    );
 }

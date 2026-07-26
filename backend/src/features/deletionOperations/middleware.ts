@@ -145,13 +145,12 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     if (mediaIds.length === 0 || mediaIds.length > 50) {
       return c.json({ error: 'mediaIds must contain between 1 and 50 integers' }, 400);
     }
-    const arrMediaIds = new Set(
-      Array.isArray(body.arrMediaIds)
-        ? body.arrMediaIds.filter((id): id is number => Number.isSafeInteger(id) && id >= 0)
-        : body.deleteFromArr === true
-        ? mediaIds
-        : [],
-    );
+    if (body.arrMediaIds !== undefined || body.deleteFromArr !== undefined) {
+      return c.json(
+        { error: 'Arr handling for media versions is determined by the backend' },
+        400,
+      );
+    }
     const cleanupMediaIds = new Set(
       Array.isArray(body.cleanupMediaIds)
         ? body.cleanupMediaIds.filter((id): id is number => Number.isSafeInteger(id) && id >= 0)
@@ -163,15 +162,13 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       return c.json({ error: 'unmonitorFromArr is no longer supported for media versions' }, 400);
     }
     if (
-      [...arrMediaIds, ...cleanupMediaIds].some((id) => !mediaIds.includes(id)) ||
-      [...cleanupMediaIds].some((id) => !arrMediaIds.has(id))
+      [...cleanupMediaIds].some((id) => !mediaIds.includes(id))
     ) {
       return c.json({ error: 'invalid deletion destinations' }, 400);
     }
     const payload = {
       path,
       mediaIds,
-      arrMediaIds: [...arrMediaIds].sort((a, b) => a - b),
       cleanupMediaIds: [...cleanupMediaIds].sort((a, b) => a - b),
     };
     const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
@@ -299,9 +296,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           seasonRatingKey: target.seasonRatingKey,
           seasonIndex: target.seasonIndex,
           episodeIndex: target.episodeIndex,
-          deleteFromArr: arrMediaIds.has(target.mediaId),
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
           selectedMediaIds: [target.mediaId],
+          operationMediaIds: mediaIds,
         },
         reservation: {
           mediaKind: kind === 'movie_version' ? 'movie' : 'episode',
@@ -310,13 +307,6 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         },
       };
     });
-    // Plex-only versions run first. A coordinated Radarr target may safely be the final
-    // live version because Radarr removes the title rather than calling Plex's
-    // last-version endpoint; keeping it last also leaves a recoverable copy if its
-    // execution-time verification fails.
-    targets.sort((a, b) =>
-      Number(a.snapshot.deleteFromArr === true) - Number(b.snapshot.deleteFromArr === true)
-    );
     const result = await enqueueDeletionOperation({
       clientRequestId,
       serverId,

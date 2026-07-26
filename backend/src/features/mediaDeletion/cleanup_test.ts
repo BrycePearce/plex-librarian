@@ -276,6 +276,10 @@ function arrTarget(historyMovieIds: number[] = [7]) {
   return {
     instanceId: 1,
     instanceName: 'Radarr',
+    instanceType: 'radarr' as const,
+    instanceUrl: 'http://radarr',
+    configurationUpdatedAt: 1,
+    mappingIdentity: '{"addImportExclusion":true,"pathMappings":[]}',
     client,
     addImportExclusion: true,
     pathMappings: [],
@@ -517,6 +521,10 @@ Deno.test('optional history and extra-file failures do not block verified Arr de
     [{
       instanceId: 1,
       instanceName: 'Radarr',
+      instanceType: 'radarr',
+      instanceUrl: 'http://radarr',
+      configurationUpdatedAt: 1,
+      mappingIdentity: '{"addImportExclusion":true,"pathMappings":[]}',
       client,
       addImportExclusion: true,
       pathMappings: [],

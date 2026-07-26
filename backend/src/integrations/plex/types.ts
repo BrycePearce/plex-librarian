@@ -139,6 +139,7 @@ export interface PlexMetadataIdentity {
   media: Array<{
     mediaId: number;
     videoResolution: string | null;
+    height: number | null;
     bitrate: number | null;
     videoCodec: string | null;
     container: string | null;
@@ -208,6 +209,8 @@ export interface PlexMediaPathPreview {
 
 export interface PlexMediaVersionPathPreview extends PlexMediaPathPreview {
   mediaId: number;
+  // Present only when Plex reports one unambiguous Part size for this Media entry.
+  fileSize?: number | null;
 }
 
 // One row per Plex `Media` entry on an episode — but only ever produced by

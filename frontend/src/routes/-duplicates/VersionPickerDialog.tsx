@@ -81,7 +81,6 @@ export function VersionPickerDialog({
     deleteWholeItem: boolean;
     deleteFromArr: boolean;
     cleanupDownloads: boolean;
-    arrMediaIds: number[];
     cleanupMediaIds: number[];
   }) => void;
   onCancel: () => void;
@@ -181,9 +180,8 @@ export function VersionPickerDialog({
     preview.data?.versions ?? [];
 
   useEffect(() => {
-    setDeleteFromArr(
-      versionDestinationState(preview.data).arrSelectedByDefault,
-    );
+    const destination = versionDestinationState(preview.data);
+    setDeleteFromArr(destination.arrSelectedByDefault);
     setCleanupDownloads(false);
     setFallbackAcknowledged(false);
   }, [
@@ -191,6 +189,7 @@ export function VersionPickerDialog({
     mediaIds.join("|"),
     preview.data?.arrConfigured,
     preview.data?.arrStatus,
+    preview.data?.arrReassignStatus,
   ]);
 
   if (!item) {
@@ -221,11 +220,13 @@ export function VersionPickerDialog({
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
   const arrDeleteAvailable = destinations.arrDeleteAvailable;
+  const arrReassignAvailable = destinations.arrReassignAvailable;
   const cleanupAvailable = destinations.cleanupAvailable;
   const arrOptionVisible = destinations.arrVisible;
   const cleanupOptionVisible = destinations.cleanupVisible;
   const cleanupUsesQbittorrent = (preview.data?.downloadJobs.length ?? 0) > 0;
-  const destinationOptionsVisible = arrOptionVisible || cleanupOptionVisible;
+  const destinationOptionsVisible = (arrOptionVisible && !arrReassignAvailable) ||
+    (cleanupOptionVisible && !arrReassignAvailable);
   // Merge in refreshed technical detail by mediaId where available — selection state,
   // fileSize, and everything else stays keyed off item.versions; only the fields the
   // refresh can improve (video/audio/subtitle technical detail) are swapped in.
@@ -240,6 +241,13 @@ export function VersionPickerDialog({
   const comparison = compareDuplicateVersions(displayVersions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
   const fallbackRequired = versionPlexFallbackRequired(preview.data);
+  const reassignActive = deleteFromArr && arrReassignAvailable;
+  const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable && !reassignActive
+    ? preview.data?.versions.filter((version) =>
+      mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
+      version.cleanupStatus === "resolved"
+    ).map((version) => version.mediaId) ?? []
+    : [];
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: checkedCount > 0,
@@ -248,17 +256,6 @@ export function VersionPickerDialog({
     fallbackRequired,
     fallbackAcknowledged,
   });
-  const arrMediaIds = deleteFromArr && arrDeleteAvailable
-    ? preview.data?.versions.filter((version) =>
-      mediaIds.includes(version.mediaId) && version.arrStatus === "resolved"
-    ).map((version) => version.mediaId) ?? []
-    : [];
-  const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable
-    ? preview.data?.versions.filter((version) =>
-      mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
-      version.cleanupStatus === "resolved"
-    ).map((version) => version.mediaId) ?? []
-    : [];
   return (
     <DeletionModalShell
       dialogRef={dialogRef}
@@ -370,7 +367,7 @@ export function VersionPickerDialog({
       {preview.data && destinationOptionsVisible && (
         <DestinationOptions
           options={[
-            ...(arrOptionVisible
+            ...(arrOptionVisible && !arrReassignAvailable
               ? [{
                 id: "arr" as const,
                 service: arrService,
@@ -387,7 +384,7 @@ export function VersionPickerDialog({
                 },
               }]
               : []),
-            ...(cleanupOptionVisible
+            ...(cleanupOptionVisible && !arrReassignAvailable
               ? [{
                 id: "cleanup" as const,
                 service: cleanupUsesQbittorrent ? "qbittorrent" as const : undefined,
@@ -395,7 +392,7 @@ export function VersionPickerDialog({
                 info: preview.data.cleanupReason ??
                   "Deletes only a qBittorrent payload tied exclusively to the selected version paths.",
                 checked: cleanupDownloads,
-                disabled: pending || !deleteFromArr || !cleanupAvailable,
+                disabled: pending || !deleteFromArr || !cleanupAvailable || reassignActive,
                 warning: !cleanupAvailable,
                 onChange: setCleanupDownloads,
               }]
@@ -449,7 +446,6 @@ export function VersionPickerDialog({
             deleteFromArr: deleteFromArr && arrAvailable,
             cleanupDownloads: deleteFromArr && arrAvailable &&
               cleanupDownloads,
-            arrMediaIds,
             cleanupMediaIds,
           })}
       />

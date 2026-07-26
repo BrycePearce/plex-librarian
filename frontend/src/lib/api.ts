@@ -308,7 +308,6 @@ export const api = {
     deleteMovieMediaVersions: (
       ratingKey: string,
       mediaIds: number[],
-      arrMediaIds: number[],
       cleanupMediaIds: number[],
     ) =>
       apiFetch<DeletionOperationCreated>(
@@ -318,7 +317,6 @@ export const api = {
           body: JSON.stringify({
             clientRequestId: uuidv4(),
             mediaIds,
-            arrMediaIds,
             cleanupMediaIds,
           }),
         },

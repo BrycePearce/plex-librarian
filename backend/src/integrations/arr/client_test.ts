@@ -37,6 +37,232 @@ Deno.test('ArrClient looks up and deletes a Radarr movie by native id', async ()
   ]);
 });
 
+Deno.test('ArrClient rejects an ambiguous external-id lookup', async () => {
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([
+        { id: 42, title: 'First' },
+        { id: 43, title: 'Second' },
+      ]))) as typeof fetch,
+  );
+
+  await assertRejects(
+    () => client.lookup(550),
+    ArrApiError,
+    'multiple records',
+  );
+});
+
+Deno.test('ArrClient rejects a falsy record in a non-empty lookup response', async () => {
+  for (const response of [[null], [false], [0]]) {
+    const client = new ArrClient(
+      'radarr',
+      'http://radarr:7878',
+      'secret',
+      (() => Promise.resolve(Response.json(response))) as typeof fetch,
+    );
+
+    await assertRejects(
+      () => client.lookup(550),
+      ArrApiError,
+      'invalid managed record',
+    );
+  }
+});
+
+Deno.test('ArrClient rejects multiple managed Radarr movie files', async () => {
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([
+        { id: 1, relativePath: 'first.mkv', path: '/movies/Movie/first.mkv' },
+        { id: 2, relativePath: 'second.mkv', path: '/movies/Movie/second.mkv' },
+      ]))) as typeof fetch,
+  );
+
+  await assertRejects(
+    () => client.radarrManagedFile(42),
+    ArrApiError,
+    'multiple managed files',
+  );
+});
+
+Deno.test('ArrClient rejects malformed or partially valid Radarr managed-file responses', async () => {
+  for (
+    const response of [
+      [null],
+      [false],
+      [0],
+      [{ relativePath: 'missing-id.mkv', path: '/movies/Movie/missing-id.mkv' }],
+      [
+        { id: 1, relativePath: 'valid.mkv', path: '/movies/Movie/valid.mkv' },
+        { relativePath: 'missing-id.mkv', path: '/movies/Movie/missing-id.mkv' },
+      ],
+    ]
+  ) {
+    const client = new ArrClient(
+      'radarr',
+      'http://radarr:7878',
+      'secret',
+      (() => Promise.resolve(Response.json(response))) as typeof fetch,
+    );
+    await assertRejects(() => client.radarrManagedFile(42), ArrApiError);
+  }
+});
+
+Deno.test('ArrClient updates only the path on the complete existing Radarr movie record', async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    ((input: string | URL | Request, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Promise.resolve(Response.json({
+        id: 42,
+        title: 'Movie',
+        path: '/movies/Movie',
+        monitored: true,
+        qualityProfileId: 7,
+        tags: [3],
+      }));
+    }) as typeof fetch,
+  );
+
+  assertEquals(
+    await client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
+    true,
+  );
+  assertEquals(requests, [
+    {
+      url: 'http://radarr:7878/api/v3/movie/42',
+      method: 'GET',
+      body: null,
+    },
+    {
+      url: 'http://radarr:7878/api/v3/movie/42?moveFiles=false',
+      method: 'PUT',
+      body: {
+        id: 42,
+        title: 'Movie',
+        path: '/movies-4k/Movie',
+        monitored: true,
+        qualityProfileId: 7,
+        tags: [3],
+      },
+    },
+  ]);
+});
+
+Deno.test('ArrClient reconciles an already-updated Radarr path without another mutation', async () => {
+  let requests = 0;
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() => {
+      requests++;
+      return Promise.resolve(Response.json({
+        id: 42,
+        title: 'Movie',
+        path: '/movies-4k/Movie',
+      }));
+    }) as typeof fetch,
+  );
+
+  assertEquals(
+    await client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
+    false,
+  );
+  assertEquals(requests, 1);
+});
+
+Deno.test('ArrClient rejects a Radarr path changed to an unexpected third location', async () => {
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json({
+        id: 42,
+        title: 'Movie',
+        path: '/unexpected/Movie',
+      }))) as typeof fetch,
+  );
+
+  await assertRejects(
+    () => client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
+    ArrApiError,
+    'changed the movie path',
+  );
+});
+
+Deno.test('ArrClient identifies a Sonarr file shared by multiple episodes', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/episode?seriesId=8')) {
+        return Promise.resolve(Response.json([
+          { id: 9, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+          { id: 11, seasonNumber: 1, episodeNumber: 2, episodeFileId: 10 },
+        ]));
+      }
+      return Promise.resolve(Response.json({
+        id: 10,
+        relativePath: 'Season 01/shared.mkv',
+        path: '/tv/Show/Season 01/shared.mkv',
+        size: 100,
+      }));
+    }) as typeof fetch,
+  );
+
+  assertEquals(await client.episodeManagedFile(8, 1, 1), {
+    episodeId: 9,
+    shared: true,
+    file: {
+      id: 10,
+      relativePath: 'Season 01/shared.mkv',
+      path: '/tv/Show/Season 01/shared.mkv',
+      size: 100,
+    },
+  });
+});
+
+Deno.test('ArrClient rejects a malformed referenced Sonarr episode file', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    ((input: string | URL | Request) =>
+      String(input).includes('/episode?seriesId=8')
+        ? Promise.resolve(Response.json([
+          { id: 9, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        ]))
+        : Promise.resolve(Response.json({
+          relativePath: 'Season 01/episode.mkv',
+          path: '/tv/Show/Season 01/episode.mkv',
+        }))) as typeof fetch,
+  );
+
+  await assertRejects(
+    () => client.episodeManagedFile(8, 1, 1),
+    ArrApiError,
+    'invalid managed episode file',
+  );
+});
+
 Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', async () => {
   const urls: string[] = [];
   const mockFetch = ((input: string | URL | Request) => {
@@ -214,7 +440,7 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
     }
     if (url.includes('/moviefile?movieId=')) {
       return Promise.resolve(Response.json([
-        { relativePath: 'Movie.mov', size: 2000 },
+        { id: 99, relativePath: 'Movie.mov', path: 'A:\\Movies\\Movie\\Movie.mov', size: 2000 },
       ]));
     }
     return Promise.resolve(Response.json([
@@ -234,6 +460,12 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
   assertEquals(await client.mediaFiles(42), [
     { relativePath: 'Movie.mov', size: 2000 },
   ]);
+  assertEquals(await client.radarrManagedFile(42), {
+    id: 99,
+    relativePath: 'Movie.mov',
+    path: 'A:\\Movies\\Movie\\Movie.mov',
+    size: 2000,
+  });
   assertEquals(await client.extraFiles(42), [
     { relativePath: 'Movie.idx', type: 'subtitle' },
     { relativePath: 'Movie.sub', type: 'subtitle' },

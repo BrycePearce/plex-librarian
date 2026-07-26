@@ -512,6 +512,7 @@ export class PlexClient {
         media.id == null ? [] : [{
           mediaId: media.id,
           videoResolution: media.videoResolution ?? null,
+          height: media.height ?? null,
           bitrate: media.bitrate ?? null,
           videoCodec: media.videoCodec ?? null,
           container: media.container ?? null,
@@ -608,7 +609,12 @@ export class PlexClient {
           seen.add(part.file);
           paths.push(part.file);
         }
-        return [{ mediaId: media.id, paths, truncated }];
+        const matchingParts = paths.length === 1
+          ? (media.Part ?? []).filter((part) => part.file === paths[0])
+          : [];
+        const rawFileSize = matchingParts.length === 1 ? Number(matchingParts[0]!.size) : NaN;
+        const fileSize = Number.isFinite(rawFileSize) && rawFileSize >= 0 ? rawFileSize : null;
+        return [{ mediaId: media.id, paths, truncated, fileSize }];
       })
     );
   }
