@@ -9,7 +9,11 @@ import { queryKeys } from "../../lib/queryKeys.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
-import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState.ts";
+import {
+  arrDestinationState,
+  effectiveArrSelection,
+  shouldUseArrByDefault,
+} from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
 import { deletionImpact } from "./deletionImpact.ts";
 import {
@@ -20,6 +24,7 @@ import {
   DeletionPreview,
   DeletionPreviewStatus,
   PlexFallbackAcknowledgement,
+  useDelayedFlag,
   useDeletionDialogCancelFocus,
 } from "./DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "./deletionConfirmation.ts";
@@ -70,6 +75,7 @@ export function DeleteConfirmDialog({
     staleTime: 15_000,
     retry: false,
   });
+  const showPreviewLoading = useDelayedFlag(preview.isLoading, 350);
   const previewByRatingKey = useMemo(
     () => new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
@@ -99,7 +105,11 @@ export function DeleteConfirmDialog({
   const arrService: ServiceIconName = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   const arrOptionVisible = arrDestination.visible;
-  const plexFallbackRequired = deleteFromArr && arrProblems.length > 0;
+  // Query results and effects commit in separate renders. Suppress an obsolete Arr
+  // selection immediately when no coordinated destination exists so its fallback
+  // acknowledgement cannot flash before the state-syncing effect catches up.
+  const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
+  const plexFallbackRequired = effectiveDeleteFromArr && arrProblems.length > 0;
   const cleanupOptionVisible = arrOptionVisible &&
     (cleanupEligibleCount > 0 || cleanupVerificationErrors.length > 0);
   const cleanupUsesQbittorrent = downloadJobs.length > 0;
@@ -203,7 +213,7 @@ export function DeleteConfirmDialog({
                     <DeletionServiceMarks
                       item={item}
                       preview={previewItem}
-                      deleteFromArr={deleteFromArr}
+                      deleteFromArr={effectiveDeleteFromArr}
                       cleanupDownloads={cleanupDownloads}
                     />
                   }
@@ -217,7 +227,7 @@ export function DeleteConfirmDialog({
           <AdvancedDeletionTree
             items={items}
             plexPreviews={previewByRatingKey}
-            deleteFromArr={deleteFromArr}
+            deleteFromArr={effectiveDeleteFromArr}
             cleanupDownloads={cleanupDownloads}
             loading={preview.isLoading}
           />
@@ -252,7 +262,7 @@ export function DeleteConfirmDialog({
                 label: arrLabel,
                 info: arrProblems[0]?.arrReason ??
                   `Deletes the managed title and its files through ${arrLabel}.`,
-                checked: deleteFromArr,
+                checked: effectiveDeleteFromArr,
                 disabled: pending || preview.isLoading ||
                   coordinatedRatingKeys.length === 0,
                 warning: arrProblems.length > 0,
@@ -273,7 +283,7 @@ export function DeleteConfirmDialog({
                     ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
                     : "Removes downloaded files whose hardlink identity has been verified safely."),
                 checked: cleanupDownloads,
-                disabled: pending || preview.isLoading || !deleteFromArr ||
+                disabled: pending || preview.isLoading || !effectiveDeleteFromArr ||
                   cleanupEligibleCount === 0,
                 warning: cleanupVerificationErrors.length > 0,
                 onChange: setCleanupDownloads,
@@ -284,8 +294,9 @@ export function DeleteConfirmDialog({
       )}
 
       <DeletionPreviewStatus
-        loading={preview.isLoading}
         error={preview.isError ? preview.error.message : null}
+        onRetry={() => void preview.refetch()}
+        retrying={preview.isFetching}
         warnings={[
           ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
             ? [
@@ -322,13 +333,14 @@ export function DeleteConfirmDialog({
       <DeletionDialogFooter
         cancelButtonRef={cancelButtonRef}
         pending={pending}
+        preparing={showPreviewLoading}
         confirmDisabled={confirmDisabled}
         confirmLabel="Delete permanently"
         onCancel={cancel}
         onConfirm={() =>
           onConfirm({
-            coordinatedRatingKeys: deleteFromArr ? coordinatedRatingKeys : [],
-            cleanupDownloads: deleteFromArr && cleanupDownloads,
+            coordinatedRatingKeys: effectiveDeleteFromArr ? coordinatedRatingKeys : [],
+            cleanupDownloads: effectiveDeleteFromArr && cleanupDownloads,
           })}
       />
     </DeletionModalShell>

@@ -1,9 +1,24 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, Trash2 } from "lucide-react";
 
 export type DeletionPreviewMode = "basic" | "advanced";
+
+export function useDelayedFlag(active: boolean, delayMs: number): boolean {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!active) {
+      setVisible(false);
+      return;
+    }
+    const timeout = setTimeout(() => setVisible(true), delayMs);
+    return () => clearTimeout(timeout);
+  }, [active, delayMs]);
+
+  return active && visible;
+}
 
 export function useDeletionDialogCancelFocus(
   dialogRef: RefObject<HTMLDialogElement | null>,
@@ -165,23 +180,37 @@ export function BasicDeletionRow({
 }
 
 export function DeletionPreviewStatus({
-  loading,
   error,
   warnings = [],
+  onRetry,
+  retrying = false,
 }: {
-  loading: boolean;
   error: string | null;
   warnings?: string[];
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
+  if (!error && warnings.length === 0) return null;
+
   return (
     <div className="mt-2 space-y-1 text-xs">
-      {loading && (
-        <p className="flex items-center gap-2 text-base-content/50">
-          <span className="loading loading-spinner loading-xs" /> Verifying deletion paths…
-        </p>
+      {error && (
+        <div className="flex items-center justify-between gap-3 text-error">
+          <p>Could not verify this deletion: {error}</p>
+          {onRetry && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs h-6 min-h-0 w-14 shrink-0"
+              onClick={onRetry}
+              disabled={retrying}
+              aria-label={retrying ? "Retrying deletion verification" : undefined}
+            >
+              {retrying ? <span className="loading loading-spinner loading-xs" /> : "Retry"}
+            </button>
+          )}
+        </div>
       )}
-      {error && <p className="text-error">Could not verify deletion paths: {error}</p>}
-      {!loading && !error &&
+      {!error &&
         warnings.map((warning) => <p key={warning} className="text-warning">{warning}</p>)}
     </div>
   );
@@ -215,6 +244,7 @@ export function PlexFallbackAcknowledgement({
 export function DeletionDialogFooter({
   cancelButtonRef,
   pending,
+  preparing,
   confirmDisabled,
   confirmLabel,
   onCancel,
@@ -222,11 +252,14 @@ export function DeletionDialogFooter({
 }: {
   cancelButtonRef?: RefObject<HTMLButtonElement | null>;
   pending: boolean;
+  preparing: boolean;
   confirmDisabled: boolean;
   confirmLabel: ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const showPreparing = preparing && !pending;
+
   return (
     <div className="modal-action mt-3">
       <button
@@ -240,14 +273,29 @@ export function DeletionDialogFooter({
       </button>
       <button
         type="button"
-        className="btn btn-sm btn-error gap-2 transition-[color,background-color,border-color,opacity] duration-200"
+        className="btn btn-sm btn-error relative min-w-40 transition-[color,background-color,border-color,opacity] duration-200"
         onClick={onConfirm}
         disabled={confirmDisabled}
+        aria-label={showPreparing ? "Checking deletion safety" : undefined}
       >
-        {pending
-          ? <span className="loading loading-spinner loading-xs" />
-          : <Trash2 className="size-4" />}
-        {confirmLabel}
+        <span
+          className={`flex items-center gap-2 ${showPreparing ? "invisible" : ""}`}
+          aria-hidden={showPreparing}
+        >
+          {pending
+            ? <span className="loading loading-spinner loading-xs" />
+            : <Trash2 className="size-4" />}
+          {confirmLabel}
+        </span>
+        {showPreparing && (
+          <span
+            className="absolute inset-0 flex items-center justify-center gap-2"
+            role="status"
+          >
+            <span className="loading loading-spinner loading-xs" />
+            Checking safety…
+          </span>
+        )}
       </button>
     </div>
   );

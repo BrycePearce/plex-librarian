@@ -15,3 +15,10 @@ export function shouldUseArrByDefault(
 ): boolean {
   return preview?.coordinatedConfigured !== false;
 }
+
+export function effectiveArrSelection(
+  selected: boolean,
+  preview: DownloadCleanupPreviewResponse | undefined,
+): boolean {
+  return selected && shouldUseArrByDefault(preview);
+}

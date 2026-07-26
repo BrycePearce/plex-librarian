@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -23,6 +23,7 @@ import {
   DeletionPreview,
   DeletionPreviewStatus,
   PlexFallbackAcknowledgement,
+  useDelayedFlag,
   useDeletionDialogCancelFocus,
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
@@ -33,36 +34,6 @@ import {
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 import "../../components/dataSurfaces.css";
-
-function useDelayedFlag(
-  active: boolean,
-  delayMs: number,
-  minimumVisibleMs = 300,
-): boolean {
-  const [visible, setVisible] = useState(false);
-  const shownAt = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (active && !visible) {
-      const timeout = setTimeout(() => {
-        shownAt.current = performance.now();
-        setVisible(true);
-      }, delayMs);
-      return () => clearTimeout(timeout);
-    }
-    if (active || !visible) {
-      return;
-    }
-    const elapsed = performance.now() - (shownAt.current ?? 0);
-    const timeout = setTimeout(() => {
-      shownAt.current = null;
-      setVisible(false);
-    }, Math.max(0, minimumVisibleMs - elapsed));
-    return () => clearTimeout(timeout);
-  }, [active, delayMs, minimumVisibleMs, visible]);
-
-  return visible;
-}
 
 export function VersionPickerDialog({
   dialogRef,
@@ -402,8 +373,9 @@ export function VersionPickerDialog({
       )}
 
       <DeletionPreviewStatus
-        loading={showPreviewLoading}
         error={preview.isError ? preview.error.message : null}
+        onRetry={() => void preview.refetch()}
+        retrying={preview.isFetching}
       />
       {fallbackRequired && (
         <PlexFallbackAcknowledgement
@@ -431,6 +403,7 @@ export function VersionPickerDialog({
       <DeletionDialogFooter
         cancelButtonRef={cancelButtonRef}
         pending={pending}
+        preparing={showPreviewLoading}
         confirmDisabled={confirmDisabled}
         confirmLabel={
           <>

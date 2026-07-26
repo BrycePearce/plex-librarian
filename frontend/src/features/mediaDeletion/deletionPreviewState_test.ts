@@ -1,6 +1,10 @@
 import { assertEquals } from "@std/assert";
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
-import { arrDestinationState, shouldUseArrByDefault } from "./deletionPreviewState.ts";
+import {
+  arrDestinationState,
+  effectiveArrSelection,
+  shouldUseArrByDefault,
+} from "./deletionPreviewState.ts";
 
 Deno.test("configured Arr remains visible when every selected item is unavailable", () => {
   const preview = {
@@ -33,4 +37,15 @@ Deno.test("Arr is disabled by default only when no destination is configured", (
   } as DownloadCleanupPreviewResponse;
 
   assertEquals(shouldUseArrByDefault(preview), false);
+});
+
+Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview arrives", () => {
+  const preview = {
+    coordinatedConfigured: false,
+    downloadClientsConfigured: false,
+    items: [],
+  } as DownloadCleanupPreviewResponse;
+
+  assertEquals(effectiveArrSelection(true, undefined), true);
+  assertEquals(effectiveArrSelection(true, preview), false);
 });
