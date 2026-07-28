@@ -82,6 +82,36 @@ export async function repeatedDeletionOperation(
   });
 }
 
+export async function repeatedDeletionOperationBatch(
+  serverId: number,
+  clientRequestId: string,
+  payload: Record<string, unknown>,
+): Promise<{ operationIds: string[]; targetCount: number } | null> {
+  const hash = await requestHash(payload);
+  const prefix = `${clientRequestId}:`;
+  return withTransaction((client) => {
+    const rows = client.prepare(
+      `SELECT id, client_request_id, request_hash, target_count
+       FROM deletion_operations
+       WHERE server_id = ? AND substr(client_request_id, 1, ?) = ?`,
+    ).values<[string, string, string, number]>(serverId, prefix.length, prefix);
+    if (rows.length === 0) return null;
+    const indexed = rows.map((row) => {
+      const suffix = row[1].slice(prefix.length);
+      if (!/^\d+$/.test(suffix) || row[2] !== hash) {
+        throw new DeletionConflictError(
+          'clientRequestId was already used with a different request',
+        );
+      }
+      return { row, index: Number(suffix) };
+    }).sort((left, right) => left.index - right.index);
+    return {
+      operationIds: indexed.map(({ row }) => row[0]),
+      targetCount: indexed.reduce((total, { row }) => total + row[3], 0),
+    };
+  });
+}
+
 function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation): void {
   const groups = new Map<
     string,
@@ -215,109 +245,140 @@ function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperati
 export async function enqueueDeletionOperation(
   input: NewDeletionOperation,
 ): Promise<{ operationId: string; status: 'queued' }> {
-  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(input.clientRequestId)) {
-    throw new DeletionConflictError(
-      'clientRequestId must be a non-empty string of at most 128 characters',
-      400,
-    );
+  const [result] = await enqueueDeletionOperations([input]);
+  return result!;
+}
+
+export async function enqueueDeletionOperations(
+  inputs: readonly NewDeletionOperation[],
+): Promise<Array<{ operationId: string; status: 'queued' }>> {
+  if (inputs.length === 0) {
+    throw new DeletionConflictError('no deletion operations were provided', 400);
   }
-  if (input.targets.length === 0) {
-    throw new DeletionConflictError('no deletion targets were found', 404);
-  }
-  const hash = await requestHash(input.payload);
-  const operationId = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
-  const id = withTransaction((client) => {
-    if (!activeServerMatches(client, input.serverId)) {
+  const requestIds = new Set<string>();
+  for (const input of inputs) {
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(input.clientRequestId)) {
       throw new DeletionConflictError(
-        'the active Plex server changed before deletion was accepted',
+        'clientRequestId must be a non-empty string of at most 128 characters',
+        400,
       );
     }
-    const repeated = client.prepare(
-      'SELECT id, request_hash FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
-    ).value<[string, string]>(input.serverId, input.clientRequestId);
-    if (repeated) {
-      if (repeated[1] !== hash) {
+    if (input.targets.length === 0) {
+      throw new DeletionConflictError('no deletion targets were found', 404);
+    }
+    const requestKey = `${input.serverId}:${input.clientRequestId}`;
+    if (requestIds.has(requestKey)) {
+      throw new DeletionConflictError(
+        'clientRequestId must be unique within a deletion batch',
+        400,
+      );
+    }
+    requestIds.add(requestKey);
+  }
+  const prepared = await Promise.all(
+    inputs.map(async (input) => ({
+      input,
+      hash: await requestHash(input.payload),
+      operationId: crypto.randomUUID(),
+    })),
+  );
+  const now = Math.floor(Date.now() / 1000);
+  const ids = withTransaction((client) => {
+    const accepted: string[] = [];
+    for (const { input, hash, operationId } of prepared) {
+      if (!activeServerMatches(client, input.serverId)) {
         throw new DeletionConflictError(
-          'clientRequestId was already used with a different request',
+          'the active Plex server changed before deletion was accepted',
         );
       }
-      return repeated[0];
-    }
-    if (
+      const repeated = client.prepare(
+        'SELECT id, request_hash FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
+      ).value<[string, string]>(input.serverId, input.clientRequestId);
+      if (repeated) {
+        if (repeated[1] !== hash) {
+          throw new DeletionConflictError(
+            'clientRequestId was already used with a different request',
+          );
+        }
+        accepted.push(repeated[0]);
+        continue;
+      }
+      if (
+        client.prepare(
+          "SELECT id FROM sync_log WHERE server_id = ? AND status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1",
+        ).value<[number]>(input.serverId, input.libraryKey)
+      ) {
+        throw new DeletionConflictError('this library is currently syncing');
+      }
+      if (
+        client.prepare(
+          "SELECT id FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
+        ).value<[string]>(input.serverId, input.libraryKey)
+      ) {
+        throw new DeletionConflictError('this library already has an active deletion operation');
+      }
+      if (activeLibraryOperation(input.serverId, input.libraryKey) !== null) {
+        throw new DeletionConflictError('this library is currently syncing or being modified');
+      }
+      ensureNoRecoveryOverlap(client, input);
+      ensureVersionCapacity(client, input);
+      for (const target of input.targets) {
+        if (target.kind === 'whole_item') continue;
+        target.snapshot.arrReassignmentMappings = snapshotArrMappingIdentities(
+          client,
+          input.serverId,
+          input.libraryKey,
+          target.kind,
+        );
+      }
       client.prepare(
-        "SELECT id FROM sync_log WHERE server_id = ? AND status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1",
-      ).value<[number]>(input.serverId, input.libraryKey)
-    ) {
-      throw new DeletionConflictError('this library is currently syncing');
-    }
-    if (
-      client.prepare(
-        "SELECT id FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
-      ).value<[string]>(input.serverId, input.libraryKey)
-    ) {
-      throw new DeletionConflictError('this library already has an active deletion operation');
-    }
-    if (activeLibraryOperation(input.serverId, input.libraryKey) !== null) {
-      throw new DeletionConflictError('this library is currently syncing or being modified');
-    }
-    ensureNoRecoveryOverlap(client, input);
-    ensureVersionCapacity(client, input);
-    for (const target of input.targets) {
-      if (target.kind === 'whole_item') continue;
-      target.snapshot.arrReassignmentMappings = snapshotArrMappingIdentities(
-        client,
+        "INSERT INTO deletion_operations (id, client_request_id, request_hash, server_id, library_key, kind, status, target_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+      ).run(
+        operationId,
+        input.clientRequestId,
+        hash,
         input.serverId,
         input.libraryKey,
-        target.kind,
-      );
-    }
-    client.prepare(
-      "INSERT INTO deletion_operations (id, client_request_id, request_hash, server_id, library_key, kind, status, target_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-    ).run(
-      operationId,
-      input.clientRequestId,
-      hash,
-      input.serverId,
-      input.libraryKey,
-      input.kind,
-      input.targets.length,
-      now,
-      now,
-    );
-    for (const [ordinal, target] of input.targets.entries()) {
-      const row = client.prepare(
-        'INSERT INTO deletion_targets (operation_id, ordinal, target_kind, target_key, title, snapshot, logical_size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      ).value<[number]>(
-        operationId,
-        ordinal,
-        target.kind,
-        target.key,
-        target.title,
-        JSON.stringify(target.snapshot),
-        target.logicalSize,
+        input.kind,
+        input.targets.length,
         now,
         now,
       );
-      if (!row) throw new Error('deletion target insert returned no id');
-      if (target.reservation) {
-        client.prepare(
-          'INSERT INTO media_version_reservations (server_id, media_kind, media_id, rating_key, operation_id, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ).run(
-          input.serverId,
-          target.reservation.mediaKind,
-          target.reservation.mediaId,
-          target.reservation.ratingKey,
+      for (const [ordinal, target] of input.targets.entries()) {
+        const row = client.prepare(
+          'INSERT INTO deletion_targets (operation_id, ordinal, target_kind, target_key, title, snapshot, logical_size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+        ).value<[number]>(
           operationId,
-          row[0],
+          ordinal,
+          target.kind,
+          target.key,
+          target.title,
+          JSON.stringify(target.snapshot),
+          target.logicalSize,
+          now,
           now,
         );
+        if (!row) throw new Error('deletion target insert returned no id');
+        if (target.reservation) {
+          client.prepare(
+            'INSERT INTO media_version_reservations (server_id, media_kind, media_id, rating_key, operation_id, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          ).run(
+            input.serverId,
+            target.reservation.mediaKind,
+            target.reservation.mediaId,
+            target.reservation.ratingKey,
+            operationId,
+            row[0],
+            now,
+          );
+        }
       }
+      accepted.push(operationId);
     }
-    return operationId;
+    return accepted;
   });
   wakeDeletionWorker();
-  return { operationId: id, status: 'queued' };
+  return ids.map((operationId) => ({ operationId, status: 'queued' }));
 }
 
 function claimTarget(): DeletionWorkTarget | null {

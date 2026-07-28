@@ -10,6 +10,7 @@ import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow.tsx";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog.tsx";
+import { QuickCleanupAction } from "../features/quickCleanup/QuickCleanupAction.tsx";
 import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionState.ts";
 import { DuplicatesTableSkeleton } from "../components/Skeletons.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
@@ -216,6 +217,7 @@ function DuplicatesPage() {
               `${data.total.toLocaleString()} with multiple synced versions`
             )
             : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+          actions={<QuickCleanupAction />}
         />
       </div>
 

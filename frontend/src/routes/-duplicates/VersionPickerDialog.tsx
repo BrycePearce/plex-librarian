@@ -6,7 +6,7 @@ import { api } from "../../lib/api.ts";
 import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion.ts";
-import { VersionTechnicalInfo } from "./VersionTechnicalInfo.tsx";
+import { VersionTechnicalInfo } from "../../features/mediaDeletion/VersionTechnicalInfo.tsx";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";

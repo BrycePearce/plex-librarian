@@ -87,6 +87,12 @@ export async function directPlexDeletionStillSafe(
   if (!validation.live) return false;
   const liveMediaIds = new Set(validation.live.media.map((version) => version.mediaId));
   if (!liveMediaIds.has(snapshot.mediaId!)) return false;
+  if (
+    snapshot.expectedRetainedVersion !== undefined &&
+    !liveMediaIds.has(snapshot.expectedRetainedVersion.mediaId)
+  ) {
+    throw new Error('the version selected to keep is no longer available in Plex');
+  }
   if (![...liveMediaIds].some((mediaId) => !excludedMediaIds.has(mediaId))) {
     throw new Error('at least one unselected live Plex version must remain');
   }

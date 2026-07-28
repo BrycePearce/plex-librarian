@@ -13,6 +13,7 @@ const {
   cancelDeletionOperation,
   DeletionConflictError,
   enqueueDeletionOperation,
+  enqueueDeletionOperations,
   getDeletionOperation,
   retryDeletionOperation,
   runDeletionWorkerOnceForTest,
@@ -443,6 +444,117 @@ function addMovie(ratingKey: string, mediaIds = [11, 12], tmdbId: number | null 
   });
 }
 
+function addSmartCleanupMovie(ratingKey: string, persistDetails = true): void {
+  addMovie(ratingKey, [11, 12]);
+  if (persistDetails) {
+    withTransaction((client) => {
+      for (const [mediaId, bitrate] of [[11, 9_800], [12, 10_000]] as const) {
+        client.prepare(
+          `UPDATE item_media_versions
+           SET video_resolution = '1080', width = 1920, height = 1080,
+               duration = 7200000, bitrate = ?, video_codec = 'h264',
+               video_profile = 'high', video_bit_depth = 8, video_dynamic_range = 'sdr',
+               video_frame_rate = '24p', video_scan_type = 'progressive',
+               container = 'mkv', audio_codec = 'aac', audio_channels = 2,
+               audio_profile = 'lc', audio_streams_json = ?, subtitle_streams_json = '[]',
+               stream_details_available = 1
+           WHERE item_rating_key = ? AND media_id = ?`,
+        ).run(
+          bitrate,
+          JSON.stringify([{
+            codec: 'aac',
+            language: 'eng',
+            channels: 2,
+            channelLayout: 'stereo',
+            title: null,
+            forced: false,
+            default: true,
+          }]),
+          ratingKey,
+          mediaId,
+        );
+      }
+    });
+  } else {
+    withTransaction((client) => {
+      for (const [mediaId, bitrate] of [[11, 9_800], [12, 10_000]] as const) {
+        client.prepare(
+          `UPDATE item_media_versions
+           SET video_resolution = '1080', width = 1920, height = 1080,
+               duration = 7200000, bitrate = ?, video_codec = 'h264',
+               video_profile = 'high', video_dynamic_range = 'sdr',
+               video_frame_rate = '24p', container = 'mkv',
+               audio_codec = 'aac', audio_channels = 2, audio_profile = 'lc',
+               stream_details_available = 0
+           WHERE item_rating_key = ? AND media_id = ?`,
+        ).run(bitrate, ratingKey, mediaId);
+      }
+    });
+  }
+  live.get(ratingKey)!.Media = [
+    {
+      id: 11,
+      videoResolution: '1080',
+      width: 1920,
+      height: 1080,
+      duration: 7200000,
+      bitrate: 9_800,
+      videoCodec: 'h264',
+      videoProfile: 'high',
+      videoDynamicRange: 'sdr',
+      videoFrameRate: '24p',
+      container: 'mkv',
+      audioCodec: 'aac',
+      audioChannels: 2,
+      audioProfile: 'lc',
+      Part: [{
+        size: 50_000,
+        Stream: [
+          { streamType: 1, bitDepth: 8, scanType: 'progressive' },
+          {
+            streamType: 2,
+            codec: 'aac',
+            languageCode: 'eng',
+            channels: 2,
+            channelLayout: 'stereo',
+            default: true,
+          },
+        ],
+      }],
+    },
+    {
+      id: 12,
+      videoResolution: '1080',
+      width: 1920,
+      height: 1080,
+      duration: 7200000,
+      bitrate: 10_000,
+      videoCodec: 'h264',
+      videoProfile: 'high',
+      videoDynamicRange: 'sdr',
+      videoFrameRate: '24p',
+      container: 'mkv',
+      audioCodec: 'aac',
+      audioChannels: 2,
+      audioProfile: 'lc',
+      Part: [{
+        size: 50_000,
+        Stream: [
+          { streamType: 1, bitDepth: 8, scanType: 'progressive' },
+          {
+            streamType: 2,
+            codec: 'aac',
+            languageCode: 'eng',
+            channels: 2,
+            channelLayout: 'stereo',
+            default: true,
+          },
+        ],
+      }],
+    },
+  ];
+}
+
 function configureRadarr(withQbit = false): void {
   withTransaction((client) => {
     client.prepare(
@@ -620,6 +732,7 @@ async function enqueueVersion(
   ratingKey: string,
   mediaId = 11,
   tmdbId: number | null = null,
+  snapshotOverrides: Record<string, unknown> = {},
 ): Promise<string> {
   const result = await enqueueDeletionOperation({
     clientRequestId: crypto.randomUUID(),
@@ -648,6 +761,7 @@ async function enqueueVersion(
         bitrate: null,
         videoCodec: null,
         container: null,
+        ...snapshotOverrides,
       },
       reservation: { mediaKind: 'movie', mediaId, ratingKey },
     }],
@@ -1046,6 +1160,239 @@ Deno.test('multi-target operation processes every target in ordinal order', asyn
   assertEquals(wholeDeleteOrder, ['batch-a', 'batch-b']);
 });
 
+Deno.test('multi-operation enqueue rolls back every library when one library conflicts', async () => {
+  reset();
+  await enqueueDeletionOperation({
+    clientRequestId: 'atomic-existing',
+    serverId: 1,
+    libraryKey: 'shows',
+    kind: 'whole_item',
+    payload: { ratingKeys: ['existing-show'] },
+    targets: [{
+      kind: 'whole_item',
+      key: 'existing-show',
+      title: 'Existing show',
+      logicalSize: null,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'shows',
+        ratingKey: 'existing-show',
+        title: 'Existing show',
+        type: 'show',
+      },
+    }],
+  });
+
+  const operation = (
+    clientRequestId: string,
+    libraryKey: string,
+    ratingKey: string,
+  ) => ({
+    clientRequestId,
+    serverId: 1,
+    libraryKey,
+    kind: 'whole_item' as const,
+    payload: { ratingKeys: [ratingKey] },
+    targets: [{
+      kind: 'whole_item' as const,
+      key: ratingKey,
+      title: ratingKey,
+      logicalSize: null,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey,
+        ratingKey,
+        title: ratingKey,
+        type: libraryKey === 'shows' ? 'show' : 'movie',
+      },
+    }],
+  });
+  await assertRejects(
+    () =>
+      enqueueDeletionOperations([
+        operation('atomic-batch:0', 'movies', 'new-movie'),
+        operation('atomic-batch:1', 'shows', 'new-show'),
+      ]),
+    DeletionConflictError,
+    'this library already has an active deletion operation',
+  );
+
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT client_request_id FROM deletion_operations WHERE client_request_id LIKE 'atomic-batch:%'",
+      ).values()
+    ),
+    [],
+  );
+});
+
+Deno.test('quick cleanup endpoints persist the analyzed keeper in the durable target', async () => {
+  reset();
+  addSmartCleanupMovie('smart-route');
+
+  const analysisResponse = await app.request('/api/duplicates/smart-analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ movies: true, tv: false }),
+  });
+  assertEquals(analysisResponse.status, 200);
+  const analysis = await analysisResponse.json();
+  assertEquals(analysis.analyzedGroups, 1);
+  assertEquals(analysis.protectedGroups, 0);
+  assertEquals(analysis.candidates[0].keepMediaId, 12);
+
+  const cleanupResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'smart-route-cleanup',
+      selections: [{
+        mediaType: 'movie',
+        ratingKey: 'smart-route',
+        deleteMediaIds: [11],
+      }],
+      includeNearIdentical: false,
+    }),
+  });
+  assertEquals(cleanupResponse.status, 202, await cleanupResponse.text());
+  const [snapshot] = withTransaction((client) =>
+    client.prepare(
+      `SELECT t.snapshot
+       FROM deletion_targets t
+       JOIN deletion_operations o ON o.id = t.operation_id
+       WHERE o.client_request_id = 'smart-route-cleanup:0'`,
+    ).value<[string]>() ?? []
+  );
+  assert(snapshot);
+  const parsed = JSON.parse(snapshot);
+  assertEquals(parsed.expectedRetainedVersion.mediaId, 12);
+  assertEquals(parsed.expectedRetainedVersion.bitrate, 10_000);
+  assertEquals(parsed.height, 1080);
+});
+
+Deno.test('quick analysis enriches thin synced rows before classifying candidates', async () => {
+  reset();
+  addSmartCleanupMovie('smart-thin-sync', false);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT SUM(stream_details_available) FROM item_media_versions WHERE item_rating_key = ?',
+      ).value<[number]>('smart-thin-sync')?.[0]
+    ),
+    0,
+  );
+
+  const response = await app.request('/api/duplicates/smart-analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ movies: true, tv: false }),
+  });
+  assertEquals(response.status, 200, await response.clone().text());
+  const analysis = await response.json();
+  assertEquals(analysis.analyzedGroups, 1);
+  assertEquals(analysis.protectedGroups, 0);
+  assertEquals(analysis.candidates[0].ratingKey, 'smart-thin-sync');
+  assertEquals(analysis.candidates[0].keepMediaId, 12);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT SUM(stream_details_available), MAX(updated_at) FROM item_media_versions WHERE item_rating_key = ?',
+      ).value<[number, number]>('smart-thin-sync')
+    ),
+    [2, 1],
+  );
+});
+
+Deno.test('quick cleanup replays an accepted batch after its targets complete', async () => {
+  reset();
+  addSmartCleanupMovie('smart-replay');
+  const requestBody = {
+    clientRequestId: 'smart-replay-request',
+    selections: [{
+      mediaType: 'movie',
+      ratingKey: 'smart-replay',
+      deleteMediaIds: [11],
+    }],
+    includeNearIdentical: false,
+  };
+  const firstResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  assertEquals(firstResponse.status, 202, await firstResponse.clone().text());
+  const first = await firstResponse.json();
+
+  await settle();
+  assertEquals(getDeletionOperation(first.operationIds[0], 1)?.status, 'completed');
+
+  const replayResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  assertEquals(replayResponse.status, 202, await replayResponse.clone().text());
+  assertEquals(await replayResponse.json(), first);
+
+  const changedResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...requestBody, includeNearIdentical: true }),
+  });
+  assertEquals(changedResponse.status, 409);
+});
+
+Deno.test('quick analysis counts reserved candidates as protected', async () => {
+  reset();
+  addSmartCleanupMovie('smart-reserved');
+  await enqueueVersion('smart-reserved', 11);
+
+  const response = await app.request('/api/duplicates/smart-analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ movies: true, tv: false }),
+  });
+  assertEquals(response.status, 200);
+  const analysis = await response.json();
+  assertEquals(analysis.analyzedGroups, 1);
+  assertEquals(analysis.protectedGroups, 1);
+  assertEquals(analysis.candidates, []);
+});
+
+Deno.test('quick cleanup request IDs reserve space for the operation suffix', async () => {
+  reset();
+  addSmartCleanupMovie('smart-request-id');
+  const selection = [{
+    mediaType: 'movie',
+    ratingKey: 'smart-request-id',
+    deleteMediaIds: [11],
+  }];
+  const valid = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'a'.repeat(124),
+      selections: selection,
+      includeNearIdentical: false,
+    }),
+  });
+  assertEquals(valid.status, 202, await valid.text());
+
+  const tooLong = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'b'.repeat(125),
+      selections: selection,
+      includeNearIdentical: false,
+    }),
+  });
+  assertEquals(tooLong.status, 400);
+});
+
 Deno.test('multi-version batch replays sequentially while earlier selected versions are absent', async () => {
   reset();
   addMovie('version-batch', [11, 12, 13]);
@@ -1092,6 +1439,158 @@ Deno.test('multi-version batch replays sequentially while earlier selected versi
     ),
     [[13]],
   );
+});
+
+Deno.test('quick cleanup stops when the explicitly selected keeper disappears', async () => {
+  reset();
+  addMovie('keeper-changed', [11, 12, 13]);
+  const operationId = await enqueueVersion('keeper-changed', 11, null, {
+    operationMediaIds: [11],
+    expectedRetainedVersion: {
+      mediaId: 12,
+      fileSize: 50,
+      videoResolution: null,
+      height: null,
+      bitrate: null,
+      videoCodec: null,
+      container: null,
+    },
+  });
+  live.get('keeper-changed')!.Media = live.get('keeper-changed')!.Media!.filter((media) =>
+    media.id !== 12
+  );
+
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(live.get('keeper-changed')?.Media?.map((media) => media.id), [11, 13]);
+});
+
+Deno.test('quick cleanup stops when live Plex version metadata changed after analysis', async () => {
+  reset();
+  addMovie('metadata-changed', [11, 12]);
+  withTransaction((client) =>
+    client.prepare(
+      'UPDATE item_media_versions SET video_resolution = ?, height = ?, bitrate = ?, video_codec = ?, container = ? WHERE item_rating_key = ? AND media_id = ?',
+    ).run('1080', 1080, 10_000, 'h264', 'mkv', 'metadata-changed', 11)
+  );
+  const source = live.get('metadata-changed')!.Media!.find((media) => media.id === 11)!;
+  Object.assign(source, {
+    videoResolution: '4k',
+    height: 2160,
+    bitrate: 20_000,
+    videoCodec: 'hevc',
+    container: 'mkv',
+  });
+  const operationId = await enqueueVersion('metadata-changed', 11, null, {
+    videoResolution: '1080',
+    height: 1080,
+    bitrate: 10_000,
+    videoCodec: 'h264',
+    container: 'mkv',
+    expectedRetainedVersion: {
+      mediaId: 12,
+      fileSize: 50,
+      videoResolution: null,
+      height: null,
+      bitrate: null,
+      videoCodec: null,
+      container: null,
+    },
+  });
+
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(live.get('metadata-changed')?.Media?.map((media) => media.id), [11, 12]);
+});
+
+Deno.test('quick cleanup stops when the retained version changed after analysis', async () => {
+  reset();
+  addMovie('retained-metadata-changed', [11, 12]);
+  const retained = live.get('retained-metadata-changed')!.Media!.find((media) => media.id === 12)!;
+  Object.assign(retained, { videoResolution: '4k', height: 2160, bitrate: 20_000 });
+  const operationId = await enqueueVersion('retained-metadata-changed', 11, null, {
+    expectedRetainedVersion: {
+      mediaId: 12,
+      fileSize: 50,
+      videoResolution: '1080',
+      height: 1080,
+      bitrate: 10_000,
+      videoCodec: null,
+      container: null,
+    },
+  });
+
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(live.get('retained-metadata-changed')?.Media?.map((media) => media.id), [11, 12]);
+});
+
+Deno.test('quick cleanup stops when a classification-critical technical detail changes', async () => {
+  reset();
+  addSmartCleanupMovie('stream-detail-changed');
+  const cleanupResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'smart-stream-detail-change',
+      selections: [{
+        mediaType: 'movie',
+        ratingKey: 'stream-detail-changed',
+        deleteMediaIds: [11],
+      }],
+      includeNearIdentical: false,
+    }),
+  });
+  assertEquals(cleanupResponse.status, 202, await cleanupResponse.clone().text());
+  const cleanup = await cleanupResponse.json();
+  const source = live.get('stream-detail-changed')!.Media!.find((media) => media.id === 11)!;
+  source.duration = 7300000;
+
+  await settle();
+
+  const operation = getDeletionOperation(cleanup.operationIds[0], 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(live.get('stream-detail-changed')?.Media?.map((media) => media.id), [11, 12]);
+});
+
+Deno.test('quick cleanup still converges after a lost destructive response', async () => {
+  reset();
+  addSmartCleanupMovie('smart-lost-response');
+  loseDeleteResponse = true;
+  const cleanupResponse = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'smart-lost-response-request',
+      selections: [{
+        mediaType: 'movie',
+        ratingKey: 'smart-lost-response',
+        deleteMediaIds: [11],
+      }],
+      includeNearIdentical: false,
+    }),
+  });
+  assertEquals(cleanupResponse.status, 202, await cleanupResponse.clone().text());
+  const cleanup = await cleanupResponse.json();
+
+  await settle();
+  assertEquals(
+    getDeletionOperation(cleanup.operationIds[0], 1)?.status,
+    'waiting_retry',
+  );
+
+  loseDeleteResponse = false;
+  makeRetryReady(cleanup.operationIds[0]);
+  await settle();
+
+  assertEquals(getDeletionOperation(cleanup.operationIds[0], 1)?.status, 'completed');
+  assertEquals(live.get('smart-lost-response')?.Media?.map((media) => media.id), [12]);
 });
 
 Deno.test('legacy Arr intent cannot bypass media-version capacity validation', async () => {

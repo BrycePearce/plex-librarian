@@ -5,6 +5,7 @@
     "./search.ts": "./search.ts",
     "./schedule.ts": "./schedule.ts",
     "./mediaComparison.ts": "./mediaComparison.ts",
-    "./mediaVersionRanking.ts": "./mediaVersionRanking.ts"
+    "./mediaVersionRanking.ts": "./mediaVersionRanking.ts",
+    "./smartDuplicateAnalysis.ts": "./smartDuplicateAnalysis.ts"
   }
 }

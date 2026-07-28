@@ -26,6 +26,8 @@ import type {
   SeerrIntegrationSettings,
   Settings,
   ShowDetail,
+  SmartDuplicateAnalysisResponse,
+  SmartDuplicateCleanupResponse,
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
@@ -86,6 +88,9 @@ export type {
   SeerrIntegrationSettings,
   Settings,
   ShowDetail,
+  SmartDuplicateAnalysisResponse,
+  SmartDuplicateCandidate,
+  SmartDuplicateCleanupResponse,
   StaleItem,
   StaleResponse,
   SyncLog,
@@ -286,6 +291,28 @@ export const api = {
       }
       return apiFetch<DuplicatesResponse>(`/duplicates?${q}`);
     },
+    smartAnalysis: (options: { movies: boolean; tv: boolean }) =>
+      apiFetch<SmartDuplicateAnalysisResponse>("/duplicates/smart-analysis", {
+        method: "POST",
+        body: JSON.stringify(options),
+      }),
+    smartCleanup: (
+      clientRequestId: string,
+      selections: Array<{
+        mediaType: "movie" | "episode";
+        ratingKey: string;
+        deleteMediaIds: number[];
+      }>,
+      includeNearIdentical: boolean,
+    ) =>
+      apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          clientRequestId,
+          selections,
+          includeNearIdentical,
+        }),
+      }),
     deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,

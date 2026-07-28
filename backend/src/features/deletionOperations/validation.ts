@@ -1,7 +1,11 @@
 import { withTransaction } from '../../db/index.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
-import type { PlexMetadataIdentity } from '../../integrations/plex/types.ts';
+import type {
+  PlexMediaStreamSummary,
+  PlexMediaTechnicalDetails,
+  PlexMetadataIdentity,
+} from '../../integrations/plex/types.ts';
 import type {
   PersistedArrMappingIdentity,
   PersistedArrOwnership,
@@ -13,6 +17,8 @@ export interface DurableTargetRecord {
   targetKind: 'whole_item' | 'movie_version' | 'episode_version';
   snapshot: string;
 }
+
+export type DurableVersionTechnicalSnapshot = PlexMediaTechnicalDetails;
 
 export interface DurableTargetSnapshot {
   machineIdentifier: string;
@@ -28,9 +34,21 @@ export interface DurableTargetSnapshot {
   selectedRatingKeys?: string[];
   selectedMediaIds?: number[];
   operationMediaIds?: number[];
+  classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
+  expectedRetainedVersion?: {
+    mediaId: number;
+    fileSize: number | null;
+    videoResolution: string | null;
+    height: number | null;
+    bitrate: number | null;
+    videoCodec: string | null;
+    container: string | null;
+    classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
+  };
   mediaId?: number;
   fileSize?: number | null;
   videoResolution?: string | null;
+  height?: number | null;
   bitrate?: number | null;
   videoCodec?: string | null;
   container?: string | null;
@@ -54,6 +72,55 @@ function mismatch(label: string): never {
 
 function equalNullable(expected: unknown, actual: unknown, label: string): void {
   if (expected !== null && expected !== undefined && expected !== actual) mismatch(label);
+}
+
+function normalized(value: string | null): string | null {
+  const result = value?.trim().toLowerCase();
+  return result ? result : null;
+}
+
+function normalizedStream(stream: PlexMediaStreamSummary): Record<string, unknown> {
+  return {
+    codec: normalized(stream.codec),
+    language: normalized(stream.language),
+    channels: stream.channels,
+    channelLayout: normalized(stream.channelLayout),
+    title: normalized(stream.title),
+    forced: stream.forced,
+    default: stream.default,
+  };
+}
+
+function technicalFingerprint(details: DurableVersionTechnicalSnapshot): string {
+  const streams = (values: PlexMediaStreamSummary[]) =>
+    values.map(normalizedStream).map((stream) => JSON.stringify(stream)).sort();
+  return JSON.stringify({
+    width: details.width,
+    height: details.height,
+    duration: details.duration,
+    videoProfile: normalized(details.videoProfile),
+    videoBitDepth: details.videoBitDepth,
+    videoDynamicRange: normalized(details.videoDynamicRange),
+    videoFrameRate: normalized(details.videoFrameRate),
+    videoScanType: normalized(details.videoScanType),
+    audioCodec: normalized(details.audioCodec),
+    audioChannels: details.audioChannels,
+    audioProfile: normalized(details.audioProfile),
+    audioStreams: streams(details.audioStreams),
+    subtitleStreams: streams(details.subtitleStreams),
+    streamDetailsAvailable: details.streamDetailsAvailable,
+  });
+}
+
+function validateTechnicalDetails(
+  expected: DurableVersionTechnicalSnapshot,
+  actual: PlexMediaTechnicalDetails | undefined,
+  label: string,
+): void {
+  if (
+    !actual ||
+    technicalFingerprint(expected) !== technicalFingerprint(actual)
+  ) mismatch(label);
 }
 
 function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIdentity): void {
@@ -82,11 +149,11 @@ function validateLocalTarget(
     }
     if (kind === 'movie_version') {
       return client.prepare(
-        'SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size, v.video_resolution, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+        'SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
       ).value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
     }
     return client.prepare(
-      'SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.file_size, v.video_resolution, v.bitrate, v.video_codec, v.container FROM episode_media_versions v WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+      'SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM episode_media_versions v WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
     ).value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
   });
   if (!row) throw new DeletionValidationError('local target disappeared before finalization');
@@ -102,7 +169,14 @@ function validateLocalTarget(
     equalNullable(snapshot.tmdbId, row[3], 'local TMDB identity');
     equalNullable(snapshot.tvdbId, row[4], 'local TVDB identity');
     for (
-      const [index, key] of ['fileSize', 'videoResolution', 'bitrate', 'videoCodec', 'container']
+      const [index, key] of [
+        'fileSize',
+        'videoResolution',
+        'height',
+        'bitrate',
+        'videoCodec',
+        'container',
+      ]
         .entries()
     ) {
       equalNullable(
@@ -121,6 +195,7 @@ function validateLocalTarget(
     snapshot.episodeIndex,
     snapshot.fileSize,
     snapshot.videoResolution,
+    snapshot.height,
     snapshot.bitrate,
     snapshot.videoCodec,
     snapshot.container,
@@ -152,6 +227,66 @@ export async function validateDeletionTarget(
   const live = await active.client.metadataIdentity(snapshot.ratingKey);
   if (!live) return { client: active.client, snapshot, live: null };
   validateLiveItem(snapshot, live);
+  if (target.targetKind !== 'whole_item') {
+    const liveVersion = live.media.find((version) => version.mediaId === snapshot.mediaId);
+    if (liveVersion) {
+      for (
+        const key of [
+          'fileSize',
+          'videoResolution',
+          'height',
+          'bitrate',
+          'videoCodec',
+          'container',
+        ] as const
+      ) {
+        equalNullable(snapshot[key], liveVersion[key], `Plex version ${key}`);
+      }
+    }
+    const expectedRetained = snapshot.expectedRetainedVersion;
+    if (expectedRetained) {
+      const liveRetained = live.media.find((version) =>
+        version.mediaId === expectedRetained.mediaId
+      );
+      if (!liveRetained) {
+        throw new DeletionValidationError(
+          'the version selected to keep is no longer available in Plex',
+        );
+      }
+      for (
+        const key of [
+          'fileSize',
+          'videoResolution',
+          'height',
+          'bitrate',
+          'videoCodec',
+          'container',
+        ] as const
+      ) {
+        equalNullable(expectedRetained[key], liveRetained[key], `retained Plex version ${key}`);
+      }
+    }
+    if (
+      (liveVersion && snapshot.classificationTechnicalDetails) ||
+      expectedRetained?.classificationTechnicalDetails
+    ) {
+      const liveDetails = await active.client.mediaVersionTechnicalDetails(snapshot.ratingKey);
+      if (liveVersion && snapshot.classificationTechnicalDetails) {
+        validateTechnicalDetails(
+          snapshot.classificationTechnicalDetails,
+          liveDetails.get(snapshot.mediaId!),
+          'Plex version technical profile',
+        );
+      }
+      if (expectedRetained?.classificationTechnicalDetails) {
+        validateTechnicalDetails(
+          expectedRetained.classificationTechnicalDetails,
+          liveDetails.get(expectedRetained.mediaId),
+          'retained Plex version technical profile',
+        );
+      }
+    }
+  }
   if (target.targetKind === 'episode_version') {
     if (
       live.grandparentRatingKey !== snapshot.showRatingKey ||

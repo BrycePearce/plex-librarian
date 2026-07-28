@@ -359,6 +359,12 @@ async function ensureVersionDeleted(
   }
   const sourceVersionIsLive = liveAtStart.media.some((media) => media.mediaId === snapshot.mediaId);
   const liveIds = new Set(liveAtStart.media.map((media) => media.mediaId));
+  if (
+    snapshot.expectedRetainedVersion !== undefined &&
+    !liveIds.has(snapshot.expectedRetainedVersion.mediaId)
+  ) {
+    throw new Error('the version selected to keep is no longer available in Plex');
+  }
   const hasRemainingVersion = [...liveIds].some((id) => !excludedReassignIds.has(id));
   if (!sourceVersionIsLive && retainedMediaId === null) {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);

@@ -4,48 +4,24 @@ import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
 import { episodeVersionsByEpisode, itemByRatingKey, mediaVersionsByItem } from '../../db/scope.ts';
 import { createPlexClient } from '../../integrations/plex/index.ts';
-import type { PlexMediaTechnicalDetails } from '../../integrations/plex/types.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
-import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { resolveDownloadCleanup } from '../mediaDeletion/cleanup.ts';
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
 } from '../mediaDeletion/planning.ts';
+import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
+import smartCleanupRoute from './smartCleanupRoute.ts';
+import { technicalDetailUpdate } from './technicalDetails.ts';
 import type {
   MediaVersionsRefreshResponse,
   VersionDeletionPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
-
-// Shared by both technical-refresh routes below: writes fresh per-Media technical detail
-// back onto the same rows sync populates, keyed by Plex's own Media id (already the
-// table's primary key alongside serverId — see schema.ts) so no item/episode join is
-// needed. This is a live-Plex enrichment of existing rows, not a resync: fields sync
-// itself doesn't touch (fileSize, container, etc.) are left alone.
-function technicalDetailUpdate(detail: PlexMediaTechnicalDetails, now: number) {
-  return {
-    width: detail.width,
-    height: detail.height,
-    duration: detail.duration,
-    videoProfile: detail.videoProfile,
-    videoBitDepth: detail.videoBitDepth,
-    videoDynamicRange: detail.videoDynamicRange,
-    videoFrameRate: detail.videoFrameRate,
-    videoScanType: detail.videoScanType,
-    audioCodec: detail.audioCodec,
-    audioChannels: detail.audioChannels,
-    audioProfile: detail.audioProfile,
-    audioStreamsJson: JSON.stringify(detail.audioStreams),
-    subtitleStreamsJson: JSON.stringify(detail.subtitleStreams),
-    streamDetailsAvailable: detail.streamDetailsAvailable,
-    updatedAt: now,
-  };
-}
 
 function parseMediaIds(body: unknown): number[] | null {
   if (!body || typeof body !== 'object' || !('mediaIds' in body)) return null;
@@ -60,6 +36,7 @@ function parseMediaIds(body: unknown): number[] | null {
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 router.route('/', listRoute);
+router.route('/', smartCleanupRoute);
 
 router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
   const ratingKey = c.req.param('ratingKey');
@@ -177,13 +154,9 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
   }
 });
 
-// On-demand only — never called during sync. A duplicate group's comparison can land
-// in "unknown" because the bulk library listing sync reads from came back with thinner
-// Media/Part/Stream detail than a single-item Plex lookup provides (see
-// mediaVersionTechnicalDetails() in the Plex client for why). Fetching that richer
-// detail for every duplicate group at sync time would mean one extra Plex request per
-// group on every sync; fetching it only when a user opens the review modal for an
-// ambiguous group keeps the cost proportional to actual attention, not library size.
+// On-demand only — never called during sync. An individual review refreshes its one
+// group here; Quick Cleanup applies the same enrichment to a separately bounded set of
+// its largest scanned groups. Neither path adds per-item requests to full-library sync.
 router.post('/movies/:ratingKey/media/technical-refresh', async (c) => {
   const ratingKey = c.req.param('ratingKey');
   const serverId = c.get('activeServerId');
@@ -196,13 +169,12 @@ router.post('/movies/:ratingKey/media/technical-refresh', async (c) => {
   try {
     const client = await createPlexClient();
     const details = await client.mediaVersionTechnicalDetails(ratingKey);
-    const now = Math.floor(Date.now() / 1000);
     await Promise.all(
       versions
         .filter((version) => details.has(version.mediaId))
         .map((version) =>
           db.update(itemMediaVersions)
-            .set(technicalDetailUpdate(details.get(version.mediaId)!, now))
+            .set(technicalDetailUpdate(details.get(version.mediaId)!))
             .where(
               and(
                 eq(itemMediaVersions.serverId, serverId),
@@ -235,13 +207,12 @@ router.post('/episodes/:ratingKey/media/technical-refresh', async (c) => {
   try {
     const client = await createPlexClient();
     const details = await client.mediaVersionTechnicalDetails(ratingKey);
-    const now = Math.floor(Date.now() / 1000);
     await Promise.all(
       versions
         .filter((version) => details.has(version.mediaId))
         .map((version) =>
           db.update(episodeMediaVersions)
-            .set(technicalDetailUpdate(details.get(version.mediaId)!, now))
+            .set(technicalDetailUpdate(details.get(version.mediaId)!))
             .where(
               and(
                 eq(episodeMediaVersions.serverId, serverId),
