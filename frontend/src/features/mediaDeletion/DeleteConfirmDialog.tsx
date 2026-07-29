@@ -298,7 +298,8 @@ export function DeleteConfirmDialog({
         onRetry={() => void preview.refetch()}
         retrying={preview.isFetching}
         warnings={[
-          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
+          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0 &&
+              !plexFallbackRequired
             ? [
               `${arrProblems.length} ${
                 arrProblems.length === 1 ? "item has" : "items have"
