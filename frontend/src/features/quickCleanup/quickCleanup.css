@@ -62,17 +62,25 @@
      (success, warning, info, error) remain unchanged. */
   --color-primary: var(--workspace-color);
 
+  display: flex;
+  max-height: calc(100dvh - 2rem);
   overflow: hidden;
+  flex-direction: column;
   border: 1px solid color-mix(in oklab, var(--color-primary) 12%, var(--color-base-300));
   box-shadow:
     0 24px 70px rgb(0 0 0 / 0.34),
     0 0 0 1px color-mix(in oklab, var(--color-primary) 3%, transparent);
 }
 
+.smart-cleanup-modal:has(.quick-stale-workspace) {
+  height: min(52rem, calc(100dvh - 2rem));
+}
+
 .smart-cleanup-header,
 .smart-cleanup-footer {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 0.85rem;
   padding: 1rem 1.25rem;
   background: color-mix(in oklab, var(--color-base-200) 82%, transparent);
@@ -116,8 +124,17 @@
 
 .smart-cleanup-body {
   display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
   gap: 1rem;
+  overflow-y: auto;
   padding: 1.25rem;
+}
+
+.smart-cleanup-body:has(.quick-stale-workspace) {
+  display: flex;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .smart-cleanup-result-grid {

@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import {
-  ArrowDown,
-  ArrowUp,
-  CheckCircle2,
-  Gauge,
-  HardDrive,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, Gauge, HardDrive, ShieldCheck } from "lucide-react";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { HistorySyncWarning } from "../../components/HistorySyncWarning.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
@@ -64,6 +55,7 @@ export function QuickCleanupPanel({
   const analysis = useQuery({
     queryKey: quickKey,
     queryFn: () => api.libraries.staleQuickCleanup(libraryKey, thresholdDays, sort, order),
+    placeholderData: (previousData) => previousData,
     staleTime: 30_000,
     retry: 1,
   });
@@ -76,7 +68,7 @@ export function QuickCleanupPanel({
   ]);
 
   useEffect(() => {
-    if (!analysis.data) return;
+    if (!analysis.data || analysis.isPlaceholderData) return;
     const scope = `${libraryKey}:${thresholdDays}`;
     const available = analysis.data.candidates.map((candidate) => candidate.ratingKey);
     setSelected(
@@ -85,7 +77,7 @@ export function QuickCleanupPanel({
         exclusionsByScope.current.get(scope) ?? new Set(),
       ),
     );
-  }, [analysis.data, libraryKey, thresholdDays]);
+  }, [analysis.data, analysis.isPlaceholderData, libraryKey, thresholdDays]);
 
   useEffect(() => {
     if (reviewOpen) dialogRef.current?.showModal();
@@ -197,6 +189,12 @@ export function QuickCleanupPanel({
     data.candidates.every((candidate) => selected.has(candidate.ratingKey));
   const thresholdFilter = (
     <div className="quick-stale-filter-row">
+      {analysis.isPlaceholderData && (
+        <span
+          className="loading loading-spinner loading-xs text-primary"
+          aria-label="Updating recommendations"
+        />
+      )}
       <label>
         <span>Inactive at least</span>
         <select
@@ -218,16 +216,8 @@ export function QuickCleanupPanel({
   return (
     <div className="quick-stale-workspace space-y-4">
       <div className="quick-stale-intro">
-        <div>
-          <span>
-            <Sparkles className="size-4" /> Opinionated cleanup
-          </span>
-          <h2>Likely ready to let go</h2>
-          <p>
-            Whole titles with no activity inside your chosen window. Recent requests and titles with
-            a less-destructive duplicate cleanup are left out.
-          </p>
-        </div>
+        <h2>Likely ready to let go</h2>
+        <p>Inactive whole titles that passed every cleanup safeguard.</p>
       </div>
 
       <div className="quick-stale-stats">
@@ -273,35 +263,6 @@ export function QuickCleanupPanel({
         </HoverPopover>
       </div>
 
-      {protectedCount > 0 && (
-        <div className="quick-stale-protected">
-          <ShieldCheck className="size-4 shrink-0 text-info" />
-          <span>
-            {data.activePlaybackProtectedCount > 0 &&
-              `${data.activePlaybackProtectedCount.toLocaleString()} currently playing protected`}
-            {data.activePlaybackProtectedCount > 0 &&
-              (data.recentRequestProtectedCount > 0 || data.duplicateProtectedCount > 0) && " · "}
-            {data.recentRequestProtectedCount > 0 &&
-              `${data.recentRequestProtectedCount.toLocaleString()} recent ${
-                data.recentRequestProtectedCount === 1 ? "request" : "requests"
-              } protected`}
-            {data.recentRequestProtectedCount > 0 && data.duplicateProtectedCount > 0 && " · "}
-            {data.duplicateProtectedCount > 0 && (
-              <>
-                {data.duplicateProtectedCount.toLocaleString()} with multiple versions left for{" "}
-                <Link
-                  to="/duplicates"
-                  search={{ type: "all", comparison: "all" }}
-                  className="link link-primary"
-                >
-                  duplicate cleanup
-                </Link>
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
       {shownCount === 0
         ? (
           <>
@@ -335,6 +296,7 @@ export function QuickCleanupPanel({
                     type="checkbox"
                     className="checkbox checkbox-sm"
                     checked={allShownSelected}
+                    disabled={analysis.isPlaceholderData}
                     onChange={toggleAll}
                   />
                 </label>
@@ -349,6 +311,7 @@ export function QuickCleanupPanel({
                       type="button"
                       className={active ? "is-active" : ""}
                       aria-pressed={active}
+                      disabled={analysis.isPlaceholderData}
                       title={active
                         ? `Sorted by ${label.toLowerCase()} ${
                           order === "desc" ? "descending" : "ascending"
@@ -370,6 +333,7 @@ export function QuickCleanupPanel({
                     key={candidate.ratingKey}
                     candidate={candidate}
                     checked={checked}
+                    disabled={analysis.isPlaceholderData}
                     expanded={expandedRatingKey === candidate.ratingKey}
                     onToggle={() => toggle(candidate)}
                     onExpandedChange={() =>
@@ -388,11 +352,10 @@ export function QuickCleanupPanel({
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={selectedItems.length === 0}
+                disabled={analysis.isPlaceholderData || selectedItems.length === 0}
                 onClick={() => setReviewOpen(true)}
               >
-                Review cleanup · {selectedItems.length.toLocaleString()} titles ·{" "}
-                {formatKilobytes(selectedSize)}
+                Review cleanup · {formatKilobytes(selectedSize)}
                 {unknownSelectedSize > 0 &&
                   ` + ${unknownSelectedSize.toLocaleString()} unknown-size`}
               </button>

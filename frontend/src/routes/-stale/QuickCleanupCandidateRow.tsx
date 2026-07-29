@@ -9,12 +9,14 @@ import { formatQuickCleanupInactivity } from "./quickCleanupPresentation.ts";
 export function QuickCleanupCandidateRow({
   candidate,
   checked,
+  disabled,
   expanded,
   onToggle,
   onExpandedChange,
 }: {
   candidate: StaleQuickCleanupCandidate;
   checked: boolean;
+  disabled?: boolean;
   expanded: boolean;
   onToggle: () => void;
   onExpandedChange: () => void;
@@ -44,6 +46,7 @@ export function QuickCleanupCandidateRow({
             type="checkbox"
             className="checkbox checkbox-sm checkbox-primary"
             checked={checked}
+            disabled={disabled}
             aria-label={`${checked ? "Exclude" : "Include"} ${candidate.title} ${
               checked ? "from" : "in"
             } cleanup`}
@@ -55,6 +58,7 @@ export function QuickCleanupCandidateRow({
           className="smart-cleanup-candidate-review"
           aria-expanded={expanded}
           aria-controls={detailsId}
+          disabled={disabled}
           onClick={onExpandedChange}
         >
           <span className="smart-cleanup-candidate-copy">
