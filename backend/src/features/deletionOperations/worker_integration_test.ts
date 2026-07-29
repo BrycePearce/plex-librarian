@@ -59,6 +59,7 @@ let removePlexMediaOnManagedFileRead: {
 } | null = null;
 let pendingPlexMediaRemoval: { ratingKey: string; mediaId: number } | null = null;
 let activePlaybackRatingKey: string | null = null;
+let activeSessionsHook: (() => void) | null = null;
 let sonarrManagedFilePresent = true;
 let sonarrManagedFileId = 10;
 let sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -79,6 +80,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     return Promise.resolve(Response.json({ MediaContainer: { machineIdentifier: 'machine-1' } }));
   }
   if (url.pathname === '/status/sessions') {
+    activeSessionsHook?.();
     return Promise.resolve(Response.json({
       MediaContainer: {
         Metadata: activePlaybackRatingKey
@@ -308,6 +310,16 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     if (!arrPresent && coordinatedRatingKey) live.delete(coordinatedRatingKey);
     return Promise.resolve(new Response(null, { status: 200 }));
   }
+  const allLeaves = url.pathname.match(/^\/library\/metadata\/([^/]+)\/allLeaves$/);
+  if (allLeaves) {
+    const showRatingKey = decodeURIComponent(allLeaves[1]);
+    const metadata = [...live.values()].filter((item) =>
+      item.type === 'episode' && item.grandparentRatingKey === showRatingKey
+    );
+    return Promise.resolve(Response.json({
+      MediaContainer: { Metadata: metadata, totalSize: metadata.length },
+    }));
+  }
   const mediaDelete = url.pathname.match(/^\/library\/metadata\/([^/]+)\/media\/(\d+)$/);
   if (mediaDelete && init?.method === 'DELETE') {
     const ratingKey = decodeURIComponent(mediaDelete[1]);
@@ -387,6 +399,7 @@ function reset(): void {
   removePlexMediaOnManagedFileRead = null;
   pendingPlexMediaRemoval = null;
   activePlaybackRatingKey = null;
+  activeSessionsHook = null;
   sonarrManagedFilePresent = true;
   sonarrManagedFileId = 10;
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -410,6 +423,9 @@ function reset(): void {
         'torrent_delete_attempts',
         'download_file_delete_attempts',
         'arr_delete_attempts',
+        'seerr_request_seasons',
+        'seerr_requests',
+        'seerr_instances',
         'item_media_versions',
         'episode_media_versions',
         'seasons',
@@ -441,6 +457,36 @@ function addMovie(ratingKey: string, mediaIds = [11, 12], tmdbId: number | null 
     librarySectionID: 'movies',
     Guid: tmdbId === null ? [] : [{ id: `tmdb://${tmdbId}` }],
     Media: mediaIds.map((id) => ({ id, Part: [{ size: 50_000 }] })),
+  });
+}
+
+function addQuickCleanupShow(ratingKey: string): void {
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO items (server_id, rating_key, library_key, title, type, added_at, file_size, updated_at) VALUES (1, ?, 'shows', ?, 'show', ?, 100, ?)",
+    ).run(
+      ratingKey,
+      `Show ${ratingKey}`,
+      Math.floor(Date.now() / 1000) - 366 * 86_400,
+      Math.floor(Date.now() / 1000),
+    );
+  });
+  live.set(ratingKey, {
+    ratingKey,
+    title: `Show ${ratingKey}`,
+    type: 'show',
+    librarySectionID: 'shows',
+  });
+  live.set(`${ratingKey}-episode`, {
+    ratingKey: `${ratingKey}-episode`,
+    title: 'Pilot',
+    type: 'episode',
+    librarySectionID: 'shows',
+    grandparentRatingKey: ratingKey,
+    parentRatingKey: `${ratingKey}-season`,
+    parentIndex: 1,
+    index: 1,
+    Media: [{ id: 9501, Part: [{ size: 50_000 }] }],
   });
 }
 
@@ -922,6 +968,401 @@ Deno.test('media-version endpoints reject client-controlled Arr policy fields', 
     0,
   );
 });
+
+Deno.test('stale quick cleanup revalidates eligibility after checking active sessions', async () => {
+  reset();
+  const now = Math.floor(Date.now() / 1000);
+  const old = now - 366 * 86_400;
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+    ).run(now);
+    client.prepare(
+      "INSERT INTO items (server_id, rating_key, library_key, title, type, added_at, file_size, updated_at) VALUES (1, 'stale-race', 'movies', 'Stale race', 'movie', ?, 100, ?)",
+    ).run(old, now);
+  });
+  activeSessionsHook = () => {
+    activeSessionsHook = null;
+    withTransaction((client) => {
+      const statement = client.prepare(
+        "INSERT INTO item_media_versions (server_id, media_id, item_rating_key, library_key, file_size, updated_at) VALUES (1, ?, 'stale-race', 'movies', 50, ?)",
+      );
+      statement.run(9101, now);
+      statement.run(9102, now);
+    });
+  };
+
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['stale-race'],
+      coordinatedRatingKeys: [],
+      quickCleanupThresholdDays: 365,
+    }),
+  });
+
+  assertEquals(response.status, 409);
+  assertEquals(
+    await response.json(),
+    { error: 'the quick cleanup plan changed; analyze stale items again before deleting' },
+  );
+});
+
+Deno.test('stale quick cleanup rejects a live movie that gained another version', async () => {
+  reset();
+  const now = Math.floor(Date.now() / 1000);
+  const old = now - 366 * 86_400;
+  addMovie('stale-live-duplicate', [9301]);
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+    ).run(now);
+    client.prepare(
+      "UPDATE items SET added_at = ? WHERE server_id = 1 AND rating_key = 'stale-live-duplicate'",
+    ).run(old);
+  });
+  live.get('stale-live-duplicate')!.Media!.push({
+    id: 9302,
+    Part: [{ size: 50_000 }],
+  });
+
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['stale-live-duplicate'],
+      coordinatedRatingKeys: [],
+      quickCleanupThresholdDays: 365,
+    }),
+  });
+
+  assertEquals(response.status, 409);
+  assertEquals(
+    await response.json(),
+    {
+      error:
+        'a selected title now has multiple versions; analyze stale items again before deleting',
+    },
+  );
+});
+
+Deno.test('stale quick cleanup rejects a show that gained a duplicate episode', async () => {
+  reset();
+  const now = Math.floor(Date.now() / 1000);
+  addQuickCleanupShow('stale-show-live-duplicate');
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'shows'",
+    ).run(now);
+  });
+  live.get('stale-show-live-duplicate-episode')!.Media!.push({
+    id: 9502,
+    Part: [{ size: 50_000 }],
+  });
+
+  const response = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['stale-show-live-duplicate'],
+      coordinatedRatingKeys: [],
+      quickCleanupThresholdDays: 365,
+    }),
+  });
+
+  assertEquals(response.status, 409);
+  assertEquals(
+    await response.json(),
+    {
+      error:
+        'a selected title now has multiple versions; analyze stale items again before deleting',
+    },
+  );
+});
+
+Deno.test('stale quick cleanup rejects active playback before enqueue', async () => {
+  reset();
+  const now = Math.floor(Date.now() / 1000);
+  const old = now - 366 * 86_400;
+  addMovie('stale-playing', [9601]);
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+    ).run(now);
+    client.prepare(
+      "UPDATE items SET added_at = ? WHERE server_id = 1 AND rating_key = 'stale-playing'",
+    ).run(old);
+  });
+  activePlaybackRatingKey = 'stale-playing';
+
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['stale-playing'],
+      coordinatedRatingKeys: [],
+      quickCleanupThresholdDays: 365,
+    }),
+  });
+
+  assertEquals(response.status, 409);
+  assertEquals(
+    await response.json(),
+    {
+      error: 'a selected title started playing; analyze stale items again after playback stops',
+    },
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM deletion_operations').value<[number]>()?.[0]
+    ),
+    0,
+  );
+  assertEquals(live.has('stale-playing'), true);
+});
+
+Deno.test(
+  'stale quick cleanup revalidates material eligibility during durable execution',
+  async () => {
+    reset();
+    const now = Math.floor(Date.now() / 1000);
+    const old = now - 366 * 86_400;
+    addMovie('stale-durable', [9201]);
+    withTransaction((client) => {
+      client.prepare(
+        "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+      ).run(now);
+      client.prepare(
+        "UPDATE items SET added_at = ? WHERE server_id = 1 AND rating_key = 'stale-durable'",
+      ).run(old);
+    });
+
+    const response = await app.request('/api/libraries/movies/items', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: crypto.randomUUID(),
+        ratingKeys: ['stale-durable'],
+        coordinatedRatingKeys: [],
+        quickCleanupThresholdDays: 365,
+      }),
+    });
+    assertEquals(response.status, 202);
+    const { operationId } = await response.json() as { operationId: string };
+
+    withTransaction((client) => {
+      client.prepare(
+        "INSERT INTO item_media_versions (server_id, media_id, item_rating_key, library_key, file_size, updated_at) VALUES (1, 9202, 'stale-durable', 'movies', 50, ?)",
+      ).run(now);
+    });
+    await settle();
+
+    assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+    assertEquals(live.has('stale-durable'), true);
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          "SELECT COUNT(*) FROM items WHERE server_id = 1 AND rating_key = 'stale-durable'",
+        ).value<[number]>()?.[0]
+      ),
+      1,
+    );
+  },
+);
+
+Deno.test(
+  'stale quick cleanup rejects watch-history and request changes after enqueue',
+  async () => {
+    const cases = [
+      {
+        name: 'recent watch',
+        ratingKey: 'stale-watched-after-enqueue',
+        mediaId: 9701,
+        mutate(ratingKey: string, now: number) {
+          withTransaction((client) => {
+            client.prepare(
+              'UPDATE items SET last_viewed_at = ? WHERE server_id = 1 AND rating_key = ?',
+            ).run(now, ratingKey);
+          });
+        },
+      },
+      {
+        name: 'incomplete history',
+        ratingKey: 'stale-history-reset-after-enqueue',
+        mediaId: 9702,
+        mutate(_ratingKey: string, _now: number) {
+          withTransaction((client) => {
+            client.prepare(
+              "UPDATE libraries SET history_synced_at = NULL WHERE server_id = 1 AND key = 'movies'",
+            ).run();
+          });
+        },
+      },
+      {
+        name: 'recent approved request',
+        ratingKey: 'stale-requested-after-enqueue',
+        mediaId: 9703,
+        mutate(ratingKey: string, now: number) {
+          withTransaction((client) => {
+            client.prepare(
+              "INSERT INTO seerr_instances (id, server_id, name, url, api_key, created_at, updated_at) VALUES (1, 1, 'Seerr', 'http://seerr', 'key', ?, ?)",
+            ).run(now, now);
+            client.prepare(
+              `INSERT INTO seerr_requests
+                (server_id, seerr_instance_id, request_id, rating_key, media_type,
+                 request_status, media_status, requested_at, availability_estimated, synced_at)
+               VALUES (1, 1, 1, ?, 'movie', 2, 5, ?, 0, ?)`,
+            ).run(ratingKey, now, now);
+          });
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      reset();
+      const now = Math.floor(Date.now() / 1000);
+      const old = now - 366 * 86_400;
+      addMovie(testCase.ratingKey, [testCase.mediaId]);
+      withTransaction((client) => {
+        client.prepare(
+          "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+        ).run(now);
+        client.prepare(
+          'UPDATE items SET added_at = ? WHERE server_id = 1 AND rating_key = ?',
+        ).run(old, testCase.ratingKey);
+      });
+
+      const response = await app.request('/api/libraries/movies/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: [testCase.ratingKey],
+          coordinatedRatingKeys: [],
+          quickCleanupThresholdDays: 365,
+        }),
+      });
+      assertEquals(response.status, 202, testCase.name);
+      const { operationId } = await response.json() as { operationId: string };
+
+      testCase.mutate(testCase.ratingKey, now);
+      await settle();
+
+      assertEquals(
+        getDeletionOperation(operationId, 1)?.status,
+        'needs_attention',
+        testCase.name,
+      );
+      assertEquals(live.has(testCase.ratingKey), true, testCase.name);
+      assertEquals(
+        withTransaction((client) =>
+          client.prepare(
+            'SELECT COUNT(*) FROM items WHERE server_id = 1 AND rating_key = ?',
+          ).value<[number]>(testCase.ratingKey)?.[0]
+        ),
+        1,
+        testCase.name,
+      );
+    }
+  },
+);
+
+Deno.test(
+  'stale quick cleanup rejects a show duplicate added after enqueue',
+  async () => {
+    reset();
+    const now = Math.floor(Date.now() / 1000);
+    addQuickCleanupShow('stale-show-durable');
+    withTransaction((client) => {
+      client.prepare(
+        "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'shows'",
+      ).run(now);
+    });
+
+    const response = await app.request('/api/libraries/shows/items', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: crypto.randomUUID(),
+        ratingKeys: ['stale-show-durable'],
+        coordinatedRatingKeys: [],
+        quickCleanupThresholdDays: 365,
+      }),
+    });
+    assertEquals(response.status, 202);
+    const { operationId } = await response.json() as { operationId: string };
+
+    live.get('stale-show-durable-episode')!.Media!.push({
+      id: 9502,
+      Part: [{ size: 50_000 }],
+    });
+    await settle();
+
+    assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+    assertEquals(live.has('stale-show-durable'), true);
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          "SELECT COUNT(*) FROM items WHERE server_id = 1 AND rating_key = 'stale-show-durable'",
+        ).value<[number]>()?.[0]
+      ),
+      1,
+    );
+  },
+);
+
+Deno.test(
+  'stale quick cleanup rejects a live movie version added after enqueue',
+  async () => {
+    reset();
+    const now = Math.floor(Date.now() / 1000);
+    const old = now - 366 * 86_400;
+    addMovie('stale-live-durable', [9401]);
+    withTransaction((client) => {
+      client.prepare(
+        "UPDATE libraries SET history_synced_at = ? WHERE server_id = 1 AND key = 'movies'",
+      ).run(now);
+      client.prepare(
+        "UPDATE items SET added_at = ? WHERE server_id = 1 AND rating_key = 'stale-live-durable'",
+      ).run(old);
+    });
+
+    const response = await app.request('/api/libraries/movies/items', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: crypto.randomUUID(),
+        ratingKeys: ['stale-live-durable'],
+        coordinatedRatingKeys: [],
+        quickCleanupThresholdDays: 365,
+      }),
+    });
+    assertEquals(response.status, 202);
+    const { operationId } = await response.json() as { operationId: string };
+
+    live.get('stale-live-durable')!.Media!.push({
+      id: 9402,
+      Part: [{ size: 50_000 }],
+    });
+    await settle();
+
+    assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+    assertEquals(live.has('stale-live-durable'), true);
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          "SELECT COUNT(*) FROM items WHERE server_id = 1 AND rating_key = 'stale-live-durable'",
+        ).value<[number]>()?.[0]
+      ),
+      1,
+    );
+  },
+);
 
 Deno.test('deletion worker converges direct Plex version deletion atomically', async () => {
   reset();

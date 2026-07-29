@@ -522,6 +522,41 @@ export class PlexClient {
     };
   }
 
+  // Shows do not expose episode Media entries on their own metadata response, and this
+  // app deliberately does not persist every episode. Walk allLeaves page-by-page and
+  // stop as soon as one episode has multiple addressable Plex versions.
+  async showHasMultiVersionEpisodes(
+    ratingKey: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const basePath = `/library/metadata/${encodeURIComponent(ratingKey)}/allLeaves`;
+    let start = 0;
+    while (true) {
+      const data = await this.get<{
+        MediaContainer: { Metadata?: PlexRawMetadata[]; totalSize?: number };
+      }>(basePath, {
+        'X-Plex-Container-Start': String(start),
+        'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
+      }, signal);
+      const metadata = data.MediaContainer.Metadata ?? [];
+      if (
+        metadata.some((episode) =>
+          (episode.Media ?? []).filter((media) => media.id != null).length >= 2
+        )
+      ) {
+        return true;
+      }
+      start += metadata.length;
+      const total = data.MediaContainer.totalSize;
+      if (
+        metadata.length === 0 ||
+        (total !== undefined ? start >= total : metadata.length < ITEMS_PAGE_SIZE)
+      ) {
+        return false;
+      }
+    }
+  }
+
   // Fetches current Plex-reported Part paths solely for confirmation UI. Movies and
   // other leaf items expose Media directly; shows and artists require allLeaves because
   // this app intentionally does not persist every episode/track. The cap prevents a

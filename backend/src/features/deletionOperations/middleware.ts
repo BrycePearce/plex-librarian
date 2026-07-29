@@ -1,12 +1,21 @@
 import type { Context, Next } from 'hono';
 import { withTransaction } from '../../db/index.ts';
-import { getActiveServerIdOrNull, resolveActiveServer } from '../../integrations/plex/index.ts';
+import type { PlexClient } from '../../integrations/plex/client.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import {
   DeletionConflictError,
   enqueueDeletionOperation,
   type NewDeletionTarget,
   repeatedDeletionOperation,
 } from './service.ts';
+import {
+  parseStaleQuickCleanupDays,
+  validateStaleQuickCleanupSelection,
+} from '../libraries/quickCleanup.ts';
+import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
+import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts';
+
+const QUICK_CLEANUP_LIVE_READ_CONCURRENCY = 3;
 
 function decode(value: string): string {
   try {
@@ -14,6 +23,34 @@ function decode(value: string): string {
   } catch {
     return value;
   }
+}
+
+async function hasLiveMultiVersionTitle(
+  candidates: ReadonlyMap<string, StaleQuickCleanupCandidate>,
+  client: Pick<PlexClient, 'metadataIdentity' | 'showHasMultiVersionEpisodes'>,
+): Promise<boolean> {
+  const candidateList = [...candidates.values()];
+  let nextIndex = 0;
+  let found = false;
+  const workers = Array.from(
+    { length: Math.min(QUICK_CLEANUP_LIVE_READ_CONCURRENCY, candidateList.length) },
+    async () => {
+      while (!found && nextIndex < candidateList.length) {
+        const candidate = candidateList[nextIndex++];
+        const live = await client.metadataIdentity(candidate.ratingKey);
+        if (!live) continue;
+        if (
+          (live.type === 'movie' && live.media.length >= 2) ||
+          (live.type === 'show' &&
+            await client.showHasMultiVersionEpisodes(candidate.ratingKey))
+        ) {
+          found = true;
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  return found;
 }
 
 export async function durableDeletionAdapter(c: Context, next: Next): Promise<Response | void> {
@@ -36,9 +73,10 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
   if (typeof clientRequestId !== 'string') {
     return c.json({ error: 'clientRequestId is required' }, 400);
   }
-  const serverId = await getActiveServerIdOrNull();
-  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 404);
-  const serverUrl = (await resolveActiveServer()).client.serverUrl;
+  const activeServer = await resolveActiveServer().catch(() => null);
+  if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+  const serverId = activeServer.serverId;
+  const serverUrl = activeServer.client.serverUrl;
   try {
     if (libraryMatch) {
       const libraryKey = decode(libraryMatch[1]);
@@ -47,6 +85,15 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         : [];
       if (ratingKeys.length === 0 || ratingKeys.length > 200) {
         return c.json({ error: 'ratingKeys must contain between 1 and 200 strings' }, 400);
+      }
+      const quickCleanupDays = body.quickCleanupThresholdDays === undefined
+        ? null
+        : parseStaleQuickCleanupDays(body.quickCleanupThresholdDays);
+      if (body.quickCleanupThresholdDays !== undefined && quickCleanupDays === null) {
+        return c.json(
+          { error: 'quickCleanupThresholdDays must be an integer between 180 and 3650' },
+          400,
+        );
       }
       const coordinated = new Set(
         Array.isArray(body.coordinatedRatingKeys)
@@ -72,9 +119,73 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         coordinatedRatingKeys: [...coordinated].sort(),
         cleanupDownloads: body.cleanupDownloads === true,
         unmonitorRatingKeys: [...unmonitor].sort(),
+        ...(quickCleanupDays !== null ? { quickCleanupThresholdDays: quickCleanupDays } : {}),
       };
       const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
       if (repeated) return c.json(repeated, 202);
+      const initialQuickCleanupCandidates = quickCleanupDays === null
+        ? null
+        : validateStaleQuickCleanupSelection(
+          serverId,
+          libraryKey,
+          quickCleanupDays,
+          ratingKeys,
+        );
+      if (quickCleanupDays !== null && initialQuickCleanupCandidates === null) {
+        return c.json(
+          {
+            error: 'the quick cleanup plan changed; analyze stale items again before deleting',
+          },
+          409,
+        );
+      }
+      if (
+        initialQuickCleanupCandidates &&
+        await hasLiveMultiVersionTitle(
+          initialQuickCleanupCandidates,
+          activeServer.client,
+        )
+      ) {
+        return c.json(
+          {
+            error:
+              'a selected title now has multiple versions; analyze stale items again before deleting',
+          },
+          409,
+        );
+      }
+      const activeQuickCleanupSelection = quickCleanupDays === null
+        ? new Set<string>()
+        : activeWholeItemRatingKeys(
+          new Set(ratingKeys),
+          await activeServer.client.activeSessions(),
+        );
+      if (activeQuickCleanupSelection.size > 0) {
+        return c.json(
+          {
+            error:
+              'a selected title started playing; analyze stale items again after playback stops',
+          },
+          409,
+        );
+      }
+      // The live Plex checks above yield to other sync work. Keep the authoritative local
+      // eligibility read last so a duplicate/request/history change cannot slip through
+      // that gap before the operation is enqueued.
+      const quickCleanupCandidates = quickCleanupDays === null
+        ? null
+        : validateStaleQuickCleanupSelection(
+          serverId,
+          libraryKey,
+          quickCleanupDays,
+          ratingKeys,
+        );
+      if (quickCleanupDays !== null && quickCleanupCandidates === null) {
+        return c.json(
+          { error: 'the quick cleanup plan changed; analyze stale items again before deleting' },
+          409,
+        );
+      }
       const rows = withTransaction((client) => {
         const machine = client.prepare('SELECT machine_identifier FROM servers WHERE id = ?').value<
           [string]
@@ -98,6 +209,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       const targets: NewDeletionTarget[] = rows.map((row) => {
         const found = row!;
         const mode = coordinated.has(found.ratingKey) ? 'coordinated' : 'plex-only';
+        const quickCleanupCandidate = quickCleanupCandidates?.get(found.ratingKey);
         return {
           kind: 'whole_item',
           key: found.ratingKey,
@@ -116,6 +228,16 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             cleanupDownloads: mode === 'coordinated' && body.cleanupDownloads === true,
             unmonitorFromArr: mode === 'plex-only' && unmonitor.has(found.ratingKey),
             selectedRatingKeys: mode === 'coordinated' ? coordinatedKeys : plexOnlyKeys,
+            ...(quickCleanupCandidate
+              ? {
+                quickCleanupEvidence: {
+                  thresholdDays: quickCleanupDays,
+                  reason: quickCleanupCandidate.reason,
+                  lastViewedAt: quickCleanupCandidate.lastViewedAt,
+                  addedAt: quickCleanupCandidate.addedAt,
+                },
+              }
+              : {}),
           },
         };
       });

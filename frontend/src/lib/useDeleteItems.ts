@@ -22,6 +22,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         cleanupDownloads,
         coordinatedRatingKeys,
         unmonitorRatingKeys,
+        quickCleanupThresholdDays,
       }: {
         libraryKey: string;
         ratingKeys: string[];
@@ -29,6 +30,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         cleanupDownloads?: boolean;
         coordinatedRatingKeys?: string[];
         unmonitorRatingKeys?: string[];
+        quickCleanupThresholdDays?: number;
       },
     ) => {
       const coordinated = coordinatedRatingKeys ??
@@ -39,6 +41,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         coordinated,
         cleanupDownloads,
         unmonitorRatingKeys,
+        quickCleanupThresholdDays,
       );
     },
     onSuccess: (result) => {

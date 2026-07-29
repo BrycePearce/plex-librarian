@@ -626,6 +626,34 @@ Deno.test('show media path preview pages through live allLeaves metadata', async
   assertEquals(starts, ['0', '1']);
 });
 
+Deno.test(
+  'show duplicate check pages live leaves and stops at the first duplicate episode',
+  async () => {
+    const starts: string[] = [];
+    const mockFetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      const start = headers.get('X-Plex-Container-Start') ?? '0';
+      starts.push(start);
+      const duplicate = start === '1';
+      return Promise.resolve(Response.json({
+        MediaContainer: {
+          totalSize: 3,
+          Metadata: [{
+            ratingKey: duplicate ? 'episode-2' : 'episode-1',
+            title: 'Episode',
+            type: 'episode',
+            Media: duplicate ? [{ id: 21 }, { id: 22 }, {}] : [{ id: 11 }],
+          }],
+        },
+      }));
+    }) as typeof fetch;
+    const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+    assertEquals(await client.showHasMultiVersionEpisodes('show-1'), true);
+    assertEquals(starts, ['0', '1']);
+  },
+);
+
 Deno.test('media path preview caps large leaf collections and reports truncation', async () => {
   const mockFetch = (() =>
     Promise.resolve(Response.json({

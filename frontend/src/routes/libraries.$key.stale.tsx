@@ -2,15 +2,7 @@ import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  ArrowLeft,
-  Clock3,
-  Copy,
-  Database,
-  HardDrive,
-  RefreshCw,
-  SlidersHorizontal,
-} from "lucide-react";
+import { ArrowLeft, Database, Gauge, HardDrive, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { api, isNotFoundError } from "../lib/api.ts";
 import type { SortKey, StaleItem, StaleParams } from "../lib/api.ts";
 import { formatKilobytes } from "../lib/format.ts";
@@ -31,7 +23,9 @@ import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 import { StaleItemsTable } from "./-stale/StaleItemsTable.tsx";
 import { SelectionActionBar } from "./-stale/SelectionActionBar.tsx";
+import { LibraryQuickCleanupAction } from "./-stale/LibraryQuickCleanupAction.tsx";
 import { DeleteConfirmDialog } from "../features/mediaDeletion/DeleteConfirmDialog.tsx";
+import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import { CollectionToolbar } from "../components/Workspace.tsx";
 import "./libraries.$key.stale.css";
 
@@ -117,7 +111,7 @@ function LibraryInsight({
   value,
 }: {
   icon: ReactNode;
-  label: string;
+  label: ReactNode;
   value: string;
 }) {
   return (
@@ -129,6 +123,12 @@ function LibraryInsight({
       </span>
     </div>
   );
+}
+
+function formatLibraryMatch(matching: number, total: number): string {
+  if (total <= 0) return "—";
+  const percentage = Math.min(100, matching / total * 100);
+  return percentage >= 10 ? `${Math.round(percentage)}%` : `${percentage.toFixed(1)}%`;
 }
 
 function StalePage() {
@@ -146,6 +146,7 @@ function StalePage() {
   });
   const thisLibrary = librariesData?.libraries.find((l) => l.key === key);
   const thisLibraryItemCount = thisLibrary?.itemCount ?? 0;
+  const supportsQuickCleanup = thisLibrary?.type === "movie" || thisLibrary?.type === "show";
   const params = Route.useSearch();
   const navigate = Route.useNavigate();
 
@@ -341,32 +342,28 @@ function StalePage() {
           </div>
           <div className="library-header-actions flex flex-col items-end gap-1">
             <div className="flex gap-2">
-              {(thisLibrary?.type === "movie" ||
-                thisLibrary?.type === "show") && (
-                <Link
-                  to="/duplicates"
-                  search={{
-                    type: thisLibrary.type === "show" ? "tv" : "movie",
-                    comparison: "all",
-                  }}
-                  className="btn btn-ghost btn-sm gap-2"
-                  title="Find items with multiple synced versions"
-                >
-                  <Copy className="w-4 h-4" />
-                  Duplicates
-                </Link>
-              )}
-              <button
-                type="button"
-                className="btn btn-primary btn-sm gap-2 library-sync-action"
-                onClick={trigger}
-                disabled={isSyncing}
-              >
-                <RefreshCw
-                  className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
-                />
-                {isSyncing ? "Syncing…" : "Sync"}
-              </button>
+              {supportsQuickCleanup
+                ? (
+                  <LibraryQuickCleanupAction
+                    libraryKey={key}
+                    libraryItemCount={thisLibraryItemCount}
+                    isSyncing={isSyncing}
+                    isSyncStatusLoading={isSyncStatusLoading}
+                  />
+                )
+                : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm gap-2 library-sync-action"
+                    onClick={trigger}
+                    disabled={isSyncing}
+                  >
+                    <RefreshCw
+                      className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+                    />
+                    {isSyncing ? "Syncing…" : "Sync"}
+                  </button>
+                )}
             </div>
             {isError && (
               <span className="text-xs text-error">
@@ -417,11 +414,14 @@ function StalePage() {
             value={thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"}
           />
           <LibraryInsight
-            icon={<Clock3 />}
-            label="Inactive for"
-            value={(params.days ?? staleSearchDefaults.days) === 0
-              ? "Everything"
-              : `${params.days ?? staleSearchDefaults.days}+ days`}
+            icon={<Gauge />}
+            label={
+              <span className="library-insight-label">
+                Library match
+                <InfoTip text="Percentage of library items that match the current filters." />
+              </span>
+            }
+            value={formatLibraryMatch(data.total, thisLibraryItemCount)}
           />
         </div>
       )}

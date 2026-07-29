@@ -36,10 +36,14 @@ export function HoverPopover({
   content,
   children,
   openOnClick = false,
+  anchorClassName,
+  anchorTabIndex,
 }: {
   content: ReactNode;
   children: ReactNode;
   openOnClick?: boolean;
+  anchorClassName?: string;
+  anchorTabIndex?: number;
 }) {
   const id = useId();
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -76,7 +80,8 @@ export function HoverPopover({
     <>
       <span
         ref={anchorRef}
-        className="inline-flex shrink-0"
+        className={anchorClassName ?? "inline-flex shrink-0"}
+        tabIndex={anchorTabIndex}
         aria-describedby={open ? id : undefined}
         onPointerEnter={() => setOpen(true)}
         onPointerLeave={() => setOpen(false)}

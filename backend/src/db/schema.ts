@@ -405,6 +405,12 @@ export const seerrRequests = sqliteTable(
       table.seerrInstanceId,
       table.syncedAt,
     ),
+    cleanupProtectionIdx: index('seerr_requests_cleanup_protection_idx').on(
+      table.serverId,
+      table.ratingKey,
+      table.requestStatus,
+      table.requestedAt,
+    ),
   }),
 );
 

@@ -223,6 +223,30 @@ export interface StaleResponse {
   items: StaleItem[];
 }
 
+export type StaleQuickCleanupReason = 'never-watched' | 'long-dormant';
+export type StaleQuickCleanupSort = 'inactiveSince' | 'fileSize';
+export type StaleQuickCleanupOrder = 'asc' | 'desc';
+
+export interface StaleQuickCleanupCandidate extends StaleItem {
+  reason: StaleQuickCleanupReason;
+  inactiveSince: number;
+}
+
+export interface StaleQuickCleanupResponse {
+  thresholdDays: number;
+  historySyncedAt: number | null;
+  eligible: boolean;
+  unavailableReason: 'history-incomplete' | 'unsupported-library' | null;
+  candidateTotal: number;
+  candidateFileSize: number;
+  unknownSizeCount: number;
+  duplicateProtectedCount: number;
+  recentRequestProtectedCount: number;
+  activePlaybackProtectedCount: number;
+  limit: number;
+  candidates: StaleQuickCleanupCandidate[];
+}
+
 // --- Seasons / Show detail ---
 
 export interface Season {

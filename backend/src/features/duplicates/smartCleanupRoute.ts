@@ -7,7 +7,7 @@ import {
   items,
   mediaVersionReservations,
 } from '../../db/schema.ts';
-import { createPlexClient, resolveActiveServer } from '../../integrations/plex/index.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexMediaTechnicalDetails } from '../../integrations/plex/types.ts';
 import type { ActiveServerVariables } from '../../middleware/activeServer.ts';
 import {
@@ -61,9 +61,13 @@ router.post('/smart-analysis', async (c) => {
     return c.json({ analyzedGroups: 0, protectedGroups: 0, candidates: [] });
   }
   try {
+    const activeServer = await resolveActiveServer();
+    if (activeServer.serverId !== serverId) {
+      return c.json({ error: 'the active Plex server changed during analysis' }, 409);
+    }
     const [analysis, sessions, reservations] = await Promise.all([
       buildSmartDuplicateAnalysis(serverId, { movies, tv }),
-      createPlexClient().then((client) => client.activeSessions()),
+      activeServer.client.activeSessions(),
       db.select({
         mediaKind: mediaVersionReservations.mediaKind,
         ratingKey: mediaVersionReservations.ratingKey,
@@ -198,6 +202,9 @@ router.post('/smart-cleanup', async (c) => {
   );
   if (!machineIdentifier) return c.json({ error: 'Plex server identity is unavailable' }, 409);
   const activeServer = await resolveActiveServer();
+  if (activeServer.serverId !== serverId) {
+    return c.json({ error: 'the active Plex server changed during cleanup' }, 409);
+  }
   const sessions = await activeServer.client.activeSessions();
   if (
     selectedCandidates.some((candidate) => mediaRatingKeyIsPlaying(candidate.ratingKey, sessions))

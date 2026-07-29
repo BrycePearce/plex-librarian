@@ -11,6 +11,7 @@ import type {
   PersistedArrOwnership,
   PersistedArrReassignment,
 } from '../mediaDeletion/arrReassignmentPlanning.ts';
+import { isStaleQuickCleanupCandidate } from '../libraries/quickCleanup.ts';
 
 export interface DurableTargetRecord {
   id: number;
@@ -62,6 +63,12 @@ export interface DurableTargetSnapshot {
   arrOwnerships?: PersistedArrOwnership[];
   arrReassignments?: PersistedArrReassignment[];
   unmonitorFromArr?: boolean;
+  quickCleanupEvidence?: {
+    thresholdDays: number;
+    reason: 'never-watched' | 'long-dormant';
+    lastViewedAt: number | null;
+    addedAt: number | null;
+  };
 }
 
 export class DeletionValidationError extends Error {}
@@ -134,6 +141,12 @@ function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIde
     equalNullable(snapshot.tmdbId, live.tmdbId, 'TMDB identity');
     equalNullable(snapshot.tvdbId, live.tvdbId, 'TVDB identity');
   }
+  if (
+    snapshot.quickCleanupEvidence && snapshot.type === 'movie' &&
+    live.media.length >= 2
+  ) {
+    mismatch('quick cleanup Plex versions');
+  }
 }
 
 function validateLocalTarget(
@@ -144,7 +157,7 @@ function validateLocalTarget(
   const row = withTransaction((client) => {
     if (kind === 'whole_item') {
       return client.prepare(
-        'SELECT library_key, title, type, tmdb_id, tvdb_id FROM items WHERE server_id = ? AND rating_key = ?',
+        'SELECT library_key, title, type, tmdb_id, tvdb_id, last_viewed_at, added_at FROM items WHERE server_id = ? AND rating_key = ?',
       ).value<unknown[]>(serverId, snapshot.ratingKey);
     }
     if (kind === 'movie_version') {
@@ -162,6 +175,19 @@ function validateLocalTarget(
     if (row[1] !== snapshot.title || row[2] !== snapshot.type) mismatch('local item identity');
     equalNullable(snapshot.tmdbId, row[3], 'local TMDB identity');
     equalNullable(snapshot.tvdbId, row[4], 'local TVDB identity');
+    const evidence = snapshot.quickCleanupEvidence;
+    if (evidence) {
+      if (row[5] !== evidence.lastViewedAt) mismatch('quick cleanup watch history');
+      if (row[6] !== evidence.addedAt) mismatch('quick cleanup added date');
+      if (
+        !isStaleQuickCleanupCandidate(
+          serverId,
+          snapshot.libraryKey,
+          evidence.thresholdDays,
+          snapshot.ratingKey,
+        )
+      ) mismatch('quick cleanup eligibility');
+    }
     return;
   }
   if (kind === 'movie_version') {
@@ -227,6 +253,12 @@ export async function validateDeletionTarget(
   const live = await active.client.metadataIdentity(snapshot.ratingKey);
   if (!live) return { client: active.client, snapshot, live: null };
   validateLiveItem(snapshot, live);
+  if (
+    snapshot.quickCleanupEvidence && live.type === 'show' &&
+    await active.client.showHasMultiVersionEpisodes(snapshot.ratingKey)
+  ) {
+    mismatch('quick cleanup Plex versions');
+  }
   if (target.targetKind !== 'whole_item') {
     const liveVersion = live.media.find((version) => version.mediaId === snapshot.mediaId);
     if (liveVersion) {

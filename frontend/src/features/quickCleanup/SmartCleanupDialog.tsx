@@ -1,18 +1,17 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
-import { HardDrive, Loader2, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Loader2, Sparkles, X } from "lucide-react";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { useDeletionOperationTracker } from "../deletionOperations/DeletionOperationCoordinator.tsx";
 import { api } from "../../lib/api.ts";
 import type { SmartDuplicateAnalysisResponse, SmartDuplicateCandidate } from "../../lib/api.ts";
-import { formatKilobytes } from "../../lib/format.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { CleanupResults } from "./CleanupResults.tsx";
 import { candidateKey, selectedSize } from "./model.ts";
 import "./quickCleanup.css";
 
-type Phase = "configure" | "results" | "confirm";
+type Phase = "configure" | "results";
 
 export interface SmartCleanupDialogHandle {
   open: () => void;
@@ -180,9 +179,7 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
               <div className="text-xs font-semibold uppercase tracking-[0.16em] opacity-55">
                 Storage intelligence
               </div>
-              <h2 className="mt-1 text-xl font-semibold">
-                {phase === "confirm" ? "Confirm quick cleanup" : "Quick cleanup"}
-              </h2>
+              <h2 className="mt-1 text-xl font-semibold">Quick cleanup</h2>
             </div>
             <button
               type="button"
@@ -219,45 +216,18 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
             )}
 
             {phase === "results" && analysis && (
-              <CleanupResults
-                analysis={analysis}
-                selected={selected}
-                keepSelections={keepSelections}
-                expandedCandidate={expandedCandidate}
-                reclaimableSize={reclaimableSize}
-                onToggleCandidate={toggleCandidate}
-                onSetConfidenceSelection={setConfidenceSelection}
-                onExpandedCandidateChange={setExpandedCandidate}
-                onKeepChange={updateKeeper}
-              />
-            )}
-
-            {phase === "confirm" && analysis && (
               <>
-                <div className="smart-cleanup-confirm">
-                  <div className="smart-cleanup-confirm-icon">
-                    <HardDrive className="size-7" />
-                  </div>
-                  <h3>
-                    Reclaim approximately {reclaimableSize != null
-                      ? formatKilobytes(reclaimableSize)
-                      : "an unknown amount of space"}
-                  </h3>
-                  <p>
-                    Plex Librarian will remove the {deleteVersionCount.toLocaleString()} version
-                    {deleteVersionCount === 1 ? "" : "s"} marked <strong>Remove</strong> across{" "}
-                    {chosen.length.toLocaleString()}{" "}
-                    title{chosen.length === 1 ? "" : "s"}. It will not delete every version: the one
-                    marked <strong>Keep</strong> remains for each title.
-                  </p>
-                  <div className="smart-cleanup-guardrails text-left">
-                    <ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" />
-                    <span>
-                      Every target will be checked again for library ownership, remaining versions,
-                      active playback, and the accepted metadata snapshot before Plex is modified.
-                    </span>
-                  </div>
-                </div>
+                <CleanupResults
+                  analysis={analysis}
+                  selected={selected}
+                  keepSelections={keepSelections}
+                  expandedCandidate={expandedCandidate}
+                  reclaimableSize={reclaimableSize}
+                  onToggleCandidate={toggleCandidate}
+                  onSetConfidenceSelection={setConfidenceSelection}
+                  onExpandedCandidateChange={setExpandedCandidate}
+                  onKeepChange={updateKeeper}
+                />
                 {cleanup.isError && (
                   <ErrorAlert
                     message={cleanup.error instanceof Error
@@ -279,43 +249,21 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
             {phase === "results" && (
               <button
                 type="button"
-                className="btn btn-primary"
-                disabled={chosen.length === 0}
-                onClick={() => setPhase("confirm")}
+                className="btn btn-error min-w-44"
+                disabled={chosen.length === 0 || cleanup.isPending}
+                onClick={() => cleanup.mutate()}
               >
-                Review removal · {deleteVersionCount.toLocaleString()}{" "}
-                {deleteVersionCount === 1 ? "version" : "versions"} ·{" "}
-                {reclaimableSize != null ? formatKilobytes(reclaimableSize) : "size unknown"}
+                {cleanup.isPending
+                  ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Queuing cleanup…
+                    </>
+                  )
+                  : `Remove ${deleteVersionCount.toLocaleString()} ${
+                    deleteVersionCount === 1 ? "version" : "versions"
+                  }`}
               </button>
-            )}
-            {phase === "confirm" && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={cleanup.isPending}
-                  onClick={() => setPhase("results")}
-                >
-                  Back to review
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-error min-w-44"
-                  disabled={cleanup.isPending}
-                  onClick={() => cleanup.mutate()}
-                >
-                  {cleanup.isPending
-                    ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Queuing cleanup…
-                      </>
-                    )
-                    : `Remove ${deleteVersionCount.toLocaleString()} ${
-                      deleteVersionCount === 1 ? "version" : "versions"
-                    }`}
-                </button>
-              </>
             )}
           </footer>
         </div>

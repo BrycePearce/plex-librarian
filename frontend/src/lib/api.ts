@@ -28,6 +28,9 @@ import type {
   ShowDetail,
   SmartDuplicateAnalysisResponse,
   SmartDuplicateCleanupResponse,
+  StaleQuickCleanupOrder,
+  StaleQuickCleanupResponse,
+  StaleQuickCleanupSort,
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
@@ -92,6 +95,10 @@ export type {
   SmartDuplicateCandidate,
   SmartDuplicateCleanupResponse,
   StaleItem,
+  StaleQuickCleanupCandidate,
+  StaleQuickCleanupOrder,
+  StaleQuickCleanupResponse,
+  StaleQuickCleanupSort,
   StaleResponse,
   SyncLog,
   SyncTriggerResponse,
@@ -228,6 +235,17 @@ export const api = {
         `/libraries/${encodeURIComponent(key)}/stale?${q}`,
       );
     },
+    staleQuickCleanup: (
+      key: string,
+      days: number,
+      sort: StaleQuickCleanupSort,
+      order: StaleQuickCleanupOrder,
+    ) =>
+      apiFetch<StaleQuickCleanupResponse>(
+        `/libraries/${
+          encodeURIComponent(key)
+        }/stale/quick-cleanup?days=${days}&sort=${sort}&order=${order}`,
+      ),
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(
         `/libraries/${encodeURIComponent(key)}/shows/${
@@ -255,6 +273,7 @@ export const api = {
       coordinatedRatingKeys: string[],
       cleanupDownloads = false,
       unmonitorRatingKeys: string[] = [],
+      quickCleanupThresholdDays?: number,
     ) =>
       apiFetch<DeletionOperationCreated>(
         `/libraries/${encodeURIComponent(key)}/items`,
@@ -266,6 +285,7 @@ export const api = {
             coordinatedRatingKeys,
             cleanupDownloads,
             unmonitorRatingKeys,
+            quickCleanupThresholdDays,
           }),
         },
       ),

@@ -165,6 +165,9 @@ export function useLibrarySync(libraryKey: string) {
     // Not debounced — this key is scoped to this one library, so there's nothing for
     // it to coalesce with, and this is likely the page the user is actually watching.
     void qc.invalidateQueries({ queryKey: queryKeys.stale.library(libraryKey) });
+    void qc.invalidateQueries({
+      queryKey: queryKeys.staleQuickCleanup.library(libraryKey),
+    });
     // A global run's own history-list entry doesn't flip to 'success' until every
     // library finishes, so only invalidate it once the whole thing is actually over.
     // The backend logs its sync.completed/sync.failed activity event on that same
@@ -206,6 +209,9 @@ export function useLibrarySync(libraryKey: string) {
       increment();
       void qc.invalidateQueries({
         queryKey: queryKeys.stale.library(libraryKey),
+      });
+      void qc.invalidateQueries({
+        queryKey: queryKeys.staleQuickCleanup.library(libraryKey),
       });
     } else if (!isSyncing && prevSyncing.current) {
       prevSyncing.current = false;

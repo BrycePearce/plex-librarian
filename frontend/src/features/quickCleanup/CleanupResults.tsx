@@ -11,7 +11,7 @@ import {
 import type { SmartDuplicateAnalysisResponse, SmartDuplicateCandidate } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { versionLabel } from "../../lib/mediaVersion.ts";
-import { InfoTip } from "../mediaDeletion/InfoTip.tsx";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { CandidateFileDetails } from "./CandidateFileDetails.tsx";
 import { candidateKey, candidateReclaimableSize } from "./model.ts";
 
@@ -109,37 +109,44 @@ export function CleanupResults({
   return (
     <>
       <div className="smart-cleanup-result-grid">
-        <div>
+        <HoverPopover
+          content="Plex reports matching runtime, resolution, video, HDR, audio, subtitles, and container, with no more than a 5% bitrate difference. This is a technical match, not proof that the files are byte-identical."
+          anchorClassName="smart-cleanup-stat-tip"
+          anchorTabIndex={0}
+        >
           <CheckCircle2 className="size-4 text-success" />
-          <span className="smart-cleanup-stat-label">
-            Likely identical
-            <InfoTip text="Plex reports matching runtime, resolution, video, HDR, audio, subtitles, and container, with no more than a 5% bitrate difference. This is a technical match, not proof that the files are byte-identical." />
-          </span>
+          <span>Likely identical</span>
           <strong>{identicalCount.toLocaleString()}</strong>
-        </div>
-        <div>
+        </HoverPopover>
+        <HoverPopover
+          content="Matching runtime and core stream characteristics, with a resolution difference, no more than a 15% bitrate difference, or overlapping subtitle coverage. The higher-quality copy is kept by default."
+          anchorClassName="smart-cleanup-stat-tip"
+          anchorTabIndex={0}
+        >
           <Sparkles className="size-4 text-warning" />
-          <span className="smart-cleanup-stat-label">
-            Near-identical
-            <InfoTip text="Matching runtime and core stream characteristics, with a resolution difference, no more than a 15% bitrate difference, or overlapping subtitle coverage. The higher-quality copy is kept by default." />
-          </span>
+          <span>Near-identical</span>
           <strong>{nearIdenticalCount.toLocaleString()}</strong>
-        </div>
-        <div>
+        </HoverPopover>
+        <HoverPopover
+          content="Left on the regular duplicates page because of meaningful differences, a container change, a larger bitrate gap, incomplete metadata, or active playback."
+          anchorClassName="smart-cleanup-stat-tip"
+          anchorTabIndex={0}
+        >
           <ShieldCheck className="size-4 text-info" />
-          <span className="smart-cleanup-stat-label">
-            Not included
-            <InfoTip text="Left on the regular duplicates page because of meaningful differences, a container change, a larger bitrate gap, incomplete metadata, or active playback." />
-          </span>
+          <span>Not included</span>
           <strong>{excludedCount.toLocaleString()}</strong>
-        </div>
-        <div className="smart-cleanup-savings-stat">
+        </HoverPopover>
+        <HoverPopover
+          content="Estimated space reclaimed by the versions currently selected for removal. The copy marked Keep remains for every title."
+          anchorClassName="smart-cleanup-stat-tip smart-cleanup-savings-stat"
+          anchorTabIndex={0}
+        >
           <HardDrive className="size-4 text-primary" />
           <span>Selected savings</span>
           <strong className="smart-cleanup-savings-value">
             {reclaimableSize != null ? formatKilobytes(reclaimableSize) : "Unknown"}
           </strong>
-        </div>
+        </HoverPopover>
       </div>
 
       {visibleCandidates.length > 0 && (

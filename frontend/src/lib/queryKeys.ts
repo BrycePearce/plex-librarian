@@ -5,6 +5,7 @@ const roots = {
   libraries: "libraries",
   sync: "sync",
   stale: "stale",
+  staleQuickCleanup: "stale-quick-cleanup",
   show: "show",
   movie: "movie",
   duplicates: "duplicates",
@@ -40,6 +41,16 @@ export const queryKeys = {
     library: (libraryKey: string) => [roots.stale, libraryKey] as const,
     list: <TParams>(libraryKey: string, params: TParams) =>
       [roots.stale, libraryKey, params] as const,
+  },
+  staleQuickCleanup: {
+    all: [roots.staleQuickCleanup] as const,
+    library: (libraryKey: string) => [roots.staleQuickCleanup, libraryKey] as const,
+    analysis: (
+      libraryKey: string,
+      days: number,
+      sort: "inactiveSince" | "fileSize" = "fileSize",
+      order: "asc" | "desc" = "desc",
+    ) => [roots.staleQuickCleanup, libraryKey, days, sort, order] as const,
   },
   show: {
     all: [roots.show] as const,
@@ -107,6 +118,7 @@ const rootPolicies = {
   libraries: { serverScoped: true, syncDerived: true },
   sync: { serverScoped: true, syncDerived: true },
   stale: { serverScoped: true, syncDerived: true },
+  staleQuickCleanup: { serverScoped: true, syncDerived: true },
   show: { serverScoped: true, syncDerived: true },
   movie: { serverScoped: true, syncDerived: true },
   duplicates: { serverScoped: true, syncDerived: true },
