@@ -6,7 +6,7 @@ import {
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
   versionDestinationState,
-  versionPlexFallbackRequired,
+  versionPlexFallbackWarning,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 
@@ -145,7 +145,7 @@ Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsa
     cleanupAvailable: false,
     cleanupVisible: false,
   });
-  assertEquals(versionPlexFallbackRequired(reassignment), false);
+  assertEquals(versionPlexFallbackWarning(reassignment), false);
 });
 
 Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => {
@@ -173,12 +173,12 @@ Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => 
     versionArrDeletionActive(true, unsafePreview.arrStatus),
     false,
   );
-  assertEquals(versionPlexFallbackRequired(unsafePreview), true);
+  assertEquals(versionPlexFallbackWarning(unsafePreview), true);
 });
 
-Deno.test("an unmanaged Plex copy needs no Arr fallback acknowledgement", () => {
+Deno.test("an unmanaged Plex copy needs no Arr fallback warning", () => {
   assertEquals(
-    versionPlexFallbackRequired(preview({ arrConfigured: true })),
+    versionPlexFallbackWarning(preview({ arrConfigured: true })),
     false,
   );
 });

@@ -23,7 +23,6 @@ import {
   DeletionModalShell,
   DeletionPreview,
   DeletionPreviewStatus,
-  PlexFallbackAcknowledgement,
   useDelayedFlag,
   useDeletionDialogCancelFocus,
 } from "./DeletionDialog.tsx";
@@ -52,9 +51,6 @@ export function DeleteConfirmDialog({
 }) {
   const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
-  const [plexFallbackAcknowledged, setPlexFallbackAcknowledged] = useState(
-    false,
-  );
   const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
@@ -96,8 +92,6 @@ export function DeleteConfirmDialog({
     : [];
   const arrDestination = arrDestinationState(preview.data);
   const arrProblems = arrDestination.problems;
-  const arrProblemKey = arrProblems.map((problem) => problem.ratingKey).sort()
-    .join("|");
   const cleanupVerificationErrors =
     preview.data?.items.filter((item) =>
       item.arrStatus === "resolved" && item.status === "error"
@@ -106,17 +100,15 @@ export function DeleteConfirmDialog({
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   const arrOptionVisible = arrDestination.visible;
   // Query results and effects commit in separate renders. Suppress an obsolete Arr
-  // selection immediately when no coordinated destination exists so its fallback
-  // acknowledgement cannot flash before the state-syncing effect catches up.
+  // selection immediately when no coordinated destination exists so the displayed
+  // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
-  const plexFallbackRequired = effectiveDeleteFromArr && arrProblems.length > 0;
   const cleanupOptionVisible = arrOptionVisible &&
     (cleanupEligibleCount > 0 || cleanupVerificationErrors.length > 0);
   const cleanupUsesQbittorrent = downloadJobs.length > 0;
   useEffect(() => {
     setDeleteFromArr(true);
     setCleanupDownloads(false);
-    setPlexFallbackAcknowledged(false);
     setPreviewMode("basic");
   }, [libraryKey, ratingKeys.join("|")]);
   useEffect(() => {
@@ -131,13 +123,9 @@ export function DeleteConfirmDialog({
   useEffect(() => {
     if (cleanupEligibleCount === 0) setCleanupDownloads(false);
   }, [cleanupEligibleCount]);
-  useEffect(() => {
-    setPlexFallbackAcknowledged(false);
-  }, [arrProblemKey]);
   const cancel = () => {
     setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
     setCleanupDownloads(false);
-    setPlexFallbackAcknowledged(false);
     onCancel();
   };
   const { totalSize, unknownSizeCount } = deletionImpact(items);
@@ -152,8 +140,6 @@ export function DeleteConfirmDialog({
     pending,
     hasSelection: items.length > 0,
     preview: preview.isLoading ? "loading" : preview.isError ? "error" : "ready",
-    fallbackRequired: plexFallbackRequired,
-    fallbackAcknowledged: plexFallbackAcknowledged,
   });
 
   return (
@@ -268,7 +254,6 @@ export function DeleteConfirmDialog({
                 warning: arrProblems.length > 0,
                 onChange: (checked: boolean) => {
                   setDeleteFromArr(checked);
-                  setPlexFallbackAcknowledged(false);
                   if (!checked) setCleanupDownloads(false);
                 },
               }]
@@ -298,12 +283,15 @@ export function DeleteConfirmDialog({
         onRetry={() => void preview.refetch()}
         retrying={preview.isFetching}
         warnings={[
-          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0 &&
-              !plexFallbackRequired
+          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
             ? [
               `${arrProblems.length} ${
                 arrProblems.length === 1 ? "item has" : "items have"
-              } no verified Arr destination and will use Plex only. Review the Arr warning for details.`,
+              } no verified Arr destination and will use Plex only. ${
+                arrProblems.length === 1 ? "It" : "They"
+              } may be downloaded again if ${
+                arrProblems.length === 1 ? "it remains" : "they remain"
+              } monitored.`,
             ]
             : []),
           ...(cleanupVerificationErrors.length > 0
@@ -318,18 +306,6 @@ export function DeleteConfirmDialog({
             : []),
         ]}
       />
-
-      {plexFallbackRequired && (
-        <PlexFallbackAcknowledgement
-          checked={plexFallbackAcknowledged}
-          pending={pending}
-          onChange={setPlexFallbackAcknowledged}
-        >
-          Delete {arrProblems.length} {arrProblems.length === 1 ? "item" : "items"}{" "}
-          directly through Plex because no verified {arrLabel}{" "}
-          destination is available. These items may be downloaded again if they remain monitored.
-        </PlexFallbackAcknowledgement>
-      )}
 
       <DeletionDialogFooter
         cancelButtonRef={cancelButtonRef}

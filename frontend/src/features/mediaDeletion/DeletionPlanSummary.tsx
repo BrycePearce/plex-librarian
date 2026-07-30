@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Folder, X } from "lucide-react";
+import { Folder, X } from "lucide-react";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
@@ -35,9 +35,9 @@ function DestinationOption({
 }) {
   return (
     <label
-      className={`inline-flex items-center gap-1.5 text-sm transition-colors ${
-        warning ? "text-warning" : "text-base-content/75"
-      } ${disabled ? warning ? "opacity-80" : "opacity-45" : "cursor-pointer"}`}
+      className={`inline-flex items-center gap-1.5 text-sm text-base-content/75 transition-colors ${
+        disabled ? warning ? "opacity-80" : "opacity-45" : "cursor-pointer"
+      }`}
     >
       <input
         type="checkbox"
@@ -50,7 +50,6 @@ function DestinationOption({
         ? <ServiceIcon service={service} className="size-4 shrink-0" />
         : <Folder className="size-4 shrink-0" />}
       <span className="whitespace-nowrap font-medium">{label}</span>
-      {warning && <AlertTriangle className="size-3.5 shrink-0" />}
       <InfoTip text={info} />
     </label>
   );

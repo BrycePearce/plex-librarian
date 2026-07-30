@@ -290,10 +290,12 @@ export function ActiveServiceMark({
   label: string;
 }) {
   const color = service === "plex"
-    ? "bg-warning/15 text-warning"
+    ? "bg-plex/15"
     : service === "sonarr"
-    ? "bg-warning/10 text-warning"
-    : "bg-info/10 text-info";
+    ? "bg-sonarr/15"
+    : service === "radarr"
+    ? "bg-radarr/15"
+    : "bg-qbittorrent/15";
   return (
     <span
       className={`inline-flex size-5 shrink-0 items-center justify-center rounded p-0.5 ${color}`}

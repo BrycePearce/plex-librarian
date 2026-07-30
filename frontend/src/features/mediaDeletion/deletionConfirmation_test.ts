@@ -5,8 +5,6 @@ const ready = {
   pending: false,
   hasSelection: true,
   preview: "ready" as const,
-  fallbackRequired: false,
-  fallbackAcknowledged: false,
 };
 
 Deno.test("loading and error previews terminate deletion confirmation", () => {
@@ -19,21 +17,6 @@ Deno.test("loading and error previews terminate deletion confirmation", () => {
     true,
   );
   assertEquals(deletionConfirmationBlocked(ready), false);
-});
-
-Deno.test("fallback acknowledgement cannot be bypassed", () => {
-  assertEquals(
-    deletionConfirmationBlocked({ ...ready, fallbackRequired: true }),
-    true,
-  );
-  assertEquals(
-    deletionConfirmationBlocked({
-      ...ready,
-      fallbackRequired: true,
-      fallbackAcknowledged: true,
-    }),
-    false,
-  );
 });
 
 Deno.test("pending, empty, and semantic blocks always win", () => {

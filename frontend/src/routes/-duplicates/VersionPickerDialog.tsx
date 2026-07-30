@@ -22,7 +22,6 @@ import {
   DeletionModalShell,
   DeletionPreview,
   DeletionPreviewStatus,
-  PlexFallbackAcknowledgement,
   useDelayedFlag,
   useDeletionDialogCancelFocus,
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
@@ -30,7 +29,7 @@ import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deleti
 import {
   defaultVersionSelection,
   versionDestinationState,
-  versionPlexFallbackRequired,
+  versionPlexFallbackWarning,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 import "../../components/dataSurfaces.css";
@@ -78,7 +77,6 @@ export function VersionPickerDialog({
   const previewMode = previewModeState.itemKey === itemKey ? previewModeState.mode : "basic";
   const [deleteFromArr, setDeleteFromArr] = useState(false);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
-  const [fallbackAcknowledged, setFallbackAcknowledged] = useState(false);
   const queryClient = useQueryClient();
 
   useLayoutEffect(() => {
@@ -154,7 +152,6 @@ export function VersionPickerDialog({
     const destination = versionDestinationState(preview.data);
     setDeleteFromArr(destination.arrSelectedByDefault);
     setCleanupDownloads(false);
-    setFallbackAcknowledged(false);
   }, [
     item,
     mediaIds.join("|"),
@@ -211,7 +208,7 @@ export function VersionPickerDialog({
   );
   const comparison = compareDuplicateVersions(displayVersions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
-  const fallbackRequired = versionPlexFallbackRequired(preview.data);
+  const showFallbackWarning = versionPlexFallbackWarning(preview.data);
   const reassignActive = deleteFromArr && arrReassignAvailable;
   const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable && !reassignActive
     ? preview.data?.versions.filter((version) =>
@@ -224,8 +221,6 @@ export function VersionPickerDialog({
     hasSelection: checkedCount > 0,
     preview: preview.isError ? "error" : preview.isLoading || !preview.data ? "loading" : "ready",
     semanticBlock: selection.blocked,
-    fallbackRequired,
-    fallbackAcknowledged,
   });
   return (
     <DeletionModalShell
@@ -350,7 +345,6 @@ export function VersionPickerDialog({
                 warning: false,
                 onChange: (checked: boolean) => {
                   setDeleteFromArr(checked);
-                  setFallbackAcknowledged(false);
                   if (!checked) setCleanupDownloads(false);
                 },
               }]
@@ -376,17 +370,14 @@ export function VersionPickerDialog({
         error={preview.isError ? preview.error.message : null}
         onRetry={() => void preview.refetch()}
         retrying={preview.isFetching}
+        warnings={showFallbackWarning
+          ? [
+            `This version will be deleted from Plex only. ${
+              preview.data?.arrReason ?? `No verified ${arrLabel} destination is available.`
+            } It may be downloaded again if it remains monitored.`,
+          ]
+          : []}
       />
-      {fallbackRequired && (
-        <PlexFallbackAcknowledgement
-          checked={fallbackAcknowledged}
-          pending={pending}
-          onChange={setFallbackAcknowledged}
-        >
-          Delete from Plex only. {preview.data?.arrReason}{" "}
-          The version may be downloaded again if it remains monitored.
-        </PlexFallbackAcknowledgement>
-      )}
       {wouldDeleteAll && (
         <p className="mt-2 text-sm text-warning">
           {item.mediaType === "movie"

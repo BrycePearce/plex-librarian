@@ -60,7 +60,7 @@ export function versionDestinationState(
   };
 }
 
-export function versionPlexFallbackRequired(
+export function versionPlexFallbackWarning(
   preview: VersionDeletionPreviewResponse | undefined,
 ): boolean {
   if (

@@ -216,31 +216,6 @@ export function DeletionPreviewStatus({
   );
 }
 
-export function PlexFallbackAcknowledgement({
-  checked,
-  pending,
-  children,
-  onChange,
-}: {
-  checked: boolean;
-  pending: boolean;
-  children: ReactNode;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-      <input
-        type="checkbox"
-        className="checkbox checkbox-warning checkbox-xs mt-0.5"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        disabled={pending}
-      />
-      <span>{children}</span>
-    </label>
-  );
-}
-
 export function DeletionDialogFooter({
   cancelButtonRef,
   pending,

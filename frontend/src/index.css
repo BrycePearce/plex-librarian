@@ -11,6 +11,9 @@
 
 @theme {
   --color-plex: #e5a00d;
+  --color-sonarr: #2596be;
+  --color-radarr: #ffcb3d;
+  --color-qbittorrent: #2f67ba;
   --font-plex: -apple-system, Helvetica, sans-serif;
 }
 
