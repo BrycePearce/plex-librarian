@@ -1,5 +1,8 @@
+/// <reference lib="dom" />
+
 export const ARCADE_SAVE_KEY = "plex-librarian:arcade-save-v2";
 export const ARCADE_OPENING_TRACK_URL = "/arcade/oldschool-action-theme.mp3";
+export const ARCADE_MUSIC_GAIN = 2 / 3;
 
 const DEFAULT_MUSIC_VOLUME = 28;
 let primedLaunchMusic: HTMLAudioElement | null = null;
@@ -26,7 +29,7 @@ export function primeArcadeLaunchMusic(url: string, volume: number) {
   const element = new Audio(url);
   element.loop = true;
   element.preload = "auto";
-  element.volume = Math.max(0, Math.min(1, volume));
+  element.volume = Math.max(0, Math.min(1, volume)) * ARCADE_MUSIC_GAIN;
   primedLaunchMusic = element;
   void element.play().catch(() => undefined);
   return element;

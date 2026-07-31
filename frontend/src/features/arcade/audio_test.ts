@@ -1,6 +1,7 @@
 import { assertEquals, assertNotEquals } from "@std/assert";
 import { ArcadeAudio, type MusicTrackUrls, resolveMusicCue } from "./audio.ts";
 import { createDefaultSave } from "./persistence.ts";
+import { ARCADE_MUSIC_GAIN } from "../../lib/arcadeLaunch.ts";
 
 const TRACKS: MusicTrackUrls = {
   stale: "/stale.mp3",
@@ -61,6 +62,10 @@ Deno.test("audio starts with the original track and crossfades to the Act 1 boss
   await Promise.resolve();
   assertEquals(first.element.src, "/stale.mp3");
   assertEquals(first.plays(), 1);
+  assertEquals(
+    first.element.volume,
+    createDefaultSave().settings.musicVolume / 100 * ARCADE_MUSIC_GAIN,
+  );
 
   audio.startFor(0, "boss");
   await Promise.resolve();

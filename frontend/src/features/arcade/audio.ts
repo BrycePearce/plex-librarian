@@ -1,4 +1,5 @@
 import type { ArcadeSettings, GamePhase } from "./types.ts";
+import { ARCADE_MUSIC_GAIN } from "../../lib/arcadeLaunch.ts";
 
 export type ArcadeSfx =
   | "fire"
@@ -237,7 +238,9 @@ export class ArcadeAudio {
   }
 
   private updateMusicVolumes() {
-    const volume = this.settings.musicEnabled ? this.settings.musicVolume / 100 : 0;
+    const volume = this.settings.musicEnabled
+      ? this.settings.musicVolume / 100 * ARCADE_MUSIC_GAIN
+      : 0;
     this.musicElements[this.activeElementIndex].volume = volume * this.fadeProgress;
     if (this.outgoingElementIndex !== null) {
       this.musicElements[this.outgoingElementIndex].volume = volume * (1 - this.fadeProgress);
