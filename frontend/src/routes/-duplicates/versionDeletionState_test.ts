@@ -5,6 +5,7 @@ import {
   versionArrDeletionActive,
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
+  versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
   versionSelectionSemantics,
@@ -146,6 +147,23 @@ Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsa
     cleanupVisible: false,
   });
   assertEquals(versionPlexFallbackWarning(reassignment), false);
+  assertEquals(versionDestinationOptionVisibility(reassignment), {
+    arr: true,
+    cleanup: false,
+  });
+});
+
+Deno.test("reassignment keeps known destination controls visible", () => {
+  assertEquals(
+    versionDestinationOptionVisibility(preview({
+      arrConfigured: true,
+      arrStatus: "resolved",
+      arrReassignStatus: "resolved",
+      cleanupConfigured: true,
+      cleanupStatus: "resolved",
+    })),
+    { arr: true, cleanup: true },
+  );
 });
 
 Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => {

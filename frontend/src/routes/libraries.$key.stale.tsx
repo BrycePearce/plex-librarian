@@ -241,7 +241,21 @@ function StalePage() {
   });
 
   const pageItems = data?.items ?? [];
-  const selection = useItemSelection(pageItems);
+  // Selection belongs to the exact visible result page. TanStack Router keeps this route
+  // mounted for search-param navigation, so key it explicitly instead of carrying hidden
+  // selections across pagination, filtering, searching, or sorting.
+  const selectionScope = JSON.stringify([
+    key,
+    params.days,
+    params.minAgeDays ?? "",
+    params.filter,
+    params.duplicatesOnly ? "duplicates" : "all",
+    params.search,
+    params.sort,
+    params.order,
+    params.offset,
+  ]);
+  const selection = useItemSelection(pageItems, selectionScope);
 
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);

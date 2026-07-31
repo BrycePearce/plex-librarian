@@ -28,6 +28,7 @@ import {
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
 import {
   defaultVersionSelection,
+  versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
   versionSelectionSemantics,
@@ -190,11 +191,10 @@ export function VersionPickerDialog({
   const arrDeleteAvailable = destinations.arrDeleteAvailable;
   const arrReassignAvailable = destinations.arrReassignAvailable;
   const cleanupAvailable = destinations.cleanupAvailable;
-  const arrOptionVisible = destinations.arrVisible;
-  const cleanupOptionVisible = destinations.cleanupVisible;
   const cleanupUsesQbittorrent = (preview.data?.downloadJobs.length ?? 0) > 0;
-  const destinationOptionsVisible = (arrOptionVisible && !arrReassignAvailable) ||
-    (cleanupOptionVisible && !arrReassignAvailable);
+  const destinationOptionVisibility = versionDestinationOptionVisibility(preview.data);
+  const destinationOptionsVisible = destinationOptionVisibility.arr ||
+    destinationOptionVisibility.cleanup;
   // Merge in refreshed technical detail by mediaId where available — selection state,
   // fileSize, and everything else stays keyed off item.versions; only the fields the
   // refresh can improve (video/audio/subtitle technical detail) are swapped in.
@@ -209,7 +209,11 @@ export function VersionPickerDialog({
   const comparison = compareDuplicateVersions(displayVersions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
   const showFallbackWarning = versionPlexFallbackWarning(preview.data);
-  const reassignActive = deleteFromArr && arrReassignAvailable;
+  // Arr reassignment is a backend-enforced safety step when the selected file is the
+  // managed copy. Keep the UI checked even during the render before the preview-driven
+  // state effect catches up.
+  const effectiveDeleteFromArr = arrReassignAvailable || deleteFromArr;
+  const reassignActive = arrReassignAvailable;
   const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable && !reassignActive
     ? preview.data?.versions.filter((version) =>
       mediaIds.includes(version.mediaId) && version.arrStatus === "resolved" &&
@@ -295,7 +299,7 @@ export function VersionPickerDialog({
                       <VersionDeletionServiceMarks
                         preview={preview.data}
                         mediaId={version.mediaId}
-                        deleteFromArr={deleteFromArr}
+                        deleteFromArr={effectiveDeleteFromArr}
                         cleanupDownloads={cleanupDownloads}
                       />
                     )
@@ -322,7 +326,7 @@ export function VersionPickerDialog({
             })}
             preview={preview.data}
             availableVersions={availableVersionPaths}
-            deleteFromArr={deleteFromArr}
+            deleteFromArr={effectiveDeleteFromArr}
             cleanupDownloads={cleanupDownloads}
             loading={preview.isLoading}
             onToggleVersion={toggle}
@@ -333,15 +337,16 @@ export function VersionPickerDialog({
       {preview.data && destinationOptionsVisible && (
         <DestinationOptions
           options={[
-            ...(arrOptionVisible && !arrReassignAvailable
+            ...(destinationOptionVisibility.arr
               ? [{
                 id: "arr" as const,
                 service: arrService,
-                label: arrLabel,
-                info:
-                  `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
-                checked: deleteFromArr,
-                disabled: pending,
+                label: arrReassignAvailable ? `${arrLabel} reassignment` : arrLabel,
+                info: arrReassignAvailable
+                  ? `Required to keep the ${arrLabel} record: ${arrLabel} will adopt an unselected Plex version before removing its currently managed file.`
+                  : `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
+                checked: effectiveDeleteFromArr,
+                disabled: pending || arrReassignAvailable,
                 warning: false,
                 onChange: (checked: boolean) => {
                   setDeleteFromArr(checked);
@@ -349,16 +354,18 @@ export function VersionPickerDialog({
                 },
               }]
               : []),
-            ...(cleanupOptionVisible && !arrReassignAvailable
+            ...(destinationOptionVisibility.cleanup
               ? [{
                 id: "cleanup" as const,
                 service: cleanupUsesQbittorrent ? "qbittorrent" as const : undefined,
                 label: cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files",
-                info: preview.data.cleanupReason ??
-                  "Deletes only a qBittorrent payload tied exclusively to the selected version paths.",
+                info: reassignActive
+                  ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
+                  : preview.data.cleanupReason ??
+                    "Deletes only a qBittorrent payload tied exclusively to the selected version paths.",
                 checked: cleanupDownloads,
                 disabled: pending || !deleteFromArr || !cleanupAvailable || reassignActive,
-                warning: !cleanupAvailable,
+                warning: !cleanupAvailable || reassignActive,
                 onChange: setCleanupDownloads,
               }]
               : []),
@@ -407,8 +414,8 @@ export function VersionPickerDialog({
           onConfirm({
             mediaIds,
             deleteWholeItem: selection.deleteWholeItem,
-            deleteFromArr: deleteFromArr && arrAvailable,
-            cleanupDownloads: deleteFromArr && arrAvailable &&
+            deleteFromArr: effectiveDeleteFromArr && arrAvailable,
+            cleanupDownloads: effectiveDeleteFromArr && arrAvailable &&
               cleanupDownloads,
             cleanupMediaIds,
           })}

@@ -60,6 +60,20 @@ export function versionDestinationState(
   };
 }
 
+export function versionDestinationOptionVisibility(
+  preview: VersionDeletionPreviewResponse | undefined,
+) {
+  const destinations = versionDestinationState(preview);
+  return {
+    // Reassignment is automatic and cannot be disabled, but it still needs to be visible
+    // so the controls agree with the service marks on the selected version.
+    arr: destinations.arrVisible,
+    // Keep verified cleanup visible during reassignment too; the dialog explains why that
+    // destination is temporarily locked instead of making a known association disappear.
+    cleanup: destinations.cleanupVisible,
+  };
+}
+
 export function versionPlexFallbackWarning(
   preview: VersionDeletionPreviewResponse | undefined,
 ): boolean {

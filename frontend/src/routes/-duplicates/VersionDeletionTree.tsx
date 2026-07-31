@@ -58,7 +58,7 @@ export function VersionDeletionServiceMarks({
     ? undefined
     : versionPreview?.arrReason ?? preview?.arrReason;
   const cleanupReason = versionPreview?.cleanupReason ?? preview?.cleanupReason;
-  const arrActive = versionArrDeletionActive(deleteFromArr, arrStatus);
+  const arrActive = versionArrDeletionActive(deleteFromArr, effectiveArrStatus);
   const cleanupResolved = cleanupDownloads && effectiveArrStatus === "resolved" &&
     cleanupStatus === "resolved";
   const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
