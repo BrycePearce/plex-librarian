@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, CheckCircle2, Gauge, HardDrive, ShieldCheck } from "lucide-react";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
@@ -24,28 +25,49 @@ const THRESHOLDS = [
   { days: 730, label: "2 years" },
   { days: 1_095, label: "3 years" },
 ] as const;
+const DAYS_PER_YEAR = 365;
+const MIN_CUSTOM_YEARS = 0.5;
+const MAX_CUSTOM_YEARS = 10;
+
+function formatCustomYears(days: number): string {
+  return String(Number((days / DAYS_PER_YEAR).toFixed(1)));
+}
 
 export function QuickCleanupPanel({
   libraryKey,
   libraryItemCount,
   isSyncing,
   isSyncStatusLoading,
+  dialogRef,
+  reviewOpen,
+  onReviewOpenChange,
+  onReviewPendingChange,
   onClose,
 }: {
   libraryKey: string;
   libraryItemCount: number;
   isSyncing: boolean;
   isSyncStatusLoading: boolean;
+  dialogRef: RefObject<HTMLDialogElement | null>;
+  reviewOpen: boolean;
+  onReviewOpenChange: (open: boolean) => void;
+  onReviewPendingChange: (pending: boolean) => void;
   onClose: () => void;
 }) {
   const [thresholdDays, setThresholdDays] = useState(1_095);
+  const [customThreshold, setCustomThreshold] = useState(false);
+  const [customYears, setCustomYears] = useState("3");
   const [sort, setSort] = useState<StaleQuickCleanupSort>("fileSize");
   const [order, setOrder] = useState<StaleQuickCleanupOrder>("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expandedRatingKey, setExpandedRatingKey] = useState<string | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
   const exclusionsByScope = useRef(new Map<string, Set<string>>());
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const parsedCustomYears = Number(customYears);
+  const customYearsValid = customYears !== "" &&
+    Number.isFinite(parsedCustomYears) &&
+    parsedCustomYears >= MIN_CUSTOM_YEARS &&
+    parsedCustomYears <= MAX_CUSTOM_YEARS &&
+    Number.isInteger(parsedCustomYears * 2);
   const quickKey = queryKeys.staleQuickCleanup.analysis(
     libraryKey,
     thresholdDays,
@@ -80,8 +102,20 @@ export function QuickCleanupPanel({
   }, [analysis.data, analysis.isPlaceholderData, libraryKey, thresholdDays]);
 
   useEffect(() => {
-    if (reviewOpen) dialogRef.current?.showModal();
-  }, [reviewOpen]);
+    if (!customThreshold || !customYearsValid) return;
+    const days = Math.round(parsedCustomYears * DAYS_PER_YEAR);
+    if (days === thresholdDays) return;
+    const timer = setTimeout(() => {
+      setExpandedRatingKey(null);
+      setThresholdDays(days);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [customThreshold, customYearsValid, parsedCustomYears, thresholdDays]);
+
+  useEffect(() => {
+    onReviewPendingChange(deleteMutation.isPending);
+    return () => onReviewPendingChange(false);
+  }, [deleteMutation.isPending, onReviewPendingChange]);
 
   const selectedItems = useMemo(
     () => analysis.data?.candidates.filter((candidate) => selected.has(candidate.ratingKey)) ?? [],
@@ -199,19 +233,93 @@ export function QuickCleanupPanel({
         <span>Inactive at least</span>
         <select
           className="select select-bordered select-sm"
-          value={thresholdDays}
+          value={customThreshold ? "custom" : thresholdDays}
           onChange={(event) => {
             setExpandedRatingKey(null);
+            if (event.target.value === "custom") {
+              setCustomYears(formatCustomYears(thresholdDays));
+              setCustomThreshold(true);
+              return;
+            }
+            setCustomThreshold(false);
             setThresholdDays(Number(event.target.value));
           }}
         >
           {THRESHOLDS.map((threshold) => (
             <option key={threshold.days} value={threshold.days}>{threshold.label}</option>
           ))}
+          <option value="custom">Custom…</option>
         </select>
       </label>
+      {customThreshold && (
+        <label>
+          <span>Custom</span>
+          <div className="join">
+            <input
+              type="number"
+              min={MIN_CUSTOM_YEARS}
+              max={MAX_CUSTOM_YEARS}
+              step={0.5}
+              className={`input input-bordered input-sm join-item w-20 ${
+                !customYearsValid ? "input-error" : ""
+              }`}
+              value={customYears}
+              onChange={(event) => setCustomYears(event.target.value)}
+              aria-label="Custom inactivity threshold in years"
+              title="Enter 0.5–10 years in half-year increments"
+            />
+            <span className="btn btn-sm join-item pointer-events-none font-normal">
+              years
+            </span>
+          </div>
+        </label>
+      )}
     </div>
   );
+
+  if (reviewOpen) {
+    return (
+      <DeleteConfirmDialog
+        dialogRef={dialogRef}
+        embedded
+        libraryKey={libraryKey}
+        items={selectedItems}
+        pending={deleteMutation.isPending}
+        error={deleteMutation.error}
+        onConfirm={({ coordinatedRatingKeys, cleanupDownloads }) =>
+          deleteMutation.mutate(
+            {
+              libraryKey,
+              ratingKeys: selectedItems.map((item) => item.ratingKey),
+              coordinatedRatingKeys,
+              cleanupDownloads,
+              quickCleanupThresholdDays: thresholdDays,
+            },
+            {
+              onSuccess: () => {
+                onReviewOpenChange(false);
+                const scope = `${libraryKey}:${thresholdDays}`;
+                const submittedKeys = selectedItems.map((item) => item.ratingKey);
+                const excluded = updateQuickCleanupExclusions(
+                  exclusionsByScope.current.get(scope) ?? new Set(),
+                  submittedKeys,
+                  true,
+                );
+                exclusionsByScope.current.set(scope, excluded);
+                setSelected(
+                  selectedQuickCleanupKeys(
+                    analysis.data?.candidates.map((item) => item.ratingKey) ?? [],
+                    excluded,
+                  ),
+                );
+                onClose();
+              },
+            },
+          )}
+        onCancel={() => onReviewOpenChange(false)}
+      />
+    );
+  }
 
   return (
     <div className="quick-stale-workspace space-y-4">
@@ -353,7 +461,7 @@ export function QuickCleanupPanel({
                 type="button"
                 className="btn btn-primary"
                 disabled={analysis.isPlaceholderData || selectedItems.length === 0}
-                onClick={() => setReviewOpen(true)}
+                onClick={() => onReviewOpenChange(true)}
               >
                 Review cleanup · {formatKilobytes(selectedSize)}
                 {unknownSelectedSize > 0 &&
@@ -362,47 +470,6 @@ export function QuickCleanupPanel({
             </div>
           </>
         )}
-
-      {reviewOpen && (
-        <DeleteConfirmDialog
-          dialogRef={dialogRef}
-          libraryKey={libraryKey}
-          items={selectedItems}
-          pending={deleteMutation.isPending}
-          error={deleteMutation.error}
-          onConfirm={({ coordinatedRatingKeys, cleanupDownloads }) =>
-            deleteMutation.mutate(
-              {
-                libraryKey,
-                ratingKeys: selectedItems.map((item) => item.ratingKey),
-                coordinatedRatingKeys,
-                cleanupDownloads,
-                quickCleanupThresholdDays: thresholdDays,
-              },
-              {
-                onSuccess: () => {
-                  setReviewOpen(false);
-                  const scope = `${libraryKey}:${thresholdDays}`;
-                  const submittedKeys = selectedItems.map((item) => item.ratingKey);
-                  const excluded = updateQuickCleanupExclusions(
-                    exclusionsByScope.current.get(scope) ?? new Set(),
-                    submittedKeys,
-                    true,
-                  );
-                  exclusionsByScope.current.set(scope, excluded);
-                  setSelected(
-                    selectedQuickCleanupKeys(
-                      analysis.data?.candidates.map((item) => item.ratingKey) ?? [],
-                      excluded,
-                    ),
-                  );
-                  onClose();
-                },
-              },
-            )}
-          onCancel={() => setReviewOpen(false)}
-        />
-      )}
     </div>
   );
 }

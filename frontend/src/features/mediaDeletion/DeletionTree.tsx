@@ -398,7 +398,7 @@ export function AdvancedDeletionTree({
   );
 
   return (
-    <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
+    <div className="deletion-advanced-tree mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
       <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
         <span className="font-medium text-base-content/60">Deletion tree</span>
         <InfoTip text="Shows paths reported by Plex and configured deletion services. Plex paths are informational and never authorize direct filesystem deletion." />
@@ -410,7 +410,7 @@ export function AdvancedDeletionTree({
             </span>
           )}
       </div>
-      <div className="max-h-72 overflow-y-auto px-2.5 py-1">
+      <div className="deletion-advanced-tree-viewport max-h-72 overflow-y-auto px-2.5 py-1">
         {plans.map((plan) => {
           const hasPaths = plan.arrTargets.length > 0 ||
             plan.plexEntries.length > 0 || plan.downloadJobs.length > 0 ||

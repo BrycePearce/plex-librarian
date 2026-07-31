@@ -72,7 +72,8 @@
     0 0 0 1px color-mix(in oklab, var(--color-primary) 3%, transparent);
 }
 
-.smart-cleanup-modal:has(.quick-stale-workspace) {
+.smart-cleanup-modal:has(.quick-stale-workspace),
+.smart-cleanup-modal:has(.quick-cleanup-review) {
   height: min(52rem, calc(100dvh - 2rem));
 }
 
@@ -122,6 +123,30 @@
     inset 0 1px 0 color-mix(in oklab, white 12%, transparent);
 }
 
+button.smart-cleanup-header-icon {
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+button.smart-cleanup-header-icon:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--color-primary) 42%, transparent);
+  background: color-mix(in oklab, var(--color-primary) 13%, transparent);
+  transform: translateX(-1px);
+}
+
+button.smart-cleanup-header-icon:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+button.smart-cleanup-header-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .smart-cleanup-body {
   display: grid;
   min-height: 0;
@@ -135,6 +160,122 @@
   display: flex;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.smart-cleanup-body:has(.quick-cleanup-review) {
+  display: flex;
+  overflow: hidden;
+}
+
+.quick-stale-workspace,
+.quick-cleanup-review {
+  animation: quick-cleanup-step-in 160ms ease-out;
+}
+
+.quick-cleanup-review {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.quick-cleanup-review .deletion-dialog-intro {
+  position: relative;
+  overflow: hidden;
+  flex: 0 0 auto;
+  padding: 0.8rem 0.95rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--color-error) 20%, var(--color-base-300));
+  border-radius: 0.8rem;
+  background:
+    radial-gradient(
+      circle at 0 0,
+      color-mix(in oklab, var(--color-error) 10%, transparent),
+      transparent 13rem
+    ),
+    color-mix(in oklab, var(--color-base-200) 72%, transparent);
+  box-shadow:
+    inset 3px 0 0 color-mix(in oklab, var(--color-error) 65%, transparent),
+    0 8px 24px rgb(0 0 0 / 0.06);
+}
+
+.quick-cleanup-review .deletion-dialog-intro h3,
+.quick-cleanup-review .deletion-dialog-intro > div {
+  position: relative;
+}
+
+.quick-cleanup-review .deletion-dialog-intro h3 svg {
+  filter: drop-shadow(0 0 7px color-mix(in oklab, var(--color-error) 35%, transparent));
+}
+
+.quick-cleanup-review .deletion-dialog-intro > div {
+  padding-bottom: 0;
+}
+
+.quick-cleanup-review .deletion-preview {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.quick-cleanup-review .deletion-preview-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.quick-cleanup-review .deletion-basic-list {
+  height: calc(100% - 0.5rem);
+  max-height: none;
+  min-height: 0;
+  overscroll-behavior: contain;
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 4%, transparent),
+    0 10px 28px rgb(0 0 0 / 0.08);
+}
+
+.quick-cleanup-review .deletion-advanced-tree {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: calc(100% - 0.5rem);
+  min-height: 0;
+  flex-direction: column;
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 4%, transparent),
+    0 10px 28px rgb(0 0 0 / 0.08);
+}
+
+.quick-cleanup-review .deletion-advanced-tree-viewport {
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.quick-cleanup-review .modal-action {
+  flex: 0 0 auto;
+  margin-top: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
+}
+
+@keyframes quick-cleanup-step-in {
+  from {
+    opacity: 0;
+    transform: translateX(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .smart-cleanup-result-grid {
@@ -591,7 +732,9 @@
 
   .smart-cleanup-savings-value,
   .smart-cleanup-file-details,
-  .smart-cleanup-analyzing-orbit {
+  .smart-cleanup-analyzing-orbit,
+  .quick-stale-workspace,
+  .quick-cleanup-review {
     animation: none;
   }
 }

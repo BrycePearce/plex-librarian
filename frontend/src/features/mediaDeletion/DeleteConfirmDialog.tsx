@@ -31,6 +31,7 @@ import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({
   dialogRef,
+  embedded = false,
   libraryKey,
   items,
   pending,
@@ -39,6 +40,7 @@ export function DeleteConfirmDialog({
   onCancel,
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
+  embedded?: boolean;
   libraryKey: string;
   items: WholeItemDeletionCandidate[];
   pending: boolean;
@@ -146,6 +148,7 @@ export function DeleteConfirmDialog({
     <DeletionModalShell
       dialogRef={dialogRef}
       pending={pending}
+      embedded={embedded}
       onClose={cancel}
       title={<>Delete {items.length} item{items.length === 1 ? "" : "s"}?</>}
       summary={

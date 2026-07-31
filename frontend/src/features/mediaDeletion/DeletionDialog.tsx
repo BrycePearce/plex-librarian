@@ -36,6 +36,7 @@ export function useDeletionDialogCancelFocus(
 export function DeletionModalShell({
   dialogRef,
   pending,
+  embedded = false,
   title,
   summary,
   children,
@@ -43,19 +44,32 @@ export function DeletionModalShell({
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
   pending: boolean;
+  embedded?: boolean;
   title: ReactNode;
   summary: ReactNode;
   children: ReactNode;
   onClose: () => void;
 }) {
-  return (
-    <dialog ref={dialogRef} className="modal" onClose={onClose}>
-      <div className="modal-box polished-modal max-w-2xl">
+  const content = (
+    <>
+      <div className="deletion-dialog-intro">
         <h3 className="flex items-center gap-2 text-lg font-bold">
           <AlertTriangle className="size-5 text-error" /> {title}
         </h3>
         <div className="py-2 text-sm text-base-content/70">{summary}</div>
-        {children}
+      </div>
+      {children}
+    </>
+  );
+
+  if (embedded) {
+    return <div className="quick-cleanup-review flex h-full w-full flex-col">{content}</div>;
+  }
+
+  return (
+    <dialog ref={dialogRef} className="modal" onClose={onClose}>
+      <div className="modal-box polished-modal max-w-2xl">
+        {content}
       </div>
       <form method="dialog" className="modal-backdrop">
         <button type="submit" disabled={pending}>close</button>
@@ -81,7 +95,7 @@ export function DeletionPreview({
     hasMounted.current = true;
   }, []);
   return (
-    <>
+    <div className="deletion-preview">
       <div className="mt-3 flex items-center justify-between gap-3">
         <span className="text-xs font-medium text-base-content/50">
           Deletion preview
@@ -109,6 +123,7 @@ export function DeletionPreview({
         </div>
       </div>
       <motion.div
+        className="deletion-preview-content"
         key={mode}
         initial={reduceMotion || !hasMounted.current ? false : { opacity: 0, y: 3 }}
         animate={{ opacity: 1, y: 0 }}
@@ -119,13 +134,13 @@ export function DeletionPreview({
       >
         {mode === "basic" ? basic : advanced}
       </motion.div>
-    </>
+    </div>
   );
 }
 
 export function BasicDeletionList({ children }: { children: ReactNode }) {
   return (
-    <ul className="mt-2 max-h-56 divide-y divide-base-300/50 overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 py-1 text-sm">
+    <ul className="deletion-basic-list mt-2 max-h-56 divide-y divide-base-300/50 overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 py-1 text-sm">
       {children}
     </ul>
   );
