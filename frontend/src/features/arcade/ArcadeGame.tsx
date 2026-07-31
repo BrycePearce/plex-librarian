@@ -29,7 +29,7 @@ import {
 } from "./engine.ts";
 import { ArcadeInputController } from "./input.ts";
 import { ArcadeAudio } from "./audio.ts";
-import { claimArcadeLaunchMusic } from "./launchAudio.ts";
+import { ARCADE_OPENING_TRACK_URL, claimArcadeLaunchMusic } from "../../lib/arcadeLaunch.ts";
 import {
   checkpointFromState,
   createDefaultSave,
@@ -49,7 +49,6 @@ import type {
 import backlogBossMusicUrl from "./assets/backlog-boss.mp3?url";
 import duplicateBossMusicUrl from "./assets/duplicate-boss.ogg?url";
 import duplicateMusicUrl from "./assets/duplicate-vault.mp3?url";
-import staleMusicUrl from "./assets/oldschool-action-theme.mp3?url";
 import rogueMusicUrl from "./assets/rogue-access.mp3?url";
 import rogueBossMusicUrl from "./assets/rogue-boss.mp3?url";
 import "./arcade.css";
@@ -239,7 +238,7 @@ export function ArcadeGame() {
     const audio = new ArcadeAudio(
       [launchMusic ?? musicElementA, musicElementB],
       {
-        stale: staleMusicUrl,
+        stale: ARCADE_OPENING_TRACK_URL,
         "backlog-boss": backlogBossMusicUrl,
         duplicate: duplicateMusicUrl,
         "duplicate-boss": duplicateBossMusicUrl,

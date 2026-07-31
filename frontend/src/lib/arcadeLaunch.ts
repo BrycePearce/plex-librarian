@@ -1,4 +1,5 @@
 export const ARCADE_SAVE_KEY = "plex-librarian:arcade-save-v2";
+export const ARCADE_OPENING_TRACK_URL = "/arcade/oldschool-action-theme.mp3";
 
 const DEFAULT_MUSIC_VOLUME = 28;
 let primedLaunchMusic: HTMLAudioElement | null = null;
