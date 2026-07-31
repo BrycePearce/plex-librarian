@@ -2,152 +2,261 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Check,
+  ChevronRight,
   Crosshair,
+  Gauge,
   Heart,
   Pause,
   Play,
   RotateCcw,
+  Shield,
+  Trophy,
   Volume2,
   VolumeX,
+  Zap,
 } from "lucide-react";
+import { ACTS, DIFFICULTIES, WEAPONS } from "./content.ts";
 import {
-  type ArcadeInput,
-  type ArcadeState,
-  createArcadeState,
-  type Enemy,
-  resizeArcadeState,
-  stepArcade,
+  createGameState,
+  createStateFromCheckpoint,
+  dispatchGameAction,
+  getActProgress,
+  getCurrentEncounter,
+  getObjectiveLabel,
+  resizeGameState,
+  stepGame,
 } from "./engine.ts";
-import musicUrl from "./assets/oldschool-action-theme.mp3?url";
+import { ArcadeInputController } from "./input.ts";
+import { ArcadeAudio, claimArcadeLaunchMusic } from "./audio.ts";
+import {
+  checkpointFromState,
+  createDefaultSave,
+  readArcadeSave,
+  recordScore,
+  writeArcadeSave,
+} from "./persistence.ts";
+import { renderArcade } from "./renderer.ts";
+import type {
+  ArcadeSaveV2,
+  ArcadeSettings,
+  DifficultyMode,
+  GamePhase,
+  GameState,
+  WeaponKind,
+} from "./types.ts";
+import backlogBossMusicUrl from "./assets/backlog-boss.mp3?url";
+import duplicateBossMusicUrl from "./assets/duplicate-boss.ogg?url";
+import duplicateMusicUrl from "./assets/duplicate-vault.mp3?url";
+import staleMusicUrl from "./assets/oldschool-action-theme.mp3?url";
+import rogueMusicUrl from "./assets/rogue-access.mp3?url";
+import rogueBossMusicUrl from "./assets/rogue-boss.mp3?url";
 import "./arcade.css";
 
 interface GameSummary {
+  phase: GamePhase;
+  actIndex: number;
+  encounterIndex: number;
+  endlessRound: number;
   score: number;
-  wave: number;
   health: number;
+  maxHealth: number;
+  shield: number;
   comboCount: number;
   comboMultiplier: number;
-  gameOver: boolean;
+  dashCooldown: number;
+  ammo: number;
+  magazineSize: number;
+  magazineLabel: string;
+  reloadFor: number;
+  secondaryCooldown: number;
+  powerups: Array<{ label: string; remaining: number }>;
+  objective: string;
+  actProgress: number;
+  banner: string;
+  weapon: WeaponKind;
+  mode: DifficultyMode;
+  noDamage: boolean;
+  gameOverReason?: string;
 }
 
 const INITIAL_SUMMARY: GameSummary = {
+  phase: "title",
+  actIndex: 0,
+  encounterIndex: 0,
+  endlessRound: 0,
   score: 0,
-  wave: 1,
   health: 3,
+  maxHealth: 3,
+  shield: 0,
   comboCount: 0,
   comboMultiplier: 1,
-  gameOver: false,
+  dashCooldown: 0,
+  ammo: 14,
+  magazineSize: 14,
+  magazineLabel: "Magazine",
+  reloadFor: 0,
+  secondaryCooldown: 0,
+  powerups: [],
+  objective: "",
+  actProgress: 0,
+  banner: "",
+  weapon: "blaster",
+  mode: "normal",
+  noDamage: true,
 };
-const HIGH_SCORE_KEY = "plex-librarian:arcade-high-score";
-// Keep daisyUI from promoting its full slider component into the shared stylesheet just
-// because it sees the native input type as a static source token.
+const ACTIVE_PHASES = new Set<GamePhase>(["encounter", "reward", "boss", "endless"]);
 const SLIDER_INPUT_TYPE = ["ra", "nge"].join("") as React.HTMLInputTypeAttribute;
 
 export function ArcadeGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const musicElementARef = useRef<HTMLAudioElement>(null);
+  const musicElementBRef = useRef<HTMLAudioElement>(null);
+  const stateRef = useRef<GameState | null>(null);
+  const inputRef = useRef<ArcadeInputController | null>(null);
+  const audioRef = useRef<ArcadeAudio | null>(null);
   const frameRef = useRef<number | null>(null);
-  const stateRef = useRef<ArcadeState | null>(null);
-  const keysRef = useRef(new Set<string>());
-  const pointerRef = useRef({ x: 0, y: 0, firing: false });
   const pausedRef = useRef(false);
-  const musicEnabledRef = useRef(true);
-  const volumeRef = useRef(0.28);
+  const settingsRef = useRef<ArcadeSettings>(createDefaultSave().settings);
+  const saveRef = useRef<ArcadeSaveV2 | null>(null);
+  const previousSignalsRef = useRef({
+    phase: "title" as GamePhase,
+    health: 3,
+    score: 0,
+    projectileId: 1,
+    dashCooldown: 0,
+    warningCount: 0,
+    secondaryCooldown: 0,
+    reloadFor: 0,
+    powerupCount: 0,
+    powerupsCollected: 0,
+    endlessRound: 0,
+    upgradeTargetCount: 0,
+  });
+  const [save, setSave] = useState<ArcadeSaveV2>(readArcadeSave);
+  const [summary, setSummary] = useState<GameSummary>(INITIAL_SUMMARY);
   const [paused, setPaused] = useState(false);
-  const [musicEnabled, setMusicEnabled] = useState(true);
-  const [volume, setVolume] = useState(28);
+  const [selectedMode, setSelectedMode] = useState<DifficultyMode>("normal");
+  const [selectedWeapon, setSelectedWeapon] = useState<WeaponKind>("blaster");
+  const [showSettings, setShowSettings] = useState(false);
   const [runId, setRunId] = useState(0);
-  const [summary, setSummary] = useState(INITIAL_SUMMARY);
-  const [highScore, setHighScore] = useState(readHighScore);
+  settingsRef.current = save.settings;
+  saveRef.current = save;
 
-  const restart = useCallback(() => {
-    stateRef.current = null;
-    pointerRef.current.firing = false;
-    pausedRef.current = false;
-    setPaused(false);
-    setSummary(INITIAL_SUMMARY);
-    setRunId((value) => value + 1);
+  const commitSave = useCallback((update: (draft: ArcadeSaveV2) => void) => {
+    setSave((current) => {
+      const next = structuredClone(current);
+      update(next);
+      writeArcadeSave(next);
+      return next;
+    });
+  }, []);
+
+  const setPauseState = useCallback((next: boolean) => {
+    pausedRef.current = next;
+    setPaused(next);
+    if (next) audioRef.current?.pause();
+    else audioRef.current?.resume();
   }, []);
 
   const togglePause = useCallback(() => {
-    if (summary.gameOver) return;
-    pausedRef.current = !pausedRef.current;
-    setPaused(pausedRef.current);
-  }, [summary.gameOver]);
+    const state = stateRef.current;
+    if (!state || !ACTIVE_PHASES.has(state.phase)) return;
+    setPauseState(!pausedRef.current);
+  }, [setPauseState]);
 
-  const startMusic = useCallback(() => {
-    const audio = audioRef.current;
-    if (
-      !audio || !musicEnabledRef.current || pausedRef.current ||
-      stateRef.current?.gameOver
-    ) return;
-
-    audio.volume = volumeRef.current;
-    // Autoplay can be rejected until the first keyboard/pointer interaction. Keep the
-    // preference enabled and retry from those interaction handlers below.
-    void audio.play().catch(() => undefined);
+  const beginAudio = useCallback(() => {
+    const state = stateRef.current;
+    if (!state || state.phase === "title") return;
+    audioRef.current?.startFor(state.actIndex, state.phase, state.endlessRound);
   }, []);
 
-  const toggleMusic = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (musicEnabledRef.current) {
-      audio.pause();
-      musicEnabledRef.current = false;
-      setMusicEnabled(false);
-      return;
-    }
-
-    musicEnabledRef.current = true;
-    setMusicEnabled(true);
-    startMusic();
-  }, [startMusic]);
-
-  const changeVolume = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const nextVolume = Number(event.currentTarget.value);
-    volumeRef.current = nextVolume / 100;
-    setVolume(nextVolume);
-    if (audioRef.current) audioRef.current.volume = volumeRef.current;
-    startMusic();
-  }, [startMusic]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !musicEnabled) return;
-
-    if (paused || summary.gameOver) {
-      audio.pause();
-    } else {
-      startMusic();
-    }
-  }, [musicEnabled, paused, startMusic, summary.gameOver]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    return () => audio?.pause();
+  const beginOpeningAudio = useCallback(() => {
+    const state = stateRef.current;
+    if (!state || state.phase === "title") return;
+    audioRef.current?.startOpeningFor(state.actIndex, state.phase, state.endlessRound);
   }, []);
 
-  useEffect(() => {
-    if (summary.score <= highScore) return;
-    setHighScore(summary.score);
-    try {
-      localStorage.setItem(HIGH_SCORE_KEY, String(summary.score));
-    } catch {
-      // A blocked storage API should never stop the game.
+  const handleBlur = useCallback(() => {
+    const state = stateRef.current;
+    if (state && ACTIVE_PHASES.has(state.phase) && !pausedRef.current) setPauseState(true);
+  }, [setPauseState]);
+
+  const handleTransition = useCallback((state: GameState, previous: GamePhase) => {
+    if (state.phase === previous) return;
+    if (ACTIVE_PHASES.has(state.phase) && !pausedRef.current) {
+      audioRef.current?.startFor(state.actIndex, state.phase, state.endlessRound);
     }
-  }, [highScore, summary.score]);
+    if (state.phase === "reward") audioRef.current?.playSfx("reward");
+    if (state.phase === "boss") audioRef.current?.playSfx("boss");
+
+    if (state.phase === "actComplete") {
+      commitSave((draft) => {
+        recordScore(draft, state.mode, state.score);
+        if (state.actIndex === 0) {
+          draft.unlocks.rail = true;
+          if (!draft.achievements.includes("Backlog cleared")) {
+            draft.achievements.push("Backlog cleared");
+          }
+        }
+        if (state.actIndex < ACTS.length - 1) {
+          draft.checkpoint = {
+            ...checkpointFromState(state),
+            actIndex: state.actIndex + 1,
+            health: Math.min(state.player.maxHealth, state.player.health + 1),
+          };
+        }
+      });
+    } else if (state.phase === "gameOver") {
+      commitSave((draft) => recordScore(draft, state.mode, state.score));
+      audioRef.current?.pause();
+    } else if (state.phase === "victory") {
+      commitSave((draft) => {
+        recordScore(draft, state.mode, state.score);
+        draft.victories[state.mode] += 1;
+        draft.unlocks.array = true;
+        draft.unlocks.endless = true;
+        if (state.mode === "normal") draft.unlocks.hard = true;
+        draft.checkpoint = null;
+        if (!draft.achievements.includes("Library secured")) {
+          draft.achievements.push("Library secured");
+        }
+      });
+      audioRef.current?.playSfx("reward");
+    }
+  }, [commitSave]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const musicElementA = musicElementARef.current;
+    const musicElementB = musicElementBRef.current;
+    if (!canvas || !musicElementA || !musicElementB) return;
     const context = canvas.getContext("2d");
     if (!context) return;
 
+    const launchMusic = claimArcadeLaunchMusic();
+    const audio = new ArcadeAudio(
+      [launchMusic ?? musicElementA, musicElementB],
+      {
+        stale: staleMusicUrl,
+        "backlog-boss": backlogBossMusicUrl,
+        duplicate: duplicateMusicUrl,
+        "duplicate-boss": duplicateBossMusicUrl,
+        rogue: rogueMusicUrl,
+        "rogue-boss": rogueBossMusicUrl,
+      },
+      settingsRef.current,
+      launchMusic ? "stale" : null,
+    );
+    audioRef.current = audio;
     let cssWidth = 1;
     let cssHeight = 1;
-    let lastTime = performance.now();
-    let lastSummaryUpdate = 0;
+    let previousTime = performance.now();
+    let accumulator = 0;
+    let lastSummaryAt = 0;
+    let lastSummaryPhase: GamePhase = stateRef.current?.phase ?? "title";
+    let adoptingLaunchMusic = launchMusic !== null;
+    const fixedStep = 1 / 60;
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -158,106 +267,345 @@ export function ArcadeGame() {
       canvas.height = Math.round(cssHeight * scale);
       context.setTransform(scale, 0, 0, scale, 0, 0);
       if (!stateRef.current) {
-        stateRef.current = createArcadeState(cssWidth, cssHeight);
-        pointerRef.current.x = cssWidth * 0.75;
-        pointerRef.current.y = cssHeight / 2;
+        const currentSave = saveRef.current ?? createDefaultSave();
+        if (currentSave.victories.normal === 0 && currentSave.checkpoint) {
+          stateRef.current = createStateFromCheckpoint(cssWidth, cssHeight, currentSave.checkpoint);
+        } else {
+          stateRef.current = createGameState(cssWidth, cssHeight);
+          if (currentSave.victories.normal === 0) {
+            dispatchGameAction(stateRef.current, {
+              type: "start",
+              mode: "normal",
+              weapon: "blaster",
+            });
+            commitSave((draft) => {
+              draft.checkpoint = checkpointFromState(stateRef.current!);
+            });
+          }
+        }
+        setSummary(summarize(stateRef.current));
       } else {
-        resizeArcadeState(stateRef.current, cssWidth, cssHeight);
+        resizeGameState(stateRef.current, cssWidth, cssHeight);
+      }
+      if (ACTIVE_PHASES.has(stateRef.current.phase)) {
+        if (adoptingLaunchMusic) {
+          adoptingLaunchMusic = false;
+          audio.startOpeningFor(
+            stateRef.current.actIndex,
+            stateRef.current.phase,
+            stateRef.current.endlessRound,
+          );
+        } else {
+          audio.startFor(
+            stateRef.current.actIndex,
+            stateRef.current.phase,
+            stateRef.current.endlessRound,
+          );
+        }
       }
     };
 
+    const input = new ArcadeInputController(canvas, {
+      onInteract: beginAudio,
+      onPause: togglePause,
+      onBlur: handleBlur,
+    });
+    inputRef.current = input;
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     resize();
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.target instanceof HTMLElement &&
-        ["INPUT", "BUTTON", "A"].includes(event.target.tagName)
-      ) return;
-
-      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
-        event.preventDefault();
-      }
-      if (event.code === "KeyP" || event.code === "Escape") {
-        if (!event.repeat) togglePause();
-        return;
-      }
-      if (
-        [
-          "KeyW",
-          "KeyA",
-          "KeyS",
-          "KeyD",
-          "ArrowUp",
-          "ArrowDown",
-          "ArrowLeft",
-          "ArrowRight",
-          "Space",
-        ].includes(event.code)
-      ) startMusic();
-      keysRef.current.add(event.code);
-    };
-    const onKeyUp = (event: KeyboardEvent) => keysRef.current.delete(event.code);
-    const onBlur = () => {
-      keysRef.current.clear();
-      pointerRef.current.firing = false;
-    };
-    globalThis.addEventListener("keydown", onKeyDown);
-    globalThis.addEventListener("keyup", onKeyUp);
-    globalThis.addEventListener("blur", onBlur);
-
     const frame = (time: number) => {
       const state = stateRef.current;
       if (!state) return;
-      const delta = (time - lastTime) / 1000;
-      lastTime = time;
+      const elapsed = Math.min(0.25, Math.max(0, (time - previousTime) / 1000));
+      previousTime = time;
 
-      if (!pausedRef.current) {
-        stepArcade(state, readInput(keysRef.current, pointerRef.current), delta);
+      if (!pausedRef.current && ACTIVE_PHASES.has(state.phase)) {
+        accumulator = Math.min(accumulator + elapsed, fixedStep * 6);
+        while (accumulator >= fixedStep) {
+          stepGame(state, input.read(state.player), fixedStep);
+          accumulator -= fixedStep;
+        }
+      } else {
+        accumulator = 0;
       }
-      drawGame(context, state, cssWidth, cssHeight, pausedRef.current);
 
-      if (time - lastSummaryUpdate > 100 || state.gameOver !== summary.gameOver) {
-        lastSummaryUpdate = time;
-        setSummary({
-          score: state.score,
-          wave: state.wave,
-          health: state.player.health,
-          comboCount: state.comboCount,
-          comboMultiplier: state.comboMultiplier,
-          gameOver: state.gameOver,
-        });
+      renderArcade(context, state, cssWidth, cssHeight, {
+        paused: pausedRef.current,
+        settings: settingsRef.current,
+        touch: input.getTouchVisuals(),
+      });
+
+      const previousSignals = previousSignalsRef.current;
+      handleTransition(state, previousSignals.phase);
+      if (state.phase === "endless" && state.endlessRound !== previousSignals.endlessRound) {
+        audio.startFor(state.actIndex, state.phase, state.endlessRound);
+      }
+      if (state.player.health < previousSignals.health) audio.playSfx("damage");
+      if (state.score > previousSignals.score) audio.playSfx("hit");
+      if (state.nextProjectileId > previousSignals.projectileId) audio.playSfx("fire");
+      if (state.player.dashCooldown > previousSignals.dashCooldown + 0.5) audio.playSfx("dash");
+      if (state.player.secondaryCooldown > previousSignals.secondaryCooldown + 4) {
+        audio.playSfx("beam");
+      }
+      if (state.player.reloadFor > previousSignals.reloadFor + 0.4) audio.playSfx("reload");
+      const powerupCount = Number(state.activePowerups.reflect > 0) +
+        Number(state.activePowerups.prism > 0) +
+        Number(state.activePowerups.shieldFor > 0) +
+        Number(state.temporaryWeapon !== null);
+      if (state.powerupsCollected > previousSignals.powerupsCollected) audio.playSfx("powerup");
+      if (
+        previousSignals.upgradeTargetCount > 0 && state.upgradeTargets.length === 0 &&
+        state.phase === "reward"
+      ) audio.playSfx("select");
+      const warningCount = state.enemies.filter((enemy) => enemy.warningFor > 0).length +
+        state.hazards.filter((hazard) => hazard.armFor > 0).length;
+      if (warningCount > previousSignals.warningCount) audio.playSfx("warning");
+      previousSignalsRef.current = {
+        phase: state.phase,
+        health: state.player.health,
+        score: state.score,
+        projectileId: state.nextProjectileId,
+        dashCooldown: state.player.dashCooldown,
+        warningCount,
+        secondaryCooldown: state.player.secondaryCooldown,
+        reloadFor: state.player.reloadFor,
+        powerupCount,
+        powerupsCollected: state.powerupsCollected,
+        endlessRound: state.endlessRound,
+        upgradeTargetCount: state.upgradeTargets.length,
+      };
+
+      if (time - lastSummaryAt >= 100 || state.phase !== lastSummaryPhase) {
+        lastSummaryAt = time;
+        lastSummaryPhase = state.phase;
+        setSummary(summarize(state));
       }
       frameRef.current = requestAnimationFrame(frame);
     };
     frameRef.current = requestAnimationFrame(frame);
 
+    const onVisibilityChange = () => {
+      if (document.hidden) handleBlur();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       observer.disconnect();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-      globalThis.removeEventListener("keydown", onKeyDown);
-      globalThis.removeEventListener("keyup", onKeyUp);
-      globalThis.removeEventListener("blur", onBlur);
-      keysRef.current.clear();
+      input.destroy();
+      audio.destroy();
+      inputRef.current = null;
+      audioRef.current = null;
     };
-  }, [runId, startMusic, summary.gameOver, togglePause]);
+  }, [beginAudio, commitSave, handleBlur, handleTransition, runId, togglePause]);
 
-  const updatePointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    pointerRef.current.x = event.clientX - bounds.left;
-    pointerRef.current.y = event.clientY - bounds.top;
+  useEffect(() => {
+    audioRef.current?.applySettings(save.settings);
+  }, [save.settings]);
+
+  const startRun = (mode: DifficultyMode, weapon: WeaponKind) => {
+    const state = stateRef.current;
+    if (!state) return;
+    dispatchGameAction(state, { type: "start", mode, weapon });
+    previousSignalsRef.current = {
+      phase: state.phase,
+      health: state.player.health,
+      score: state.score,
+      projectileId: state.nextProjectileId,
+      dashCooldown: 0,
+      warningCount: 0,
+      secondaryCooldown: 0,
+      reloadFor: 0,
+      powerupCount: 0,
+      powerupsCollected: state.powerupsCollected,
+      endlessRound: state.endlessRound,
+      upgradeTargetCount: 0,
+    };
+    commitSave((draft) => {
+      draft.checkpoint = checkpointFromState(state);
+    });
+    setPauseState(false);
+    setSummary(summarize(state));
+    beginOpeningAudio();
   };
 
+  const resumeRun = () => {
+    const checkpoint = save.checkpoint;
+    const canvas = canvasRef.current;
+    if (!checkpoint || !canvas) return;
+    stateRef.current = createStateFromCheckpoint(
+      Math.max(1, canvas.clientWidth),
+      Math.max(1, canvas.clientHeight),
+      checkpoint,
+    );
+    previousSignalsRef.current = {
+      phase: stateRef.current.phase,
+      health: stateRef.current.player.health,
+      score: stateRef.current.score,
+      projectileId: stateRef.current.nextProjectileId,
+      dashCooldown: 0,
+      warningCount: 0,
+      secondaryCooldown: 0,
+      reloadFor: 0,
+      powerupCount: 0,
+      powerupsCollected: stateRef.current.powerupsCollected,
+      endlessRound: stateRef.current.endlessRound,
+      upgradeTargetCount: 0,
+    };
+    setPauseState(false);
+    setSummary(summarize(stateRef.current));
+    beginOpeningAudio();
+  };
+
+  const continueAct = () => {
+    const state = stateRef.current;
+    if (!state) return;
+    dispatchGameAction(state, { type: "continueAct" });
+    if (state.phase === "encounter") {
+      commitSave((draft) => {
+        draft.checkpoint = checkpointFromState(state);
+      });
+    }
+    setSummary(summarize(state));
+    beginAudio();
+  };
+
+  const restartAct = () => {
+    const checkpoint = save.checkpoint;
+    const canvas = canvasRef.current;
+    if (!checkpoint || !canvas) {
+      setRunId((value) => value + 1);
+      return;
+    }
+    stateRef.current = createStateFromCheckpoint(
+      Math.max(1, canvas.clientWidth),
+      Math.max(1, canvas.clientHeight),
+      checkpoint,
+    );
+    setPauseState(false);
+    setSummary(summarize(stateRef.current));
+    beginOpeningAudio();
+  };
+
+  const returnToTitle = () => {
+    const state = stateRef.current;
+    if (!state) return;
+    if (save.victories.normal === 0) {
+      restartAct();
+      return;
+    }
+    dispatchGameAction(state, { type: "returnToTitle" });
+    audioRef.current?.pause();
+    setPauseState(false);
+    setSummary(summarize(state));
+  };
+
+  const startEndless = () => {
+    const state = stateRef.current;
+    if (!state) return;
+    dispatchGameAction(state, { type: "startEndless" });
+    setPauseState(false);
+    setSummary(summarize(state));
+    beginOpeningAudio();
+  };
+
+  const changeSettings = (patch: Partial<ArcadeSettings>) => {
+    commitSave((draft) => Object.assign(draft.settings, patch));
+  };
+
+  const bestScore = Math.max(save.bestScores[summary.mode], summary.score);
+  const act = ACTS[summary.actIndex] ?? ACTS[0];
+  const encounter = getCurrentEncounter(stateRef.current ?? createGameState(1, 1));
+  const active = ACTIVE_PHASES.has(summary.phase);
+  const weapon = WEAPONS.find((candidate) => candidate.id === summary.weapon) ?? WEAPONS[0];
+  const overlay = (() => {
+    if (summary.phase === "title") {
+      return (
+        <TitleScreen
+          save={save}
+          mode={selectedMode}
+          weapon={selectedWeapon}
+          onMode={setSelectedMode}
+          onWeapon={setSelectedWeapon}
+          onStart={() => startRun(selectedMode, selectedWeapon)}
+          onResume={resumeRun}
+          onSettings={() => setShowSettings((value) => !value)}
+          showSettings={showSettings}
+          onChangeSettings={changeSettings}
+        />
+      );
+    }
+    if (summary.phase === "actComplete") {
+      const isFinal = summary.actIndex === ACTS.length - 1;
+      return (
+        <ResultScreen
+          icon={<Check />}
+          eyebrow="Act secured"
+          title={summary.banner}
+          copy={isFinal
+            ? "Every library is clean. One final report remains."
+            : `${ACTS[summary.actIndex + 1].name} is now cleared for entry.`}
+          score={summary.score}
+          primary={isFinal ? "Complete archive" : "Enter next act"}
+          onPrimary={continueAct}
+          onSecondary={save.victories.normal > 0 ? returnToTitle : undefined}
+        />
+      );
+    }
+    if (summary.phase === "gameOver") {
+      return (
+        <ResultScreen
+          icon={<RotateCcw />}
+          eyebrow="Recovery checkpoint available"
+          title="Library overrun"
+          copy={summary.gameOverReason ?? "The cleanup job failed safely."}
+          score={summary.score}
+          primary="Restart this act"
+          onPrimary={restartAct}
+          onSecondary={save.victories.normal > 0 ? returnToTitle : undefined}
+        />
+      );
+    }
+    if (summary.phase === "victory") {
+      return (
+        <ResultScreen
+          icon={<Trophy />}
+          eyebrow={`${DIFFICULTIES[summary.mode].label} complete`}
+          title="Library secured"
+          copy="The Quarantine Array, Hard mode, and endless maintenance are now available."
+          score={summary.score}
+          primary="Start endless mode"
+          onPrimary={startEndless}
+          onSecondary={returnToTitle}
+        />
+      );
+    }
+    if (paused) {
+      return (
+        <PauseScreen
+          onResume={togglePause}
+          onRestart={restartAct}
+          onTitle={save.victories.normal > 0 ? returnToTitle : undefined}
+          settings={save.settings}
+          onChangeSettings={changeSettings}
+        />
+      );
+    }
+    return null;
+  })();
+
   return (
-    <section className="arcade-page flex flex-1 flex-col gap-4" aria-labelledby="arcade-title">
-      <audio ref={audioRef} src={musicUrl} loop preload="none" />
-      <header className="flex flex-wrap items-center justify-between gap-3">
+    <section className="arcade-page flex flex-1 flex-col gap-3" aria-labelledby="arcade-title">
+      <audio ref={musicElementARef} loop preload="none" />
+      <audio ref={musicElementBRef} loop preload="none" />
+      <header className="arcade-heading">
         <div>
-          <div className="flex items-center gap-2 text-sm text-base-content/60">
+          <div className="arcade-kicker">
             <Crosshair className="size-4" /> Classified shelf maintenance
           </div>
-          <h1 id="arcade-title" className="text-2xl font-bold">Stale Content Cleanup</h1>
+          <h1 id="arcade-title">Stale Content Cleanup</h1>
         </div>
         <Link to="/dashboard" className="btn btn-ghost btn-sm gap-2">
           <ArrowLeft className="size-4" /> Back to work
@@ -265,100 +613,180 @@ export function ArcadeGame() {
       </header>
 
       <div className="arcade-hud" aria-live="polite">
-        <span>
-          <strong>{summary.score}</strong> reclaimed
-        </span>
-        <span>
-          Best <strong>{highScore}</strong>
-        </span>
-        <span className={`arcade-combo ${summary.comboMultiplier > 1 ? "is-active" : ""}`}>
-          {summary.comboCount > 1 ? `${summary.comboCount} chain` : "Combo"}{" "}
-          <strong>x{summary.comboMultiplier}</strong>
-        </span>
-        <span>
-          Wave <strong>{summary.wave}</strong>
-        </span>
-        <span className="arcade-health" aria-label={`${summary.health} health remaining`}>
-          {Array.from(
-            { length: 3 },
-            (_, index) => <Heart key={index} className={index < summary.health ? "is-full" : ""} />,
+        <div className="arcade-hud-stat">
+          <small>Reclaimed</small>
+          <strong>{summary.score.toLocaleString()} GB</strong>
+        </div>
+        <div className="arcade-hud-stat">
+          <small>Best · {DIFFICULTIES[summary.mode].label}</small>
+          <strong>{bestScore.toLocaleString()}</strong>
+        </div>
+        <div
+          className={`arcade-hud-stat arcade-combo ${
+            summary.comboMultiplier > 1 ? "is-active" : ""
+          }`}
+        >
+          <small>{summary.comboCount > 1 ? `${summary.comboCount} deletion chain` : "Combo"}</small>
+          <strong>×{summary.comboMultiplier}</strong>
+        </div>
+        <div className="arcade-hud-stat arcade-objective">
+          <small>
+            {summary.phase === "endless"
+              ? "Endless"
+              : `Act ${summary.actIndex + 1} · ${
+                summary.phase === "boss" ? "Boss" : `Job ${summary.encounterIndex + 1}`
+              }`}
+          </small>
+          <strong>{summary.objective || summary.banner || "Awaiting assignment"}</strong>
+          <span>
+            <i style={{ width: `${summary.actProgress * 100}%` }} />
+          </span>
+        </div>
+        <div className="arcade-vitals">
+          <span className="arcade-health" aria-label={`${summary.health} integrity remaining`}>
+            {Array.from(
+              { length: summary.maxHealth },
+              (_, index) => (
+                <Heart key={index} className={index < summary.health ? "is-full" : ""} />
+              ),
+            )}
+          </span>
+          {summary.shield > 0 && (
+            <span className="arcade-shield" title="Snapshot shield">
+              <Shield /> {summary.shield}
+            </span>
           )}
-        </span>
+          {summary.powerups.length > 0 && (
+            <span className="arcade-powerups">
+              {summary.powerups.map((powerup) => (
+                <i key={powerup.label}>
+                  {powerup.label}
+                  {powerup.remaining >= 0 ? ` ${Math.ceil(powerup.remaining)}s` : ""}
+                </i>
+              ))}
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="arcade-cabinet">
+      <div className={`arcade-cabinet arcade-act-${summary.actIndex + 1}`}>
         <canvas
           ref={canvasRef}
           className="arcade-canvas"
           aria-label="Stale Content Cleanup game area"
-          onContextMenu={(event) => event.preventDefault()}
-          onPointerMove={updatePointer}
-          onPointerDown={(event) => {
-            updatePointer(event);
-            startMusic();
-            pointerRef.current.firing = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerUp={() => (pointerRef.current.firing = false)}
-          onPointerCancel={() => (pointerRef.current.firing = false)}
         />
-
-        {(paused || summary.gameOver) && (
-          <div className="arcade-overlay">
-            <div className="arcade-overlay-card">
-              <h2>{summary.gameOver ? "Library overrun" : "Paused"}</h2>
-              <p>
-                {summary.gameOver
-                  ? `${summary.score} GB reclaimed. Best: ${highScore} GB.`
-                  : "The stale files will wait. Probably."}
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm gap-2"
-                onClick={summary.gameOver ? restart : togglePause}
-              >
-                {summary.gameOver
-                  ? (
-                    <>
-                      <RotateCcw className="size-4" /> Try again
-                    </>
-                  )
-                  : (
-                    <>
-                      <Play className="size-4" /> Resume
-                    </>
-                  )}
-              </button>
+        {active && !paused && (
+          <>
+            <div className="arcade-mission-chip">
+              <span>
+                {summary.phase === "reward"
+                  ? "Select maintenance patch"
+                  : summary.phase === "boss"
+                  ? act.boss.name
+                  : encounter?.name}
+              </span>
+              <small>
+                {summary.phase === "reward"
+                  ? "Shoot one patch to install it and continue."
+                  : summary.phase === "boss"
+                  ? act.boss.briefing
+                  : encounter?.briefing}
+              </small>
             </div>
-          </div>
+            <div className="arcade-combat-indicators">
+              <div
+                className={`arcade-magazine-indicator ${
+                  summary.reloadFor > 0 ? "is-reloading" : ""
+                }`}
+              >
+                <span>
+                  <small>{summary.reloadFor > 0 ? "Reloading" : summary.magazineLabel}</small>
+                  <strong>
+                    {summary.reloadFor > 0
+                      ? `${summary.reloadFor.toFixed(1)}s`
+                      : `${summary.ammo}/${summary.magazineSize}`}
+                  </strong>
+                </span>
+              </div>
+              <div
+                className={`arcade-secondary-indicator ${
+                  summary.secondaryCooldown === 0 ? "is-ready" : ""
+                }`}
+              >
+                <kbd>Space</kbd>
+                <span>
+                  <small>Deep Scan</small>
+                  <strong>
+                    {summary.secondaryCooldown === 0
+                      ? "Ready"
+                      : `${summary.secondaryCooldown.toFixed(1)}s`}
+                  </strong>
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="arcade-touch-secondary"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                inputRef.current?.queueSecondary();
+              }}
+              aria-label="Deep Scan Beam"
+            >
+              <Crosshair />
+            </button>
+            <button
+              type="button"
+              className="arcade-touch-dash"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                inputRef.current?.queueDash();
+              }}
+              aria-label="Dash"
+            >
+              <Zap />
+            </button>
+          </>
         )}
+        {overlay && <div className="arcade-overlay">{overlay}</div>}
       </div>
 
       <footer className="arcade-controls">
         <span>
-          <kbd>WASD</kbd> or arrows to move
+          <kbd>WASD</kbd> Move
         </span>
-        <span>Mouse/touch to aim and fire</span>
-        <span className="flex items-center gap-1">
-          <button type="button" className="btn btn-ghost btn-xs gap-1" onClick={toggleMusic}>
-            {musicEnabled ? <Volume2 className="size-3" /> : <VolumeX className="size-3" />}
-            Music {musicEnabled ? "on" : "off"}
+        <span>
+          <kbd>Mouse</kbd> Aim / fire
+        </span>
+        <span>
+          <kbd>Space</kbd> Deep Scan
+        </span>
+        <span>
+          <kbd>R</kbd> Reload
+        </span>
+        <span>
+          <kbd>Shift</kbd> Dash
+        </span>
+        <span className="arcade-loadout">
+          <Gauge /> {weapon.name}
+        </span>
+        <span className="arcade-footer-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs gap-1"
+            onClick={() => changeSettings({ musicEnabled: !save.settings.musicEnabled })}
+          >
+            {save.settings.musicEnabled
+              ? <Volume2 className="size-3" />
+              : <VolumeX className="size-3" />}
+            Music
           </button>
-          <label className="arcade-volume" title={`Music volume: ${volume}%`}>
-            <span className="sr-only">Music volume</span>
-            <input
-              type={SLIDER_INPUT_TYPE}
-              min="0"
-              max="100"
-              step="1"
-              value={volume}
-              className="arcade-volume-input"
-              aria-label="Music volume"
-              onChange={changeVolume}
-              disabled={!musicEnabled}
-            />
-          </label>
-          <button type="button" className="btn btn-ghost btn-xs gap-1" onClick={togglePause}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs gap-1"
+            onClick={togglePause}
+            disabled={!active}
+          >
             {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
             {paused ? "Resume" : "Pause"}
           </button>
@@ -368,251 +796,301 @@ export function ArcadeGame() {
   );
 }
 
-function readInput(
-  keys: Set<string>,
-  pointer: { x: number; y: number; firing: boolean },
-): ArcadeInput {
+function TitleScreen({
+  save,
+  mode,
+  weapon,
+  onMode,
+  onWeapon,
+  onStart,
+  onResume,
+  onSettings,
+  showSettings,
+  onChangeSettings,
+}: {
+  save: ArcadeSaveV2;
+  mode: DifficultyMode;
+  weapon: WeaponKind;
+  onMode: (mode: DifficultyMode) => void;
+  onWeapon: (weapon: WeaponKind) => void;
+  onStart: () => void;
+  onResume: () => void;
+  onSettings: () => void;
+  showSettings: boolean;
+  onChangeSettings: (patch: Partial<ArcadeSettings>) => void;
+}) {
+  return (
+    <div className="arcade-overlay-card arcade-title-card">
+      <div className="arcade-card-icon">
+        <Crosshair />
+      </div>
+      <div className="arcade-overlay-eyebrow">Incident response briefing</div>
+      <h2>Three libraries. One cleanup window.</h2>
+      <p>
+        Clear nine authored jobs, choose a build between sectors, and survive each library’s
+        resident catastrophe.
+      </p>
+
+      {save.checkpoint && (
+        <button type="button" className="arcade-resume" onClick={onResume}>
+          <span>
+            <small>Checkpoint available</small>
+            <strong>Resume {ACTS[save.checkpoint.actIndex].name}</strong>
+          </span>
+          <ChevronRight />
+        </button>
+      )}
+
+      <div className="arcade-setup-grid">
+        <fieldset>
+          <legend>Difficulty</legend>
+          {(["normal", "hard"] as DifficultyMode[]).map((candidate) => {
+            const locked = candidate === "hard" && !save.unlocks.hard;
+            return (
+              <button
+                key={candidate}
+                type="button"
+                className={mode === candidate ? "is-selected" : ""}
+                onClick={() => !locked && onMode(candidate)}
+                disabled={locked}
+              >
+                <strong>{DIFFICULTIES[candidate].label}</strong>
+                <small>
+                  {locked
+                    ? "Win Normal to unlock"
+                    : candidate === "normal"
+                    ? "Learnable pressure"
+                    : "Hostile patterns"}
+                </small>
+              </button>
+            );
+          })}
+        </fieldset>
+        <fieldset>
+          <legend>Cleanup tool</legend>
+          {WEAPONS.map((candidate) => {
+            const locked = candidate.id === "rail"
+              ? !save.unlocks.rail
+              : candidate.id === "array"
+              ? !save.unlocks.array
+              : false;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                className={weapon === candidate.id ? "is-selected" : ""}
+                onClick={() => !locked && onWeapon(candidate.id)}
+                disabled={locked}
+                title={candidate.description}
+              >
+                <strong>{candidate.name}</strong>
+                <small>{locked ? "Locked" : candidate.description}</small>
+              </button>
+            );
+          })}
+        </fieldset>
+      </div>
+
+      {showSettings && <SettingsPanel settings={save.settings} onChange={onChangeSettings} />}
+      <div className="arcade-card-actions">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onSettings}>
+          {showSettings ? "Hide settings" : "Audio & effects"}
+        </button>
+        <button type="button" className="btn btn-primary gap-2" onClick={onStart}>
+          <Play className="size-4" /> Start cleanup
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResultScreen({
+  icon,
+  eyebrow,
+  title,
+  copy,
+  score,
+  primary,
+  onPrimary,
+  onSecondary,
+}: {
+  icon: React.ReactNode;
+  eyebrow: string;
+  title: string;
+  copy: string;
+  score: number;
+  primary: string;
+  onPrimary: () => void;
+  onSecondary?: () => void;
+}) {
+  return (
+    <div className="arcade-overlay-card arcade-result-card">
+      <div className="arcade-card-icon">{icon}</div>
+      <div className="arcade-overlay-eyebrow">{eyebrow}</div>
+      <h2>{title}</h2>
+      <p>{copy}</p>
+      <div className="arcade-result-score">
+        <small>Total reclaimed</small>
+        <strong>{score.toLocaleString()} GB</strong>
+      </div>
+      <div className="arcade-card-actions">
+        {onSecondary && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onSecondary}>
+            Main menu
+          </button>
+        )}
+        <button type="button" className="btn btn-primary btn-sm gap-2" onClick={onPrimary}>
+          {primary} <ChevronRight className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PauseScreen({
+  onResume,
+  onRestart,
+  onTitle,
+  settings,
+  onChangeSettings,
+}: {
+  onResume: () => void;
+  onRestart: () => void;
+  onTitle?: () => void;
+  settings: ArcadeSettings;
+  onChangeSettings: (patch: Partial<ArcadeSettings>) => void;
+}) {
+  return (
+    <div className="arcade-overlay-card arcade-pause-card">
+      <div className="arcade-card-icon">
+        <Pause />
+      </div>
+      <div className="arcade-overlay-eyebrow">Cleanup suspended</div>
+      <h2>Paused</h2>
+      <SettingsPanel settings={settings} onChange={onChangeSettings} />
+      <div className="arcade-card-actions">
+        {onTitle && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onTitle}>
+            Main menu
+          </button>
+        )}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRestart}>
+          Restart act
+        </button>
+        <button type="button" className="btn btn-primary btn-sm gap-2" onClick={onResume}>
+          <Play className="size-4" /> Resume
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({
+  settings,
+  onChange,
+}: {
+  settings: ArcadeSettings;
+  onChange: (patch: Partial<ArcadeSettings>) => void;
+}) {
+  return (
+    <div className="arcade-settings">
+      <label>
+        <span>Music</span>
+        <input
+          type="checkbox"
+          checked={settings.musicEnabled}
+          onChange={(event) => onChange({ musicEnabled: event.currentTarget.checked })}
+        />
+        <input
+          type={SLIDER_INPUT_TYPE}
+          min="0"
+          max="100"
+          value={settings.musicVolume}
+          disabled={!settings.musicEnabled}
+          aria-label="Music volume"
+          onChange={(event) => onChange({ musicVolume: Number(event.currentTarget.value) })}
+        />
+      </label>
+      <label>
+        <span>Effects</span>
+        <input
+          type="checkbox"
+          checked={settings.sfxEnabled}
+          onChange={(event) => onChange({ sfxEnabled: event.currentTarget.checked })}
+        />
+        <input
+          type={SLIDER_INPUT_TYPE}
+          min="0"
+          max="100"
+          value={settings.sfxVolume}
+          disabled={!settings.sfxEnabled}
+          aria-label="Sound effects volume"
+          onChange={(event) => onChange({ sfxVolume: Number(event.currentTarget.value) })}
+        />
+      </label>
+      <label className="arcade-setting-toggle">
+        <span>Reduced effects</span>
+        <input
+          type="checkbox"
+          checked={settings.reducedEffects}
+          onChange={(event) => onChange({ reducedEffects: event.currentTarget.checked })}
+        />
+      </label>
+      <label className="arcade-setting-toggle">
+        <span>Screen shake</span>
+        <input
+          type="checkbox"
+          checked={settings.screenShake}
+          disabled={settings.reducedEffects}
+          onChange={(event) => onChange({ screenShake: event.currentTarget.checked })}
+        />
+      </label>
+    </div>
+  );
+}
+
+function summarize(state: GameState): GameSummary {
   return {
-    movement: {
-      x: Number(keys.has("KeyD") || keys.has("ArrowRight")) -
-        Number(keys.has("KeyA") || keys.has("ArrowLeft")),
-      y: Number(keys.has("KeyS") || keys.has("ArrowDown")) -
-        Number(keys.has("KeyW") || keys.has("ArrowUp")),
-    },
-    aim: pointer,
-    firing: pointer.firing || keys.has("Space"),
+    phase: state.phase,
+    actIndex: state.actIndex,
+    encounterIndex: state.encounterIndex,
+    endlessRound: state.endlessRound,
+    score: state.score,
+    health: state.player.health,
+    maxHealth: state.player.maxHealth,
+    shield: state.player.shield,
+    comboCount: state.comboCount,
+    comboMultiplier: state.comboMultiplier,
+    dashCooldown: state.player.dashCooldown,
+    ammo: state.temporaryWeapon?.ammo ?? state.player.ammo,
+    magazineSize: state.temporaryWeapon?.kind === "machine-gun"
+      ? 48
+      : state.temporaryWeapon?.kind === "super-shot"
+      ? 6
+      : state.player.magazineSize,
+    magazineLabel: state.temporaryWeapon?.kind === "machine-gun"
+      ? "Machine Gun"
+      : state.temporaryWeapon?.kind === "super-shot"
+      ? "Super Shot"
+      : "Magazine",
+    reloadFor: state.player.reloadFor,
+    secondaryCooldown: state.player.secondaryCooldown,
+    powerups: [
+      state.activePowerups.reflect > 0 ? { label: "Reflect", remaining: -1 } : null,
+      state.activePowerups.prism > 0 ? { label: "Prism", remaining: -1 } : null,
+      state.activePowerups.shieldFor > 0
+        ? {
+          label: "Shield",
+          remaining: -1,
+        }
+        : null,
+    ].filter((powerup): powerup is { label: string; remaining: number } => powerup !== null),
+    objective: getObjectiveLabel(state),
+    actProgress: getActProgress(state),
+    banner: state.banner,
+    weapon: state.weapon,
+    mode: state.mode,
+    noDamage: state.noDamage,
+    gameOverReason: state.gameOverReason,
   };
-}
-
-function drawGame(
-  context: CanvasRenderingContext2D,
-  state: ArcadeState,
-  width: number,
-  height: number,
-  paused: boolean,
-) {
-  context.clearRect(0, 0, width, height);
-  drawGrid(context, width, height);
-
-  for (const projectile of state.projectiles) {
-    context.beginPath();
-    context.fillStyle = "#f8d477";
-    context.shadowColor = "#f8d477";
-    context.shadowBlur = 10;
-    context.arc(projectile.x, projectile.y, 3, 0, Math.PI * 2);
-    context.fill();
-  }
-  context.shadowBlur = 0;
-
-  for (const projectile of state.enemyProjectiles) {
-    const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
-    context.strokeStyle = "rgba(255, 91, 116, 0.55)";
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(projectile.x, projectile.y);
-    context.lineTo(
-      projectile.x - (projectile.vx / speed) * 10,
-      projectile.y - (projectile.vy / speed) * 10,
-    );
-    context.stroke();
-    context.fillStyle = "#ff5b74";
-    context.shadowColor = "#ff5b74";
-    context.shadowBlur = 9;
-    context.beginPath();
-    context.arc(projectile.x, projectile.y, 4, 0, Math.PI * 2);
-    context.fill();
-  }
-  context.shadowBlur = 0;
-
-  for (const enemy of state.enemies) drawEnemy(context, enemy);
-  drawPlayer(context, state);
-
-  if (paused) {
-    context.fillStyle = "rgba(7, 12, 20, 0.2)";
-    context.fillRect(0, 0, width, height);
-  }
-}
-
-function drawGrid(context: CanvasRenderingContext2D, width: number, height: number) {
-  context.fillStyle = "#07101a";
-  context.fillRect(0, 0, width, height);
-  context.strokeStyle = "rgba(104, 211, 181, 0.08)";
-  context.lineWidth = 1;
-  context.beginPath();
-  for (let x = 0; x < width; x += 32) {
-    context.moveTo(x, 0);
-    context.lineTo(x, height);
-  }
-  for (let y = 0; y < height; y += 32) {
-    context.moveTo(0, y);
-    context.lineTo(width, y);
-  }
-  context.stroke();
-}
-
-function drawPlayer(context: CanvasRenderingContext2D, state: ArcadeState) {
-  const { player } = state;
-  if (player.invulnerableFor > 0 && Math.floor(player.invulnerableFor * 12) % 2 === 0) return;
-
-  context.save();
-  context.translate(player.x, player.y);
-  context.rotate(player.angle);
-  context.strokeStyle = "#68d3b5";
-  context.fillStyle = "#07101a";
-  context.lineWidth = 3;
-  context.lineCap = "round";
-  context.beginPath();
-  context.arc(0, -9, 5, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-  context.beginPath();
-  context.moveTo(0, -3);
-  context.lineTo(0, 9);
-  context.moveTo(0, 1);
-  context.lineTo(10, 2);
-  context.lineTo(19, 0);
-  context.moveTo(0, 9);
-  context.lineTo(-7, 17);
-  context.moveTo(0, 9);
-  context.lineTo(7, 17);
-  context.stroke();
-  context.restore();
-}
-
-function drawEnemy(context: CanvasRenderingContext2D, enemy: Enemy) {
-  const { x, y, radius } = enemy;
-  context.save();
-  context.translate(x, y);
-  context.lineWidth = 2;
-  context.lineJoin = "round";
-
-  if (enemy.kind === "malicious") drawMaliciousEnemy(context, enemy);
-  else if (enemy.kind === "library") drawLibraryEnemy(context, radius);
-  else if (enemy.kind === "media") drawMediaEnemy(context, radius);
-  else drawFileEnemy(context, radius);
-
-  if (enemy.maxHealth > 1 && enemy.health < enemy.maxHealth) {
-    const width = radius * 1.7;
-    context.fillStyle = "rgba(5, 12, 20, 0.8)";
-    context.fillRect(-width / 2, -radius - 7, width, 3);
-    context.fillStyle = "#f8d477";
-    context.fillRect(-width / 2, -radius - 7, width * (enemy.health / enemy.maxHealth), 3);
-  }
-  context.restore();
-}
-
-function drawMaliciousEnemy(context: CanvasRenderingContext2D, enemy: Enemy) {
-  const telegraphing = (enemy.shootCooldown ?? 1) < 0.35;
-  if (telegraphing) {
-    context.fillStyle = "rgba(255, 70, 99, 0.2)";
-    context.shadowColor = "#ff4663";
-    context.shadowBlur = 18;
-    context.beginPath();
-    context.arc(0, 0, enemy.radius + 7, 0, Math.PI * 2);
-    context.fill();
-    context.shadowBlur = 0;
-  }
-
-  context.save();
-  context.rotate(enemy.aimAngle ?? 0);
-  context.strokeStyle = telegraphing ? "#ff4663" : "#f36b81";
-  context.fillStyle = "#07101a";
-  context.lineWidth = 2.5;
-  context.lineCap = "round";
-  context.beginPath();
-  context.arc(0, -8, 4.5, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-  context.beginPath();
-  context.moveTo(0, -3);
-  context.lineTo(0, 9);
-  context.moveTo(0, 9);
-  context.lineTo(-7, 16);
-  context.moveTo(0, 9);
-  context.lineTo(7, 16);
-  context.stroke();
-
-  context.save();
-  context.rotate(Math.sin(enemy.spinPhase ?? 0) * 0.22);
-  context.beginPath();
-  context.moveTo(0, 1);
-  context.lineTo(10, 0);
-  context.lineTo(17, 0);
-  context.stroke();
-  context.fillStyle = "#ff4663";
-  context.fillRect(14, -2, 6, 4);
-  context.restore();
-  context.restore();
-}
-
-function drawFileEnemy(context: CanvasRenderingContext2D, radius: number) {
-  context.fillStyle = "#ef6f79";
-  context.strokeStyle = "#ffadb4";
-  context.beginPath();
-  context.moveTo(-radius * 0.68, -radius);
-  context.lineTo(radius * 0.25, -radius);
-  context.lineTo(radius * 0.68, -radius * 0.55);
-  context.lineTo(radius * 0.68, radius);
-  context.lineTo(-radius * 0.68, radius);
-  context.closePath();
-  context.fill();
-  context.stroke();
-  context.strokeStyle = "rgba(7, 16, 26, 0.78)";
-  context.lineWidth = 1.5;
-  context.beginPath();
-  context.moveTo(-radius * 0.38, radius * 0.15);
-  context.lineTo(radius * 0.38, radius * 0.15);
-  context.moveTo(-radius * 0.38, radius * 0.48);
-  context.lineTo(radius * 0.2, radius * 0.48);
-  context.stroke();
-}
-
-function drawMediaEnemy(context: CanvasRenderingContext2D, radius: number) {
-  context.fillStyle = "#a978e8";
-  context.strokeStyle = "#d4b7ff";
-  context.beginPath();
-  context.roundRect(-radius, -radius * 0.72, radius * 2, radius * 1.44, 4);
-  context.fill();
-  context.stroke();
-  context.fillStyle = "rgba(7, 16, 26, 0.78)";
-  for (const side of [-1, 1]) {
-    for (const offset of [-0.42, 0, 0.42]) {
-      context.fillRect(side * radius * 0.78 - 1.5, offset * radius - 1.5, 3, 3);
-    }
-  }
-  context.beginPath();
-  context.moveTo(-radius * 0.2, -radius * 0.3);
-  context.lineTo(radius * 0.38, 0);
-  context.lineTo(-radius * 0.2, radius * 0.3);
-  context.closePath();
-  context.fill();
-}
-
-function drawLibraryEnemy(context: CanvasRenderingContext2D, radius: number) {
-  const books = [
-    { y: -0.68, width: 1.5, color: "#f3a65a" },
-    { y: -0.05, width: 1.75, color: "#e8894d" },
-    { y: 0.58, width: 1.38, color: "#d96d45" },
-  ];
-  context.strokeStyle = "#ffd09a";
-  for (const book of books) {
-    const width = radius * book.width;
-    const height = radius * 0.52;
-    context.fillStyle = book.color;
-    context.beginPath();
-    context.roundRect(-width / 2, radius * book.y - height / 2, width, height, 3);
-    context.fill();
-    context.stroke();
-    context.fillStyle = "rgba(7, 16, 26, 0.64)";
-    context.fillRect(-width * 0.3, radius * book.y - 1, width * 0.6, 2);
-  }
-}
-
-function readHighScore() {
-  try {
-    const stored = Number(localStorage.getItem(HIGH_SCORE_KEY));
-    return Number.isFinite(stored) && stored > 0 ? stored : 0;
-  } catch {
-    return 0;
-  }
 }
