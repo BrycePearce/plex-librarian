@@ -38,7 +38,7 @@ export function QuickCleanupPanel({
   isSyncStatusLoading: boolean;
   onClose: () => void;
 }) {
-  const [thresholdDays, setThresholdDays] = useState(730);
+  const [thresholdDays, setThresholdDays] = useState(1_095);
   const [sort, setSort] = useState<StaleQuickCleanupSort>("fileSize");
   const [order, setOrder] = useState<StaleQuickCleanupOrder>("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());

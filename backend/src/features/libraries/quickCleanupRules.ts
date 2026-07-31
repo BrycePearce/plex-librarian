@@ -1,6 +1,6 @@
 import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts';
 
-export const STALE_QUICK_CLEANUP_DEFAULT_DAYS = 730;
+export const STALE_QUICK_CLEANUP_DEFAULT_DAYS = 1_095;
 export const STALE_QUICK_CLEANUP_MIN_DAYS = 180;
 export const STALE_QUICK_CLEANUP_MAX_DAYS = 3_650;
 export const STALE_QUICK_CLEANUP_LIMIT = 200;
