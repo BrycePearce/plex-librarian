@@ -110,7 +110,7 @@ export function CleanupResults({
     <>
       <div className="smart-cleanup-result-grid">
         <HoverPopover
-          content="Plex reports matching runtime, resolution, video, HDR, audio, subtitles, and container, with no more than a 5% bitrate difference. This is a technical match, not proof that the files are byte-identical."
+          content="Versions whose Plex-reported runtime, resolution, video, HDR, audio, subtitles, and container match, with a bitrate difference of 5% or less. This does not prove the files are byte-identical."
           anchorClassName="smart-cleanup-stat-tip"
           anchorTabIndex={0}
         >
@@ -119,7 +119,7 @@ export function CleanupResults({
           <strong>{identicalCount.toLocaleString()}</strong>
         </HoverPopover>
         <HoverPopover
-          content="Matching runtime and core stream characteristics, with a resolution difference, no more than a 15% bitrate difference, or overlapping subtitle coverage. The higher-quality copy is kept by default."
+          content="Versions with matching runtime and core audio/video characteristics, but a resolution difference, a bitrate difference of 15% or less, or some differing subtitle tracks with shared language coverage. The higher-quality copy is kept by default."
           anchorClassName="smart-cleanup-stat-tip"
           anchorTabIndex={0}
         >
@@ -128,7 +128,7 @@ export function CleanupResults({
           <strong>{nearIdenticalCount.toLocaleString()}</strong>
         </HoverPopover>
         <HoverPopover
-          content="Left on the regular duplicates page because of meaningful differences, a container change, a larger bitrate gap, incomplete metadata, or active playback."
+          content="Groups not recommended for automatic cleanup because of meaningful differences, a container change, a larger bitrate gap, incomplete metadata, or active playback. They remain available on the Duplicates page for manual review."
           anchorClassName="smart-cleanup-stat-tip"
           anchorTabIndex={0}
         >
@@ -137,7 +137,7 @@ export function CleanupResults({
           <strong>{excludedCount.toLocaleString()}</strong>
         </HoverPopover>
         <HoverPopover
-          content="Estimated space reclaimed by the versions currently selected for removal. The copy marked Keep remains for every title."
+          content="Estimated space reclaimed by removing the currently selected versions. The version marked Keep remains for each title."
           anchorClassName="smart-cleanup-stat-tip smart-cleanup-savings-stat"
           anchorTabIndex={0}
         >

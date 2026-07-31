@@ -222,7 +222,7 @@ export function QuickCleanupPanel({
 
       <div className="quick-stale-stats">
         <HoverPopover
-          content="Inactive titles that passed every cleanup safeguard and are recommended for removal at the selected threshold."
+          content="Titles inactive for at least the selected period that are safe to review for removal. Titles with duplicate versions, recent requests, or active playback are excluded."
           anchorClassName="quick-stale-stat"
           anchorTabIndex={0}
         >
@@ -231,7 +231,7 @@ export function QuickCleanupPanel({
           <strong>{data.candidateTotal.toLocaleString()}</strong>
         </HoverPopover>
         <HoverPopover
-          content="Combined synced size of all recommended titles. Titles whose size is unavailable are reported separately."
+          content="Total size of all recommended titles, based on the latest Plex sync. Recommended titles with an unknown size are counted separately."
           anchorClassName="quick-stale-stat"
           anchorTabIndex={0}
         >
@@ -244,7 +244,7 @@ export function QuickCleanupPanel({
           </strong>
         </HoverPopover>
         <HoverPopover
-          content="Inactive titles excluded because they have multiple versions, a recent approved or completed Seerr request, or active playback."
+          content="Inactive titles not recommended because they have duplicate versions, a recent approved or completed Seerr request, or are currently playing."
           anchorClassName="quick-stale-stat"
           anchorTabIndex={0}
         >
@@ -253,12 +253,12 @@ export function QuickCleanupPanel({
           <strong>{protectedCount.toLocaleString()}</strong>
         </HoverPopover>
         <HoverPopover
-          content="Recommended titles as a percentage of every title in this library."
+          content="Percentage of all titles in this library that are currently recommended for removal."
           anchorClassName="quick-stale-stat"
           anchorTabIndex={0}
         >
           <Gauge className="size-4 text-secondary" />
-          <span>Of library</span>
+          <span>Library share</span>
           <strong>{formatQuickCleanupLibraryShare(data.candidateTotal, libraryItemCount)}</strong>
         </HoverPopover>
       </div>

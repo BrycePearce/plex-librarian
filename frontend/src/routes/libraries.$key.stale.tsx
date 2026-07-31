@@ -418,7 +418,7 @@ function StalePage() {
             label={
               <span className="library-insight-label">
                 Library match
-                <InfoTip text="Percentage of library items that match the current filters." />
+                <InfoTip text="Percentage of all titles in this library that match the current filters." />
               </span>
             }
             value={formatLibraryMatch(data.total, thisLibraryItemCount)}
