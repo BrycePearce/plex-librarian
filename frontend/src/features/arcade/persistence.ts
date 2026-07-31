@@ -9,8 +9,9 @@ import type {
   WeaponKind,
 } from "./types.ts";
 import { UPGRADES } from "./content.ts";
+import { ARCADE_SAVE_KEY } from "./launchAudio.ts";
 
-export const ARCADE_SAVE_KEY = "plex-librarian:arcade-save-v2";
+export { ARCADE_SAVE_KEY };
 export const LEGACY_HIGH_SCORE_KEY = "plex-librarian:arcade-high-score";
 
 export const DEFAULT_ARCADE_SETTINGS: ArcadeSettings = {

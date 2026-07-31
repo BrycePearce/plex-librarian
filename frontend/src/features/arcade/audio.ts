@@ -32,32 +32,6 @@ const ENDLESS_CUES: MusicCue[] = [
 ];
 const CROSSFADE_MS = 700;
 const CROSSFADE_TICK_MS = 50;
-let primedLaunchMusic: HTMLAudioElement | null = null;
-
-export function primeArcadeLaunchMusic(url: string, volume: number) {
-  if (typeof Audio === "undefined") return null;
-  cancelArcadeLaunchMusic();
-  const element = new Audio(url);
-  element.loop = true;
-  element.preload = "auto";
-  element.volume = Math.max(0, Math.min(1, volume));
-  primedLaunchMusic = element;
-  void element.play().catch(() => undefined);
-  return element;
-}
-
-export function claimArcadeLaunchMusic() {
-  const element = primedLaunchMusic;
-  primedLaunchMusic = null;
-  return element;
-}
-
-export function cancelArcadeLaunchMusic(element?: HTMLAudioElement | null) {
-  if (!primedLaunchMusic || (element && primedLaunchMusic !== element)) return;
-  primedLaunchMusic.pause();
-  primedLaunchMusic.currentTime = 0;
-  primedLaunchMusic = null;
-}
 
 export function resolveMusicCue(
   actIndex: number,

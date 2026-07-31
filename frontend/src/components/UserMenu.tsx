@@ -10,9 +10,12 @@ import type { AuthStatus } from "../lib/api.ts";
 import { avatarUrl } from "../lib/avatar.ts";
 import { useClickOutside } from "../lib/useClickOutside.ts";
 import { useDisconnectTransition } from "../features/auth/DisconnectTransition.tsx";
-import { cancelArcadeLaunchMusic, primeArcadeLaunchMusic } from "../features/arcade/audio.ts";
+import {
+  cancelArcadeLaunchMusic,
+  primeArcadeLaunchMusic,
+  readArcadeLaunchMusicSettings,
+} from "../features/arcade/launchAudio.ts";
 import staleMusicUrl from "../features/arcade/assets/oldschool-action-theme.mp3?url";
-import { readArcadeSave } from "../features/arcade/persistence.ts";
 
 const DISCONNECT_LOADER_MIN_MS = 350;
 
@@ -66,9 +69,9 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
 
   const openArcade = () => {
     setOpen(false);
-    const settings = readArcadeSave().settings;
-    const launchMusic = settings.musicEnabled
-      ? primeArcadeLaunchMusic(staleMusicUrl, settings.musicVolume / 100)
+    const music = readArcadeLaunchMusicSettings();
+    const launchMusic = music.enabled
+      ? primeArcadeLaunchMusic(staleMusicUrl, music.volume / 100)
       : null;
     // Deliberately navigate from the click instead of rendering a Link. The router's
     // global intent preloading would otherwise fetch the game chunk on hover/focus.

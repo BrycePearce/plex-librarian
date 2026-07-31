@@ -28,7 +28,8 @@ import {
   stepGame,
 } from "./engine.ts";
 import { ArcadeInputController } from "./input.ts";
-import { ArcadeAudio, claimArcadeLaunchMusic } from "./audio.ts";
+import { ArcadeAudio } from "./audio.ts";
+import { claimArcadeLaunchMusic } from "./launchAudio.ts";
 import {
   checkpointFromState,
   createDefaultSave,
