@@ -129,6 +129,7 @@ export interface StaleParams {
   order?: "asc" | "desc";
   limit?: number;
   offset?: number;
+  count?: boolean;
 }
 
 export interface UsersParams {

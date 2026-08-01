@@ -18,6 +18,11 @@ import { HistorySyncWarning } from "../components/HistorySyncWarning.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { useItemSelection } from "./-stale/useItemSelection.ts";
 import { useScrollToOffset } from "./-stale/useScrollToOffset.ts";
+import {
+  lastStalePageOffset,
+  requireStaleTotal,
+  reuseStaleTotal,
+} from "./-stale/stalePagination.ts";
 import { StaleFilters } from "./-stale/StaleFilters.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
@@ -158,12 +163,18 @@ function StalePage() {
     data,
     isLoading,
     isFetching,
+    isPlaceholderData,
     isError: isStaleError,
     error: staleError,
     refetch: refetchStale,
   } = useQuery({
     queryKey: queryKeys.stale.list(key, params),
-    queryFn: () => api.libraries.stale(key, { ...params, limit: PAGE_SIZE }),
+    // Visible pages are authoritative: direct deep links and invalidation refetches get
+    // a fresh exact total. Speculative adjacent requests below are the only uncounted ones.
+    queryFn: async () =>
+      requireStaleTotal(
+        await api.libraries.stale(key, { ...params, limit: PAGE_SIZE, count: true }),
+      ),
     placeholderData: (prev) => prev,
     // A 404 here means this library hasn't been synced even once yet (still queued
     // behind others in the current sync) — retrying won't make the row appear any
@@ -177,7 +188,10 @@ function StalePage() {
   // then swaps rows synchronously instead of racing a live fetch against the smooth-scroll
   // animation, which is what caused the row swap to visibly stutter mid-scroll.
   useEffect(() => {
-    if (!data) return;
+    // `placeholderData` belongs to the previous query key. A background fetch can also
+    // be replacing an expired total. Wait for the authoritative visible request before
+    // copying its count into another cache entry.
+    if (!data || isPlaceholderData || isFetching) return;
     const offset = params.offset ?? 0;
     const nextOffset = offset + PAGE_SIZE;
     if (nextOffset < data.total) {
@@ -186,12 +200,16 @@ function StalePage() {
           ...params,
           offset: nextOffset,
         }),
-        queryFn: () =>
-          api.libraries.stale(key, {
-            ...params,
-            limit: PAGE_SIZE,
-            offset: nextOffset,
-          }),
+        queryFn: async () =>
+          reuseStaleTotal(
+            await api.libraries.stale(key, {
+              ...params,
+              limit: PAGE_SIZE,
+              offset: nextOffset,
+              count: false,
+            }),
+            data.total,
+          ),
       });
     }
     const prevOffset = offset - PAGE_SIZE;
@@ -201,15 +219,19 @@ function StalePage() {
           ...params,
           offset: prevOffset,
         }),
-        queryFn: () =>
-          api.libraries.stale(key, {
-            ...params,
-            limit: PAGE_SIZE,
-            offset: prevOffset,
-          }),
+        queryFn: async () =>
+          reuseStaleTotal(
+            await api.libraries.stale(key, {
+              ...params,
+              limit: PAGE_SIZE,
+              offset: prevOffset,
+              count: false,
+            }),
+            data.total,
+          ),
       });
     }
-  }, [data, params, key, qc]);
+  }, [data, isFetching, isPlaceholderData, params, key, qc]);
 
   // Distinguishes "hasn't synced yet" (legitimate, resolves itself once sync reaches
   // this library) from a real failure — also requires a sync to plausibly still be
@@ -270,6 +292,19 @@ function StalePage() {
     params.offset ?? 0,
     (offset) => setParams((p) => ({ ...p, offset })),
   );
+
+  // A bookmarked offset can become invalid after a sync or durable deletion. Correct it
+  // only from a settled counted response; placeholder/background rows may carry an old total.
+  useEffect(() => {
+    if (!data || isPlaceholderData || isFetching) return;
+    const offset = params.offset ?? 0;
+    if (offset === 0 || offset < data.total) return;
+    const correctedOffset = lastStalePageOffset(data.total, PAGE_SIZE);
+    void navigate({
+      search: (previous) => ({ ...previous, offset: correctedOffset }),
+      replace: true,
+    });
+  }, [data, isFetching, isPlaceholderData, navigate, params.offset]);
 
   function openConfirm(items: StaleItem[]) {
     setConfirmItems(items);

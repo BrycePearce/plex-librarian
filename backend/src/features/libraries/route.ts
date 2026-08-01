@@ -189,6 +189,9 @@ router.get('/:key/stale', async (c) => {
   const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 500 : Math.min(rawLimit, 1000);
   const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
   const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+  // Exact counting remains the default API contract. Only the literal value `false`
+  // disables it, so existing and malformed requests retain the safer counted response.
+  const includeTotal = c.req.query('count') !== 'false';
 
   // Literal substring search across the full filtered result set. `instr` deliberately
   // avoids treating user-entered `%` and `_` as LIKE wildcards. SQLite's built-in lower()
@@ -274,11 +277,16 @@ router.get('/:key/stale', async (c) => {
     titleSearchCond,
   );
 
-  const [[{ total }], staleItems] = await Promise.all([
-    db.select({ total: count() }).from(items).where(staleWhere),
-    db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit)
+  const [countRows, pageRows] = await Promise.all([
+    includeTotal ? db.select({ total: count() }).from(items).where(staleWhere) : null,
+    // One bounded look-ahead row makes `hasMore` available without an exact count. It is
+    // trimmed before page enrichment, so the existing <= limit memory/work bound remains.
+    db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit + 1)
       .offset(offset),
   ]);
+  const total = countRows?.[0]?.total ?? null;
+  const hasMore = pageRows.length > limit;
+  const staleItems = hasMore ? pageRows.slice(0, limit) : pageRows;
 
   // Attaches the full per-version breakdown to items whose fileSize is a combined
   // total across multiple synced Plex Media versions (see Duplicate detection in
@@ -333,6 +341,7 @@ router.get('/:key/stale', async (c) => {
       limit,
       offset,
       total,
+      hasMore,
       items: staleItems.map((item) => {
         const versions = versionsByKey.get(item.ratingKey);
         return {

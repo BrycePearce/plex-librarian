@@ -219,7 +219,12 @@ export interface StaleResponse {
   duplicatesOnly: boolean;
   limit: number;
   offset: number;
-  total: number;
+  // Null only when the caller explicitly requests count=false. The default remains an
+  // exact count for backward compatibility with clients that predate optional counting.
+  total: number | null;
+  // Derived from fetching one row beyond `limit`, so it remains available even when the
+  // exact total was intentionally omitted.
+  hasMore: boolean;
   items: StaleItem[];
 }
 
