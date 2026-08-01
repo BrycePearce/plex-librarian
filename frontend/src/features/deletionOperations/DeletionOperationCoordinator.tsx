@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -84,6 +84,12 @@ function DeletionOperationToast({
   const qc = useQueryClient();
   const reduceMotion = useReducedMotion();
   const terminalHandled = useRef(false);
+  const viewingThisOperation = useRouterState({
+    select: (state) =>
+      state.matches.some((match) =>
+        match.routeId === "/deletion-operations/$id" && match.params.id === operation.id
+      ),
+  });
   const query = useQuery({
     queryKey: queryKeys.deletionOperations.detail(operation.id),
     queryFn: () => api.deletionOperations.get(operation.id),
@@ -182,13 +188,15 @@ function DeletionOperationToast({
               max={100}
             />
           )}
-          <Link
-            to="/deletion-operations/$id"
-            params={{ id: operation.id }}
-            className="btn btn-ghost btn-xs mt-2 -ml-2"
-          >
-            {active ? "View progress" : "View details"}
-          </Link>
+          {!viewingThisOperation && (
+            <Link
+              to="/deletion-operations/$id"
+              params={{ id: operation.id }}
+              className="btn btn-ghost btn-xs mt-2 -ml-2"
+            >
+              {active ? "View progress" : "View details"}
+            </Link>
+          )}
         </div>
         {!active && (
           <button
