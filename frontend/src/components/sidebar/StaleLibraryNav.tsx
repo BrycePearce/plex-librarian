@@ -84,7 +84,6 @@ export function StaleLibraryNav({ collapsed }: { collapsed: boolean }) {
       <Link
         to="/libraries/$key/stale"
         params={{ key: library.key }}
-        preload="viewport"
         className={`sidebar-link ${activeKey === library.key ? "is-active" : ""}`}
         aria-current={activeKey === library.key ? "page" : undefined}
         title={collapsed ? `Stale content · ${library.title}` : undefined}
@@ -217,7 +216,6 @@ function StaleLibraryLink({
     <Link
       to="/libraries/$key/stale"
       params={{ key: library.key }}
-      preload="viewport"
       className={`${picker ? "stale-picker-result" : "stale-sidebar-child"} ${
         active ? "is-active" : ""
       }`}

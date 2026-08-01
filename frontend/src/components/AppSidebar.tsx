@@ -120,7 +120,6 @@ function Brand() {
   return (
     <Link
       to="/dashboard"
-      preload="viewport"
       className="sidebar-brand"
       aria-label="Plex Librarian dashboard"
     >
@@ -150,7 +149,6 @@ function SidebarContent({ collapsed, id }: { collapsed: boolean; id: string }) {
                 <Link
                   key={item.to}
                   to={item.to}
-                  preload="viewport"
                   search={"search" in item ? item.search : undefined}
                   className="sidebar-link"
                   activeProps={{
