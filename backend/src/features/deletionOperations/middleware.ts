@@ -5,6 +5,8 @@ import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import {
   DeletionConflictError,
   enqueueDeletionOperation,
+  findWarningOverlap,
+  locallyActiveServerId,
   type NewDeletionTarget,
   repeatedDeletionOperation,
 } from './service.ts';
@@ -73,10 +75,13 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
   if (typeof clientRequestId !== 'string') {
     return c.json({ error: 'clientRequestId is required' }, 400);
   }
-  const activeServer = await resolveActiveServer().catch(() => null);
-  if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
-  const serverId = activeServer.serverId;
-  const serverUrl = activeServer.client.serverUrl;
+  let activeServer: Awaited<ReturnType<typeof resolveActiveServer>> | null = null;
+  const persistedServerId = locallyActiveServerId();
+  if (persistedServerId === null) {
+    activeServer = await resolveActiveServer().catch(() => null);
+    if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+  }
+  const serverId = persistedServerId ?? activeServer!.serverId;
   try {
     if (libraryMatch) {
       const libraryKey = decode(libraryMatch[1]);
@@ -123,6 +128,24 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       };
       const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
       if (repeated) return c.json(repeated, 202);
+      const warningOperationId = findWarningOverlap(
+        serverId,
+        'whole_item',
+        ratingKeys,
+      );
+      if (warningOperationId) {
+        throw new DeletionConflictError(
+          'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first',
+          409,
+          warningOperationId,
+        );
+      }
+      activeServer ??= await resolveActiveServer().catch(() => null);
+      if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+      if (activeServer.serverId !== serverId) {
+        return c.json({ error: 'the active Plex server changed during deletion validation' }, 409);
+      }
+      const serverUrl = activeServer.client.serverUrl;
       const initialQuickCleanupCandidates = quickCleanupDays === null
         ? null
         : validateStaleQuickCleanupSelection(
@@ -295,6 +318,20 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     };
     const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
     if (repeated) return c.json(repeated, 202);
+    const warningOperationId = findWarningOverlap(serverId, kind, [ratingKey], mediaIds);
+    if (warningOperationId) {
+      throw new DeletionConflictError(
+        'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first',
+        409,
+        warningOperationId,
+      );
+    }
+    activeServer ??= await resolveActiveServer().catch(() => null);
+    if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+    if (activeServer.serverId !== serverId) {
+      return c.json({ error: 'the active Plex server changed during deletion validation' }, 409);
+    }
+    const serverUrl = activeServer.client.serverUrl;
     const found = withTransaction((client) => {
       const machine = client.prepare('SELECT machine_identifier FROM servers WHERE id = ?').value<
         [string]
@@ -440,7 +477,10 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     return c.json(result, 202);
   } catch (error) {
     if (error instanceof DeletionConflictError) {
-      return c.json({ error: error.message }, error.status as 400 | 409);
+      return c.json(
+        { error: error.message, ...(error.operationId ? { operationId: error.operationId } : {}) },
+        error.status as 400 | 409,
+      );
     }
     throw error;
   }

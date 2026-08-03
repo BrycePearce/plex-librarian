@@ -69,12 +69,14 @@ let sonarrMonitorMutationCount = 0;
 let sonarrManagedFileShared = false;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
+let fetchCount = 0;
 let historyAccountId: unknown = null;
 const torrentHash = 'a'.repeat(40);
 const wholeDeleteOrder: string[] = [];
 setAutomaticDeletionWorkerForTest(false);
 
 globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+  fetchCount++;
   const url = new URL(String(input));
   if (url.pathname === '/identity') {
     return Promise.resolve(Response.json({ MediaContainer: { machineIdentifier: 'machine-1' } }));
@@ -306,10 +308,6 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 200 }));
     }
   }
-  if (url.pathname.match(/^\/library\/sections\/[^/]+\/refresh$/)) {
-    if (!arrPresent && coordinatedRatingKey) live.delete(coordinatedRatingKey);
-    return Promise.resolve(new Response(null, { status: 200 }));
-  }
   const allLeaves = url.pathname.match(/^\/library\/metadata\/([^/]+)\/allLeaves$/);
   if (allLeaves) {
     const showRatingKey = decodeURIComponent(allLeaves[1]);
@@ -348,6 +346,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     const item = live.get(ratingKey);
     if (init?.method === 'DELETE') {
       if (!item) return Promise.resolve(new Response(null, { status: 404 }));
+      if (failDeleteBeforeMutation) return Promise.reject(new TypeError('fetch failed'));
       wholeDeleteOrder.push(ratingKey);
       live.delete(ratingKey);
       return Promise.resolve(new Response(null, { status: 200 }));
@@ -409,6 +408,7 @@ function reset(): void {
   sonarrManagedFileShared = false;
   qbitPresent = false;
   qbitDeleteCount = 0;
+  fetchCount = 0;
   historyAccountId = null;
   wholeDeleteOrder.length = 0;
   live.clear();
@@ -1419,8 +1419,19 @@ Deno.test('target finalization atomically finalizes its parent operation', async
   const operationId = await enqueueWhole('atomic-parent');
   const target = withTransaction((client) => {
     const row = client.prepare(
-      'SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id WHERE t.operation_id = ?',
-    ).value<[number, string, number, 'whole_item', string, string, number | null]>(operationId)!;
+      'SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size, t.phase, t.removal_confirmed_at, t.plex_attempt_count FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id WHERE t.operation_id = ?',
+    ).value<[
+      number,
+      string,
+      number,
+      'whole_item',
+      string,
+      string,
+      number | null,
+      'validating',
+      number | null,
+      number,
+    ]>(operationId)!;
     client.prepare("UPDATE deletion_targets SET status = 'running' WHERE id = ?").run(row[0]);
     client.prepare("UPDATE deletion_operations SET status = 'running' WHERE id = ?").run(
       operationId,
@@ -1433,6 +1444,9 @@ Deno.test('target finalization atomically finalizes its parent operation', async
       targetKey: row[4],
       snapshot: row[5],
       logicalSize: row[6],
+      phase: row[7],
+      removalConfirmedAt: row[8],
+      plexAttemptCount: row[9],
     };
   });
 
@@ -1486,6 +1500,170 @@ Deno.test('coordinated whole-item deletion converges through Radarr before local
     ),
     0,
   );
+});
+
+Deno.test('coordinated Plex retries are phase-only, bounded, and warning-retryable', async () => {
+  reset();
+  addMovie('coordinated-plex-retry', [11], 10);
+  configureRadarr();
+  coordinatedRatingKey = 'coordinated-plex-retry';
+  arrPresent = true;
+  failDeleteBeforeMutation = true;
+  const operationId = await enqueueCoordinated(['coordinated-plex-retry']);
+
+  const expectedDelays = [15, 60, 300];
+  for (const [index, delay] of expectedDelays.entries()) {
+    const before = Math.floor(Date.now() / 1000);
+    await settle();
+    const operation = getDeletionOperation(operationId, 1)!;
+    const target = (operation.targets as Array<Record<string, unknown>>)[0];
+    assertEquals(operation.status, 'waiting_retry', JSON.stringify(operation));
+    assertEquals(target.plexAttemptCount, index + 1);
+    assert(Number(target.nextRetryAt) >= before + delay);
+    assert(Number(target.nextRetryAt) <= Math.floor(Date.now() / 1000) + delay);
+    assertEquals(arrDeleteCount, 1);
+    makeRetryReady(operationId);
+  }
+
+  await settle();
+  const warned = getDeletionOperation(operationId, 1)!;
+  assertEquals(warned.status, 'completed_with_warning', JSON.stringify(warned));
+  assertEquals(warned.warningCount, 1);
+  assertEquals(warned.removalConfirmedCount, 0);
+  assertEquals(warned.logicalSizeRemoved, 0);
+  assertEquals(
+    (warned.targets as Array<Record<string, unknown>>)[0].plexAttemptCount,
+    4,
+  );
+  assertEquals(arrDeleteCount, 1);
+
+  failDeleteBeforeMutation = false;
+  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  await settle();
+  const completed = getDeletionOperation(operationId, 1)!;
+  assertEquals(completed.status, 'completed', JSON.stringify(completed));
+  assertEquals(completed.removalConfirmedCount, 1);
+  assertEquals(completed.logicalSizeRemoved, 100);
+  assertEquals(arrDeleteCount, 1);
+});
+
+Deno.test('warning retry refreshes aggregates before the worker reclaims the target', async () => {
+  reset();
+  addMovie('warning-aggregate', [11, 12]);
+  const operationId = await enqueueVersion('warning-aggregate');
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'completed_with_warning', phase = 'plex_reconciliation', removal_confirmed_at = 10, plex_attempt_count = 4, warning = 'warning' WHERE operation_id = ?",
+    ).run(operationId);
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'completed_with_warning', warning_count = 1, removal_confirmed_count = 1, logical_size_removed = 50, finished_at = 10 WHERE id = ?",
+    ).run(operationId);
+  });
+
+  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  const retried = getDeletionOperation(operationId, 1)!;
+  assertEquals(retried.status, 'queued');
+  assertEquals(retried.warningCount, 0);
+  assertEquals(retried.removalConfirmedCount, 1);
+  assertEquals(retried.logicalSizeRemoved, 50);
+  assertEquals(retried.finishedAt, null);
+  const target = (retried.targets as Array<Record<string, unknown>>)[0];
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(target.phase, 'plex_reconciliation');
+});
+
+Deno.test('warning overlap is returned before Plex I/O or current projection lookup', async () => {
+  reset();
+  addMovie('warning-pruned', [11, 12]);
+  const operationId = await enqueueVersion('warning-pruned');
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'completed_with_warning', phase = 'plex_reconciliation', warning = 'warning' WHERE operation_id = ?",
+    ).run(operationId);
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'completed_with_warning', warning_count = 1 WHERE id = ?",
+    ).run(operationId);
+    client.prepare(
+      'DELETE FROM item_media_versions WHERE server_id = 1 AND item_rating_key = ? AND media_id = 11',
+    ).run('warning-pruned');
+  });
+  const beforeFetches = fetchCount;
+
+  const response = await app.request('/api/duplicates/movies/warning-pruned/media/11', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+  });
+  assertEquals(response.status, 409);
+  assertEquals(await response.json(), {
+    error: 'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first',
+    operationId,
+  });
+  assertEquals(fetchCount, beforeFetches);
+});
+
+Deno.test('warning retry needs current Arr absence but not a pruned legacy attempt row', async () => {
+  reset();
+  addMovie('warning-pruned-attempt', [11], 10);
+  configureRadarr();
+  coordinatedRatingKey = 'warning-pruned-attempt';
+  arrPresent = true;
+  failDeleteBeforeMutation = true;
+  const operationId = await enqueueCoordinated(['warning-pruned-attempt']);
+  for (let index = 0; index < 4; index++) {
+    await settle();
+    if (index < 3) makeRetryReady(operationId);
+  }
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
+
+  withTransaction((client) => {
+    client.prepare('DELETE FROM arr_delete_attempts WHERE rating_key = ?').run(
+      'warning-pruned-attempt',
+    );
+    client.prepare('DELETE FROM items WHERE server_id = 1 AND rating_key = ?').run(
+      'warning-pruned-attempt',
+    );
+  });
+  live.delete('warning-pruned-attempt');
+  failDeleteBeforeMutation = false;
+
+  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
+        operationId,
+      )?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('warning retry treats a reappeared Arr record as a safety failure', async () => {
+  reset();
+  addMovie('warning-arr-reappeared', [11], 10);
+  configureRadarr();
+  arrPresent = true;
+  const operationId = await enqueueCoordinated(['warning-arr-reappeared']);
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'completed_with_warning', phase = 'plex_reconciliation', plex_attempt_count = 4, warning = 'warning' WHERE operation_id = ?",
+    ).run(operationId);
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'completed_with_warning', warning_count = 1 WHERE id = ?",
+    ).run(operationId);
+  });
+
+  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  await settle();
+  const operation = getDeletionOperation(operationId, 1)!;
+  assertEquals(operation.status, 'needs_attention');
+  assertEquals(operation.warningCount, 0);
+  assertEquals(operation.failedCount, 1);
+  const target = (operation.targets as Array<Record<string, unknown>>)[0];
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(target.phase, 'plex_reconciliation');
 });
 
 Deno.test('coordinated deletion executes verified qBittorrent cleanup before Radarr', async () => {
@@ -2023,15 +2201,17 @@ Deno.test('quick cleanup still converges after a lost destructive response', asy
   await settle();
   assertEquals(
     getDeletionOperation(cleanup.operationIds[0], 1)?.status,
-    'waiting_retry',
+    'completed',
   );
-
-  loseDeleteResponse = false;
-  makeRetryReady(cleanup.operationIds[0]);
-  await settle();
-
-  assertEquals(getDeletionOperation(cleanup.operationIds[0], 1)?.status, 'completed');
   assertEquals(live.get('smart-lost-response')?.Media?.map((media) => media.id), [12]);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
+        cleanup.operationIds[0],
+      )?.[0]
+    ),
+    0,
+  );
 });
 
 Deno.test('legacy Arr intent cannot bypass media-version capacity validation', async () => {
@@ -2817,21 +2997,21 @@ Deno.test('Sonarr reassignment recovers lost file-delete and rescan responses', 
   }
 });
 
-Deno.test('lost destructive response retains projection and reservation until replay confirms absence', async () => {
+Deno.test('lost destructive response finalizes from the same-attempt exact postcondition', async () => {
   reset();
   addMovie('movie-replay');
   loseDeleteResponse = true;
   const operationId = await enqueueVersion('movie-replay');
   await settle();
   const operation = getDeletionOperation(operationId, 1);
-  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
   assertEquals(
     withTransaction((client) =>
       client.prepare(
         'SELECT COUNT(*) FROM item_media_versions WHERE server_id = 1 AND media_id = 11',
       ).value<[number]>()?.[0]
     ),
-    1,
+    0,
   );
   assertEquals(
     withTransaction((client) =>
@@ -2839,22 +3019,13 @@ Deno.test('lost destructive response retains projection and reservation until re
         'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
       ).value<[number]>(operationId)?.[0]
     ),
-    1,
+    0,
   );
-
-  loseDeleteResponse = false;
-  withTransaction((client) =>
-    client.prepare(
-      "UPDATE deletion_targets SET next_retry_at = 0 WHERE operation_id = ? AND status = 'waiting_retry'",
-    ).run(operationId)
-  );
-  await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
   assertEquals(
     withTransaction((client) =>
       client.prepare(
-        'SELECT COUNT(*) FROM item_media_versions WHERE server_id = 1 AND media_id = 11',
-      ).value<[number]>()?.[0]
+        'SELECT COUNT(*) FROM media_removals WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
     ),
     0,
   );
@@ -2885,16 +3056,37 @@ Deno.test('terminal validation failure stays visible and retains the version res
   );
 });
 
+Deno.test('Plex-phase recovery revalidates durable identity before deleting', async () => {
+  reset();
+  addMovie('plex-phase-drift');
+  const operationId = await enqueueVersion('plex-phase-drift');
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET phase = 'plex_reconciliation' WHERE operation_id = ?",
+    ).run(operationId);
+  });
+  live.get('plex-phase-drift')!.title = 'Reused rating key';
+
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0];
+  assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(target.phase, 'plex_reconciliation');
+  assertEquals(target.plexAttemptCount, 1);
+  assertEquals(live.get('plex-phase-drift')?.Media?.map((media) => media.id), [11, 12]);
+});
+
 Deno.test('sync preserves a needs-attention version projection until manual retry finalizes it', async () => {
   reset();
   addMovie('sync-recovery');
   addMovie('sync-survivor', [31, 32]);
-  loseDeleteResponse = true;
+  failDeleteBeforeMutation = true;
   const operationId = await enqueueVersion('sync-recovery');
   await settle();
   assertEquals(getDeletionOperation(operationId, 1)?.status, 'waiting_retry');
 
-  // Model transient retry exhaustion after Plex already committed the deletion.
+  // Model transient retry exhaustion while Plex still exposes the version.
   withTransaction((client) => {
     client.prepare(
       "UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL WHERE operation_id = ?",
@@ -2903,7 +3095,7 @@ Deno.test('sync preserves a needs-attention version projection until manual retr
       "UPDATE deletion_operations SET status = 'needs_attention', next_retry_at = NULL WHERE id = ?",
     ).run(operationId);
   });
-  loseDeleteResponse = false;
+  failDeleteBeforeMutation = false;
 
   const active = await resolveActiveServer();
   await runLibrarySync(active.client, active.serverId, 'movies');

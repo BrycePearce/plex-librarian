@@ -400,6 +400,7 @@ export type DeletionOperationStatus =
   | 'running'
   | 'waiting_retry'
   | 'completed'
+  | 'completed_with_warning'
   | 'needs_attention'
   | 'cancelled';
 
@@ -419,9 +420,22 @@ export interface DeletionOperationTarget {
     | 'running'
     | 'waiting_retry'
     | 'completed'
+    | 'completed_with_warning'
     | 'needs_attention'
     | 'cancelled';
   attemptCount: number;
+  phase:
+    | 'validating'
+    | 'download_cleanup'
+    | 'arr_coordination'
+    | 'plex_reconciliation'
+    | 'finalizing';
+  removalConfirmedAt: number | null;
+  plexReconciledAt: number | null;
+  plexAttemptCount: number;
+  warning: string | null;
+  downloadCleanupSelected: boolean;
+  arrCoordinationConfigured: boolean;
   nextRetryAt: number | null;
   error: string | null;
   logicalSize: number | null;
@@ -435,6 +449,8 @@ export interface DeletionOperation {
   status: DeletionOperationStatus;
   targetCount: number;
   completedCount: number;
+  warningCount: number;
+  removalConfirmedCount: number;
   failedCount: number;
   logicalSizeRemoved: number;
   nextRetryAt: number | null;
@@ -840,9 +856,11 @@ export interface DeletionCompletedPayload {
   operationId: string;
   libraryKey: string;
   kind: 'whole_item' | 'movie_version' | 'episode_version';
-  status: 'completed' | 'needs_attention' | 'cancelled';
+  status: 'completed' | 'completed_with_warning' | 'needs_attention' | 'cancelled';
   targetCount: number;
   completedCount: number;
+  warningCount: number;
+  removalConfirmedCount: number;
   failedCount: number;
   cancelledCount: number;
   logicalSizeRemoved: number;

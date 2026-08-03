@@ -26,10 +26,19 @@ router.post('/:id/cancel', (c) => {
   return c.json(getDeletionOperation(c.req.param('id'), serverId));
 });
 
-router.post('/:id/retry', (c) => {
+router.post('/:id/retry', async (c) => {
   const serverId = c.get('activeServerId');
-  if (serverId === null || !retryDeletionOperation(c.req.param('id'), serverId)) {
+  const body = await c.req.json().catch(() => ({})) as { outcome?: unknown };
+  const outcome = body.outcome ?? 'needs_attention';
+  if (outcome !== 'needs_attention' && outcome !== 'warning') {
+    return c.json({ error: 'outcome must be needs_attention or warning' }, 400);
+  }
+  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
+  if (!getDeletionOperation(c.req.param('id'), serverId)) {
     return c.json({ error: 'operation not found' }, 404);
+  }
+  if (!retryDeletionOperation(c.req.param('id'), serverId, outcome)) {
+    return c.json({ error: 'no matching targets can be retried' }, 409);
   }
   wakeDeletionWorker();
   return c.json(getDeletionOperation(c.req.param('id'), serverId));

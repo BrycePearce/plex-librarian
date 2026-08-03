@@ -34,9 +34,12 @@ function parseMediaIds(body: unknown): number[] | null {
 }
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
+// Smart cleanup performs its durable warning-overlap check before resolving Plex.
+// Register it ahead of the general active-server middleware so a warned target can
+// still be redirected to its original operation after sync prunes the projection.
+router.route('/', smartCleanupRoute);
 router.use('*', withActiveServerId);
 router.route('/', listRoute);
-router.route('/', smartCleanupRoute);
 
 router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
   const ratingKey = c.req.param('ratingKey');

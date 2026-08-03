@@ -6,6 +6,7 @@ type DeletionOperationStatus =
   | 'running'
   | 'waiting_retry'
   | 'completed'
+  | 'completed_with_warning'
   | 'needs_attention'
   | 'cancelled';
 
@@ -16,10 +17,23 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
   ).value<[number, string, DeletionKind, DeletionOperationStatus, number]>(operationId);
   if (!operation) return;
   const counts = client.prepare(
-    "SELECT COUNT(*) FILTER (WHERE status = 'completed'), COUNT(*) FILTER (WHERE status = 'needs_attention'), COUNT(*) FILTER (WHERE status = 'cancelled'), COALESCE(SUM(CASE WHEN status = 'completed' THEN logical_size ELSE 0 END),0), MIN(CASE WHEN status = 'waiting_retry' THEN next_retry_at END), COUNT(*) FILTER (WHERE status = 'running'), COUNT(*) FILTER (WHERE status = 'queued'), COUNT(*) FILTER (WHERE status = 'waiting_retry') FROM deletion_targets WHERE operation_id = ?",
-  ).value<[number, number, number, number, number | null, number, number, number]>(operationId);
+    "SELECT COUNT(*) FILTER (WHERE status = 'completed'), COUNT(*) FILTER (WHERE status = 'completed_with_warning'), COUNT(*) FILTER (WHERE status = 'needs_attention'), COUNT(*) FILTER (WHERE status = 'cancelled'), COUNT(*) FILTER (WHERE removal_confirmed_at IS NOT NULL), COALESCE(SUM(CASE WHEN removal_confirmed_at IS NOT NULL THEN logical_size ELSE 0 END),0), MIN(CASE WHEN status = 'waiting_retry' THEN next_retry_at END), COUNT(*) FILTER (WHERE status = 'running'), COUNT(*) FILTER (WHERE status = 'queued'), COUNT(*) FILTER (WHERE status = 'waiting_retry') FROM deletion_targets WHERE operation_id = ?",
+  ).value<[number, number, number, number, number, number, number | null, number, number, number]>(
+    operationId,
+  );
   if (!counts) return;
-  const [completed, failed, cancelled, size, retryAt, running, queued, retrying] = counts;
+  const [
+    completed,
+    warnings,
+    failed,
+    cancelled,
+    confirmed,
+    size,
+    retryAt,
+    running,
+    queued,
+    retrying,
+  ] = counts;
   const active = running + queued + retrying;
   let status: DeletionOperationStatus;
   let finishedAt: number | null = null;
@@ -27,14 +41,27 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
   else {
     status = failed > 0
       ? 'needs_attention'
+      : warnings > 0
+      ? 'completed_with_warning'
       : completed === 0 && cancelled > 0
       ? 'cancelled'
       : 'completed';
     finishedAt = now;
   }
   client.prepare(
-    'UPDATE deletion_operations SET status = ?, completed_count = ?, failed_count = ?, logical_size_removed = ?, next_retry_at = ?, finished_at = ?, updated_at = ? WHERE id = ?',
-  ).run(status, completed, failed, size, retryAt, finishedAt, now, operationId);
+    'UPDATE deletion_operations SET status = ?, completed_count = ?, warning_count = ?, removal_confirmed_count = ?, failed_count = ?, logical_size_removed = ?, next_retry_at = ?, finished_at = ?, updated_at = ? WHERE id = ?',
+  ).run(
+    status,
+    completed,
+    warnings,
+    confirmed,
+    failed,
+    size,
+    retryAt,
+    finishedAt,
+    now,
+    operationId,
+  );
   if (active === 0 && ['queued', 'running', 'waiting_retry'].includes(operation[3])) {
     client.prepare(
       "INSERT INTO events (server_id, type, payload, created_at) VALUES (?, 'deletion.completed', ?, ?)",
@@ -47,6 +74,8 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
         status,
         targetCount: operation[4],
         completedCount: completed,
+        warningCount: warnings,
+        removalConfirmedCount: confirmed,
         failedCount: failed,
         cancelledCount: cancelled,
         logicalSizeRemoved: size,

@@ -416,10 +416,10 @@ export const api = {
         `/deletion-operations/${encodeURIComponent(id)}/cancel`,
         { method: "POST" },
       ),
-    retry: (id: string) =>
+    retry: (id: string, outcome: "needs_attention" | "warning" = "needs_attention") =>
       apiFetch<DeletionOperation>(
         `/deletion-operations/${encodeURIComponent(id)}/retry`,
-        { method: "POST" },
+        { method: "POST", body: JSON.stringify({ outcome }) },
       ),
   },
   settings: {

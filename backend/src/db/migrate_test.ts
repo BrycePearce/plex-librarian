@@ -2,6 +2,7 @@ import { Database } from '@db/sqlite';
 import { assertEquals } from '@std/assert';
 import { resolve } from '@std/path';
 import { runMigrations } from './migrate.ts';
+import { recoverInterruptedDeletionWork } from '../features/deletionOperations/recovery.ts';
 
 const migrationsDir = resolve(import.meta.dirname!, '../../drizzle');
 
@@ -95,8 +96,17 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
     observationColumns.finalize();
     const targetColumns = sqlite.prepare("PRAGMA table_info('deletion_targets')");
     assertEquals(
-      targetColumns.values().map((column) => column[1]).includes('ambiguous'),
-      false,
+      targetColumns.values().map((column) => column[1]).filter((name) =>
+        name === 'phase' || name === 'removal_confirmed_at' ||
+        name === 'plex_reconciled_at' || name === 'plex_attempt_count' || name === 'warning'
+      ),
+      [
+        'phase',
+        'removal_confirmed_at',
+        'plex_reconciled_at',
+        'plex_attempt_count',
+        'warning',
+      ],
     );
     targetColumns.finalize();
     const requestColumns = sqlite.prepare("PRAGMA table_info('seerr_requests')");
@@ -114,6 +124,69 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
     // directory will clean that disposable fixture without making the test flaky.
     if (Deno.build.os !== 'windows') await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test('0046 backfills legacy deletion milestones and preserves recovery evidence', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE deletion_operations (
+      id TEXT PRIMARY KEY, completed_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0, logical_size_removed INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE deletion_targets (
+      id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER,
+      logical_size INTEGER, updated_at INTEGER NOT NULL, snapshot TEXT NOT NULL
+    );
+    CREATE TABLE media_version_reservations (
+      target_id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL
+    );
+    INSERT INTO deletion_operations VALUES
+      ('legacy', 0, 0, 0, 'running', NULL, 100);
+    INSERT INTO deletion_targets VALUES
+      (1, 'legacy', 'completed', 2, NULL, 50, 10, '{}'),
+      (2, 'legacy', 'cancelled', 0, NULL, 20, 20, '{}'),
+      (3, 'legacy', 'running', 1, NULL, 30, 30, '{}'),
+      (4, 'legacy', 'waiting_retry', 3, 777, 40, 40, '{}'),
+      (5, 'legacy', 'needs_attention', 4, NULL, 60, 50, '{}');
+    INSERT INTO media_version_reservations VALUES (5, 'legacy');
+  `);
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0046_big_the_professor.sql')),
+  );
+  assertEquals(
+    sqlite.prepare(
+      `SELECT id, status, phase, removal_confirmed_at, plex_reconciled_at,
+              plex_attempt_count, next_retry_at, attempt_count
+       FROM deletion_targets ORDER BY id`,
+    ).values(),
+    [
+      [1, 'completed', 'finalizing', 10, 10, 0, null, 2],
+      [2, 'cancelled', 'validating', null, null, 0, null, 0],
+      [3, 'running', 'validating', null, null, 0, null, 1],
+      [4, 'waiting_retry', 'validating', null, null, 0, 777, 3],
+      [5, 'needs_attention', 'validating', null, null, 0, null, 4],
+    ],
+  );
+  assertEquals(
+    sqlite.prepare(
+      `SELECT completed_count, warning_count, removal_confirmed_count,
+              failed_count, logical_size_removed FROM deletion_operations`,
+    ).values(),
+    [[1, 0, 1, 1, 50]],
+  );
+  assertEquals(sqlite.prepare('SELECT target_id FROM media_version_reservations').values(), [[5]]);
+  recoverInterruptedDeletionWork(sqlite, 200);
+  assertEquals(
+    sqlite.prepare(
+      'SELECT status, next_retry_at FROM deletion_targets WHERE id IN (3, 4) ORDER BY id',
+    )
+      .values(),
+    [['queued', null], ['waiting_retry', 777]],
+  );
+  sqlite.close();
 });
 
 Deno.test('0032 consolidates duplicate Arr instances without dropping mappings', async () => {

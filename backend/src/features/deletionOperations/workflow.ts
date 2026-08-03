@@ -7,6 +7,7 @@ import {
   torrentDeleteAttempts,
 } from '../../db/schema.ts';
 import { PlexDeleteError } from '../../integrations/plex/client.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { tryAcquireLibraryOperation } from '../../services/libraryOperations.ts';
 import {
   arrDeleteDisposition,
@@ -46,8 +47,17 @@ import {
   waitForArrManagedPath,
 } from './arrReassignment.ts';
 import { refreshDeletionOperation } from './state.ts';
-import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
-import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
+import {
+  DeletionConvergenceError,
+  type DeletionPhase,
+  type DeletionWorkTarget,
+  PlexReconciliationError,
+} from './types.ts';
+import {
+  type DurableTargetSnapshot,
+  validateDeletionTarget,
+  validateLiveDeletionIdentity,
+} from './validation.ts';
 
 function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
@@ -83,6 +93,7 @@ async function executeCleanup(
   serverId: number,
   associations: ReadonlyMap<string, ResolvedCleanupItem>,
   cleanup: ResolvedCleanupItem,
+  attemptParentRatingKey?: string,
 ): Promise<void> {
   await executeDownloadedFileCleanup(
     cleanup,
@@ -98,7 +109,7 @@ async function executeCleanup(
         ) continue;
         await db.insert(torrentDeleteAttempts).values({
           serverId,
-          ratingKey,
+          ratingKey: attemptParentRatingKey ?? ratingKey,
           instanceKey: job.instanceKey,
           torrentHash: job.jobId,
           startedAt: Math.floor(Date.now() / 1000),
@@ -120,7 +131,7 @@ async function executeCleanup(
         if (!associated.orphanFiles.some((candidate) => candidate.path === file.path)) continue;
         await db.insert(downloadFileDeleteAttempts).values({
           serverId,
-          ratingKey,
+          ratingKey: attemptParentRatingKey ?? ratingKey,
           localPath: file.path,
           rootPath: file.root,
           rootDevice: root.rootDevice,
@@ -144,12 +155,56 @@ async function executeCleanup(
   );
 }
 
+function advancePhase(target: DeletionWorkTarget, phase: DeletionPhase): void {
+  const now = Math.floor(Date.now() / 1000);
+  const changed = withTransaction((client) =>
+    client.prepare(
+      'UPDATE deletion_targets SET phase = ?, updated_at = ? WHERE id = ? AND status = ? AND phase = ?',
+    ).run(phase, now, target.id, 'running', target.phase)
+  );
+  if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
+  target.phase = phase;
+}
+
+function confirmReassignedRemoval(
+  target: DeletionWorkTarget,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  withTransaction((client) => {
+    const changed = client.prepare(
+      `UPDATE deletion_targets
+       SET removal_confirmed_at = COALESCE(removal_confirmed_at, ?),
+           phase = 'plex_reconciliation', updated_at = ?
+       WHERE id = ? AND status = 'running' AND phase = ?`,
+    ).run(now, now, target.id, target.phase);
+    if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
+    client.prepare(
+      'INSERT OR IGNORE INTO media_removals (server_id, operation_id, target_kind, target_key, media_size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(
+      target.serverId,
+      target.operationId,
+      target.targetKind,
+      target.targetKey,
+      target.logicalSize,
+      now,
+    );
+    refreshDeletionOperation(client, target.operationId);
+  });
+  target.phase = 'plex_reconciliation';
+  target.removalConfirmedAt = now;
+}
+
 function finalizeTarget(
   client: SqliteClient,
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
   attributable: boolean,
 ): void {
+  const now = Math.floor(Date.now() / 1000);
+  const changed = client.prepare(
+    "UPDATE deletion_targets SET status = 'completed', phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = NULL, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+  ).run(now, now, now, target.id);
+  if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
   let removed = 0;
   if (target.targetKind === 'whole_item') {
     removed = client.prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?').run(
@@ -177,7 +232,7 @@ function finalizeTarget(
       ).run(size, target.serverId, snapshot.showRatingKey!);
     }
   }
-  if (removed > 0 && attributable) {
+  if (attributable) {
     const kind = target.targetKind === 'whole_item' ? 'item' : target.targetKind;
     client.prepare(
       'INSERT OR IGNORE INTO media_removals (server_id, operation_id, target_kind, target_key, media_size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -187,13 +242,300 @@ function finalizeTarget(
       kind,
       target.targetKey,
       target.logicalSize,
-      Math.floor(Date.now() / 1000),
+      now,
     );
   }
   client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(target.id);
-  client.prepare(
-    "UPDATE deletion_targets SET status = 'completed', next_retry_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND status = 'running'",
-  ).run(Math.floor(Date.now() / 1000), target.id);
+}
+
+function permanentPlexFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = error instanceof PlexDeleteError ? error.status : null;
+  if (status === 401 || status === 403) return true;
+  return /(?:delet(?:e|ion).*(?:disabled|not allowed)|permission|unauthori[sz]ed|forbidden|read[- ]only|policy rejection)/i
+    .test(error.message);
+}
+
+function assertRetainedVersionPostcondition(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  live: NonNullable<Awaited<ReturnType<typeof validateDeletionTarget>>['live']>,
+): void {
+  const liveIds = new Set(live.media.map((entry) => entry.mediaId));
+  const retainedMediaId = persistedRetainedMediaId(snapshot);
+  if (retainedMediaId !== null) {
+    if (!liveIds.has(retainedMediaId)) {
+      throw new PlexReconciliationError(
+        'The retained Plex version disappeared during reconciliation',
+        true,
+        false,
+      );
+    }
+    return;
+  }
+  const operationIds = new Set(snapshot.operationMediaIds ?? [snapshot.mediaId!]);
+  if (![...liveIds].some((mediaId) => !operationIds.has(mediaId))) {
+    throw new PlexReconciliationError(
+      'at least one unselected live Plex version must remain',
+      true,
+      false,
+    );
+  }
+  if (target.targetKind === 'whole_item') {
+    throw new PlexReconciliationError('invalid retained-version check', true, false);
+  }
+}
+
+async function assertWholeItemArrPostcondition(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  if (snapshot.mode === 'coordinated') {
+    const id = externalId(snapshot);
+    if (id === null) {
+      throw new PlexReconciliationError('the target has no Arr external ID', true, false);
+    }
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    for (const entry of arrTargets) {
+      const record = await entry.client.lookup(id);
+      if (record) {
+        throw new PlexReconciliationError(
+          `${entry.instanceName} still reports the item after coordinated deletion`,
+          true,
+          false,
+        );
+      }
+    }
+    return;
+  }
+  if (!snapshot.unmonitorFromArr) return;
+  if (snapshot.tmdbId === null) {
+    throw new PlexReconciliationError('Radarr movie identity is required', true, false);
+  }
+  const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+  let matched = false;
+  for (const entry of arrTargets) {
+    const record = await entry.client.lookup(snapshot.tmdbId);
+    if (!record) continue;
+    const monitorTarget = await entry.client.monitorTarget(record.id);
+    if (!monitorTarget) continue;
+    matched = true;
+    if (monitorTarget.monitored !== false) {
+      throw new PlexReconciliationError(
+        `${entry.instanceName} no longer reports the item as unmonitored`,
+        true,
+        false,
+      );
+    }
+  }
+  if (!matched) {
+    throw new PlexReconciliationError(
+      'No matching Radarr movie was found to confirm unmonitoring',
+      true,
+      false,
+    );
+  }
+}
+
+async function assertVersionArrPostcondition(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  plexClient: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+): Promise<void> {
+  if (snapshot.arrOwnerships === undefined && snapshot.arrReassignments === undefined) return;
+  const selectedIds = new Set(snapshot.selectedMediaIds ?? [snapshot.mediaId!]);
+  const excludedIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
+  const [arrTargets, liveVersions] = await Promise.all([
+    getArrDeleteTargets(target.serverId, snapshot.libraryKey),
+    plexClient.mediaVersionPathPreviews(snapshot.ratingKey),
+  ]);
+  try {
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    const plan = await buildVersionDeletionPlan({
+      mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
+      item: snapshot,
+      selectedMediaIds: selectedIds,
+      liveVersions,
+      arrTargets,
+      resolvedCleanup: null,
+      cleanupConfigured: false,
+      excludedReassignMediaIds: excludedIds,
+      requiredMappingIdentities: snapshot.arrReassignmentMappings,
+      requiredOwnerships: persistedArrOwnershipMap(snapshot),
+      requiredReassignments: persistedArrReassignmentMap(snapshot),
+      ...(snapshot.type === 'episode' && snapshot.seasonIndex != null &&
+          snapshot.episodeIndex != null
+        ? {
+          episodeIdentity: {
+            seasonNumber: snapshot.seasonIndex,
+            episodeNumber: snapshot.episodeIndex,
+          },
+        }
+        : {}),
+    });
+    if (!plan.arrOwnershipValid) {
+      throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
+    }
+    if (
+      snapshot.arrReassignments?.length && plan.preview.arrReassignStatus !== 'resolved'
+    ) {
+      throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment is no longer confirmed');
+    }
+  } catch (error) {
+    throw new PlexReconciliationError(
+      error instanceof Error ? error.message : String(error),
+      true,
+      false,
+    );
+  }
+}
+
+async function reconcilePlexTarget(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  // A committed Plex phase already proves that the initial Arr mutation and its
+  // postcondition completed. Recheck only the current Arr postcondition here: the
+  // projection-backed attempt row may legitimately have been pruned by a later sync.
+  if (target.targetKind === 'whole_item') {
+    await assertWholeItemArrPostcondition(target, snapshot);
+  }
+
+  const attemptStartedAt = Math.floor(Date.now() / 1000);
+  const attemptChanged = withTransaction((client) =>
+    client.prepare(
+      `UPDATE deletion_targets
+       SET plex_attempt_count = plex_attempt_count + 1, updated_at = ?
+       WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'`,
+    ).run(attemptStartedAt, target.id)
+  );
+  if (attemptChanged !== 1) throw new DeletionConvergenceError('deletion target state changed');
+  target.plexAttemptCount++;
+
+  const active = await resolveActiveServer();
+  if (active.serverId !== target.serverId || active.client.serverUrl !== snapshot.serverUrl) {
+    throw new PlexReconciliationError(
+      'the active Plex server changed after deletion was accepted',
+      true,
+      false,
+    );
+  }
+  if (await active.client.identity() !== snapshot.machineIdentifier) {
+    throw new PlexReconciliationError(
+      'Plex machine identity changed after deletion was accepted',
+      true,
+      false,
+    );
+  }
+
+  let live = await active.client.metadataIdentity(snapshot.ratingKey);
+  if (live) {
+    try {
+      await validateLiveDeletionIdentity(active.client, target.targetKind, snapshot, live);
+    } catch (error) {
+      throw new PlexReconciliationError(
+        error instanceof Error ? error.message : String(error),
+        true,
+        false,
+      );
+    }
+  }
+  if (target.targetKind !== 'whole_item') {
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    try {
+      assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    } catch (error) {
+      throw new PlexReconciliationError(
+        error instanceof Error ? error.message : String(error),
+        true,
+        false,
+      );
+    }
+    if (!live) {
+      throw new PlexReconciliationError(
+        'The Plex item disappeared, so a retained version cannot be confirmed',
+        true,
+        false,
+      );
+    }
+    await assertVersionArrPostcondition(target, snapshot, active.client);
+    assertRetainedVersionPostcondition(target, snapshot, live);
+  }
+
+  const alreadyAbsent = target.targetKind === 'whole_item'
+    ? live === null
+    : !live!.media.some((entry) => entry.mediaId === snapshot.mediaId);
+  if (alreadyAbsent) {
+    withTransaction((client) => {
+      finalizeTarget(client, target, snapshot, false);
+      refreshDeletionOperation(client, target.operationId);
+    });
+    return;
+  }
+
+  const sessions = await active.client.activeSessions();
+  if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
+    throw new PlexReconciliationError('cannot delete media with active playback', true);
+  }
+
+  let deleteError: unknown = null;
+  let explicitDeleteSuccess = false;
+  try {
+    if (target.targetKind === 'whole_item') {
+      await active.client.deleteItem(snapshot.ratingKey);
+    } else {
+      await active.client.deleteMedia(snapshot.ratingKey, snapshot.mediaId!);
+    }
+    explicitDeleteSuccess = true;
+  } catch (error) {
+    deleteError = error;
+  }
+
+  try {
+    live = await active.client.metadataIdentity(snapshot.ratingKey);
+  } catch (error) {
+    throw new PlexReconciliationError(
+      `Plex deletion postcondition could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (live) {
+    try {
+      await validateLiveDeletionIdentity(active.client, target.targetKind, snapshot, live);
+    } catch (error) {
+      throw new PlexReconciliationError(
+        error instanceof Error ? error.message : String(error),
+        true,
+        false,
+      );
+    }
+  }
+  if (target.targetKind !== 'whole_item' && live) {
+    assertRetainedVersionPostcondition(target, snapshot, live);
+  }
+  const absent = target.targetKind === 'whole_item'
+    ? live === null
+    : live !== null && !live.media.some((entry) => entry.mediaId === snapshot.mediaId);
+  if (!absent) {
+    if (deleteError) {
+      const message = deleteError instanceof Error ? deleteError.message : String(deleteError);
+      const unsupported404 = deleteError instanceof PlexDeleteError && deleteError.status === 404;
+      throw new PlexReconciliationError(
+        message,
+        unsupported404 || permanentPlexFailure(deleteError),
+      );
+    }
+    throw new PlexReconciliationError(
+      target.targetKind === 'whole_item'
+        ? 'Plex still reports the item after deletion'
+        : 'Plex still reports the media version after deletion',
+    );
+  }
+  withTransaction((client) => {
+    finalizeTarget(client, target, snapshot, explicitDeleteSuccess);
+    refreshDeletionOperation(client, target.operationId);
+  });
 }
 
 async function ensureWholeItemDeleted(
@@ -201,13 +543,18 @@ async function ensureWholeItemDeleted(
   snapshot: DurableTargetSnapshot,
   client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
   liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
-): Promise<boolean> {
-  if (!liveAtStart) return false;
+): Promise<void> {
+  if (!liveAtStart) {
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
+  }
   const sessions = await client.activeSessions();
   if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
     throw new Error('cannot delete media with active playback');
   }
   if (snapshot.unmonitorFromArr) {
+    advancePhase(target, 'arr_coordination');
     if (snapshot.type !== 'movie' || snapshot.tmdbId === null) {
       throw new Error('Radarr movie identity is required before unmonitoring');
     }
@@ -220,21 +567,19 @@ async function ensureWholeItemDeleted(
       if (!monitorTarget) continue;
       matched = true;
       await entry.client.setMonitorTarget(monitorTarget.id, false);
+      const confirmed = await entry.client.lookup(snapshot.tmdbId);
+      const confirmedTarget = confirmed ? await entry.client.monitorTarget(confirmed.id) : null;
+      if (!confirmedTarget || confirmedTarget.monitored !== false) {
+        throw new DeletionConvergenceError('Radarr did not retain the unmonitored state');
+      }
     }
     if (!matched) throw new Error('No matching Radarr movie was found to unmonitor');
   }
   if (snapshot.mode === 'plex-only') {
-    let removedByApp = true;
-    try {
-      await client.deleteItem(snapshot.ratingKey);
-    } catch (error) {
-      if (!(error instanceof PlexDeleteError) || error.status !== 404) throw error;
-      removedByApp = false;
-    }
-    if (await client.metadataIdentity(snapshot.ratingKey)) {
-      throw new DeletionConvergenceError('Plex still reports the item after deletion');
-    }
-    return removedByApp;
+    if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
   }
 
   const item: CoordinatedDeleteItem = snapshot;
@@ -257,7 +602,11 @@ async function ensureWholeItemDeleted(
     arrTargets.map((entry) => entry.instanceId),
   );
 
-  if (snapshot.cleanupDownloads) {
+  if (
+    snapshot.cleanupDownloads &&
+    (target.phase === 'validating' || target.phase === 'download_cleanup')
+  ) {
+    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
     const selectedKeys = snapshot.selectedRatingKeys ?? [snapshot.ratingKey];
     const selected = await db.select({
       ratingKey: items.ratingKey,
@@ -292,9 +641,11 @@ async function ensureWholeItemDeleted(
     await executeCleanup(target.serverId, cleanups, cleanup);
   }
 
+  if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+
   const result = await deleteThroughArr(item, arrTargets, {
     attemptedInstanceIds: attemptedArr.get(snapshot.ratingKey),
-    acceptAlreadyAbsent: true,
+    acceptAlreadyAbsent: false,
     onAttemptStarting: (entry) => markArrAttempt(target.serverId, snapshot, entry),
   });
   const disposition = arrDeleteDisposition(result);
@@ -303,11 +654,8 @@ async function ensureWholeItemDeleted(
       result.failures.map((failure) => failure.error).join('; ') || 'Arr deletion failed',
     );
   }
-  await client.refreshLibrary(snapshot.libraryKey);
-  if (await client.metadataIdentity(snapshot.ratingKey)) {
-    throw new DeletionConvergenceError('Plex has not converged after the Arr deletion');
-  }
-  return result.deletedInstances.some((entry) => !entry.alreadyAbsent);
+  advancePhase(target, 'plex_reconciliation');
+  await reconcilePlexTarget(target, snapshot);
 }
 
 async function ensureVersionDeleted(
@@ -315,7 +663,7 @@ async function ensureVersionDeleted(
   snapshot: DurableTargetSnapshot,
   client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
   liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
-): Promise<boolean> {
+): Promise<void> {
   const selectedIds = new Set(snapshot.selectedMediaIds ?? [snapshot.mediaId!]);
   const excludedReassignIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
   let retainedMediaId = persistedRetainedMediaId(snapshot);
@@ -355,7 +703,9 @@ async function ensureVersionDeleted(
         throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
       }
     }
-    return false;
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
   }
   const sourceVersionIsLive = liveAtStart.media.some((media) => media.mediaId === snapshot.mediaId);
   const liveIds = new Set(liveAtStart.media.map((media) => media.mediaId));
@@ -369,7 +719,11 @@ async function ensureVersionDeleted(
   if (!sourceVersionIsLive && retainedMediaId === null) {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
-    if (arrTargets.length === 0 && snapshot.arrOwnerships === undefined) return false;
+    if (arrTargets.length === 0 && snapshot.arrOwnerships === undefined) {
+      advancePhase(target, 'plex_reconciliation');
+      await reconcilePlexTarget(target, snapshot);
+      return;
+    }
     if (snapshot.arrOwnerships === undefined) {
       throw new Error('The Plex source disappeared before Arr ownership was persisted');
     }
@@ -399,7 +753,9 @@ async function ensureVersionDeleted(
     if (!plan.arrOwnershipValid) {
       throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
     }
-    return false;
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
   }
   if (!hasRemainingVersion) {
     throw new Error('at least one unselected live Plex version must remain');
@@ -459,25 +815,32 @@ async function ensureVersionDeleted(
     }
   }
 
-  if (
-    snapshot.cleanupDownloads || retainedMediaId !== null
-  ) {
+  if (snapshot.cleanupDownloads || retainedMediaId !== null) {
+    if (snapshot.cleanupDownloads && target.phase === 'validating') {
+      advancePhase(target, 'download_cleanup');
+    }
+    if (retainedMediaId !== null && target.phase !== 'arr_coordination') {
+      advancePhase(target, 'arr_coordination');
+    }
     const item: CoordinatedDeleteItem = snapshot;
+    const attemptRatingKey = target.targetKind === 'episode_version'
+      ? snapshot.showRatingKey!
+      : snapshot.ratingKey;
     const [liveVersions, arrTargets, downloadTargets, attemptedJobs, attemptedOrphans] =
       await Promise.all([
         client.mediaVersionPathPreviews(snapshot.ratingKey),
         getArrDeleteTargets(target.serverId, snapshot.libraryKey),
         getDownloadClientTargets(target.serverId),
-        loadAttemptedDownloadJobKeysByItem(target.serverId, [snapshot.ratingKey]),
-        loadAttemptedOrphanFilesByItem(target.serverId, [snapshot.ratingKey]),
+        loadAttemptedDownloadJobKeysByItem(target.serverId, [attemptRatingKey]),
+        loadAttemptedOrphanFilesByItem(target.serverId, [attemptRatingKey]),
       ]);
     const resolvedCleanup = await resolveDownloadCleanup(
       snapshot.ratingKey,
       item,
       arrTargets,
       downloadTargets,
-      attemptedJobs.get(snapshot.ratingKey),
-      attemptedOrphans.get(snapshot.ratingKey),
+      attemptedJobs.get(attemptRatingKey),
+      attemptedOrphans.get(attemptRatingKey),
     );
     const attemptedArr = await loadAttemptedArrInstancesByItem(
       target.serverId,
@@ -508,7 +871,10 @@ async function ensureVersionDeleted(
         }
         : {}),
     });
-    if (snapshot.cleanupDownloads) {
+    if (
+      snapshot.cleanupDownloads &&
+      (target.phase === 'validating' || target.phase === 'download_cleanup')
+    ) {
       if (!plan.cleanup) {
         throw new Error(plan.preview.cleanupReason ?? 'cleanup could not be verified');
       }
@@ -517,6 +883,7 @@ async function ensureVersionDeleted(
         target.serverId,
         new Map([[snapshot.ratingKey, plan.cleanup]]),
         plan.cleanup,
+        attemptRatingKey,
       );
     }
     if (retainedMediaId !== null) {
@@ -532,23 +899,14 @@ async function ensureVersionDeleted(
         client,
         retainedMediaId,
       );
-      await client.refreshLibrary(snapshot.libraryKey);
-      const after = await client.metadataIdentity(snapshot.ratingKey);
-      if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
-        throw new DeletionConvergenceError(
-          'Plex has not converged after the Arr file reassignment',
-        );
-      }
-      if (!after?.media.some((media) => media.mediaId === retainedMediaId)) {
-        throw new Error('The retained Plex version disappeared during Arr reassignment');
-      }
-      return true;
+      confirmReassignedRemoval(target);
+      await reconcilePlexTarget(target, snapshot);
+      return;
     }
   }
 
-  let removedByApp = true;
-  try {
-    await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+  await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+  {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
     if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
@@ -609,6 +967,7 @@ async function ensureVersionDeleted(
         if (candidateMediaId === null) {
           throw new Error('No deterministic retained Arr version is available');
         }
+        if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
         await waitForArrManagedPath(
           target,
           finalPlan,
@@ -616,32 +975,22 @@ async function ensureVersionDeleted(
           client,
           candidateMediaId,
         );
-        await client.refreshLibrary(snapshot.libraryKey);
-        const after = await client.metadataIdentity(snapshot.ratingKey);
-        if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
-          throw new DeletionConvergenceError(
-            'Plex has not converged after the Arr file reassignment',
-          );
-        }
-        if (!after?.media.some((media) => media.mediaId === candidateMediaId)) {
-          throw new Error('The retained Plex version disappeared during Arr reassignment');
-        }
-        return true;
+        confirmReassignedRemoval(target);
+        await reconcilePlexTarget(target, snapshot);
+        return;
       }
     }
     if (!await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds)) {
-      return false;
+      throw new PlexReconciliationError(
+        'at least one unselected live Plex version must remain',
+        true,
+        false,
+      );
     }
-    await client.deleteMedia(snapshot.ratingKey, snapshot.mediaId!);
-  } catch (error) {
-    if (!(error instanceof PlexDeleteError) || error.status !== 404) throw error;
-    removedByApp = false;
   }
-  const after = await client.metadataIdentity(snapshot.ratingKey);
-  if (after?.media.some((media) => media.mediaId === snapshot.mediaId)) {
-    throw new DeletionConvergenceError('Plex still reports the media version after deletion');
-  }
-  return removedByApp;
+  if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+  advancePhase(target, 'plex_reconciliation');
+  await reconcilePlexTarget(target, snapshot);
 }
 
 export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<void> {
@@ -652,19 +1001,22 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   );
   if (!release) throw new DeletionConvergenceError('the library is currently being modified');
   try {
+    const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
+    if (target.phase === 'plex_reconciliation') {
+      await reconcilePlexTarget(target, snapshot);
+      return;
+    }
     const validation = await validateDeletionTarget(target.serverId, target);
-    const attributable = target.targetKind === 'whole_item'
-      ? await ensureWholeItemDeleted(
+    if (target.targetKind === 'whole_item') {
+      await ensureWholeItemDeleted(
         target,
         validation.snapshot,
         validation.client,
         validation.live,
-      )
-      : await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
-    withTransaction((client) => {
-      finalizeTarget(client, target, validation.snapshot, attributable);
-      refreshDeletionOperation(client, target.operationId);
-    });
+      );
+    } else {
+      await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
+    }
   } finally {
     release();
   }

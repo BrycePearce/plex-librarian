@@ -24,14 +24,19 @@ function DeletionOperationPage() {
   const query = useQuery({
     queryKey,
     queryFn: () => api.deletionOperations.get(id),
-    refetchInterval: (state) => deletionOperationPollInterval(state.state.data?.status),
+    refetchInterval: (state) =>
+      deletionOperationPollInterval(
+        state.state.data?.status,
+        state.state.data?.nextRetryAt,
+      ),
   });
   const cancel = useMutation({
     mutationFn: () => api.deletionOperations.cancel(id),
     onSuccess: (data) => qc.setQueryData(queryKey, data),
   });
   const retry = useMutation({
-    mutationFn: () => api.deletionOperations.retry(id),
+    mutationFn: (outcome: "needs_attention" | "warning") =>
+      api.deletionOperations.retry(id, outcome),
     onSuccess: (data) => qc.setQueryData(queryKey, data),
   });
 
@@ -55,9 +60,7 @@ function DeletionOperationPage() {
     operation.targets.find((target) =>
       target.status === "waiting_retry" || target.status === "queued"
     );
-  const done = operation.completedCount + operation.failedCount +
-    operation.targets.filter((target) => target.status === "cancelled").length;
-  const percent = operation.targetCount === 0 ? 0 : Math.round(done / operation.targetCount * 100);
+  const cancelledCount = operation.targets.filter((target) => target.status === "cancelled").length;
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl w-full mx-auto">
@@ -67,7 +70,10 @@ function DeletionOperationPage() {
             Deletion operation
           </p>
           <h1 className="text-3xl font-semibold mt-1">
-            {deletionOperationTitle(operation.status)}
+            {operation.status === "completed_with_warning" &&
+                operation.removalConfirmedCount === 0
+              ? "Arr removal completed; Plex removal was not confirmed"
+              : deletionOperationTitle(operation.status)}
           </h1>
           <p className="text-sm text-base-content/55 mt-2">
             Operation {operation.id}
@@ -80,23 +86,29 @@ function DeletionOperationPage() {
 
       <section className="card bg-base-200 border border-base-300">
         <div className="card-body gap-5">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <Stat
               label="Completed"
               value={`${operation.completedCount} / ${operation.targetCount}`}
             />
             <Stat label="Failed" value={String(operation.failedCount)} />
+            <Stat label="Warning" value={String(operation.warningCount)} />
+            <Stat label="Removed" value={String(operation.removalConfirmedCount)} />
+            <Stat
+              label="Updating Plex"
+              value={String(
+                operation.targets.filter((target) =>
+                  target.phase === "plex_reconciliation" &&
+                  activeDeletionStatuses.has(target.status)
+                ).length,
+              )}
+            />
             <Stat
               label="Logical size removed"
               value={formatKilobytes(operation.logicalSizeRemoved)}
             />
-            <Stat label="Progress" value={`${percent}%`} />
+            <Stat label="Cancelled" value={String(cancelledCount)} />
           </div>
-          <progress
-            className="progress progress-primary w-full"
-            value={done}
-            max={operation.targetCount}
-          />
           {current && activeDeletionStatuses.has(operation.status) && (
             <div className="flex items-center gap-3 rounded-lg bg-base-100 px-4 py-3">
               {current.status === "waiting_retry"
@@ -106,9 +118,11 @@ function DeletionOperationPage() {
                 <p className="font-medium truncate">{current.title}</p>
                 <p className="text-sm text-base-content/55">
                   {current.status === "waiting_retry"
-                    ? "Waiting to retry"
+                    ? current.phase === "plex_reconciliation"
+                      ? "Updating Plex — waiting to retry"
+                      : "Waiting to retry"
                     : current.status === "running"
-                    ? "Deleting"
+                    ? current.phase === "plex_reconciliation" ? "Updating Plex" : "Deleting"
                     : "Queued"}
                   {current.nextRetryAt
                     ? ` · retrying ${
@@ -138,9 +152,19 @@ function DeletionOperationPage() {
                 type="button"
                 className="btn btn-primary btn-sm"
                 disabled={retry.isPending}
-                onClick={() => retry.mutate()}
+                onClick={() => retry.mutate("needs_attention")}
               >
                 <RotateCcw className="size-4" />Retry failed targets
+              </button>
+            )}
+            {operation.warningCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+              <button
+                type="button"
+                className="btn btn-warning btn-sm"
+                disabled={retry.isPending}
+                onClick={() => retry.mutate("warning")}
+              >
+                <RotateCcw className="size-4" />Retry Plex cleanup
               </button>
             )}
             <Link to="/dashboard" className="btn btn-ghost btn-sm">
@@ -153,33 +177,91 @@ function DeletionOperationPage() {
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Targets</h2>
         {operation.targets.map((target) => (
-          <div
+          <details
             key={target.id}
-            className="flex items-start gap-3 rounded-lg border border-base-300 bg-base-100 px-4 py-3"
+            open={target.status !== "completed"}
+            className="rounded-lg border border-base-300 bg-base-100"
           >
-            {target.status === "completed"
-              ? <CheckCircle2 className="size-5 text-success mt-0.5" />
-              : target.status === "needs_attention"
-              ? <AlertTriangle className="size-5 text-error mt-0.5" />
-              : target.status === "cancelled"
-              ? <XCircle className="size-5 text-base-content/40 mt-0.5" />
-              : <Clock3 className="size-5 text-info mt-0.5" />}
-            <div className="min-w-0 flex-1">
-              <div className="flex justify-between gap-3">
-                <p className="font-medium truncate">{target.title}</p>
-                <span className="text-xs uppercase text-base-content/45">
-                  {target.status.replace(/_/g, " ")}
-                </span>
+            <summary className="flex cursor-pointer list-none items-start gap-3 px-4 py-3">
+              {target.status === "completed"
+                ? <CheckCircle2 className="size-5 text-success mt-0.5" />
+                : target.status === "needs_attention"
+                ? <AlertTriangle className="size-5 text-error mt-0.5" />
+                : target.status === "completed_with_warning"
+                ? <AlertTriangle className="size-5 text-warning mt-0.5" />
+                : target.status === "cancelled"
+                ? <XCircle className="size-5 text-base-content/40 mt-0.5" />
+                : <Clock3 className="size-5 text-info mt-0.5" />}
+              <div className="min-w-0 flex-1">
+                <div className="flex justify-between gap-3">
+                  <p className="font-medium truncate">{target.title}</p>
+                  <span className="text-xs uppercase text-base-content/45">
+                    {target.status.replace(/_/g, " ")}
+                  </span>
+                </div>
+                <p className="text-sm text-base-content/50">
+                  {target.logicalSize != null ? formatKilobytes(target.logicalSize) : ""}
+                </p>
+                {target.error && target.phase !== "plex_reconciliation" && (
+                  <p className="text-sm text-error mt-1">{target.error}</p>
+                )}
+                {target.warning && <p className="text-sm text-warning mt-1">{target.warning}</p>}
+                <p className="text-xs text-base-content/45 mt-2">
+                  {phaseLabel(target.phase)} ·{" "}
+                  {target.removalConfirmedAt ? "Media removed" : "Removal pending"}
+                  {target.nextRetryAt
+                    ? ` · next attempt ${new Date(target.nextRetryAt * 1000).toLocaleString()}`
+                    : ""}
+                </p>
+                <p className="text-xs text-base-content/45 mt-1">
+                  Last confirmed action: {lastConfirmedAction(target)}
+                </p>
+                {target.phase === "plex_reconciliation" && target.error && (
+                  <p className="text-xs text-error mt-1">Last Plex error: {target.error}</p>
+                )}
               </div>
-              <p className="text-sm text-base-content/50">
-                {target.logicalSize != null ? formatKilobytes(target.logicalSize) : ""}
-              </p>
-              {target.error && <p className="text-sm text-error mt-1">{target.error}</p>}
-            </div>
-          </div>
+            </summary>
+            <TargetTimeline target={target} />
+          </details>
         ))}
       </section>
     </div>
+  );
+}
+
+function TargetTimeline({
+  target,
+}: {
+  target: import("@plex-librarian/shared/types.ts").DeletionOperationTarget;
+}) {
+  const stages = [
+    ["validating", "Safety checks"],
+    ...(target.downloadCleanupSelected ? [["download_cleanup", "Download cleanup"]] as const : []),
+    ...(target.arrCoordinationConfigured
+      ? [["arr_coordination", "Sonarr/Radarr coordination"]] as const
+      : []),
+    ["plex_reconciliation", "Plex reconciliation"],
+    ["finalizing", "Finalization"],
+  ] as const;
+  const current = stages.findIndex(([phase]) => phase === target.phase);
+  return (
+    <ol className="grid gap-1 border-t border-base-300 px-12 py-3 text-xs text-base-content/55">
+      {stages.map(([phase, label], index) => (
+        <li
+          key={phase}
+          className={index < current || target.status === "completed"
+            ? "text-success"
+            : index === current
+            ? "font-medium text-base-content"
+            : ""}
+        >
+          {index < current || target.status === "completed" ? "✓" : index === current ? "→" : "○"}
+          {" "}
+          {label}
+        </li>
+      ))}
+      <li>Plex attempts: {target.plexAttemptCount}</li>
+    </ol>
   );
 }
 
@@ -197,6 +279,31 @@ function Stat({ label, value }: { label: string; value: string }) {
 function statusBadge(status: string): string {
   if (status === "completed") return "badge-success";
   if (status === "needs_attention") return "badge-warning";
+  if (status === "completed_with_warning") return "badge-warning";
   if (status === "cancelled") return "badge-ghost";
   return "badge-info";
+}
+
+function phaseLabel(phase: string): string {
+  return ({
+    validating: "Safety checks",
+    download_cleanup: "Download cleanup",
+    arr_coordination: "Sonarr/Radarr coordination",
+    plex_reconciliation: "Plex reconciliation",
+    finalizing: "Finalization",
+  } as Record<string, string>)[phase] ?? phase;
+}
+
+function lastConfirmedAction(
+  target: import("@plex-librarian/shared/types.ts").DeletionOperationTarget,
+): string {
+  if (target.plexReconciledAt) return "Plex reconciliation confirmed";
+  if (target.removalConfirmedAt) return "Media removal confirmed";
+  if (target.phase === "plex_reconciliation" && target.arrCoordinationConfigured) {
+    return "Sonarr/Radarr coordination confirmed";
+  }
+  if (target.phase === "arr_coordination" && target.downloadCleanupSelected) {
+    return "Download cleanup confirmed";
+  }
+  return "Safety checks confirmed";
 }

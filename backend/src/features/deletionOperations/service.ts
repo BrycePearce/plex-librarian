@@ -4,7 +4,11 @@ import { activeServerMatches } from './coordination.ts';
 import { isRetryableDeletionFailure } from './policy.ts';
 import { recoverInterruptedDeletionWork } from './recovery.ts';
 import { refreshDeletionOperation } from './state.ts';
-import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
+import {
+  DeletionConvergenceError,
+  type DeletionWorkTarget,
+  PlexReconciliationError,
+} from './types.ts';
 import { DeletionValidationError } from './validation.ts';
 import { ensureDeletionTarget } from './workflow.ts';
 
@@ -14,6 +18,7 @@ export type DeletionOperationStatus =
   | 'running'
   | 'waiting_retry'
   | 'completed'
+  | 'completed_with_warning'
   | 'needs_attention'
   | 'cancelled';
 
@@ -36,12 +41,69 @@ export interface NewDeletionOperation {
 }
 
 export class DeletionConflictError extends Error {
-  constructor(message: string, readonly status = 409) {
+  constructor(message: string, readonly status = 409, readonly operationId?: string) {
     super(message);
   }
 }
 
+export function locallyActiveServerId(): number | null {
+  return withTransaction((client) =>
+    client.prepare('SELECT active_server_id FROM settings WHERE id = 1').value<[number | null]>()
+      ?.[0] ?? null
+  );
+}
+
+export function findWarningOverlap(
+  serverId: number,
+  requestedKind: DeletionKind,
+  ratingKeys: readonly string[],
+  mediaIds: readonly number[] = [],
+): string | null {
+  const requestedMedia = new Set(mediaIds);
+  return withTransaction((client) => {
+    const requestedRoots = new Set(ratingKeys);
+    if (ratingKeys.length > 0) {
+      const placeholders = ratingKeys.map(() => '?').join(',');
+      for (
+        const [showRatingKey] of client.prepare(
+          `SELECT DISTINCT show_rating_key FROM episode_media_versions
+           WHERE server_id = ? AND episode_rating_key IN (${placeholders})`,
+        ).values<[string]>(serverId, ...ratingKeys)
+      ) requestedRoots.add(showRatingKey);
+    }
+    const rows = client.prepare(
+      `SELECT t.operation_id, t.target_kind, t.snapshot
+       FROM deletion_targets t
+       JOIN deletion_operations o ON o.id = t.operation_id
+       WHERE o.server_id = ? AND t.status = 'completed_with_warning'`,
+    ).values<[string, DeletionKind, string]>(serverId);
+    for (const [operationId, targetKind, rawSnapshot] of rows) {
+      const snapshot = JSON.parse(rawSnapshot) as {
+        ratingKey?: string;
+        showRatingKey?: string | null;
+        mediaId?: number;
+        arrReassignments?: Array<{ retainedMediaId?: number }>;
+      };
+      const warningRoots = [snapshot.ratingKey, snapshot.showRatingKey].filter(
+        (value): value is string => typeof value === 'string',
+      );
+      if (!warningRoots.some((root) => requestedRoots.has(root))) continue;
+      if (requestedKind === 'whole_item' || targetKind === 'whole_item') return operationId;
+      if (snapshot.mediaId !== undefined && requestedMedia.has(snapshot.mediaId)) {
+        return operationId;
+      }
+      if (
+        snapshot.arrReassignments?.some((entry) =>
+          entry.retainedMediaId !== undefined && requestedMedia.has(entry.retainedMediaId)
+        )
+      ) return operationId;
+    }
+    return null;
+  });
+}
+
 const RETRY_DELAYS = [60, 300, 1800];
+const PLEX_RETRY_DELAYS = [15, 60, 300];
 let workerRunning = false;
 let wakeTimer: ReturnType<typeof setTimeout> | null = null;
 let automaticWake = true;
@@ -206,37 +268,52 @@ function projectionRoot(target: NewDeletionTarget): string | null {
 
 function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperation): void {
   const unresolved = client.prepare(
-    `SELECT t.target_kind, t.target_key, t.snapshot
+    `SELECT t.operation_id, t.status, t.target_kind, t.target_key, t.snapshot
      FROM deletion_targets t
      JOIN deletion_operations o ON o.id = t.operation_id
-     WHERE o.server_id = ? AND o.library_key = ? AND t.status = 'needs_attention'`,
-  ).values<[DeletionKind, string, string]>(input.serverId, input.libraryKey).map((row) => {
-    const snapshot = JSON.parse(row[2]) as Record<string, unknown>;
-    const root = row[0] === 'episode_version'
+     WHERE o.server_id = ? AND o.library_key = ? AND t.status IN ('needs_attention','completed_with_warning')`,
+  ).values<[string, 'needs_attention' | 'completed_with_warning', DeletionKind, string, string]>(
+    input.serverId,
+    input.libraryKey,
+  ).map((row) => {
+    const snapshot = JSON.parse(row[4]) as Record<string, unknown>;
+    const root = row[2] === 'episode_version'
       ? (typeof snapshot.showRatingKey === 'string' ? snapshot.showRatingKey : null)
       : (typeof snapshot.ratingKey === 'string' ? snapshot.ratingKey : null);
     const reassignments = Array.isArray(snapshot.arrReassignments)
       ? snapshot.arrReassignments as Array<Record<string, unknown>>
       : [];
-    const protectedMediaId = typeof reassignments[0]?.retainedMediaId === 'number'
-      ? reassignments[0].retainedMediaId as number
-      : null;
-    return { kind: row[0], key: row[1], root, protectedMediaId };
+    const protectedMediaIds = new Set(
+      reassignments.flatMap((entry) =>
+        typeof entry.retainedMediaId === 'number' ? [entry.retainedMediaId] : []
+      ),
+    );
+    return {
+      operationId: row[0],
+      status: row[1],
+      kind: row[2],
+      key: row[3],
+      root,
+      protectedMediaIds,
+    };
   });
 
   for (const target of input.targets) {
     const root = projectionRoot(target);
     const mediaId = target.reservation?.mediaId ?? null;
-    if (
-      unresolved.some((existing) =>
-        existing.key === target.key ||
-        (root !== null && existing.root === root &&
-          (existing.kind === 'whole_item' || target.kind === 'whole_item' ||
-            (mediaId !== null && existing.protectedMediaId === mediaId)))
-      )
-    ) {
+    const overlap = unresolved.find((existing) =>
+      existing.key === target.key ||
+      (root !== null && existing.root === root &&
+        (existing.kind === 'whole_item' || target.kind === 'whole_item' ||
+          (mediaId !== null && existing.protectedMediaIds.has(mediaId))))
+    );
+    if (overlap) {
       throw new DeletionConflictError(
-        'this item has a deletion target that needs attention; retry it from Activity first',
+        overlap.status === 'completed_with_warning'
+          ? 'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first'
+          : 'this item has a deletion target that needs attention; retry it from Activity first',
+        409,
+        overlap.operationId,
       );
     }
   }
@@ -385,7 +462,8 @@ function claimTarget(): DeletionWorkTarget | null {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
     const row = client.prepare(
-      `SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size
+      `SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size,
+              t.phase, t.removal_confirmed_at, t.plex_attempt_count
        FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id
        WHERE (t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?))
          AND (
@@ -398,7 +476,18 @@ function claimTarget(): DeletionWorkTarget | null {
            )
          )
        ORDER BY o.created_at, t.ordinal LIMIT 1`,
-    ).value<[number, string, number, DeletionKind, string, string, number | null]>(now);
+    ).value<[
+      number,
+      string,
+      number,
+      DeletionKind,
+      string,
+      string,
+      number | null,
+      DeletionWorkTarget['phase'],
+      number | null,
+      number,
+    ]>(now);
     if (!row) return null;
     client.prepare(
       "UPDATE deletion_targets SET status = 'running', attempt_count = attempt_count + 1, next_retry_at = NULL, error = NULL, updated_at = ? WHERE id = ?",
@@ -414,6 +503,9 @@ function claimTarget(): DeletionWorkTarget | null {
       targetKey: row[4],
       snapshot: row[5],
       logicalSize: row[6],
+      phase: row[7],
+      removalConfirmedAt: row[8],
+      plexAttemptCount: row[9],
     };
   });
 }
@@ -429,7 +521,39 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
     const status = typeof (error as { status?: unknown })?.status === 'number'
       ? (error as { status: number }).status
       : null;
-    const permanent = error instanceof DeletionValidationError;
+    const phaseRow = client.prepare(
+      'SELECT phase, plex_attempt_count, removal_confirmed_at, snapshot FROM deletion_targets WHERE id = ?',
+    ).value<[DeletionWorkTarget['phase'], number, number | null, string]>(target.id);
+    const inPlexReconciliation = phaseRow?.[0] === 'plex_reconciliation';
+    const permanent = error instanceof DeletionValidationError ||
+      (error instanceof PlexReconciliationError && error.permanent);
+    if (inPlexReconciliation && phaseRow) {
+      const snapshot = JSON.parse(phaseRow[3]) as { mode?: string; arrReassignments?: unknown[] };
+      const warningEligible =
+        (target.targetKind === 'whole_item' && snapshot.mode === 'coordinated') ||
+        (target.targetKind !== 'whole_item' && phaseRow[2] !== null &&
+          Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0);
+      const warningAllowed = !(error instanceof PlexReconciliationError) || error.warningAllowed;
+      if (!permanent && phaseRow[1] <= PLEX_RETRY_DELAYS.length) {
+        const next = now + PLEX_RETRY_DELAYS[phaseRow[1] - 1];
+        client.prepare(
+          "UPDATE deletion_targets SET status = 'waiting_retry', next_retry_at = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+        ).run(next, message, now, target.id);
+      } else if (warningEligible && warningAllowed) {
+        const warning = target.targetKind === 'whole_item'
+          ? 'Arr removal completed; Plex removal was not confirmed. The item or other versions may remain.'
+          : 'Media removed; Plex metadata needs attention.';
+        client.prepare(
+          "UPDATE deletion_targets SET status = 'completed_with_warning', next_retry_at = NULL, error = ?, warning = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+        ).run(message, warning, now, target.id);
+      } else {
+        client.prepare(
+          "UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL, error = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+        ).run(message, now, target.id);
+      }
+      refreshDeletionOperation(client, target.operationId);
+      return;
+    }
     const retryable = !permanent &&
       (error instanceof DeletionConvergenceError ||
         isRetryableDeletionFailure(status, message, error instanceof TypeError));
@@ -521,7 +645,7 @@ export function startDeletionWorker(): void {
 export function getDeletionOperation(id: string, serverId: number): Record<string, unknown> | null {
   return withTransaction((client) => {
     const row = client.prepare(
-      'SELECT id, client_request_id, library_key, kind, status, target_count, completed_count, failed_count, logical_size_removed, next_retry_at, created_at, started_at, finished_at, updated_at FROM deletion_operations WHERE id = ? AND server_id = ?',
+      'SELECT id, client_request_id, library_key, kind, status, target_count, completed_count, warning_count, removal_confirmed_count, failed_count, logical_size_removed, next_retry_at, created_at, started_at, finished_at, updated_at FROM deletion_operations WHERE id = ? AND server_id = ?',
     ).value<unknown[]>(id, serverId);
     if (!row) return null;
     const keys = [
@@ -532,6 +656,8 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
       'status',
       'targetCount',
       'completedCount',
+      'warningCount',
+      'removalConfirmedCount',
       'failedCount',
       'logicalSizeRemoved',
       'nextRetryAt',
@@ -542,9 +668,9 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
     ];
     const result = Object.fromEntries(keys.map((key, index) => [key, row[index]]));
     result.targets = client.prepare(
-      'SELECT id, ordinal, target_kind, target_key, title, status, attempt_count, next_retry_at, error, logical_size FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
-    ).values(id).map((target) =>
-      Object.fromEntries([
+      'SELECT id, ordinal, target_kind, target_key, title, status, attempt_count, phase, removal_confirmed_at, plex_reconciled_at, plex_attempt_count, warning, next_retry_at, error, logical_size, snapshot FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
+    ).values(id).map((target) => {
+      const targetResult = Object.fromEntries([
         'id',
         'ordinal',
         'targetKind',
@@ -552,11 +678,29 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         'title',
         'status',
         'attemptCount',
+        'phase',
+        'removalConfirmedAt',
+        'plexReconciledAt',
+        'plexAttemptCount',
+        'warning',
         'nextRetryAt',
         'error',
         'logicalSize',
-      ].map((key, index) => [key, target[index]]))
-    );
+      ].map((key, index) => [key, target[index]]));
+      const snapshot = JSON.parse(String(target[15])) as {
+        mode?: string;
+        cleanupDownloads?: boolean;
+        unmonitorFromArr?: boolean;
+        arrOwnerships?: unknown[];
+        arrReassignments?: unknown[];
+      };
+      targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
+      targetResult.arrCoordinationConfigured = snapshot.mode === 'coordinated' ||
+        snapshot.unmonitorFromArr === true ||
+        (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
+        (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0);
+      return targetResult;
+    });
     return result;
   });
 }
@@ -583,11 +727,15 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
   });
 }
 
-export function retryDeletionOperation(id: string, serverId: number): boolean {
+export function retryDeletionOperation(
+  id: string,
+  serverId: number,
+  outcome: 'needs_attention' | 'warning' = 'needs_attention',
+): boolean {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
     const operation = client.prepare(
-      "SELECT library_key FROM deletion_operations WHERE id = ? AND server_id = ? AND status = 'needs_attention'",
+      'SELECT library_key FROM deletion_operations WHERE id = ? AND server_id = ?',
     ).value<[string]>(id, serverId);
     if (!operation || activeLibraryOperation(serverId, operation[0]) !== null) return false;
     if (!activeServerMatches(client, serverId)) return false;
@@ -601,12 +749,23 @@ export function retryDeletionOperation(id: string, serverId: number): boolean {
         "SELECT id FROM sync_log WHERE server_id = ? AND status = 'pending' AND (library_key IS NULL OR library_key = ?) LIMIT 1",
       ).value<[number]>(serverId, operation[0])
     ) return false;
+    const targetStatus = outcome === 'warning' ? 'completed_with_warning' : 'needs_attention';
+    const matching = client.prepare(
+      'SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND status = ?',
+    ).value<[number]>(id, targetStatus)?.[0] ?? 0;
+    if (matching === 0) return false;
     client.prepare(
-      "UPDATE deletion_targets SET status = 'queued', attempt_count = 0, next_retry_at = NULL, error = NULL, updated_at = ? WHERE operation_id = ? AND status = 'needs_attention'",
-    ).run(now, id);
-    client.prepare(
-      "UPDATE deletion_operations SET status = 'queued', failed_count = 0, next_retry_at = NULL, finished_at = NULL, updated_at = ? WHERE id = ?",
-    ).run(now, id);
+      `UPDATE deletion_targets
+       SET status = 'queued',
+           attempt_count = CASE WHEN ? = 'needs_attention' THEN 0 ELSE attempt_count END,
+           plex_attempt_count = CASE WHEN phase = 'plex_reconciliation' THEN 0 ELSE plex_attempt_count END,
+           next_retry_at = NULL,
+           warning = CASE WHEN ? = 'warning' THEN NULL ELSE warning END,
+           error = NULL,
+           updated_at = ?
+       WHERE operation_id = ? AND status = ?`,
+    ).run(outcome, outcome, now, id, targetStatus);
+    refreshDeletionOperation(client, id);
     return true;
   });
 }

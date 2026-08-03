@@ -13,6 +13,8 @@ import type { ActiveServerVariables } from '../../middleware/activeServer.ts';
 import {
   DeletionConflictError,
   enqueueDeletionOperations,
+  findWarningOverlap,
+  locallyActiveServerId,
   type NewDeletionOperation,
   type NewDeletionTarget,
   repeatedDeletionOperationBatch,
@@ -56,15 +58,12 @@ router.post('/smart-analysis', async (c) => {
   const movies = body.movies !== false;
   const tv = body.tv !== false;
   if (!movies && !tv) return c.json({ error: 'select movies, TV, or both' }, 400);
-  const serverId = c.get('activeServerId');
-  if (serverId === null) {
+  const activeServer = await resolveActiveServer().catch(() => null);
+  if (activeServer === null) {
     return c.json({ analyzedGroups: 0, protectedGroups: 0, candidates: [] });
   }
+  const serverId = activeServer.serverId;
   try {
-    const activeServer = await resolveActiveServer();
-    if (activeServer.serverId !== serverId) {
-      return c.json({ error: 'the active Plex server changed during analysis' }, 409);
-    }
     const [analysis, sessions, reservations] = await Promise.all([
       buildSmartDuplicateAnalysis(serverId, { movies, tv }),
       activeServer.client.activeSessions(),
@@ -136,8 +135,13 @@ router.post('/smart-cleanup', async (c) => {
     return c.json({ error: 'one or more cleanup selections are invalid' }, 400);
   }
 
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 404);
+  let activeServer: Awaited<ReturnType<typeof resolveActiveServer>> | null = null;
+  const persistedServerId = locallyActiveServerId();
+  if (persistedServerId === null) {
+    activeServer = await resolveActiveServer().catch(() => null);
+    if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+  }
+  const serverId = persistedServerId ?? activeServer!.serverId;
   const normalizedSelections = parsed as Array<{
     mediaType: 'movie' | 'episode';
     ratingKey: string;
@@ -157,11 +161,34 @@ router.post('/smart-cleanup', async (c) => {
     if (repeated) {
       return c.json(repeated satisfies SmartDuplicateCleanupResponse, 202);
     }
+    for (const selection of normalizedSelections) {
+      const operationId = findWarningOverlap(
+        serverId,
+        selection.mediaType === 'movie' ? 'movie_version' : 'episode_version',
+        [selection.ratingKey],
+        selection.deleteMediaIds,
+      );
+      if (operationId) {
+        return c.json({
+          error: 'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first',
+          operationId,
+        }, 409);
+      }
+    }
   } catch (error) {
     if (error instanceof DeletionConflictError) {
-      return c.json({ error: error.message }, error.status as 400 | 404 | 409);
+      return c.json(
+        { error: error.message, ...(error.operationId ? { operationId: error.operationId } : {}) },
+        error.status as 400 | 404 | 409,
+      );
     }
     throw error;
+  }
+
+  activeServer ??= await resolveActiveServer().catch(() => null);
+  if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
+  if (activeServer.serverId !== serverId) {
+    return c.json({ error: 'the active Plex server changed during cleanup' }, 409);
   }
 
   const analysis = await buildSmartDuplicateAnalysis(serverId, { movies: true, tv: true });
@@ -201,10 +228,6 @@ router.post('/smart-cleanup', async (c) => {
     )?.[0] ?? null
   );
   if (!machineIdentifier) return c.json({ error: 'Plex server identity is unavailable' }, 409);
-  const activeServer = await resolveActiveServer();
-  if (activeServer.serverId !== serverId) {
-    return c.json({ error: 'the active Plex server changed during cleanup' }, 409);
-  }
   const sessions = await activeServer.client.activeSessions();
   if (
     selectedCandidates.some((candidate) => mediaRatingKeyIsPlaying(candidate.ratingKey, sessions))
@@ -372,7 +395,10 @@ router.post('/smart-cleanup', async (c) => {
     );
   } catch (error) {
     if (error instanceof DeletionConflictError) {
-      return c.json({ error: error.message }, error.status as 400 | 404 | 409);
+      return c.json(
+        { error: error.message, ...(error.operationId ? { operationId: error.operationId } : {}) },
+        error.status as 400 | 404 | 409,
+      );
     }
     throw error;
   }

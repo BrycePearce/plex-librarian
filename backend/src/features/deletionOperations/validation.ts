@@ -252,14 +252,24 @@ export async function validateDeletionTarget(
 
   const live = await active.client.metadataIdentity(snapshot.ratingKey);
   if (!live) return { client: active.client, snapshot, live: null };
+  await validateLiveDeletionIdentity(active.client, target.targetKind, snapshot, live);
+  return { client: active.client, snapshot, live };
+}
+
+export async function validateLiveDeletionIdentity(
+  client: PlexClient,
+  targetKind: DurableTargetRecord['targetKind'],
+  snapshot: DurableTargetSnapshot,
+  live: PlexMetadataIdentity,
+): Promise<void> {
   validateLiveItem(snapshot, live);
   if (
     snapshot.quickCleanupEvidence && live.type === 'show' &&
-    await active.client.showHasMultiVersionEpisodes(snapshot.ratingKey)
+    await client.showHasMultiVersionEpisodes(snapshot.ratingKey)
   ) {
     mismatch('quick cleanup Plex versions');
   }
-  if (target.targetKind !== 'whole_item') {
+  if (targetKind !== 'whole_item') {
     const liveVersion = live.media.find((version) => version.mediaId === snapshot.mediaId);
     if (liveVersion) {
       for (
@@ -302,7 +312,7 @@ export async function validateDeletionTarget(
       (liveVersion && snapshot.classificationTechnicalDetails) ||
       expectedRetained?.classificationTechnicalDetails
     ) {
-      const liveDetails = await active.client.mediaVersionTechnicalDetails(snapshot.ratingKey);
+      const liveDetails = await client.mediaVersionTechnicalDetails(snapshot.ratingKey);
       if (liveVersion && snapshot.classificationTechnicalDetails) {
         validateTechnicalDetails(
           snapshot.classificationTechnicalDetails,
@@ -319,16 +329,15 @@ export async function validateDeletionTarget(
       }
     }
   }
-  if (target.targetKind === 'episode_version') {
+  if (targetKind === 'episode_version') {
     if (
       live.grandparentRatingKey !== snapshot.showRatingKey ||
       live.parentRatingKey !== snapshot.seasonRatingKey ||
       live.seasonIndex !== snapshot.seasonIndex ||
       live.index !== snapshot.episodeIndex
     ) mismatch('Plex episode ancestry');
-    const show = await active.client.metadataIdentity(snapshot.showRatingKey!);
+    const show = await client.metadataIdentity(snapshot.showRatingKey!);
     if (!show || show.title !== snapshot.showTitle) mismatch('Plex show identity');
     equalNullable(snapshot.tvdbId, show.tvdbId, 'Plex show TVDB identity');
   }
-  return { client: active.client, snapshot, live };
 }

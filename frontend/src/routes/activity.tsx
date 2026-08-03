@@ -172,10 +172,17 @@ function describeEvent(
       return `Removed a duplicate version of ${title} from ${libraryLabel(libraryKey, titleByKey)}`;
     }
     case "deletion.completed": {
-      const { libraryKey, completedCount, failedCount, cancelledCount } = event.payload;
+      const {
+        libraryKey,
+        completedCount,
+        warningCount = 0,
+        failedCount,
+        cancelledCount,
+      } = event.payload;
       const label = libraryLabel(libraryKey, titleByKey);
       const suffix = [
         failedCount > 0 ? `${failedCount} failed` : null,
+        warningCount > 0 ? `${warningCount} warning` : null,
         cancelledCount > 0 ? `${cancelledCount} cancelled` : null,
       ].filter(Boolean).join(", ");
       return `Deletion finished for ${label}: ${completedCount} completed${
@@ -206,15 +213,15 @@ function EventRow(
       (event.payload.failedCount > 0 || event.payload.cancelledCount > 0));
   const Icon = hasFailedDelete ? AlertCircle : EVENT_ICON[event.type];
   const iconClass = hasFailedDelete ? "text-error" : EVENT_ICON_CLASS[event.type];
-  // Only show "N freed" when something was actually deleted — otherwise a fully-failed
-  // delete attempt renders a misleading "0 KB freed" next to its failure summary.
+  // Only show logical size when something was actually removed — otherwise a fully-failed
+  // delete attempt renders a misleading size next to its failure summary.
   const fileSizeFreed = event.type === "items.deleted" && event.payload &&
       event.payload.deletedCount > 0
     ? event.payload.fileSizeFreed
     : event.type === "media.deleted" && event.payload
     ? event.payload.fileSizeFreed
     : event.type === "deletion.completed" && event.payload &&
-        event.payload.completedCount > 0
+        (event.payload.removalConfirmedCount ?? event.payload.completedCount) > 0
     ? event.payload.logicalSizeRemoved
     : undefined;
 
@@ -227,7 +234,7 @@ function EventRow(
         </span>
         {fileSizeFreed !== undefined && (
           <span className="text-xs font-mono text-base-content/40 shrink-0">
-            {formatKilobytes(fileSizeFreed)} freed
+            {formatKilobytes(fileSizeFreed)} logical size removed
           </span>
         )}
         <span
