@@ -4,6 +4,7 @@ import type {
   VersionDeletionPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
+import type { ArrExtraFile, ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
@@ -183,6 +184,8 @@ export async function buildVersionDeletionPlan({
   const arrUnsafeReasons: string[] = [];
   const arrCoveredPaths = new Set<string>();
   let arrSelectionMatched = false;
+  const lookupRecords = new Map<number, ArrMediaRecord | null>();
+  const radarrExtraFiles = new Map<number, readonly ArrExtraFile[] | Error>();
 
   if (mediaType === 'episode') {
     arrUnsafeReasons.push(
@@ -200,6 +203,7 @@ export async function buildVersionDeletionPlan({
     for (const target of arrTargets) {
       try {
         const record = await target.client.lookup(item.tmdbId);
+        lookupRecords.set(target.instanceId, record);
         if (!record) {
           if (attemptedArrInstanceIds.has(target.instanceId)) {
             const preview = {
@@ -220,10 +224,17 @@ export async function buildVersionDeletionPlan({
           }
           continue;
         }
-        const [mediaFiles, extraFiles] = await Promise.all([
-          target.client.mediaFiles(record.id),
-          target.client.extraFiles(record.id).catch(() => []),
-        ]);
+        const mediaFiles = await target.client.mediaFiles(record.id);
+        let extraFiles: ArrExtraFile[] = [];
+        try {
+          extraFiles = await target.client.extraFiles(record.id);
+          radarrExtraFiles.set(target.instanceId, extraFiles);
+        } catch (error) {
+          radarrExtraFiles.set(
+            target.instanceId,
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
         const preview = {
           instanceName: target.instanceName,
           type: target.client.type,
@@ -231,7 +242,7 @@ export async function buildVersionDeletionPlan({
           path: record.path,
           seasons: record.seasons,
           mediaFiles,
-          extraFiles,
+          extraFiles: extraFiles.map(({ relativePath, type }) => ({ relativePath, type })),
         } satisfies ArrCleanupTarget;
         if (!record.path || !mediaFiles || mediaFiles.length === 0) continue;
         const managedPaths = mediaFiles.flatMap((file) => {
@@ -300,6 +311,8 @@ export async function buildVersionDeletionPlan({
     requiredMappingIdentities,
     requiredReassignments,
     requiredOwnerships,
+    lookupRecords,
+    radarrExtraFiles,
   });
 
   const cleanup = mediaType === 'movie' && pathsComplete

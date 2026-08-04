@@ -211,6 +211,9 @@ export interface PlexMediaVersionPathPreview extends PlexMediaPathPreview {
   mediaId: number;
   // Present only when Plex reports one unambiguous Part size for this Media entry.
   fileSize?: number | null;
+  // The persisted decimal-KB projection, including Plex's legacy signed-32-bit
+  // normalization. Radarr reassignment uses this instead of comparing raw bytes.
+  projectedFileSize?: number | null;
 }
 
 // One row per Plex `Media` entry on an episode — but only ever produced by

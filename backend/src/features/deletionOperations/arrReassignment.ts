@@ -12,10 +12,14 @@ import {
   buildVersionDeletionPlan,
   type VersionDeletionPlan,
 } from '../mediaDeletion/versionPlanning.ts';
-import { arrDirname } from '../mediaDeletion/arrPaths.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import { radarrBytesMatchProjectedKilobytes } from '../mediaDeletion/radarrSize.ts';
 import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
-import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
+import {
+  type DurableTargetSnapshot,
+  validateDeletionTarget,
+  validateLiveDeletionIdentity,
+} from './validation.ts';
 
 const ARR_CONVERGENCE_MAX_ATTEMPTS = 15;
 const ARR_CONVERGENCE_POLL_INTERVAL_MS = 1_000;
@@ -100,7 +104,7 @@ export async function directPlexDeletionStillSafe(
   return true;
 }
 
-function persistArrReassignmentPlan(
+export function persistArrReassignmentPlan(
   targetId: number,
   snapshot: DurableTargetSnapshot,
   plan: VersionDeletionPlan,
@@ -192,7 +196,7 @@ function sameRemotePath(left: string | null, right: string): boolean {
     normalizedLeft === normalizedRight;
 }
 
-async function revalidateArrReassignment(
+export async function revalidateArrReassignment(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
   client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
@@ -233,9 +237,9 @@ async function revalidateArrReassignment(
     throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified');
   }
 
-  const validation = await validateDeletionTarget(target.serverId, target);
-  const live = validation.live;
+  const live = await client.metadataIdentity(snapshot.ratingKey);
   if (!live) throw new Error('The retained Plex item disappeared during Arr reassignment');
+  await validateLiveDeletionIdentity(client, target.targetKind, snapshot, live);
   const liveIds = new Set(live.media.map((version) => version.mediaId));
   if (![...liveIds].some((id) => !excludedIds.has(id))) {
     throw new Error('at least one unselected live Plex version must remain');
@@ -250,7 +254,7 @@ async function revalidateArrReassignment(
   if (bestCandidate !== retainedMediaId) {
     throw new Error('The persisted retained version is no longer the best available copy');
   }
-  if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await validation.client.activeSessions())) {
+  if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await client.activeSessions())) {
     throw new Error('cannot delete a media version during active playback');
   }
   const entry = plan.eligibleArrReassignments.find((candidate) =>
@@ -258,6 +262,35 @@ async function revalidateArrReassignment(
   );
   if (!entry) throw new Error('A required Arr reassignment instance could not be verified');
   return entry;
+}
+
+export async function radarrReassignmentAlreadyAdopted(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+  useFreshProjectedSize = false,
+): Promise<boolean> {
+  for (const persisted of snapshot.arrReassignments ?? []) {
+    if (persisted.instanceType !== 'radarr') return false;
+    const entry = await revalidateArrReassignment(
+      target,
+      snapshot,
+      client,
+      persisted.instanceId,
+    );
+    const projectedSize = useFreshProjectedSize
+      ? entry.candidateFileSizes.get(persisted.retainedMediaId)
+      : persisted.retainedFileSize;
+    if (
+      !sameRemotePath(entry.recordPath, persisted.recordPath) ||
+      !sameRemotePath(entry.managedPath, persisted.retainedPath) ||
+      entry.managedFileId === null || entry.managedFileId === persisted.managedFileId ||
+      !radarrBytesMatchProjectedKilobytes(entry.managedFileSize, projectedSize) ||
+      await entry.target.client.fileVisibility(persisted.managedPath) !== 'folder' ||
+      await entry.target.client.fileVisibility(persisted.retainedPath) !== 'file'
+    ) return false;
+  }
+  return (snapshot.arrReassignments?.length ?? 0) > 0;
 }
 
 export async function waitForArrManagedPath(
@@ -269,6 +302,9 @@ export async function waitForArrManagedPath(
 ): Promise<void> {
   persistArrReassignmentPlan(target.id, snapshot, plan, retainMediaId);
   for (const persisted of snapshot.arrReassignments!) {
+    if (persisted.instanceType !== 'sonarr') {
+      throw new Error('Radarr reassignment must use the Plex-first coordination path');
+    }
     let entry = await revalidateArrReassignment(
       target,
       snapshot,
@@ -276,13 +312,6 @@ export async function waitForArrManagedPath(
       persisted.instanceId,
     );
     const desiredPath = persisted.retainedPath;
-    const desiredRecordPath = persisted.retainedRecordPath ??
-      (persisted.instanceType === 'radarr'
-        ? arrDirname(persisted.retainedPath)
-        : persisted.recordPath);
-    if (!desiredRecordPath) {
-      throw new Error('The persisted Radarr destination path is incomplete');
-    }
     if (!entry.alreadyReassigned && entry.managedFileId !== null) {
       try {
         await entry.target.client.deleteManagedFile(entry.managedFileId);
@@ -291,22 +320,6 @@ export async function waitForArrManagedPath(
       }
     }
     entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
-    if (
-      persisted.instanceType === 'radarr' &&
-      !sameRemotePath(entry.recordPath, desiredRecordPath)
-    ) {
-      await entry.target.client.updateMoviePath(
-        entry.recordId,
-        persisted.recordPath,
-        desiredRecordPath,
-      );
-      entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
-      if (!sameRemotePath(entry.recordPath, desiredRecordPath)) {
-        throw new DeletionConvergenceError(
-          `${entry.target.instanceName} did not retain the updated movie path`,
-        );
-      }
-    }
     await entry.target.client.rescanMedia(entry.recordId);
 
     let converged = false;
@@ -325,6 +338,97 @@ export async function waitForArrManagedPath(
         ) {
           throw new Error(
             `${entry.target.instanceName} reported unexpected metadata for the retained file`,
+          );
+        }
+        converged = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, ARR_CONVERGENCE_POLL_INTERVAL_MS));
+    }
+    if (!converged) {
+      throw new DeletionConvergenceError(
+        `${entry.target.instanceName} did not adopt the retained Plex version`,
+      );
+    }
+  }
+}
+
+export async function waitForRadarrManagedPath(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+): Promise<void> {
+  for (const persisted of snapshot.arrReassignments ?? []) {
+    if (persisted.instanceType !== 'radarr') {
+      throw new Error('The persisted reassignment is not a Radarr movie');
+    }
+    let entry = await revalidateArrReassignment(
+      target,
+      snapshot,
+      client,
+      persisted.instanceId,
+    );
+    const adopted = () =>
+      sameRemotePath(entry.managedPath, persisted.retainedPath) &&
+      entry.managedFileId !== null && entry.managedFileId !== persisted.managedFileId &&
+      radarrBytesMatchProjectedKilobytes(
+        entry.managedFileSize,
+        persisted.retainedFileSize,
+      );
+    if (adopted()) {
+      if (
+        await entry.target.client.fileVisibility(persisted.managedPath) !== 'folder' ||
+        await entry.target.client.fileVisibility(persisted.retainedPath) !== 'file'
+      ) throw new Error(`${entry.target.instanceName} reported unexpected live file state`);
+      continue;
+    }
+    if (
+      await entry.target.client.fileVisibility(persisted.managedPath) !== 'folder' ||
+      await entry.target.client.fileVisibility(persisted.retainedPath) !== 'file'
+    ) {
+      throw new Error(
+        `${entry.target.instanceName} could not verify exact selected-file absence and retained-file visibility`,
+      );
+    }
+    try {
+      await entry.target.client.rescanMedia(entry.recordId);
+    } catch (error) {
+      // A transport failure can leave command acceptance ambiguous, so reconcile
+      // through exact live adoption. A definite HTTP rejection is authoritative
+      // and retains its bounded upstream detail for the operation error.
+      if (error instanceof ArrApiError && error.status !== undefined) throw error;
+    }
+
+    let converged = false;
+    for (let attempt = 0; attempt < ARR_CONVERGENCE_MAX_ATTEMPTS; attempt++) {
+      entry = await revalidateArrReassignment(
+        target,
+        snapshot,
+        client,
+        persisted.instanceId,
+      );
+      if (sameRemotePath(entry.managedPath, persisted.retainedPath)) {
+        if (entry.managedFileId === null || entry.managedFileId === persisted.managedFileId) {
+          throw new Error(
+            `${entry.target.instanceName} did not create a new managed-file record`,
+          );
+        }
+        if (
+          !radarrBytesMatchProjectedKilobytes(
+            entry.managedFileSize,
+            persisted.retainedFileSize,
+          )
+        ) {
+          throw new Error(
+            `${entry.target.instanceName} reported unexpected metadata for the retained file`,
+          );
+        }
+        if (
+          await entry.target.client.fileVisibility(persisted.managedPath) !== 'folder' ||
+          await entry.target.client.fileVisibility(persisted.retainedPath) !== 'file'
+        ) {
+          throw new Error(
+            `${entry.target.instanceName} reported unexpected live file state after rescan`,
           );
         }
         converged = true;

@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects } from '@std/assert';
+import { assert, assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
 import { resolve } from '@std/path';
 import type { PlexRawMetadata } from '../../integrations/plex/types.ts';
 
@@ -30,21 +30,26 @@ const app = createApp();
 const live = new Map<string, PlexRawMetadata>();
 let loseDeleteResponse = false;
 let failDeleteBeforeMutation = false;
+let plexMediaDeleteCount = 0;
 let coordinatedRatingKey: string | null = null;
 let arrPresent = false;
 let arrDeleteCount = 0;
 let arrManagedFilePresent = true;
 let arrManagedFileId = 70;
 let arrManagedFileSize = 100_000;
+let arrExtraMovieFileId: number | null = null;
 let arrRescanFileSize = 50_000;
 let arrManagedPath = '/library/Coordinated/movie.mkv';
 let arrManagedMediaId: number | null = null;
 let arrRescanTargetPath: string | null = null;
+let restoreArrPathOnRescan: string | null = null;
+let restoredArrPath: string | null = null;
 let arrMoviePath = '/library/Coordinated';
 let arrMonitored = true;
 let loseArrManagedDeleteResponse = false;
 let loseArrMoviePathResponse = false;
 let loseArrRescanResponse = false;
+let rejectArrRescanStatus: number | null = null;
 let arrManagedFileReads = 0;
 let activatePlaybackOnManagedFileRead: number | null = null;
 let changeArrOwnershipOnManagedFileRead: {
@@ -148,7 +153,21 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
           : [],
       ));
     }
-    if (url.pathname === '/api/v3/extrafile') return Promise.resolve(Response.json([]));
+    if (url.pathname === '/api/v3/extrafile') {
+      return Promise.resolve(Response.json(
+        arrExtraMovieFileId === null
+          ? []
+          : [{ relativePath: 'movie.nfo', type: 'metadata', movieFileId: arrExtraMovieFileId }],
+      ));
+    }
+    if (url.pathname === '/api/v3/filesystem/type') {
+      const path = url.searchParams.get('path');
+      const exists = path === restoredArrPath ||
+        [...live.values()].some((item) =>
+          item.Media?.some((media) => media.Part?.some((part) => part.file === path))
+        );
+      return Promise.resolve(Response.json({ type: exists ? 'file' : 'folder' }));
+    }
     if (url.pathname === '/api/v3/history/movie') {
       return Promise.resolve(Response.json([{
         id: 1,
@@ -201,12 +220,18 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/command' && init?.method === 'POST') {
+      if (rejectArrRescanStatus !== null) {
+        return Promise.resolve(
+          new Response('rescan disabled', { status: rejectArrRescanStatus }),
+        );
+      }
       if (arrRescanTargetPath) {
         arrManagedPath = arrRescanTargetPath;
         arrManagedFileId++;
         arrManagedFileSize = arrRescanFileSize;
         arrManagedFilePresent = true;
       }
+      restoredArrPath = restoreArrPathOnRescan;
       if (loseArrRescanResponse) {
         loseArrRescanResponse = false;
         return Promise.reject(new TypeError('lost Radarr rescan response'));
@@ -320,6 +345,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
   }
   const mediaDelete = url.pathname.match(/^\/library\/metadata\/([^/]+)\/media\/(\d+)$/);
   if (mediaDelete && init?.method === 'DELETE') {
+    plexMediaDeleteCount++;
     const ratingKey = decodeURIComponent(mediaDelete[1]);
     const mediaId = Number(mediaDelete[2]);
     const item = live.get(ratingKey);
@@ -377,21 +403,26 @@ withTransaction((client) => {
 function reset(): void {
   loseDeleteResponse = false;
   failDeleteBeforeMutation = false;
+  plexMediaDeleteCount = 0;
   coordinatedRatingKey = null;
   arrPresent = false;
   arrDeleteCount = 0;
   arrManagedFilePresent = true;
   arrManagedFileId = 70;
   arrManagedFileSize = 100_000;
+  arrExtraMovieFileId = null;
   arrRescanFileSize = 50_000;
   arrManagedPath = '/library/Coordinated/movie.mkv';
   arrManagedMediaId = null;
   arrRescanTargetPath = null;
+  restoreArrPathOnRescan = null;
+  restoredArrPath = null;
   arrMoviePath = '/library/Coordinated';
   arrMonitored = true;
   loseArrManagedDeleteResponse = false;
   loseArrMoviePathResponse = false;
   loseArrRescanResponse = false;
+  rejectArrRescanStatus = null;
   arrManagedFileReads = 0;
   activatePlaybackOnManagedFileRead = null;
   changeArrOwnershipOnManagedFileRead = null;
@@ -2352,6 +2383,29 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
   );
 });
 
+Deno.test('Radarr linked extras block Plex deletion and rescan', async () => {
+  reset();
+  configureRadarr();
+  addMovie('reassign-linked-extra', [12, 13], 10);
+  coordinatedRatingKey = 'reassign-linked-extra';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  arrExtraMovieFileId = arrManagedFileId;
+  live.get('reassign-linked-extra')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment('reassign-linked-extra', 12);
+  await settle();
+
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+  assertEquals(live.get('reassign-linked-extra')?.Media?.map((media) => media.id), [12, 13]);
+  assertEquals(arrManagedPath, '/library/Coordinated/movie.mkv');
+});
+
 Deno.test('Radarr reassignment rejects adopted file metadata that does not match Plex', async () => {
   reset();
   configureRadarr();
@@ -2378,6 +2432,183 @@ Deno.test('Radarr reassignment rejects adopted file metadata that does not match
     ),
   );
   assertEquals(live.get('reassign-metadata')?.Media?.map((media) => media.id), [13]);
+
+  // A later full sync may prune the selected projection. Recovery remains bound
+  // to the persisted attempt and exact live Plex/Radarr postconditions.
+  withTransaction((client) =>
+    client.prepare(
+      'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
+    ).run('reassign-metadata', 12)
+  );
+  arrManagedFileSize = 50_000;
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+});
+
+Deno.test('Radarr reassignment rejects a selected file restored during rescan', async () => {
+  reset();
+  configureRadarr();
+  addMovie('reassign-restored-selected', [12, 13], 10);
+  coordinatedRatingKey = 'reassign-restored-selected';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  restoreArrPathOnRescan = arrManagedPath;
+  live.get('reassign-restored-selected')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment('reassign-restored-selected', 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assert(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error).includes(
+      'unexpected live file state',
+    ),
+  );
+  assertEquals(live.get('reassign-restored-selected')?.Media?.map((media) => media.id), [13]);
+});
+
+Deno.test('Plex reconciliation rechecks exact Radarr adoption metadata', async () => {
+  reset();
+  configureRadarr();
+  addMovie('reassign-final-postcondition', [12, 13], 10);
+  coordinatedRatingKey = 'reassign-final-postcondition';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  arrRescanFileSize = 49_000;
+  live.get('reassign-final-postcondition')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment('reassign-final-postcondition', 12);
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+
+  withTransaction((client) =>
+    client.prepare(
+      "UPDATE deletion_targets SET phase = 'plex_reconciliation' WHERE operation_id = ?",
+    ).run(operationId)
+  );
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT plex_attempt_count FROM deletion_targets WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    1,
+  );
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assert(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error).includes(
+      'exact retained-file adoption',
+    ),
+  );
+});
+
+Deno.test('legacy Radarr external repair finalizes without mutation or lifetime attribution', async () => {
+  reset();
+  configureRadarr();
+  addMovie('legacy-radarr-repair', [12, 13], 10);
+  coordinatedRatingKey = 'legacy-radarr-repair';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  arrRescanFileSize = 49_000;
+  live.get('legacy-radarr-repair')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+  const operationId = await enqueueMovieReassignment('legacy-radarr-repair', 12);
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+
+  arrManagedFileSize = 50_000;
+  withTransaction((client) => {
+    const row = client.prepare(
+      'SELECT id, snapshot FROM deletion_targets WHERE operation_id = ?',
+    ).value<[number, string]>(operationId)!;
+    const snapshot = JSON.parse(row[1]);
+    snapshot.arrReassignments[0].retainedFileSize = 50_000;
+    client.prepare(
+      'UPDATE deletion_targets SET plex_attempt_count = 0, removal_confirmed_at = NULL, snapshot = ? WHERE id = ?',
+    ).run(JSON.stringify(snapshot), row[0]);
+    client.prepare('DELETE FROM media_removals WHERE operation_id = ?').run(operationId);
+    client.prepare(
+      'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
+    ).run('legacy-radarr-repair', 12);
+  });
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(operation.status, 'completed', JSON.stringify(operation));
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
+        operationId,
+      )?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('legacy Radarr repair preserves ambiguous historical accounting', async () => {
+  reset();
+  configureRadarr();
+  addMovie('legacy-radarr-ambiguous', [12, 13], 10);
+  coordinatedRatingKey = 'legacy-radarr-ambiguous';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  arrRescanFileSize = 49_000;
+  live.get('legacy-radarr-ambiguous')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+  const operationId = await enqueueMovieReassignment('legacy-radarr-ambiguous', 12);
+  await settle();
+  arrManagedFileSize = 50_000;
+  withTransaction((client) => {
+    client.prepare(
+      'UPDATE deletion_targets SET plex_attempt_count = 0 WHERE operation_id = ?',
+    ).run(operationId);
+    client.prepare(
+      'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
+    ).run('legacy-radarr-ambiguous', 12);
+  });
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(target.removalConfirmedAt !== null, true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
+        operationId,
+      )?.[0]
+    ),
+    1,
+  );
 });
 
 Deno.test('worker fails closed when the Plex source disappears before ownership planning', async () => {
@@ -2437,7 +2668,7 @@ Deno.test('direct Plex deletion adopts reassignment when Arr ownership changed a
   assertEquals(live.get('reassign-after-preview')?.Media?.map((media) => media.id), [13]);
 });
 
-Deno.test('Radarr reassignment retry finishes after the managed source file disappeared', async () => {
+Deno.test('Radarr reassignment converges after a lost rescan response', async () => {
   reset();
   configureRadarr();
   configureSecondRadarr();
@@ -2456,7 +2687,7 @@ Deno.test('Radarr reassignment retry finishes after the managed source file disa
   const operationId = await enqueueMovieReassignment('reassign-retry', 12);
   await settle();
 
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'waiting_retry');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
   assertEquals(live.get('reassign-retry')?.Media?.map((media) => media.id), [13]);
   const storedSnapshot = withTransaction((client) =>
     client.prepare(
@@ -2470,10 +2701,6 @@ Deno.test('Radarr reassignment retry finishes after the managed source file disa
     [1, 3],
   );
 
-  makeRetryReady(operationId);
-  await settle();
-
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
   assertEquals(arrMoviePath, '/library/Coordinated');
   assertEquals(arrManagedPath, '/library/Coordinated/better.mkv');
   assertEquals(
@@ -2486,6 +2713,32 @@ Deno.test('Radarr reassignment retry finishes after the managed source file disa
   );
 });
 
+Deno.test('Radarr reassignment preserves a definite rescan rejection', async () => {
+  reset();
+  configureRadarr();
+  addMovie('reassign-rejected-rescan', [12, 13], 10);
+  coordinatedRatingKey = 'reassign-rejected-rescan';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  rejectArrRescanStatus = 403;
+  live.get('reassign-rejected-rescan')!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment('reassign-rejected-rescan', 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  const error = String((operation?.targets as Array<{ error?: string }>)[0]?.error);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertStringIncludes(error, 'Radarr returned 403: rescan disabled');
+  assertEquals(arrManagedPath, '/library/Coordinated/movie.mkv');
+  assertEquals(live.get('reassign-rejected-rescan')?.Media?.map((media) => media.id), [13]);
+});
+
 Deno.test('reassignment retry rejects changed Arr configuration and protects its retained copy', async () => {
   reset();
   configureRadarr();
@@ -2495,7 +2748,7 @@ Deno.test('reassignment retry rejects changed Arr configuration and protects its
   arrManagedMediaId = 12;
   arrManagedPath = '/library/Coordinated/movie.mkv';
   arrRescanTargetPath = '/library/Coordinated/better.mkv';
-  loseArrRescanResponse = true;
+  arrRescanFileSize = 49_000;
   live.get('reassign-config-change')!.Media = [
     { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
     { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
@@ -2504,14 +2757,14 @@ Deno.test('reassignment retry rejects changed Arr configuration and protects its
 
   const operationId = await enqueueMovieReassignment('reassign-config-change', 12);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'waiting_retry');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
 
   withTransaction((client) =>
     client.prepare(
       "UPDATE arr_instances SET url = 'http://radarr-replacement', updated_at = 2 WHERE id = 1",
     ).run()
   );
-  makeRetryReady(operationId);
+  assertEquals(retryDeletionOperation(operationId, 1), true);
   await settle();
 
   const operation = getDeletionOperation(operationId, 1);
@@ -2601,12 +2854,8 @@ Deno.test('initial execution rejects removal of the accepted Arr mapping', async
   );
 });
 
-Deno.test('Radarr reassignment recovers lost responses at every Arr mutation boundary', async () => {
-  const boundaries = [
-    'managed-delete',
-    'path-update',
-    'rescan',
-  ] as const;
+Deno.test('Radarr reassignment recovers lost Plex-delete and rescan responses', async () => {
+  const boundaries = ['plex-delete', 'rescan'] as const;
   for (const boundary of boundaries) {
     reset();
     configureRadarr();
@@ -2616,36 +2865,88 @@ Deno.test('Radarr reassignment recovers lost responses at every Arr mutation bou
     arrPresent = true;
     arrManagedMediaId = 12;
     arrManagedPath = '/library/Coordinated/movie.mkv';
-    arrRescanTargetPath = '/library/Retained/better.mkv';
+    arrRescanTargetPath = '/library/Coordinated/better.mkv';
     live.get(ratingKey)!.Media = [
       { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
       { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
     ];
-    loseArrManagedDeleteResponse = boundary === 'managed-delete';
-    loseArrMoviePathResponse = boundary === 'path-update';
+    loseDeleteResponse = boundary === 'plex-delete';
     loseArrRescanResponse = boundary === 'rescan';
 
     const operationId = await enqueueMovieReassignment(ratingKey, 12);
     await settle();
-    assertEquals(
-      getDeletionOperation(operationId, 1)?.status,
-      'waiting_retry',
-      boundary,
-    );
-
-    makeRetryReady(operationId);
-    await settle();
-
     const operation = getDeletionOperation(operationId, 1);
     assertEquals(operation?.status, 'completed', `${boundary}: ${JSON.stringify(operation)}`);
     assertEquals(arrPresent, true);
-    assertEquals(arrMoviePath, '/library/Retained');
-    assertEquals(arrManagedPath, '/library/Retained/better.mkv');
+    assertEquals(arrMoviePath, '/library/Coordinated');
+    assertEquals(arrManagedPath, '/library/Coordinated/better.mkv');
     assertEquals(live.get(ratingKey)?.Media?.map((media) => media.id), [13]);
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          'SELECT COUNT(*) FROM media_removals WHERE operation_id = ?',
+        ).value<[number]>(operationId)?.[0]
+      ),
+      boundary === 'plex-delete' ? 0 : 1,
+      `${boundary}: lifetime attribution`,
+    );
   }
 });
 
-Deno.test('Radarr reassignment chooses the best retained copy from live Plex quality', async () => {
+Deno.test(
+  'Radarr recovery after an unsent persisted Plex attempt is not attributable',
+  async () => {
+    reset();
+    configureRadarr();
+    const ratingKey = 'reassign-unsent-attempt';
+    addMovie(ratingKey, [12, 13], 10);
+    coordinatedRatingKey = ratingKey;
+    arrPresent = true;
+    arrManagedMediaId = 12;
+    arrManagedPath = '/library/Coordinated/movie.mkv';
+    arrRescanTargetPath = '/library/Coordinated/better.mkv';
+    live.get(ratingKey)!.Media = [
+      { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+      { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+    ];
+    activatePlaybackOnManagedFileRead = 3;
+
+    const operationId = await enqueueMovieReassignment(ratingKey, 12);
+    await settle();
+    assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+
+    activePlaybackRatingKey = null;
+    activatePlaybackOnManagedFileRead = null;
+    const externallyChanged = live.get(ratingKey)!;
+    externallyChanged.Media = externallyChanged.Media!.filter((media) => media.id !== 12);
+    withTransaction((client) => {
+      client.prepare(
+        'UPDATE deletion_targets SET plex_attempt_count = 1 WHERE operation_id = ?',
+      ).run(operationId);
+      client.prepare(
+        'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
+      ).run(ratingKey, 12);
+    });
+
+    assertEquals(retryDeletionOperation(operationId, 1), true);
+    await settle();
+
+    const operation = getDeletionOperation(operationId, 1);
+    assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+    assertEquals(plexMediaDeleteCount, 0);
+    assertEquals(arrManagedPath, '/library/Coordinated/better.mkv');
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          'SELECT COUNT(*) FROM media_removals WHERE operation_id = ?',
+        ).value<[number]>(operationId)?.[0]
+      ),
+      0,
+    );
+  },
+);
+
+Deno.test('Radarr reassignment rejects multiple retained competitors in the movie folder', async () => {
   reset();
   configureRadarr();
   addMovie('reassign-quality', [12, 13, 14], 10);
@@ -2684,12 +2985,12 @@ Deno.test('Radarr reassignment chooses the best retained copy from live Plex qua
   await settle();
 
   const operation = getDeletionOperation(operationId, 1);
-  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
   assertEquals(arrMoviePath, '/library/Coordinated');
-  assertEquals(arrManagedPath, '/library/Coordinated/best.mkv');
+  assertEquals(arrManagedPath, '/library/Coordinated/movie.mkv');
   assertEquals(
     live.get('reassign-quality')?.Media?.map((media) => media.id),
-    [13, 14],
+    [12, 13, 14],
   );
 });
 
@@ -3073,7 +3374,7 @@ Deno.test('Plex-phase recovery revalidates durable identity before deleting', as
   const target = (operation.targets as Array<Record<string, unknown>>)[0];
   assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
   assertEquals(target.phase, 'plex_reconciliation');
-  assertEquals(target.plexAttemptCount, 1);
+  assertEquals(target.plexAttemptCount, 0);
   assertEquals(live.get('plex-phase-drift')?.Media?.map((media) => media.id), [11, 12]);
 });
 

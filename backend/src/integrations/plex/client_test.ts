@@ -541,8 +541,20 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
   const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
 
   assertEquals(await client.mediaVersionPathPreviews('10'), [
-    { mediaId: 11, paths: ['/movies/Example-1080p.mkv'], truncated: false, fileSize: 100_000 },
-    { mediaId: 12, paths: ['/movies/Example-4k.mkv'], truncated: false, fileSize: null },
+    {
+      mediaId: 11,
+      paths: ['/movies/Example-1080p.mkv'],
+      truncated: false,
+      fileSize: 100_000,
+      projectedFileSize: 100,
+    },
+    {
+      mediaId: 12,
+      paths: ['/movies/Example-4k.mkv'],
+      truncated: false,
+      fileSize: null,
+      projectedFileSize: null,
+    },
   ]);
 });
 

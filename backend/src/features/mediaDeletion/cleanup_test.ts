@@ -251,8 +251,8 @@ function arrTarget(historyMovieIds: number[] = [7]) {
       }
       if (url.includes('/extrafile?movieId=')) {
         return Promise.resolve(Response.json([
-          { relativePath: 'Movie.idx', type: 'subtitle' },
-          { relativePath: 'Movie.sub', type: 'subtitle' },
+          { relativePath: 'Movie.idx', type: 'subtitle', movieFileId: null },
+          { relativePath: 'Movie.sub', type: 'subtitle', movieFileId: null },
         ]));
       }
       if (url.includes('/moviefile?movieId=')) {

@@ -1,4 +1,5 @@
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
+import type { ArrExtraFile, ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import { arrDirname, arrPathIsWithin, resolveArrPath } from './arrPaths.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
@@ -64,6 +65,10 @@ function normalizedComparison(path: string): string | null {
   return normalizeRemoteAbsolute(path)?.comparison ?? null;
 }
 
+function conservativeComparison(path: string): string | null {
+  return normalizeRemoteAbsolute(path)?.path.toLocaleLowerCase('en-US') ?? null;
+}
+
 function ownershipMatches(
   expected: PersistedArrOwnership,
   actual: PersistedArrOwnership,
@@ -93,6 +98,8 @@ export async function buildArrReassignmentPlan({
   requiredMappingIdentities,
   requiredReassignments = new Map<number, PersistedArrReassignment>(),
   requiredOwnerships = new Map<number, PersistedArrOwnership>(),
+  lookupRecords = new Map<number, ArrMediaRecord | null>(),
+  radarrExtraFiles = new Map<number, readonly ArrExtraFile[] | Error>(),
 }: {
   mediaType: 'movie' | 'episode';
   item: CoordinatedDeleteItem;
@@ -104,6 +111,8 @@ export async function buildArrReassignmentPlan({
   requiredMappingIdentities?: readonly PersistedArrMappingIdentity[];
   requiredReassignments?: ReadonlyMap<number, PersistedArrReassignment>;
   requiredOwnerships?: ReadonlyMap<number, PersistedArrOwnership>;
+  lookupRecords?: ReadonlyMap<number, ArrMediaRecord | null>;
+  radarrExtraFiles?: ReadonlyMap<number, readonly ArrExtraFile[] | Error>;
 }): Promise<ArrReassignmentPlanningResult> {
   const selectedVersions = [...selectedMediaIds].map((mediaId) =>
     liveVersions.find((version) => version.mediaId === mediaId)
@@ -178,7 +187,12 @@ export async function buildArrReassignmentPlan({
           );
           continue;
         }
-        const record = await target.client.lookup(externalId);
+        const lookupRecord = lookupRecords.has(target.instanceId)
+          ? lookupRecords.get(target.instanceId)!
+          : await target.client.lookup(externalId);
+        const record = lookupRecord && mediaType === 'movie'
+          ? { ...lookupRecord, ...(await target.client.radarrMovie(lookupRecord.id)) }
+          : lookupRecord;
         if (!record) {
           const ownership = {
             instanceId: target.instanceId,
@@ -255,7 +269,19 @@ export async function buildArrReassignmentPlan({
             return resolved ? [resolved] : [];
           }),
         }));
+        if (
+          resolvedVersions.some((candidate) =>
+            candidate.version.paths.length === 0 ||
+            candidate.paths.length !== candidate.version.paths.length
+          )
+        ) {
+          arrReassignUnsafeReasons.push(
+            `${target.instanceName} could not resolve every known Plex version path safely`,
+          );
+          continue;
+        }
         const resolvedPathOwners = new Map<string, Set<number>>();
+        const conservativePathOwners = new Map<string, Set<number>>();
         for (const resolvedVersion of resolvedVersions) {
           for (const path of resolvedVersion.paths) {
             const normalized = normalizedComparison(path);
@@ -263,7 +289,20 @@ export async function buildArrReassignmentPlan({
             const owners = resolvedPathOwners.get(normalized) ?? new Set<number>();
             owners.add(resolvedVersion.version.mediaId);
             resolvedPathOwners.set(normalized, owners);
+            const conservative = conservativeComparison(path);
+            if (conservative) {
+              const conservativeOwners = conservativePathOwners.get(conservative) ??
+                new Set<number>();
+              conservativeOwners.add(resolvedVersion.version.mediaId);
+              conservativePathOwners.set(conservative, conservativeOwners);
+            }
           }
+        }
+        if ([...conservativePathOwners.values()].some((owners) => owners.size > 1)) {
+          arrReassignUnsafeReasons.push(
+            `${target.instanceName} has Plex version paths that differ only by case`,
+          );
+          continue;
         }
         const matchingManagedVersions = normalizedManagedPath
           ? resolvedVersions.filter((candidate) =>
@@ -340,22 +379,31 @@ export async function buildArrReassignmentPlan({
           );
           continue;
         }
+        if (mediaType === 'movie' && (managesSelectedVersion || required !== undefined)) {
+          const cachedExtras = radarrExtraFiles.get(target.instanceId);
+          if (cachedExtras instanceof Error) throw cachedExtras;
+          const extras = cachedExtras ?? await target.client.extraFiles(record.id);
+          const selectedManagedFileId = required?.managedFileId ?? managedFile?.id;
+          if (extras.some((extra) => extra.movieFileId === selectedManagedFileId)) {
+            arrReassignUnsafeReasons.push(
+              `${target.instanceName} has extra files linked to the selected managed file`,
+            );
+            continue;
+          }
+        }
         if (!required && !managesSelectedVersion) continue;
         if (required) {
           const normalizedRecordPath = normalizedComparison(record.path ?? '');
           const normalizedOriginalRoot = normalizedComparison(required.recordPath);
           const normalizedRetainedRoot = normalizedComparison(
-            required.retainedRecordPath ??
-              (mediaType === 'movie'
-                ? arrDirname(required.retainedPath) ?? ''
-                : required.recordPath),
+            required.retainedRecordPath ?? required.recordPath,
           );
           if (
             normalizedRecordPath === null ||
-            (
-              normalizedRecordPath !== normalizedOriginalRoot &&
-              normalizedRecordPath !== normalizedRetainedRoot
-            )
+            (mediaType === 'movie'
+              ? normalizedRecordPath !== normalizedOriginalRoot
+              : normalizedRecordPath !== normalizedOriginalRoot &&
+                normalizedRecordPath !== normalizedRetainedRoot)
           ) {
             arrReassignUnsafeReasons.push(
               `${target.instanceName} changed its managed root path`,
@@ -391,6 +439,12 @@ export async function buildArrReassignmentPlan({
           );
           continue;
         }
+        if (normalizedComparison(record.path) === null) {
+          arrReassignUnsafeReasons.push(
+            `${target.instanceName} returned an invalid absolute managed path`,
+          );
+          continue;
+        }
         const candidatePaths = new Map<number, string>();
         const candidateRecordPaths = new Map<number, string>();
         const candidateFileSizes = new Map<number, number | null>();
@@ -404,17 +458,40 @@ export async function buildArrReassignmentPlan({
             !resolvedPathOwners.get(normalizedPath)?.has(version.mediaId)
           ) continue;
           if (mediaType === 'episode' && !arrPathIsWithin(paths[0]!, record.path)) continue;
+          if (
+            mediaType === 'movie' &&
+            normalizedComparison(arrDirname(paths[0]!) ?? '') !== normalizedComparison(record.path)
+          ) continue;
           const candidateRecordPath = mediaType === 'movie' ? arrDirname(paths[0]!) : record.path;
           if (candidateRecordPath === null) continue;
+          const candidateSize = mediaType === 'movie'
+            ? version.projectedFileSize ?? null
+            : version.fileSize ?? null;
+          if (
+            mediaType === 'movie' &&
+            (!Number.isSafeInteger(candidateSize) || candidateSize! < 0)
+          ) continue;
+          if (
+            mediaType === 'movie' &&
+            resolvedVersions.some((other) =>
+              other.version.mediaId !== managedVersion?.mediaId &&
+              other.version.mediaId !== version.mediaId &&
+              other.paths.some((path) => arrPathIsWithin(path, record.path!))
+            )
+          ) continue;
+          if (
+            mediaType === 'movie' &&
+            await target.client.fileVisibility(paths[0]!) !== 'file'
+          ) continue;
           candidatePaths.set(version.mediaId, paths[0]!);
           candidateRecordPaths.set(version.mediaId, candidateRecordPath);
-          candidateFileSizes.set(version.mediaId, version.fileSize ?? null);
+          candidateFileSizes.set(version.mediaId, candidateSize);
         }
         if (candidatePaths.size === 0) {
           arrReassignUnsafeReasons.push(
             mediaType === 'episode'
               ? `${target.instanceName} cannot adopt a retained copy outside its managed series folder`
-              : `${target.instanceName} has no safe retained Plex version with a dedicated movie folder`,
+              : `${target.instanceName} has no visible retained Plex version in its exact current movie folder with known size and no competing file`,
           );
           continue;
         }

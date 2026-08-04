@@ -16,6 +16,8 @@ function target(files: string[]): ArrDeleteTarget {
       type: 'radarr',
       lookup: () =>
         Promise.resolve({ id: 7, title: 'Movie', path: '/movies/Movie', seasons: null }),
+      radarrMovie: () => Promise.resolve({ id: 7, path: '/movies/Movie' }),
+      fileVisibility: () => Promise.resolve('file'),
       monitorTarget: () => Promise.resolve({ id: 7, monitored: true }),
       mediaFiles: () =>
         Promise.resolve(
@@ -103,7 +105,12 @@ Deno.test('version plan rejects Radarr when an unselected Plex version shares it
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/kept.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/kept.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv'])],
     resolvedCleanup: null,
@@ -118,15 +125,25 @@ Deno.test('version plan rejects Radarr when an unselected Plex version shares it
   assertEquals(plan.arrReassignCandidateMediaIds, [2]);
 });
 
-Deno.test('version plan carries a safe Radarr root for every retained movie copy', async () => {
+Deno.test('version plan keeps Radarr reassignment inside the exact current movie folder', async () => {
   const plan = await buildVersionDeletionPlan({
     mediaType: 'movie',
     item,
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/1080p.mkv'], truncated: false },
-      { mediaId: 3, paths: ['/movies-4k/Movie/2160p.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/1080p.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
+      {
+        mediaId: 3,
+        paths: ['/movies-4k/Movie/2160p.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv'])],
     resolvedCleanup: null,
@@ -135,11 +152,122 @@ Deno.test('version plan carries a safe Radarr root for every retained movie copy
 
   assertEquals(plan.preview.arrReassignStatus, 'resolved');
   assertEquals(plan.arrManagedMediaIds, [1]);
-  assertEquals(plan.arrReassignCandidateMediaIds, [2, 3]);
+  assertEquals(plan.arrReassignCandidateMediaIds, [2]);
   assertEquals(
     [...plan.eligibleArrReassignments[0]!.candidateRecordPaths],
-    [[2, '/movies/Movie'], [3, '/movies-4k/Movie']],
+    [[2, '/movies/Movie']],
   );
+});
+
+Deno.test('Radarr reassignment blocks flat-root, invisible, and unknown-size retained files', async () => {
+  for (
+    const [retainedPath, projectedFileSize, visibility] of [
+      ['/movies/retained.mkv', 50, 'file'],
+      ['/movies/Movie/retained.mkv', 50, 'folder'],
+      ['/movies/Movie/retained.mkv', null, 'file'],
+    ] as const
+  ) {
+    const radarr = target(['selected.mkv']);
+    radarr.client.fileVisibility = () => Promise.resolve(visibility);
+    const plan = await buildVersionDeletionPlan({
+      mediaType: 'movie',
+      item,
+      selectedMediaIds: new Set([1]),
+      liveVersions: [
+        { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
+        {
+          mediaId: 2,
+          paths: [retainedPath],
+          truncated: false,
+          projectedFileSize,
+        },
+      ],
+      arrTargets: [radarr],
+      resolvedCleanup: null,
+      cleanupConfigured: false,
+    });
+    assertEquals(plan.preview.arrReassignStatus, 'unavailable', retainedPath);
+  }
+});
+
+Deno.test('Radarr reassignment blocks selected-file extras but permits null ownership', async () => {
+  for (const [movieFileId, expected] of [[1, 'unavailable'], [null, 'resolved']] as const) {
+    const radarr = target(['selected.mkv']);
+    radarr.client.extraFiles = () =>
+      Promise.resolve([{
+        relativePath: 'movie.nfo',
+        type: 'metadata',
+        movieFileId,
+      }]);
+    const plan = await buildVersionDeletionPlan({
+      mediaType: 'movie',
+      item,
+      selectedMediaIds: new Set([1]),
+      liveVersions: [
+        { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
+        {
+          mediaId: 2,
+          paths: ['/movies/Movie/retained.mkv'],
+          truncated: false,
+          projectedFileSize: 50,
+        },
+      ],
+      arrTargets: [radarr],
+      resolvedCleanup: null,
+      cleanupConfigured: false,
+    });
+    assertEquals(plan.preview.arrReassignStatus, expected);
+  }
+});
+
+Deno.test('version planning reuses one targeted Radarr extra-file read', async () => {
+  const radarr = target(['selected.mkv']);
+  let extraReads = 0;
+  radarr.client.extraFiles = () => {
+    extraReads++;
+    return Promise.resolve([]);
+  };
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 50,
+      },
+    ],
+    arrTargets: [radarr],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+  });
+  assertEquals(plan.preview.arrReassignStatus, 'resolved');
+  assertEquals(extraReads, 1);
+});
+
+Deno.test('Radarr reassignment conservatively blocks POSIX paths differing only by case', async () => {
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/movies/Movie/Copy.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/copy.mkv'],
+        truncated: false,
+        projectedFileSize: 50,
+      },
+    ],
+    arrTargets: [target(['Copy.mkv'])],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+  });
+  assertEquals(plan.preview.arrReassignStatus, 'unavailable');
+  assertStringIncludes(plan.preview.arrReassignReason ?? '', 'differ only by case');
 });
 
 Deno.test('version reassignment resolves Plex paths through the Arr library mapping', async () => {
@@ -155,6 +283,7 @@ Deno.test('version reassignment resolves Plex paths through the Arr library mapp
   }];
   mappedTarget.client.lookup = () =>
     Promise.resolve({ id: 7, title: 'Movie', path: 'D:\\Movies\\Movie', seasons: null });
+  mappedTarget.client.radarrMovie = () => Promise.resolve({ id: 7, path: 'D:\\Movies\\Movie' });
   mappedTarget.client.radarrManagedFile = () =>
     Promise.resolve({
       id: 1,
@@ -179,6 +308,7 @@ Deno.test('version reassignment resolves Plex paths through the Arr library mapp
         paths: ['/media/movies/Movie/retained.mkv'],
         truncated: false,
         fileSize: 200,
+        projectedFileSize: 200,
       },
     ],
     arrTargets: [mappedTarget],
@@ -230,7 +360,7 @@ Deno.test('version ownership fails closed when a selected Plex path is not cover
   });
 
   assertEquals(plan.arrOwnershipValid, false);
-  assertStringIncludes(plan.arrOwnershipReason ?? '', 'ownership could not be resolved safely');
+  assertStringIncludes(plan.arrOwnershipReason ?? '', 'resolve every known Plex version path');
   assertEquals(plan.arrManagedMediaIds, []);
 });
 
@@ -271,7 +401,7 @@ Deno.test('episode ownership fails closed when Sonarr returns a malformed manage
   assertEquals(plan.arrManagedMediaIds, []);
 });
 
-Deno.test('version reassignment never retains another version selected in the same operation', async () => {
+Deno.test('version reassignment blocks another selected version still competing in the folder', async () => {
   const plan = await buildVersionDeletionPlan({
     mediaType: 'movie',
     item,
@@ -280,15 +410,20 @@ Deno.test('version reassignment never retains another version selected in the sa
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
       { mediaId: 2, paths: ['/movies/Movie/also-deleting.mkv'], truncated: false },
-      { mediaId: 3, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 3,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv'])],
     resolvedCleanup: null,
     cleanupConfigured: false,
   });
 
-  assertEquals(plan.preview.arrReassignStatus, 'resolved');
-  assertEquals(plan.arrReassignCandidateMediaIds, [3]);
+  assertEquals(plan.preview.arrReassignStatus, 'unavailable');
+  assertEquals(plan.arrReassignCandidateMediaIds, []);
 });
 
 Deno.test('version reassignment rejects a Plex path shared by selected and retained versions', async () => {
@@ -306,7 +441,7 @@ Deno.test('version reassignment rejects a Plex path shared by selected and retai
   });
 
   assertEquals(plan.preview.arrReassignStatus, 'unavailable');
-  assertStringIncludes(plan.preview.arrReassignReason ?? '', 'multiple Plex versions');
+  assertStringIncludes(plan.preview.arrReassignReason ?? '', 'differ only by case');
 });
 
 Deno.test('version reassignment rejects a selected Plex version with multiple file paths', async () => {
@@ -320,7 +455,12 @@ Deno.test('version reassignment rejects a selected Plex version with multiple fi
         paths: ['/movies/Movie/selected.mkv', '/movies/Movie/selected-part-2.mkv'],
         truncated: false,
       },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv'])],
     resolvedCleanup: null,
@@ -348,7 +488,12 @@ Deno.test('version reassignment fails closed when any mapped Arr lookup fails', 
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv']), unavailableTarget],
     resolvedCleanup: null,
@@ -370,7 +515,12 @@ Deno.test('Radarr reassignment does not adopt a version managed by another insta
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv']), retainedOwner],
     resolvedCleanup: null,
@@ -382,7 +532,7 @@ Deno.test('Radarr reassignment does not adopt a version managed by another insta
   assertStringIncludes(plan.preview.arrReassignReason ?? '', 'another mapped Arr instance');
 });
 
-Deno.test('Radarr reassignment can choose an unowned copy beside another managed version', async () => {
+Deno.test('Radarr reassignment rejects an unowned copy beside another managed competitor', async () => {
   const retainedOwner = target(['retained.mkv']);
   retainedOwner.instanceId = 2;
   retainedOwner.instanceName = 'Radarr HD';
@@ -393,16 +543,26 @@ Deno.test('Radarr reassignment can choose an unowned copy beside another managed
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
-      { mediaId: 3, paths: ['/movies/Movie/unowned.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
+      {
+        mediaId: 3,
+        paths: ['/movies/Movie/unowned.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target(['selected.mkv']), retainedOwner],
     resolvedCleanup: null,
     cleanupConfigured: false,
   });
 
-  assertEquals(plan.preview.arrReassignStatus, 'resolved');
-  assertEquals(plan.arrReassignCandidateMediaIds, [3]);
+  assertEquals(plan.preview.arrReassignStatus, 'unavailable');
+  assertEquals(plan.arrReassignCandidateMediaIds, []);
 });
 
 Deno.test('version reassignment can recover every required instance after the source disappeared', async () => {
@@ -411,7 +571,12 @@ Deno.test('version reassignment can recover every required instance after the so
     item,
     selectedMediaIds: new Set([1]),
     liveVersions: [
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [target([])],
     resolvedCleanup: null,
@@ -496,7 +661,12 @@ Deno.test('version reassignment recovery rejects new ownership on an unchanged m
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [primary, secondary],
     resolvedCleanup: null,
@@ -517,7 +687,12 @@ Deno.test('version reassignment recovery rejects new ownership on an unchanged m
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [primary, secondary],
     resolvedCleanup: null,
@@ -586,12 +761,18 @@ Deno.test('version reassignment rejects a replacement Radarr record after interr
   const replacement = target([]);
   replacement.client.lookup = () =>
     Promise.resolve({ id: 99, title: 'Movie', path: '/movies/New', seasons: null });
+  replacement.client.radarrMovie = () => Promise.resolve({ id: 99, path: '/movies/New' });
   const plan = await buildVersionDeletionPlan({
     mediaType: 'movie',
     item,
     selectedMediaIds: new Set([1]),
     liveVersions: [
-      { mediaId: 2, paths: ['/movies/Movie/retained.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
     ],
     arrTargets: [replacement],
     resolvedCleanup: null,

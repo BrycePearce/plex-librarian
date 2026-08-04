@@ -18,6 +18,7 @@ import type {
   PlexRawMetadata,
   PlexTrack,
 } from './types.ts';
+import { plexProjectedKilobytes } from '../../features/mediaDeletion/radarrSize.ts';
 import { buildPlexHeaders } from './headers.ts';
 export { buildPlexHeaders, PLEX_CLIENT_PRODUCT, PLEX_TV } from './headers.ts';
 
@@ -647,9 +648,18 @@ export class PlexClient {
         const matchingParts = paths.length === 1
           ? (media.Part ?? []).filter((part) => part.file === paths[0])
           : [];
-        const rawFileSize = matchingParts.length === 1 ? Number(matchingParts[0]!.size) : NaN;
-        const fileSize = Number.isFinite(rawFileSize) && rawFileSize >= 0 ? rawFileSize : null;
-        return [{ mediaId: media.id, paths, truncated, fileSize }];
+        const rawFileSize = matchingParts.length === 1 ? matchingParts[0]!.size : undefined;
+        const fileSize = typeof rawFileSize === 'number' && Number.isSafeInteger(rawFileSize) &&
+            rawFileSize >= 0
+          ? rawFileSize
+          : null;
+        return [{
+          mediaId: media.id,
+          paths,
+          truncated,
+          fileSize,
+          projectedFileSize: plexProjectedKilobytes(rawFileSize),
+        }];
       })
     );
   }

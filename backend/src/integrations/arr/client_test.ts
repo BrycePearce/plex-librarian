@@ -115,6 +115,77 @@ Deno.test('ArrClient rejects malformed or partially valid Radarr managed-file re
   }
 });
 
+Deno.test('ArrClient reads one targeted Radarr movie and exact file visibility', async () => {
+  const requests: string[] = [];
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    ((input: string | URL | Request) => {
+      const url = new URL(String(input));
+      requests.push(`${url.pathname}${url.search}`);
+      if (url.pathname === '/api/v3/movie/42') {
+        return Promise.resolve(Response.json({ id: 42, path: '/movies/Movie' }));
+      }
+      return Promise.resolve(Response.json({ type: 'file' }));
+    }) as typeof fetch,
+  );
+
+  assertEquals(await client.radarrMovie(42), { id: 42, path: '/movies/Movie' });
+  assertEquals(await client.fileVisibility('/movies/Movie/kept.mkv'), 'file');
+  assertEquals(requests, [
+    '/api/v3/movie/42',
+    '/api/v3/filesystem/type?path=%2Fmovies%2FMovie%2Fkept.mkv',
+  ]);
+});
+
+Deno.test('ArrClient rejects malformed Radarr file visibility and extra ownership', async () => {
+  const visibility = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() => Promise.resolve(Response.json({ type: 'missing' }))) as typeof fetch,
+  );
+  await assertRejects(() => visibility.fileVisibility('/movies/Movie/kept.mkv'), ArrApiError);
+
+  const extras = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([{
+        relativePath: 'movie.nfo',
+        type: 'metadata',
+        movieFileId: -1,
+      }]))) as typeof fetch,
+  );
+  await assertRejects(() => extras.extraFiles(42), ArrApiError, 'ownership');
+
+  const missingOwnership = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([{
+        relativePath: 'movie.nfo',
+        type: 'metadata',
+      }]))) as typeof fetch,
+  );
+  await assertRejects(() => missingOwnership.extraFiles(42), ArrApiError, 'ownership');
+
+  const malformedExtra = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json([{
+        type: 'metadata',
+        movieFileId: 99,
+      }]))) as typeof fetch,
+  );
+  await assertRejects(() => malformedExtra.extraFiles(42), ArrApiError, 'extra-file record');
+});
+
 Deno.test('ArrClient updates only the path on the complete existing Radarr movie record', async () => {
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
   const client = new ArrClient(
@@ -444,10 +515,10 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
       ]));
     }
     return Promise.resolve(Response.json([
-      { relativePath: 'Movie.idx', type: 'subtitle' },
-      { relativePath: 'Movie.sub', type: 0 },
-      { relativePath: 'movie.nfo', type: 1 },
-      { relativePath: 'extras/trailer.mov', type: 2 },
+      { relativePath: 'Movie.idx', type: 'subtitle', movieFileId: null },
+      { relativePath: 'Movie.sub', type: 0, movieFileId: null },
+      { relativePath: 'movie.nfo', type: 1, movieFileId: null },
+      { relativePath: 'extras/trailer.mov', type: 2, movieFileId: null },
     ]));
   }) as typeof fetch;
   const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
@@ -467,10 +538,10 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
     size: 2000,
   });
   assertEquals(await client.extraFiles(42), [
-    { relativePath: 'Movie.idx', type: 'subtitle' },
-    { relativePath: 'Movie.sub', type: 'subtitle' },
-    { relativePath: 'movie.nfo', type: 'metadata' },
-    { relativePath: 'extras/trailer.mov', type: 'other' },
+    { relativePath: 'Movie.idx', type: 'subtitle', movieFileId: null },
+    { relativePath: 'Movie.sub', type: 'subtitle', movieFileId: null },
+    { relativePath: 'movie.nfo', type: 'metadata', movieFileId: null },
+    { relativePath: 'extras/trailer.mov', type: 'other', movieFileId: null },
   ]);
 });
 

@@ -758,7 +758,12 @@ export function retryDeletionOperation(
       `UPDATE deletion_targets
        SET status = 'queued',
            attempt_count = CASE WHEN ? = 'needs_attention' THEN 0 ELSE attempt_count END,
-           plex_attempt_count = CASE WHEN phase = 'plex_reconciliation' THEN 0 ELSE plex_attempt_count END,
+           plex_attempt_count = CASE
+             WHEN phase = 'plex_reconciliation'
+              AND COALESCE(json_extract(snapshot, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
+             THEN 0
+             ELSE plex_attempt_count
+           END,
            next_retry_at = NULL,
            warning = CASE WHEN ? = 'warning' THEN NULL ELSE warning END,
            error = NULL,

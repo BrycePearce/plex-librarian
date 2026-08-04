@@ -299,7 +299,7 @@ export async function resolveDownloadCleanup(
       path: record.path,
       seasons: record.seasons,
       mediaFiles,
-      extraFiles,
+      extraFiles: extraFiles?.map(({ relativePath, type }) => ({ relativePath, type })) ?? null,
     });
     try {
       const torrentAssociations = await arr.client.torrentAssociations(record.id);

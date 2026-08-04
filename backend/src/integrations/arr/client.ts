@@ -25,6 +25,12 @@ export interface ArrTorrentAssociation {
 export interface ArrExtraFile {
   relativePath: string;
   type: 'subtitle' | 'metadata' | 'other';
+  movieFileId: number | null;
+}
+
+export interface RadarrMovieRecord {
+  id: number;
+  path: string;
 }
 
 export interface ArrManagedFile {
@@ -189,19 +195,66 @@ export class ArrClient {
   async extraFiles(mediaId: number): Promise<ArrExtraFile[]> {
     if (this.type !== 'radarr') return [];
     const records = await this.request<
-      Array<{ relativePath?: string; type?: number | string }>
+      Array<{ relativePath?: string; type?: number | string; movieFileId?: number | null }>
     >(`/extrafile?movieId=${mediaId}`);
+    if (!Array.isArray(records)) {
+      throw new ArrApiError('Radarr returned an invalid extra-file response');
+    }
     return records.flatMap((record) => {
+      if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+        throw new ArrApiError('Radarr returned an invalid extra-file record');
+      }
       const relativePath = record.relativePath?.trim();
-      if (!relativePath) return [];
+      if (!relativePath) {
+        throw new ArrApiError('Radarr returned an invalid extra-file record');
+      }
+      const movieFileId = record.movieFileId;
+      if (!Object.hasOwn(record, 'movieFileId') || movieFileId === undefined) {
+        throw new ArrApiError('Radarr returned missing extra-file ownership');
+      }
+      if (
+        movieFileId !== null &&
+        (!Number.isInteger(movieFileId) || movieFileId <= 0)
+      ) {
+        throw new ArrApiError('Radarr returned invalid extra-file ownership');
+      }
       const rawType = String(record.type ?? '').toLowerCase();
       const type = rawType === '0' || rawType === 'subtitle'
         ? 'subtitle'
         : rawType === '1' || rawType === 'metadata'
         ? 'metadata'
         : 'other';
-      return [{ relativePath, type } satisfies ArrExtraFile];
+      return [
+        {
+          relativePath,
+          type,
+          movieFileId,
+        } satisfies ArrExtraFile,
+      ];
     });
+  }
+
+  async radarrMovie(mediaId: number): Promise<RadarrMovieRecord> {
+    if (this.type !== 'radarr') throw new ArrApiError('Movie reads require Radarr');
+    const record = await this.request<{ id?: number; path?: string }>(`/movie/${mediaId}`);
+    const path = record?.path?.trim();
+    if (
+      !record || typeof record !== 'object' || Array.isArray(record) ||
+      !Number.isInteger(record.id) || record.id !== mediaId || !path
+    ) throw new ArrApiError('Radarr returned an invalid targeted movie record');
+    return { id: mediaId, path };
+  }
+
+  async fileVisibility(path: string): Promise<'file' | 'folder'> {
+    if (this.type !== 'radarr') throw new ArrApiError('File visibility checks require Radarr');
+    const result = await this.request<{ type?: string }>(
+      `/filesystem/type?path=${encodeURIComponent(path)}`,
+    );
+    if (
+      !result || typeof result !== 'object' || Array.isArray(result) ||
+      (result.type !== 'file' && result.type !== 'folder')
+    ) throw new ArrApiError('Radarr returned an invalid file visibility response');
+    return result.type;
   }
 
   async mediaFiles(mediaId: number): Promise<ArrManagedFile[] | null> {
@@ -250,12 +303,12 @@ export class ArrClient {
     if (!Number.isInteger(record.id) || record.id! <= 0 || !relativePath) {
       throw new ArrApiError('Radarr returned an invalid managed movie file');
     }
-    const size = Number(record.size);
+    const size = record.size;
     return {
       id: record.id!,
       relativePath,
       path: absolutePath,
-      size: Number.isFinite(size) && size >= 0 ? size : null,
+      size: Number.isSafeInteger(size) && size! >= 0 ? size! : null,
     };
   }
 
