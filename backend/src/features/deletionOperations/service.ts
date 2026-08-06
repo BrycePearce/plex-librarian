@@ -11,6 +11,15 @@ import {
 } from './types.ts';
 import { DeletionValidationError } from './validation.ts';
 import { ensureDeletionTarget } from './workflow.ts';
+import { isRelocationSupersededTarget } from './relocationModel.ts';
+import {
+  classifyRelocationLifecycle,
+  hasBlockingRelocationGuidance,
+  hasIncompleteRelocationBarrier,
+  loadRelocationLifecycleEvidence,
+  type RelocationLifecycleRow,
+  relocationSupersededPredicateSql,
+} from './relocation.ts';
 
 export type DeletionKind = 'whole_item' | 'movie_version' | 'episode_version';
 export type DeletionOperationStatus =
@@ -267,6 +276,15 @@ function projectionRoot(target: NewDeletionTarget): string | null {
 }
 
 function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperation): void {
+  const roots = input.targets.flatMap((target) => {
+    const root = projectionRoot(target);
+    return root === null ? [] : [root];
+  });
+  if (hasBlockingRelocationGuidance(client, input.serverId, input.libraryKey, roots)) {
+    throw new DeletionConflictError(
+      'this movie has active retained-version relocation guidance; finish relocation first',
+    );
+  }
   const unresolved = client.prepare(
     `SELECT t.operation_id, t.status, t.target_kind, t.target_key, t.snapshot
      FROM deletion_targets t
@@ -379,6 +397,11 @@ export async function enqueueDeletionOperations(
         }
         accepted.push(repeated[0]);
         continue;
+      }
+      if (hasIncompleteRelocationBarrier(client, input.serverId, input.libraryKey)) {
+        throw new DeletionConflictError(
+          'a targeted library sync is required to finish retained-version relocation before accepting cleanup',
+        );
       }
       if (
         client.prepare(
@@ -667,9 +690,49 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
       'updatedAt',
     ];
     const result = Object.fromEntries(keys.map((key, index) => [key, row[index]]));
-    result.targets = client.prepare(
+    const aggregateCounts = client.prepare(
+      `SELECT COUNT(*) FILTER (WHERE status = 'cancelled'),
+              COUNT(*) FILTER (WHERE ${relocationSupersededPredicateSql()})
+       FROM deletion_targets WHERE operation_id = ?`,
+    ).value<[number, number]>(id) ?? [0, 0];
+    result.cancelledCount = aggregateCounts[0];
+    result.supersededCount = aggregateCounts[1];
+    result.libraryRecoveryTargetCount = client.prepare(
+      `SELECT COUNT(*) FROM deletion_targets t
+       JOIN deletion_operations o ON o.id = t.operation_id
+       WHERE o.server_id = ? AND o.library_key = ? AND t.status = 'needs_attention'`,
+    ).value<[number]>(serverId, String(row[2]))?.[0] ?? 0;
+    const targetRows = client.prepare(
       'SELECT id, ordinal, target_kind, target_key, title, status, attempt_count, phase, removal_confirmed_at, plex_reconciled_at, plex_attempt_count, warning, next_retry_at, error, logical_size, snapshot FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
-    ).values(id).map((target) => {
+    ).values<unknown[]>(id);
+    const projectedTargets = targetRows.map((target) => {
+      const snapshot = JSON.parse(String(target[15])) as Record<string, unknown> & {
+        mode?: string;
+        cleanupDownloads?: boolean;
+        unmonitorFromArr?: boolean;
+        arrOwnerships?: unknown[];
+        arrReassignments?: unknown[];
+      };
+      const lifecycleRow: RelocationLifecycleRow = {
+        targetId: Number(target[0]),
+        operationId: id,
+        serverId,
+        targetKind: String(target[2]) as DeletionKind,
+        targetKey: String(target[3]),
+        status: String(target[5]),
+        phase: String(target[7]),
+        plexAttemptCount: Number(target[10]),
+        removalConfirmedAt: target[8] === null ? null : Number(target[8]),
+        error: target[13] === null ? null : String(target[13]),
+        snapshot,
+      };
+      return { target, snapshot, lifecycleRow };
+    });
+    const lifecycleEvidence = loadRelocationLifecycleEvidence(
+      client,
+      projectedTargets.map(({ lifecycleRow }) => lifecycleRow),
+    );
+    result.targets = projectedTargets.map(({ target, snapshot, lifecycleRow }) => {
       const targetResult = Object.fromEntries([
         'id',
         'ordinal',
@@ -687,18 +750,26 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         'error',
         'logicalSize',
       ].map((key, index) => [key, target[index]]));
-      const snapshot = JSON.parse(String(target[15])) as {
-        mode?: string;
-        cleanupDownloads?: boolean;
-        unmonitorFromArr?: boolean;
-        arrOwnerships?: unknown[];
-        arrReassignments?: unknown[];
-      };
       targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
       targetResult.arrCoordinationConfigured = snapshot.mode === 'coordinated' ||
         snapshot.unmonitorFromArr === true ||
         (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
         (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0);
+      const lifecycle = classifyRelocationLifecycle(
+        lifecycleRow,
+        lifecycleEvidence.get(lifecycleRow.targetId)!,
+      );
+      targetResult.relocationGuidanceState = lifecycle.guidanceState;
+      targetResult.relocationSyncBarrierState = lifecycle.barrierState;
+      if (lifecycle.guidance) targetResult.relocationGuidance = lifecycle.guidance;
+      if (lifecycle.barrier) targetResult.relocationSyncBarrier = lifecycle.barrier;
+      targetResult.supersededReason = isRelocationSupersededTarget({
+          status: targetResult.status,
+          error: targetResult.error,
+          snapshot,
+        })
+        ? targetResult.error
+        : null;
       return targetResult;
     });
     return result;
@@ -750,8 +821,10 @@ export function retryDeletionOperation(
       ).value<[number]>(serverId, operation[0])
     ) return false;
     const targetStatus = outcome === 'warning' ? 'completed_with_warning' : 'needs_attention';
+    const eligiblePredicate =
+      "operation_id = ? AND status = ? AND json_type(snapshot, '$.relocationGuidance') IS NULL AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL";
     const matching = client.prepare(
-      'SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND status = ?',
+      `SELECT COUNT(*) FROM deletion_targets WHERE ${eligiblePredicate}`,
     ).value<[number]>(id, targetStatus)?.[0] ?? 0;
     if (matching === 0) return false;
     client.prepare(
@@ -768,7 +841,7 @@ export function retryDeletionOperation(
            warning = CASE WHEN ? = 'warning' THEN NULL ELSE warning END,
            error = NULL,
            updated_at = ?
-       WHERE operation_id = ? AND status = ?`,
+       WHERE ${eligiblePredicate}`,
     ).run(outcome, outcome, now, id, targetStatus);
     refreshDeletionOperation(client, id);
     return true;

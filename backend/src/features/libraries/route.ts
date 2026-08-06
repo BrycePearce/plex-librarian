@@ -53,6 +53,10 @@ import {
   staleQuickCleanupActiveProtection,
 } from './quickCleanup.ts';
 import { staleCutoffs } from './staleFilters.ts';
+import {
+  assertRelocationWorkflowClear,
+  RelocationConflictError,
+} from '../deletionOperations/relocation.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -360,6 +364,12 @@ router.get('/:key/stale/quick-cleanup', async (c) => {
   const key = c.req.param('key');
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'library not found' }, 404);
+  try {
+    assertRelocationWorkflowClear(serverId, key);
+  } catch (error) {
+    if (error instanceof RelocationConflictError) return c.json({ error: error.message }, 409);
+    throw error;
+  }
   const rawDays = c.req.query('days') ?? String(STALE_QUICK_CLEANUP_DEFAULT_DAYS);
   const thresholdDays = parseStaleQuickCleanupDays(rawDays);
   if (thresholdDays === null) {

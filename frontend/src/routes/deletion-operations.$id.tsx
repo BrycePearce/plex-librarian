@@ -6,10 +6,13 @@ import { formatKilobytes } from "../lib/format.ts";
 import { requireAuth } from "../lib/requireAuth.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
+import { RelocationWorkflowCard } from "../features/deletionOperations/RelocationWorkflowCard.tsx";
 import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
   deletionOperationTitle,
+  nonSupersededCancelledCount,
+  retryableRelocationSafeTargetCount,
 } from "./-deletionOperationState.ts";
 
 export const Route = createFileRoute("/deletion-operations/$id")({
@@ -24,11 +27,17 @@ function DeletionOperationPage() {
   const query = useQuery({
     queryKey,
     queryFn: () => api.deletionOperations.get(id),
-    refetchInterval: (state) =>
-      deletionOperationPollInterval(
+    refetchInterval: (state) => {
+      if (
+        state.state.data?.targets.some((target) =>
+          target.relocationSyncBarrier && !target.relocationSyncBarrier.finishedAt
+        )
+      ) return 1_000;
+      return deletionOperationPollInterval(
         state.state.data?.status,
         state.state.data?.nextRetryAt,
-      ),
+      );
+    },
   });
   const cancel = useMutation({
     mutationFn: () => api.deletionOperations.cancel(id),
@@ -60,7 +69,14 @@ function DeletionOperationPage() {
     operation.targets.find((target) =>
       target.status === "waiting_retry" || target.status === "queued"
     );
-  const cancelledCount = operation.targets.filter((target) => target.status === "cancelled").length;
+  const retryableFailedCount = retryableRelocationSafeTargetCount(
+    operation.targets,
+    "needs_attention",
+  );
+  const retryableWarningCount = retryableRelocationSafeTargetCount(
+    operation.targets,
+    "completed_with_warning",
+  );
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl w-full mx-auto">
@@ -107,7 +123,16 @@ function DeletionOperationPage() {
               label="Logical size removed"
               value={formatKilobytes(operation.logicalSizeRemoved)}
             />
-            <Stat label="Cancelled" value={String(cancelledCount)} />
+            <Stat
+              label="Cancelled"
+              value={String(
+                nonSupersededCancelledCount(
+                  operation.cancelledCount,
+                  operation.supersededCount,
+                ),
+              )}
+            />
+            <Stat label="Superseded" value={String(operation.supersededCount)} />
           </div>
           {current && activeDeletionStatuses.has(operation.status) && (
             <div className="flex items-center gap-3 rounded-lg bg-base-100 px-4 py-3">
@@ -146,7 +171,7 @@ function DeletionOperationPage() {
                 Cancel queued targets
               </button>
             )}
-            {operation.failedCount > 0 &&
+            {retryableFailedCount > 0 &&
               !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
@@ -157,7 +182,7 @@ function DeletionOperationPage() {
                 <RotateCcw className="size-4" />Retry failed targets
               </button>
             )}
-            {operation.warningCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+            {retryableWarningCount > 0 && !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-warning btn-sm"
@@ -219,8 +244,19 @@ function DeletionOperationPage() {
                 {target.phase === "plex_reconciliation" && target.error && (
                   <p className="text-xs text-error mt-1">Last Plex error: {target.error}</p>
                 )}
+                {target.supersededReason && (
+                  <p className="text-xs text-base-content/55 mt-1">{target.supersededReason}</p>
+                )}
               </div>
             </summary>
+            {(target.relocationGuidanceState !== "none" ||
+              target.relocationSyncBarrierState !== "none") && (
+              <RelocationWorkflowCard
+                operationId={operation.id}
+                target={target}
+                recoveryDefersSync={operation.libraryRecoveryTargetCount !== 1}
+              />
+            )}
             <TargetTimeline target={target} />
           </details>
         ))}

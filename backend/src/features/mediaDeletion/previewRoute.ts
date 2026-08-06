@@ -15,6 +15,10 @@ import {
 } from './planning.ts';
 import { loadPlexPathPreviews } from './plexPathPreview.ts';
 import { getDownloadClientTargets } from './targets.ts';
+import {
+  assertRelocationWorkflowClear,
+  RelocationConflictError,
+} from '../deletionOperations/relocation.ts';
 
 type PreviewApp = { Variables: ActiveServerVariables };
 
@@ -38,6 +42,12 @@ export function createDownloadCleanupPreviewRouter(
 
     const serverId = c.get('activeServerId');
     if (serverId === null) return c.json({ error: 'library not found' }, 404);
+    try {
+      assertRelocationWorkflowClear(serverId, key, body.ratingKeys);
+    } catch (error) {
+      if (error instanceof RelocationConflictError) return c.json({ error: error.message }, 409);
+      throw error;
+    }
     const ratingKeys = [...new Set(body.ratingKeys)];
     const owned = await db.select({
       ratingKey: items.ratingKey,

@@ -39,6 +39,24 @@ type LibraryCallbacks = {
   onPhase: (phase: LibraryPhase) => void;
 };
 
+export interface LibrarySyncResult {
+  itemsProcessed: number;
+  generation: number;
+  pruneCompleted: boolean;
+}
+
+export function completeProjectionPrune(
+  libraryType: PlexLibrary['type'],
+  itemProjectionPruneCompleted: boolean,
+  showProjectionPruneCompleted: boolean,
+): boolean {
+  if (libraryType === 'movie') return itemProjectionPruneCompleted;
+  if (libraryType === 'show') {
+    return itemProjectionPruneCompleted && showProjectionPruneCompleted;
+  }
+  return false;
+}
+
 function buildCallbacks(
   reporter: SyncReporter | undefined,
   libraryKey: string,
@@ -86,7 +104,7 @@ async function syncLibrary(
   now: number,
   serverId: number,
   callbacks?: LibraryCallbacks,
-): Promise<number> {
+): Promise<LibrarySyncResult> {
   callbacks?.onPhase('items');
 
   // historySyncedAt is reset to null here — it's only set back once syncLibraryHistory
@@ -254,15 +272,23 @@ async function syncLibrary(
   // means orphaned season rows are cascade-deleted by the prune step instead.
   // syncArtistSizes: runs before the prune so its UPDATEs land on live item rows;
   // after the prune, deleted artists are gone and the UPDATEs would silently no-op.
+  let showProjectionPruneCompleted = false;
   if (lib.type === 'show') {
     callbacks?.onPhase('episodes');
-    await syncShowSizes(plex, lib, now, serverId, preserveDeletionProjections);
+    showProjectionPruneCompleted = (await syncShowSizes(
+      plex,
+      lib,
+      now,
+      serverId,
+      preserveDeletionProjections,
+    )).pruneCompleted;
   } else if (lib.type === 'artist') {
     callbacks?.onPhase('tracks');
     await syncArtistSizes(plex, lib, serverId);
   }
 
-  if (itemCount > 0 && !preserveDeletionProjections) {
+  const itemProjectionPruneCompleted = itemCount > 0 && !preserveDeletionProjections;
+  if (itemProjectionPruneCompleted) {
     await db.delete(items).where(and(itemsByLibrary(serverId, lib.key), lt(items.updatedAt, now)));
     // Cascade-deletes media-version rows for any item pruned above. This explicit prune
     // additionally catches the case where the parent item still exists but one specific
@@ -271,6 +297,11 @@ async function syncLibrary(
       and(mediaVersionsByLibrary(serverId, lib.key), lt(itemMediaVersions.updatedAt, now)),
     );
   }
+  const pruneCompleted = completeProjectionPrune(
+    lib.type,
+    itemProjectionPruneCompleted,
+    showProjectionPruneCompleted,
+  );
 
   callbacks?.onPhase('history');
   await syncLibraryHistory(plex, lib, serverId);
@@ -280,7 +311,7 @@ async function syncLibrary(
 
   callbacks?.onPhase('done');
 
-  return itemCount;
+  return { itemsProcessed: itemCount, generation: now, pruneCompleted };
 }
 
 // Pure sync logic — throws on error, returns total items processed.
@@ -356,7 +387,7 @@ export async function runSync(
           buildCallbacks(reporter, lib.key, (d) => {
             totalItems += d;
           }),
-        ));
+        ).then(() => undefined));
     }
   }
 
@@ -377,7 +408,7 @@ export async function runLibrarySync(
   serverId: number,
   libraryKey: string,
   reporter?: SyncReporter,
-): Promise<number> {
+): Promise<LibrarySyncResult> {
   const [lib] = await db
     .select({ key: libraries.key, title: libraries.title, type: libraries.type })
     .from(libraries)
@@ -399,16 +430,15 @@ export async function runLibrarySync(
   // server-wide reconciliation here would make every other video library's older
   // history generation incomplete until a full sync walked them as well.
 
-  let itemCount = 0;
-  await withLibraryOperation(serverId, libraryKey, 'sync', () =>
-    syncLibrary(
+  let result: LibrarySyncResult | null = null;
+  await withLibraryOperation(serverId, libraryKey, 'sync', async () => {
+    result = await syncLibrary(
       plex,
       lib,
       now,
       serverId,
-      buildCallbacks(reporter, libraryKey, (d) => {
-        itemCount += d;
-      }),
-    ));
-  return itemCount;
+      buildCallbacks(reporter, libraryKey, () => {}),
+    );
+  });
+  return result!;
 }

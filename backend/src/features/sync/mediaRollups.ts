@@ -20,7 +20,7 @@ export async function syncShowSizes(
   now: number,
   serverId: number,
   preserveDeletionProjections = false,
-): Promise<void> {
+): Promise<{ pruneCompleted: boolean }> {
   type SeasonAgg = {
     showRatingKey: string;
     seasonIndex: number;
@@ -71,7 +71,7 @@ export async function syncShowSizes(
   // No episodes fetched — transient empty response or all filtered. Skip prune and
   // rollup to preserve existing season data rather than wiping it. Mirrors the
   // hasItems guard on the items prune in syncLibrary.
-  if (seasonMap.size === 0) return;
+  if (seasonMap.size === 0) return { pruneCompleted: false };
 
   const entries = [...seasonMap.entries()];
   for (const batch of sqliteWriteBatches(entries)) {
@@ -226,6 +226,7 @@ export async function syncShowSizes(
     )
     WHERE server_id = ${serverId} AND library_key = ${lib.key} AND type = 'show'
   `);
+  return { pruneCompleted: !preserveDeletionProjections };
 }
 
 // Fetches all tracks for a music library and rolls their file sizes up to the artist row.

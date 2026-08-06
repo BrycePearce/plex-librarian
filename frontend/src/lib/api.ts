@@ -8,6 +8,7 @@ import type {
   DeletionOperationCreated,
   DownloadCleanupPreviewResponse,
   DuplicatesResponse,
+  FinishRelocationResponse,
   LibrariesResponse,
   Library,
   MediaRemovalSummary,
@@ -420,6 +421,24 @@ export const api = {
       apiFetch<DeletionOperation>(
         `/deletion-operations/${encodeURIComponent(id)}/retry`,
         { method: "POST", body: JSON.stringify({ outcome }) },
+      ),
+    finishRelocation: (
+      id: string,
+      targetId: number,
+      guidanceId: string,
+      destinationPlaybackConfirmed: boolean,
+    ) =>
+      apiFetch<FinishRelocationResponse>(
+        `/deletion-operations/${encodeURIComponent(id)}/targets/${targetId}/finish-relocation`,
+        {
+          method: "POST",
+          body: JSON.stringify({ guidanceId, destinationPlaybackConfirmed }),
+        },
+      ),
+    runRelocationSync: (id: string, targetId: number) =>
+      apiFetch<FinishRelocationResponse>(
+        `/deletion-operations/${encodeURIComponent(id)}/targets/${targetId}/relocation-sync`,
+        { method: "POST" },
       ),
   },
   settings: {

@@ -19,6 +19,7 @@ import {
   type NewDeletionTarget,
   repeatedDeletionOperationBatch,
 } from '../deletionOperations/service.ts';
+import { hasAnyIncompleteRelocationBarrier } from '../deletionOperations/relocation.ts';
 import { mediaRatingKeyIsPlaying } from '../mediaDeletion/activePlayback.ts';
 import {
   buildSmartDuplicateAnalysis,
@@ -63,6 +64,12 @@ router.post('/smart-analysis', async (c) => {
     return c.json({ analyzedGroups: 0, protectedGroups: 0, candidates: [] });
   }
   const serverId = activeServer.serverId;
+  if (hasAnyIncompleteRelocationBarrier(serverId)) {
+    return c.json({
+      error:
+        'A targeted library sync is required to finish retained-version relocation before smart analysis',
+    }, 409);
+  }
   try {
     const [analysis, sessions, reservations] = await Promise.all([
       buildSmartDuplicateAnalysis(serverId, { movies, tv }),

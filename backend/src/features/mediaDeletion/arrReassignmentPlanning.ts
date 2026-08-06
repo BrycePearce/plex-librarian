@@ -4,6 +4,12 @@ import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import { arrDirname, arrPathIsWithin, resolveArrPath } from './arrPaths.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
+import type { RadarrMovieRelocationCandidate } from '../deletionOperations/relocationModel.ts';
+import {
+  type ArrReassignmentDecisionCode,
+  decideRadarrRelocation,
+  planRadarrMovieRelocation,
+} from './radarrRelocationPlanning.ts';
 
 export interface EligibleArrReassignment {
   target: ArrDeleteTarget;
@@ -59,6 +65,21 @@ export interface ArrReassignmentPlanningResult {
   arrReassignCandidateMediaIds: number[];
   arrReassignStatus: 'resolved' | 'unavailable' | 'error';
   arrReassignReason?: string;
+  relocationCandidate?: RadarrMovieRelocationCandidate;
+}
+
+class DecisionMessages extends Array<string> {
+  constructor(
+    private readonly code: ArrReassignmentDecisionCode,
+    private readonly codes: ArrReassignmentDecisionCode[],
+  ) {
+    super();
+  }
+
+  override push(...messages: string[]): number {
+    this.codes.push(...messages.map(() => this.code));
+    return super.push(...messages);
+  }
 }
 
 function normalizedComparison(path: string): string | null {
@@ -125,11 +146,22 @@ export async function buildArrReassignmentPlan({
       requiredReassignments.size > 0 || requiredOwnerships.size > 0
     );
 
+  const decisionCodes: ArrReassignmentDecisionCode[] = [];
   const eligibleArrReassignments: EligibleArrReassignment[] = [];
   const arrOwnerships: PersistedArrOwnership[] = [];
-  const arrReassignErrors: string[] = [];
-  const arrReassignUnsafeReasons: string[] = [];
+  const arrReassignErrors = new DecisionMessages('external_error', decisionCodes);
+  const arrReassignUnsafeReasons = new DecisionMessages('other_unsafe', decisionCodes);
+  const recordDecision = (code: ArrReassignmentDecisionCode, message: string): void => {
+    if (code === 'external_error') {
+      arrReassignErrors.push(message);
+    } else {
+      const decisionIndex = decisionCodes.length;
+      arrReassignUnsafeReasons.push(message);
+      decisionCodes[decisionIndex] = code;
+    }
+  };
   const managedMediaIds = new Set<number>();
+  const relocationCandidates: RadarrMovieRelocationCandidate[] = [];
   const arrMappingIdentities = arrTargets.filter((target) =>
     (mediaType === 'movie' && target.client.type === 'radarr') ||
     (mediaType === 'episode' && target.client.type === 'sonarr')
@@ -448,6 +480,10 @@ export async function buildArrReassignmentPlan({
         const candidatePaths = new Map<number, string>();
         const candidateRecordPaths = new Map<number, string>();
         const candidateFileSizes = new Map<number, number | null>();
+        const outsideCandidates: RadarrMovieRelocationCandidate[] = [];
+        const retainedVersionCount = resolvedVersions.filter(({ version }) =>
+          !excludedReassignMediaIds.has(version.mediaId)
+        ).length;
         for (const { version, paths } of resolvedVersions) {
           if (excludedReassignMediaIds.has(version.mediaId) || version.truncated) continue;
           if (version.paths.length !== 1 || paths.length !== 1) continue;
@@ -458,10 +494,8 @@ export async function buildArrReassignmentPlan({
             !resolvedPathOwners.get(normalizedPath)?.has(version.mediaId)
           ) continue;
           if (mediaType === 'episode' && !arrPathIsWithin(paths[0]!, record.path)) continue;
-          if (
-            mediaType === 'movie' &&
-            normalizedComparison(arrDirname(paths[0]!) ?? '') !== normalizedComparison(record.path)
-          ) continue;
+          const insideExactMovieFolder = mediaType !== 'movie' ||
+            normalizedComparison(arrDirname(paths[0]!) ?? '') === normalizedComparison(record.path);
           const candidateRecordPath = mediaType === 'movie' ? arrDirname(paths[0]!) : record.path;
           if (candidateRecordPath === null) continue;
           const candidateSize = mediaType === 'movie'
@@ -469,7 +503,7 @@ export async function buildArrReassignmentPlan({
             : version.fileSize ?? null;
           if (
             mediaType === 'movie' &&
-            (!Number.isSafeInteger(candidateSize) || candidateSize! < 0)
+            (!Number.isSafeInteger(candidateSize) || candidateSize! <= 0)
           ) continue;
           if (
             mediaType === 'movie' &&
@@ -483,12 +517,49 @@ export async function buildArrReassignmentPlan({
             mediaType === 'movie' &&
             await target.client.fileVisibility(paths[0]!) !== 'file'
           ) continue;
+          if (mediaType === 'movie' && !insideExactMovieFolder) {
+            const retainedFileSize = version.fileSize ?? null;
+            const selectedPath = managedResolvedPaths.length === 1
+              ? managedResolvedPaths[0]!
+              : null;
+            if (managesSelectedVersion && selectedPath && managedFile) {
+              const candidate = await planRadarrMovieRelocation({
+                selectedMediaId: managedVersion.mediaId,
+                selectedPlexPath: managedVersion.paths[0]!,
+                selectedArrPath: selectedPath,
+                retainedMediaId: version.mediaId,
+                retainedPlexPath: version.paths[0]!,
+                retainedArrPath: paths[0]!,
+                retainedFileSize,
+                managedDirectoryPath: record.path,
+                occupiedArrPaths: resolvedVersions.flatMap((other) => other.paths),
+                arrInstanceId: target.instanceId,
+                arrInstanceName: target.instanceName,
+                arrRecordId: record.id,
+                arrManagedFileId: managedFile.id,
+                mappingIdentity: target.mappingIdentity,
+                destinationVisibility: (path) => target.client.fileVisibility(path),
+              });
+              if (candidate) outsideCandidates.push(candidate);
+            }
+            continue;
+          }
           candidatePaths.set(version.mediaId, paths[0]!);
           candidateRecordPaths.set(version.mediaId, candidateRecordPath);
           candidateFileSizes.set(version.mediaId, candidateSize);
         }
+        // Guidance is deliberately narrower than ordinary reassignment. Every retained
+        // Plex version must resolve to the same single safe relocation candidate; do not
+        // silently ignore an additional unknown-size, invisible, or otherwise unsafe copy.
+        if (!required && retainedVersionCount === 1 && outsideCandidates.length === 1) {
+          relocationCandidates.push(outsideCandidates[0]!);
+        }
         if (candidatePaths.size === 0) {
-          arrReassignUnsafeReasons.push(
+          recordDecision(
+            mediaType === 'movie' && !required && retainedVersionCount === 1 &&
+              outsideCandidates.length === 1
+              ? 'retained_parent_mismatch'
+              : 'other_unsafe',
             mediaType === 'episode'
               ? `${target.instanceName} cannot adopt a retained copy outside its managed series folder`
               : `${target.instanceName} has no visible retained Plex version in its exact current movie folder with known size and no competing file`,
@@ -551,7 +622,8 @@ export async function buildArrReassignmentPlan({
           alreadyReassigned,
         });
       } catch (error) {
-        arrReassignErrors.push(
+        recordDecision(
+          'external_error',
           `${target.instanceName}: ${error instanceof Error ? error.message : 'lookup failed'}`,
         );
       }
@@ -630,6 +702,17 @@ export async function buildArrReassignmentPlan({
   const arrOwnershipValid = arrReassignErrors.length === 0 &&
     arrReassignUnsafeReasons.length === 0;
   const arrOwnershipReason = arrReassignErrors[0] ?? arrReassignUnsafeReasons[0];
+  if (arrReassignStatus === 'resolved') decisionCodes.push('ordinary_reassignment_available');
+  const relocationDecision = decideRadarrRelocation({
+    mediaType,
+    decisionCodes,
+    candidates: relocationCandidates,
+    managedMediaCount: managedMediaIds.size,
+    managedOwnerCount: arrOwnerships.filter((entry) => entry.managedMediaId !== null).length,
+  });
+  const relocationCandidate = relocationDecision.outcome === 'eligible'
+    ? relocationDecision.candidate
+    : undefined;
 
   return {
     eligibleArrReassignments,
@@ -641,5 +724,6 @@ export async function buildArrReassignmentPlan({
     arrReassignCandidateMediaIds: [...commonReassignCandidates].sort((a, b) => a - b),
     arrReassignStatus,
     ...(arrReassignReason ? { arrReassignReason } : {}),
+    ...(relocationCandidate ? { relocationCandidate } : {}),
   };
 }

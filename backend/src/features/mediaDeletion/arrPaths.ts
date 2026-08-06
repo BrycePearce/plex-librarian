@@ -81,3 +81,11 @@ export function arrDirname(path: string): string | null {
   if (normalized.separator === '\\' && slash === 2) return normalized.path.slice(0, 3);
   return normalized.path.slice(0, slash);
 }
+
+export function arrBasename(path: string): string | null {
+  const normalized = normalizeRemoteAbsolute(path);
+  if (!normalized) return null;
+  const slash = normalized.path.lastIndexOf(normalized.separator);
+  if (slash < 0 || slash === normalized.path.length - 1) return null;
+  return normalized.path.slice(slash + 1);
+}

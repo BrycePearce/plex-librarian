@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from '@std/assert';
 import { resolve } from '@std/path';
 import type { PlexRawMetadata } from '../../integrations/plex/types.ts';
 
@@ -21,8 +27,19 @@ const {
 } = await import('./service.ts');
 const { recoverInterruptedDeletionWork } = await import('./recovery.ts');
 const { ensureDeletionTarget } = await import('./workflow.ts');
+const {
+  assertRelocationWorkflowClear,
+  canonicalJson,
+  completeRelocationBarriers,
+  finishRelocation,
+} = await import('./relocation.ts');
+const {
+  deletionRecoveryLibraryKeys,
+  deletionRecoveryNeedsProjection,
+} = await import('./coordination.ts');
 const { orphanRootIdentity } = await import('../mediaDeletion/hardlinks.ts');
-const { runLibrarySync } = await import('../sync/service.ts');
+const { runLibrarySync, runSync } = await import('../sync/service.ts');
+const { finalizeSyncLog } = await import('../sync/syncLog.ts');
 const { resolveActiveServer } = await import('../../integrations/plex/index.ts');
 const { createApp } = await import('../../app.ts');
 const app = createApp();
@@ -76,6 +93,7 @@ let qbitPresent = false;
 let qbitDeleteCount = 0;
 let fetchCount = 0;
 let historyAccountId: unknown = null;
+let reportedPlexLibraries: Array<{ key: string; title: string; type: string }> | null = null;
 const torrentHash = 'a'.repeat(40);
 const wholeDeleteOrder: string[] = [];
 setAutomaticDeletionWorkerForTest(false);
@@ -96,8 +114,22 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       },
     }));
   }
+  if (url.pathname === '/library/sections') {
+    return Promise.resolve(Response.json({
+      MediaContainer: { Directory: reportedPlexLibraries ?? [] },
+    }));
+  }
   if (url.pathname === '/library/sections/movies/all') {
     const metadata = [...live.values()].filter((item) => item.type === 'movie');
+    return Promise.resolve(Response.json({
+      MediaContainer: { Metadata: metadata, totalSize: metadata.length },
+    }));
+  }
+  if (url.pathname === '/library/sections/shows/all') {
+    const requestedType = url.searchParams.get('type');
+    const metadata = [...live.values()].filter((item) =>
+      requestedType === '4' ? item.type === 'episode' : item.type === 'show'
+    );
     return Promise.resolve(Response.json({
       MediaContainer: { Metadata: metadata, totalSize: metadata.length },
     }));
@@ -441,6 +473,7 @@ function reset(): void {
   qbitDeleteCount = 0;
   fetchCount = 0;
   historyAccountId = null;
+  reportedPlexLibraries = null;
   wholeDeleteOrder.length = 0;
   live.clear();
   withTransaction((client) => {
@@ -451,6 +484,7 @@ function reset(): void {
         'deletion_operations',
         'media_removals',
         'events',
+        'sync_log',
         'torrent_delete_attempts',
         'download_file_delete_attempts',
         'arr_delete_attempts',
@@ -751,6 +785,48 @@ async function enqueueMovieReassignment(
   });
   return result.operationId;
 }
+
+async function prepareGuidedMovieRelocation(): Promise<{
+  operationId: string;
+  targetId: number;
+  guidanceId: string;
+}> {
+  configureRadarr();
+  addMovie('guided-relocation', [11, 12], 10);
+  coordinatedRatingKey = 'guided-relocation';
+  arrPresent = true;
+  arrManagedMediaId = 11;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrManagedFileSize = 50_000;
+  live.get('guided-relocation')!.Media = [
+    { id: 11, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 12, Part: [{ file: '/library/retained.mkv', size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment('guided-relocation', 11);
+  await runDeletionWorkerOnceForTest();
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  const guidance = target.relocationGuidance as { guidanceId?: unknown } | undefined;
+  assertEquals(typeof guidance?.guidanceId, 'string', String(target.error));
+  return {
+    operationId,
+    targetId: target.id as number,
+    guidanceId: guidance!.guidanceId as string,
+  };
+}
+
+Deno.test('relocation snapshot canonicalization sorts objects but preserves array order', () => {
+  assertEquals(
+    canonicalJson({ z: [{ b: 2, a: 1 }, 3], a: true }),
+    '{"a":true,"z":[{"a":1,"b":2},3]}',
+  );
+  assertThrows(
+    () => canonicalJson({ invalid: Number.POSITIVE_INFINITY }),
+    Error,
+    'invalid number',
+  );
+});
 
 async function enqueueEpisodeReassignment(
   fromMediaId: number,
@@ -2381,6 +2457,650 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
     ),
     [[13]],
   );
+});
+
+Deno.test('guided Radarr relocation supersedes only the untouched target and is exactly idempotent', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const guided = getDeletionOperation(operationId, 1)!;
+  const target = (guided.targets as Array<Record<string, unknown>>)[0]!;
+  assert(target.relocationGuidance, String(target.error));
+  assertEquals(guided.status, 'needs_attention');
+  assertEquals(guided.libraryRecoveryTargetCount, 1);
+  assertEquals(target.phase, 'validating');
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(plexMediaDeleteCount, 0);
+  assertEquals(retryDeletionOperation(operationId, 1), false);
+  await assertRejects(
+    () => enqueueMovieReassignment('guided-relocation', 11),
+    DeletionConflictError,
+    'active retained-version relocation guidance',
+  );
+  assertThrows(
+    () => finishRelocation(operationId, targetId, 1, guidanceId, false),
+    Error,
+    'exact destination Part path',
+  );
+  assertThrows(
+    () => finishRelocation(operationId, targetId, 1, crypto.randomUUID(), true),
+    Error,
+    'no longer matches',
+  );
+  assertThrows(
+    () => finishRelocation(operationId, 0, 1, guidanceId, true),
+    Error,
+    'not found',
+  );
+
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  withTransaction((client) => {
+    // The incomplete barrier retains the library row and blocks new cleanup, but it
+    // must not suppress the targeted projection prune needed to complete itself.
+    assertEquals(deletionRecoveryNeedsProjection(client, 1, 'movies'), false);
+    assert(deletionRecoveryLibraryKeys(client, 1).includes('movies'));
+  });
+  const active = await resolveActiveServer();
+  const targetedSync = await runLibrarySync(active.client, active.serverId, 'movies');
+  assertEquals(targetedSync.pruneCompleted, true);
+  assertEquals(finished.repeated, false);
+  await assertRejects(
+    () => enqueueMovieReassignment('guided-relocation', 11),
+    DeletionConflictError,
+    'targeted library sync is required',
+  );
+  const repeated = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  assertEquals(repeated.repeated, true);
+  assertEquals(repeated.barrier, finished.barrier);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_version_reservations WHERE target_id = ?')
+        .value<[number]>(targetId)?.[0]
+    ),
+    0,
+  );
+
+  withTransaction((client) => {
+    assertEquals(
+      completeRelocationBarriers(
+        client,
+        1,
+        'movies',
+        998,
+        finished.barrier.supersededAt,
+        finished.barrier.supersededAt + 1,
+      ),
+      0,
+    );
+    assertEquals(
+      completeRelocationBarriers(
+        client,
+        1,
+        'movies',
+        999,
+        finished.barrier.supersededAt + 1,
+        finished.barrier.supersededAt + 2,
+      ),
+      1,
+    );
+  });
+  const afterBarrier = finishRelocation(
+    operationId,
+    targetId,
+    1,
+    guidanceId,
+    true,
+  );
+  assertEquals(afterBarrier.repeated, true);
+  assertEquals(afterBarrier.barrier.syncId, 999);
+  assertEquals(plexMediaDeleteCount, 0);
+
+  withTransaction((client) => {
+    client.prepare('UPDATE deletion_targets SET plex_attempt_count = 1 WHERE id = ?').run(
+      target.id as number,
+    );
+  });
+  assertThrows(
+    () => finishRelocation(operationId, targetId, 1, guidanceId, true),
+    Error,
+    'no longer untouched',
+  );
+});
+
+Deno.test('relocation endpoints reject missing identity and invalid targets without mutation', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const snapshotBefore = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+      targetId,
+    )![0]
+  );
+  const requests = [
+    {
+      path: `/api/deletion-operations/${operationId}/targets/${targetId}/finish-relocation`,
+      body: {},
+      status: 400,
+      error: 'guidanceId is required',
+    },
+    {
+      path: `/api/deletion-operations/${operationId}/targets/${targetId}/finish-relocation`,
+      body: { guidanceId: crypto.randomUUID(), destinationPlaybackConfirmed: true },
+      status: 409,
+      error: 'Relocation guidance no longer matches this request',
+    },
+    {
+      path: `/api/deletion-operations/${operationId}/targets/not-a-target/finish-relocation`,
+      body: { guidanceId, destinationPlaybackConfirmed: true },
+      status: 404,
+      error: 'Relocation target not found',
+    },
+    {
+      path: `/api/deletion-operations/${operationId}/targets/not-a-target/relocation-sync`,
+      body: {},
+      status: 404,
+      error: 'incomplete relocation barrier not found',
+    },
+  ];
+  for (const request of requests) {
+    const response = await app.request(request.path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request.body),
+    });
+    assertEquals(response.status, request.status);
+    assertEquals(await response.json(), { error: request.error });
+  }
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+        targetId,
+      )![0]
+    ),
+    snapshotBefore,
+  );
+  assertEquals(plexMediaDeleteCount, 0);
+});
+
+Deno.test('later ownership revalidation cannot promote a relocation candidate into guidance', async () => {
+  reset();
+  configureRadarr();
+  addMovie('late-relocation-candidate', [11, 12], 10);
+  coordinatedRatingKey = 'late-relocation-candidate';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/retained.mkv';
+  arrManagedFileSize = 50_000;
+  live.get('late-relocation-candidate')!.Media = [
+    { id: 11, Part: [{ file: '/library/Coordinated/selected.mkv', size: 50_000 }] },
+    { id: 12, Part: [{ file: '/library/retained.mkv', size: 50_000 }] },
+  ];
+  changeArrOwnershipOnManagedFileRead = {
+    read: 3,
+    mediaId: 11,
+    path: '/library/Coordinated/selected.mkv',
+  };
+
+  const operationId = await enqueueMovieReassignment('late-relocation-candidate', 11);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(target.relocationGuidanceState, 'none');
+  assertEquals(target.relocationGuidance, undefined);
+  assertStringIncludes(String(target.error), 'changed its managed ownership');
+  assertEquals(plexMediaDeleteCount, 0);
+});
+
+Deno.test('completed relocation permits the required fresh cleanup operation', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  withTransaction((client) => {
+    assertEquals(
+      completeRelocationBarriers(
+        client,
+        1,
+        'movies',
+        999,
+        finished.barrier.supersededAt + 1,
+        finished.barrier.supersededAt + 2,
+      ),
+      1,
+    );
+  });
+
+  const freshOperationId = await enqueueMovieReassignment('guided-relocation', 11);
+  assert(getDeletionOperation(freshOperationId, 1));
+});
+
+Deno.test('invalid guidance blocks matching previews and retains its durable library evidence', async () => {
+  reset();
+  const { operationId, targetId } = await prepareGuidedMovieRelocation();
+  withTransaction((client) => {
+    const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+      [string]
+    >(targetId)![0];
+    const snapshot = JSON.parse(raw);
+    snapshot.relocationGuidance = null;
+    client.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, status = 'cancelled' WHERE id = ?",
+    ).run(JSON.stringify(snapshot), targetId);
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'cancelled' WHERE id = ?",
+    ).run(operationId);
+    assert(deletionRecoveryNeedsProjection(client, 1, 'movies'));
+    assert(deletionRecoveryLibraryKeys(client, 1).includes('movies'));
+  });
+  assertThrows(
+    () => assertRelocationWorkflowClear(1, 'movies', ['guided-relocation']),
+    Error,
+    'relocation guidance must be resolved',
+  );
+});
+
+Deno.test('barrier completion skips only barriers that do not predate the sync', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  const startedAt = finished.barrier.supersededAt + 1;
+
+  const newerTargetId = withTransaction((client) => {
+    const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+      [string]
+    >(targetId)![0];
+    const snapshot = JSON.parse(raw);
+    snapshot.relocationSyncBarrier.supersededAt = startedAt;
+    return client.prepare(
+      `INSERT INTO deletion_targets
+         (operation_id, ordinal, target_kind, target_key, title, snapshot, status, phase,
+          plex_attempt_count, attempt_count, error, created_at, updated_at)
+       SELECT operation_id, 1, target_kind, target_key, title, ?, 'cancelled', 'validating',
+              0, attempt_count, error, created_at, updated_at
+       FROM deletion_targets WHERE id = ? RETURNING id`,
+    ).value<[number]>(JSON.stringify(snapshot), targetId)![0];
+  });
+
+  withTransaction((client) => {
+    assertEquals(
+      completeRelocationBarriers(
+        client,
+        1,
+        'movies',
+        1000,
+        startedAt,
+        startedAt + 1,
+      ),
+      1,
+    );
+    assertEquals(
+      client.prepare(
+        "SELECT json_extract(snapshot, '$.relocationSyncBarrier.syncId') FROM deletion_targets WHERE id = ?",
+      ).value<[number | null]>(targetId)?.[0],
+      1000,
+    );
+    assertEquals(
+      client.prepare(
+        "SELECT json_extract(snapshot, '$.relocationSyncBarrier.syncId') FROM deletion_targets WHERE id = ?",
+      ).value<[number | null]>(newerTargetId)?.[0],
+      null,
+    );
+  });
+});
+
+Deno.test('every present malformed relocation JSON type stays fail-closed and curated', async () => {
+  for (const malformed of [null, {}, [], 'invalid', 1, true] as const) {
+    reset();
+    const guidanceWork = await prepareGuidedMovieRelocation();
+    withTransaction((client) => {
+      const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+        [string]
+      >(guidanceWork.targetId)![0];
+      const snapshot = JSON.parse(raw);
+      snapshot.relocationGuidance = malformed;
+      client.prepare('UPDATE deletion_targets SET snapshot = ? WHERE id = ?').run(
+        JSON.stringify(snapshot),
+        guidanceWork.targetId,
+      );
+    });
+    const guidanceOperation = getDeletionOperation(guidanceWork.operationId, 1)!;
+    const guidanceTarget = (guidanceOperation.targets as Array<Record<string, unknown>>)[0]!;
+    assertEquals(guidanceTarget.relocationGuidanceState, 'invalid');
+    assertEquals(guidanceTarget.relocationGuidance, undefined);
+    assertEquals(retryDeletionOperation(guidanceWork.operationId, 1), false);
+
+    reset();
+    const barrierWork = await prepareGuidedMovieRelocation();
+    finishRelocation(
+      barrierWork.operationId,
+      barrierWork.targetId,
+      1,
+      barrierWork.guidanceId,
+      true,
+    );
+    withTransaction((client) => {
+      const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+        [string]
+      >(barrierWork.targetId)![0];
+      const snapshot = JSON.parse(raw);
+      snapshot.relocationSyncBarrier = malformed;
+      client.prepare('UPDATE deletion_targets SET snapshot = ? WHERE id = ?').run(
+        JSON.stringify(snapshot),
+        barrierWork.targetId,
+      );
+      assertEquals(
+        completeRelocationBarriers(client, 1, 'movies', 2000, 2_000_000_000, 2_000_000_001),
+        0,
+      );
+    });
+    const barrierOperation = getDeletionOperation(barrierWork.operationId, 1)!;
+    const barrierTarget = (barrierOperation.targets as Array<Record<string, unknown>>)[0]!;
+    assertEquals(barrierOperation.supersededCount, 1);
+    assertEquals(
+      barrierTarget.supersededReason,
+      'Superseded after guided retained-version relocation; no deletion was attempted for this target',
+    );
+    assertEquals(barrierTarget.relocationSyncBarrierState, 'invalid');
+    assertEquals(barrierTarget.relocationSyncBarrier, undefined);
+    assertEquals(retryDeletionOperation(barrierWork.operationId, 1), false);
+  }
+});
+
+Deno.test('full sync retains a library and operation that own an invalid barrier', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  finishRelocation(operationId, targetId, 1, guidanceId, true);
+  const invalidSnapshot = withTransaction((client) => {
+    const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+      [string]
+    >(targetId)![0];
+    const snapshot = JSON.parse(raw);
+    snapshot.relocationSyncBarrier = {};
+    const invalid = JSON.stringify(snapshot);
+    client.prepare('UPDATE deletion_targets SET snapshot = ? WHERE id = ?').run(invalid, targetId);
+    return invalid;
+  });
+
+  // Plex reports a non-empty, different library set. The ordinary full-sync prune
+  // would remove Movies unless the invalid barrier participates in durable retention.
+  reportedPlexLibraries = [{ key: 'shows', title: 'Shows', type: 'show' }];
+  const active = await resolveActiveServer();
+  await runSync(active.client, active.serverId);
+
+  withTransaction((client) => {
+    assertEquals(
+      client.prepare("SELECT key FROM libraries WHERE server_id = 1 AND key = 'movies'")
+        .value<[string]>()?.[0],
+      'movies',
+    );
+    assertEquals(
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+        targetId,
+      )?.[0],
+      invalidSnapshot,
+    );
+  });
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(target.relocationSyncBarrierState, 'invalid');
+  assertEquals(target.relocationSyncBarrier, undefined);
+});
+
+Deno.test('targeted sync completes a coherent barrier while preserving an invalid peer', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  const { validTargetId, invalidSnapshot } = withTransaction((client) => {
+    const raw = client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<
+      [string]
+    >(targetId)![0];
+    const validTargetId = client.prepare(
+      `INSERT INTO deletion_targets
+         (operation_id, ordinal, target_kind, target_key, title, snapshot, status, phase,
+          plex_attempt_count, attempt_count, error, created_at, updated_at)
+       SELECT operation_id, 1, target_kind, target_key, title, snapshot, status, phase,
+              plex_attempt_count, attempt_count, error, created_at, updated_at
+       FROM deletion_targets WHERE id = ? RETURNING id`,
+    ).value<[number]>(targetId)![0];
+    const snapshot = JSON.parse(raw);
+    snapshot.relocationSyncBarrier = { unsupported: true };
+    const invalidSnapshot = JSON.stringify(snapshot);
+    client.prepare('UPDATE deletion_targets SET snapshot = ? WHERE id = ?').run(
+      invalidSnapshot,
+      targetId,
+    );
+    client.prepare('UPDATE deletion_operations SET target_count = 2 WHERE id = ?').run(
+      operationId,
+    );
+    return { validTargetId, invalidSnapshot };
+  });
+  const startedAt = finished.barrier.supersededAt + 1;
+  const syncId = withTransaction((client) =>
+    client.prepare(
+      "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (1, 'movies', ?, 'pending', 0) RETURNING id",
+    ).value<[number]>(startedAt)![0]
+  );
+
+  await finalizeSyncLog(syncId, 1, 'movies', {
+    ok: true,
+    itemsProcessed: 1,
+    generation: startedAt,
+    pruneCompleted: true,
+  });
+
+  withTransaction((client) => {
+    assertEquals(
+      client.prepare('SELECT status FROM sync_log WHERE id = ?').value<[string]>(syncId)?.[0],
+      'success',
+    );
+    assertEquals(
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+        targetId,
+      )?.[0],
+      invalidSnapshot,
+    );
+    assertEquals(
+      client.prepare(
+        "SELECT json_extract(snapshot, '$.relocationSyncBarrier.syncId') FROM deletion_targets WHERE id = ?",
+      ).value<[number]>(validTargetId)?.[0],
+      syncId,
+    );
+  });
+  const operation = getDeletionOperation(operationId, 1)!;
+  const targets = operation.targets as Array<Record<string, unknown>>;
+  assertEquals(
+    targets.find((target) => target.id === targetId)?.relocationSyncBarrierState,
+    'invalid',
+  );
+  assertEquals(
+    targets.find((target) => target.id === validTargetId)?.relocationSyncBarrierState,
+    'completed',
+  );
+  assertThrows(
+    () => assertRelocationWorkflowClear(1, 'movies', ['guided-relocation']),
+    Error,
+    'targeted library sync is required',
+  );
+});
+
+Deno.test('show sync requires both item and episode projection prunes', async () => {
+  reset();
+  live.set('show-prune', {
+    ratingKey: 'show-prune',
+    title: 'Show prune receipt',
+    type: 'show',
+    librarySectionID: 'shows',
+  });
+  const active = await resolveActiveServer();
+
+  const incomplete = await runLibrarySync(active.client, active.serverId, 'shows');
+  assertEquals(incomplete.itemsProcessed, 1);
+  assertEquals(incomplete.pruneCompleted, false);
+
+  live.set('show-prune-episode', {
+    ratingKey: 'show-prune-episode',
+    title: 'Pilot',
+    type: 'episode',
+    librarySectionID: 'shows',
+    grandparentRatingKey: 'show-prune',
+    parentRatingKey: 'show-prune-season-1',
+    parentIndex: 1,
+    index: 1,
+    Media: [{ id: 9001, Part: [{ file: '/tv/Show/Season 01/Pilot.mkv', size: 50_000 }] }],
+  });
+  const complete = await runLibrarySync(active.client, active.serverId, 'shows');
+  assertEquals(complete.itemsProcessed, 1);
+  assertEquals(complete.pruneCompleted, true);
+});
+
+Deno.test('non-qualifying sync publication leaves relocation barriers incomplete', async () => {
+  for (const qualifyingShape of ['same-second', 'prune-skipped', 'full-sync'] as const) {
+    reset();
+    const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+    const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+    const targeted = qualifyingShape !== 'full-sync';
+    const startedAt = qualifyingShape === 'same-second'
+      ? finished.barrier.supersededAt
+      : finished.barrier.supersededAt + 1;
+    const syncId = withTransaction((client) =>
+      client.prepare(
+        `INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed)
+         VALUES (1, ?, ?, 'pending', 0) RETURNING id`,
+      ).value<[number]>(targeted ? 'movies' : null, startedAt)![0]
+    );
+
+    await finalizeSyncLog(syncId, 1, targeted ? 'movies' : null, {
+      ok: true,
+      itemsProcessed: qualifyingShape === 'prune-skipped' ? 0 : 1,
+      ...(targeted
+        ? {
+          generation: startedAt,
+          pruneCompleted: qualifyingShape !== 'prune-skipped',
+        }
+        : {}),
+    });
+
+    const operation = getDeletionOperation(operationId, 1)!;
+    const target = (operation.targets as Array<Record<string, unknown>>).find((entry) =>
+      entry.id === targetId
+    )!;
+    assertEquals(
+      (target.relocationSyncBarrier as { finishedAt?: number }).finishedAt,
+      undefined,
+      qualifyingShape,
+    );
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare('SELECT status FROM sync_log WHERE id = ?').value<[string]>(syncId)?.[0]
+      ),
+      'success',
+      qualifyingShape,
+    );
+  }
+});
+
+Deno.test('barrier completion skips target milestone drift and leaves the barrier incomplete', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET phase = 'arr_coordination' WHERE id = ?",
+    ).run(targetId);
+    assertEquals(
+      completeRelocationBarriers(
+        client,
+        1,
+        'movies',
+        1001,
+        finished.barrier.supersededAt + 1,
+        finished.barrier.supersededAt + 2,
+      ),
+      0,
+    );
+  });
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(target.relocationSyncBarrierState, 'invalid');
+  assertEquals(target.relocationSyncBarrier, undefined);
+  const persistedBarrier = withTransaction((client) =>
+    JSON.parse(
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+        targetId,
+      )![0],
+    ).relocationSyncBarrier
+  );
+  assertEquals(persistedBarrier, finished.barrier);
+});
+
+Deno.test('targeted sync publication atomically completes only a guarded relocation barrier', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  const startedAt = finished.barrier.supersededAt + 1;
+  const syncId = withTransaction((client) =>
+    client.prepare(
+      "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (1, 'movies', ?, 'pending', 0) RETURNING id",
+    ).value<[number]>(startedAt)![0]
+  );
+
+  await finalizeSyncLog(syncId, 1, 'movies', {
+    ok: true,
+    itemsProcessed: 1,
+    generation: startedAt,
+    pruneCompleted: true,
+  });
+
+  withTransaction((client) => {
+    assertEquals(
+      client.prepare('SELECT status FROM sync_log WHERE id = ?').value<[string]>(syncId)?.[0],
+      'success',
+    );
+  });
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(
+    (target.relocationSyncBarrier as { syncId?: number }).syncId,
+    syncId,
+  );
+});
+
+Deno.test('targeted sync publication skips a relocation target that is no longer untouched', async () => {
+  reset();
+  const { operationId, targetId, guidanceId } = await prepareGuidedMovieRelocation();
+  const finished = finishRelocation(operationId, targetId, 1, guidanceId, true);
+  const startedAt = finished.barrier.supersededAt + 1;
+  const syncId = withTransaction((client) => {
+    client.prepare('UPDATE deletion_targets SET plex_attempt_count = 1 WHERE id = ?').run(targetId);
+    return client.prepare(
+      "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (1, 'movies', ?, 'pending', 0) RETURNING id",
+    ).value<[number]>(startedAt)![0];
+  });
+
+  await finalizeSyncLog(syncId, 1, 'movies', {
+    ok: true,
+    itemsProcessed: 1,
+    generation: startedAt,
+    pruneCompleted: true,
+  });
+
+  withTransaction((client) => {
+    assertEquals(
+      client.prepare('SELECT status FROM sync_log WHERE id = ?').value<[string]>(syncId)?.[0],
+      'success',
+    );
+  });
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(target.relocationSyncBarrierState, 'invalid');
+  assertEquals(target.relocationSyncBarrier, undefined);
+  const persistedBarrier = withTransaction((client) =>
+    JSON.parse(
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value<[string]>(
+        targetId,
+      )![0],
+    ).relocationSyncBarrier
+  );
+  assertEquals(persistedBarrier, finished.barrier);
 });
 
 Deno.test('Radarr linked extras block Plex deletion and rescan', async () => {

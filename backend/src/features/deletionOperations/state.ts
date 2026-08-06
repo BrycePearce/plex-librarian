@@ -1,4 +1,5 @@
 import type { SqliteClient } from '../../db/index.ts';
+import { relocationSupersededPredicateSql } from './relocationModel.ts';
 
 type DeletionKind = 'whole_item' | 'movie_version' | 'episode_version';
 type DeletionOperationStatus =
@@ -34,6 +35,9 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
     queued,
     retrying,
   ] = counts;
+  const superseded = client.prepare(
+    `SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND ${relocationSupersededPredicateSql()}`,
+  ).value<[number]>(operationId)?.[0] ?? 0;
   const active = running + queued + retrying;
   let status: DeletionOperationStatus;
   let finishedAt: number | null = null;
@@ -78,6 +82,7 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
         removalConfirmedCount: confirmed,
         failedCount: failed,
         cancelledCount: cancelled,
+        supersededCount: superseded,
         logicalSizeRemoved: size,
       }),
       now,

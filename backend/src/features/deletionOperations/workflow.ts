@@ -46,6 +46,7 @@ import {
 } from './arrReassignment.ts';
 import { advancePhase, confirmReassignedRemoval } from './deletionState.ts';
 import { reconcilePlexTarget } from './plexReconciliation.ts';
+import { persistRelocationGuidance } from './relocation.ts';
 import {
   coordinateRadarrReassignment,
   tryRecoverRadarrWithoutSelectedProjection,
@@ -404,6 +405,10 @@ async function ensureVersionDeleted(
           }
           : {}),
       });
+      if (plan.relocationCandidate && plan.arrManagedMediaIds.includes(snapshot.mediaId!)) {
+        persistRelocationGuidance(target, plan.relocationCandidate);
+        return;
+      }
       if (!plan.arrOwnershipValid) {
         throw new Error(
           plan.arrOwnershipReason ?? 'Arr ownership could not be verified',

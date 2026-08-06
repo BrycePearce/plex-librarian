@@ -12,6 +12,7 @@ import type {
   PersistedArrReassignment,
 } from '../mediaDeletion/arrReassignmentPlanning.ts';
 import { isStaleQuickCleanupCandidate } from '../libraries/quickCleanup.ts';
+import type { RelocationGuidance, RelocationSyncBarrier } from './relocationModel.ts';
 
 export interface DurableTargetRecord {
   id: number;
@@ -62,6 +63,8 @@ export interface DurableTargetSnapshot {
   arrReassignmentMappings?: PersistedArrMappingIdentity[];
   arrOwnerships?: PersistedArrOwnership[];
   arrReassignments?: PersistedArrReassignment[];
+  relocationGuidance?: RelocationGuidance | unknown;
+  relocationSyncBarrier?: RelocationSyncBarrier | unknown;
   unmonitorFromArr?: boolean;
   quickCleanupEvidence?: {
     thresholdDays: number;

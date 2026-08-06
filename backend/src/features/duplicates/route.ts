@@ -14,6 +14,10 @@ import {
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import {
+  assertRelocationWorkflowClear,
+  RelocationConflictError,
+} from '../deletionOperations/relocation.ts';
 import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import smartCleanupRoute from './smartCleanupRoute.ts';
@@ -60,6 +64,12 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
     db.select().from(itemMediaVersions).where(mediaVersionsByItem(serverId, ratingKey)),
   ]);
   if (!item || item.type !== 'movie') return c.json({ error: 'movie not found' }, 404);
+  try {
+    assertRelocationWorkflowClear(serverId, item.libraryKey, [ratingKey]);
+  } catch (error) {
+    if (error instanceof RelocationConflictError) return c.json({ error: error.message }, 409);
+    throw error;
+  }
   if (mediaIds.some((mediaId) => !versions.some((version) => version.mediaId === mediaId))) {
     return c.json({ error: 'one or more media versions were not found' }, 404);
   }
@@ -120,6 +130,12 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
     mediaIds.some((mediaId) => !versions.some((version) => version.mediaId === mediaId))
   ) return c.json({ error: 'one or more media versions were not found' }, 404);
   const target = versions[0]!;
+  try {
+    assertRelocationWorkflowClear(serverId, target.libraryKey, [target.showRatingKey]);
+  } catch (error) {
+    if (error instanceof RelocationConflictError) return c.json({ error: error.message }, 409);
+    throw error;
+  }
   const [show] = await db.select({
     title: items.title,
     type: items.type,

@@ -1,3 +1,10 @@
+import type { SqliteClient } from '../../db/index.ts';
+import {
+  blockingGuidanceLibraryKeys,
+  hasBlockingRelocationGuidance,
+  incompleteBarrierLibraryKeys,
+} from './relocation.ts';
+
 interface CoordinationStatement {
   value<T extends unknown[]>(...params: unknown[]): T | undefined;
   values<T extends unknown[]>(...params: unknown[]): T[];
@@ -22,24 +29,36 @@ export function activeServerMatches(
 // A needs-attention target is terminal for worker scheduling, but it is not finalized:
 // its normal projection (and any media-version reservation) must remain available for
 // manual replay. Sync may still refresh the library, but its prune phase must not remove
-// those durable recovery inputs in a separate transaction.
+// those durable recovery inputs in a separate transaction. A superseded relocation
+// barrier deliberately does not qualify: its targeted sync must be allowed to prune in
+// order to complete the barrier. Library-row retention for that barrier is handled below.
 export function deletionRecoveryNeedsProjection(
-  client: CoordinationClient,
+  client: SqliteClient,
   serverId: number,
   libraryKey: string,
 ): boolean {
-  return client.prepare(
+  const operationNeedsProjection = client.prepare(
     "SELECT 1 FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status = 'needs_attention' LIMIT 1",
   ).value<[number]>(serverId, libraryKey) !== undefined;
+  return operationNeedsProjection ||
+    hasBlockingRelocationGuidance(client, serverId, libraryKey);
 }
 
 export function deletionRecoveryLibraryKeys(
-  client: CoordinationClient,
+  client: SqliteClient,
   serverId: number,
 ): string[] {
-  return client.prepare(
-    "SELECT DISTINCT library_key FROM deletion_operations WHERE server_id = ? AND status = 'needs_attention'",
+  const keys = client.prepare(
+    `SELECT DISTINCT o.library_key FROM deletion_operations o
+     WHERE o.server_id = ? AND o.status = 'needs_attention'`,
   ).values<[string]>(serverId).map(([libraryKey]) => libraryKey);
+  return [
+    ...new Set([
+      ...keys,
+      ...blockingGuidanceLibraryKeys(client, serverId),
+      ...incompleteBarrierLibraryKeys(client, serverId),
+    ]),
+  ];
 }
 
 // Must be called inside the same SQLite transaction that changes settings.activeServerId.

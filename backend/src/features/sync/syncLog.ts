@@ -1,15 +1,55 @@
 import { and, eq, lt, notInArray, type SQL } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import { syncLog } from '../../db/schema.ts';
 import { type LogEventInput, logEvents } from '../events/service.ts';
+import { completeRelocationBarriers } from '../deletionOperations/relocation.ts';
+
+export type SuccessfulSyncResult = {
+  ok: true;
+  itemsProcessed: number;
+  generation?: number;
+  pruneCompleted?: boolean;
+};
 
 export async function finalizeSyncLog(
   syncId: number,
   serverId: number,
   libraryKey: string | null,
-  result: { ok: true; itemsProcessed: number } | { ok: false; error: string },
+  result: SuccessfulSyncResult | { ok: false; error: string },
 ): Promise<void> {
   const finishedAt = Math.floor(Date.now() / 1000);
+  if (result.ok && libraryKey !== null) {
+    const published = withTransaction((client) => {
+      const log = client.prepare(
+        "SELECT started_at FROM sync_log WHERE id = ? AND server_id = ? AND library_key = ? AND status = 'pending'",
+      ).value<[number]>(syncId, serverId, libraryKey);
+      if (!log) return false;
+      if (result.pruneCompleted === true && result.generation !== undefined) {
+        if (!Number.isSafeInteger(result.generation) || result.generation < log[0]) {
+          throw new Error('Targeted sync returned an invalid prune generation');
+        }
+        completeRelocationBarriers(
+          client,
+          serverId,
+          libraryKey,
+          syncId,
+          log[0],
+          finishedAt,
+        );
+      }
+      const row = client.prepare(
+        "UPDATE sync_log SET status = 'success', finished_at = ?, items_processed = ?, error = NULL WHERE id = ? AND status = 'pending' RETURNING id",
+      ).value<[number]>(finishedAt, result.itemsProcessed, syncId);
+      return row !== undefined;
+    });
+    if (!published) return;
+    await logEvents([{
+      serverId,
+      type: 'sync.completed',
+      payload: { syncId, libraryKey, itemsProcessed: result.itemsProcessed },
+    }]);
+    return;
+  }
   const setPayload = result.ok
     ? { status: 'success' as const, finishedAt, itemsProcessed: result.itemsProcessed }
     : { status: 'error' as const, finishedAt, error: result.error };

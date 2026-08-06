@@ -24,3 +24,34 @@ export function deletionOperationTitle(status: string): string {
   if (status === "waiting_retry") return "Waiting to retry";
   return "Deleting media";
 }
+
+export function isRelocationGuidanceActive(target: {
+  status: string;
+  phase: string;
+  relocationGuidanceState: "none" | "valid" | "invalid";
+  relocationSyncBarrierState: "none" | "incomplete" | "completed" | "invalid";
+}): boolean {
+  return target.status === "needs_attention" && target.phase === "validating" &&
+    target.relocationGuidanceState === "valid" && target.relocationSyncBarrierState === "none";
+}
+
+export function nonSupersededCancelledCount(
+  cancelledCount: number,
+  supersededCount: number,
+): number {
+  return Math.max(0, cancelledCount - supersededCount);
+}
+
+export function retryableRelocationSafeTargetCount(
+  targets: ReadonlyArray<{
+    status: string;
+    relocationGuidanceState: "none" | "valid" | "invalid";
+    relocationSyncBarrierState: "none" | "incomplete" | "completed" | "invalid";
+  }>,
+  status: "needs_attention" | "completed_with_warning",
+): number {
+  return targets.filter((target) =>
+    target.status === status && target.relocationGuidanceState === "none" &&
+    target.relocationSyncBarrierState === "none"
+  ).length;
+}

@@ -8,7 +8,7 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
-    "check": "deno check backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/*.ts tools/**/*.ts",
+    "check": "deno check backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/**/*.ts tools/**/*.ts",
     "test": "deno test --allow-all backend/src frontend/src",
     "precommit": "deno task fmt:check && deno task lint",
     "verify": "deno task fmt:check && deno task lint && deno task check && deno task test && deno task build",
@@ -25,7 +25,7 @@
       "frontend/src/**/*.ts",
       "frontend/src/**/*.tsx",
       "shared/deno.json",
-      "shared/*.ts",
+      "shared/**/*.ts",
       "tools/**/*.ts"
     ],
     "exclude": ["frontend/src/routeTree.gen.ts"],

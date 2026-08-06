@@ -2,6 +2,7 @@ import { withTransaction } from '../../db/index.ts';
 import type { PlexClient } from '../../integrations/plex/index.ts';
 import { runLibrarySync, runSync } from './service.ts';
 import type { SyncReporter } from './service.ts';
+import type { LibrarySyncResult } from './service.ts';
 import { failStalePendingSyncs, finalizeSyncLog } from './syncLog.ts';
 import type { LibrarySyncProgress } from '@plex-librarian/shared/types.ts';
 
@@ -181,13 +182,20 @@ async function runSyncTask(
   syncId: number,
   serverId: number,
   libraryKey: string | null,
-  task: () => Promise<number>,
+  task: () => Promise<number | LibrarySyncResult>,
 ): Promise<void> {
   let result: { ok: true; itemsProcessed: number } | { ok: false; error: string } | null = null;
   const dog = watchdog(syncId);
   try {
-    const itemsProcessed = await Promise.race([task(), dog.promise]);
-    await finalizeSyncLog(syncId, serverId, libraryKey, { ok: true, itemsProcessed });
+    const taskResult = await Promise.race([task(), dog.promise]);
+    const itemsProcessed = typeof taskResult === 'number' ? taskResult : taskResult.itemsProcessed;
+    await finalizeSyncLog(syncId, serverId, libraryKey, {
+      ok: true,
+      itemsProcessed,
+      ...(typeof taskResult === 'number'
+        ? {}
+        : { generation: taskResult.generation, pruneCompleted: taskResult.pruneCompleted }),
+    });
     result = { ok: true, itemsProcessed };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);

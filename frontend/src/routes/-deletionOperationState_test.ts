@@ -2,6 +2,9 @@ import { assertEquals } from "@std/assert";
 import {
   deletionOperationPollInterval,
   deletionOperationTitle,
+  isRelocationGuidanceActive,
+  nonSupersededCancelledCount,
+  retryableRelocationSafeTargetCount,
 } from "./-deletionOperationState.ts";
 
 Deno.test("deletion operation UI polls only while work can still change", () => {
@@ -11,6 +14,48 @@ Deno.test("deletion operation UI polls only while work can still change", () => 
   assertEquals(deletionOperationPollInterval("completed_with_warning"), false);
   assertEquals(deletionOperationPollInterval("needs_attention"), false);
   assertEquals(deletionOperationPollInterval("cancelled"), false);
+});
+
+Deno.test("relocation guidance is active only before its sync barrier", () => {
+  const base = {
+    status: "needs_attention",
+    phase: "validating",
+    relocationGuidanceState: "valid" as const,
+    relocationSyncBarrierState: "none" as const,
+  };
+  assertEquals(isRelocationGuidanceActive(base), true);
+  assertEquals(isRelocationGuidanceActive({ ...base, status: "cancelled" }), false);
+  assertEquals(isRelocationGuidanceActive({ ...base, phase: "arr_coordination" }), false);
+  assertEquals(
+    isRelocationGuidanceActive({ ...base, relocationSyncBarrierState: "incomplete" }),
+    false,
+  );
+});
+
+Deno.test("superseded targets are excluded from the ordinary cancelled total", () => {
+  assertEquals(nonSupersededCancelledCount(3, 2), 1);
+  assertEquals(nonSupersededCancelledCount(1, 1), 0);
+  assertEquals(nonSupersededCancelledCount(0, 1), 0);
+});
+
+Deno.test("generic retry counts exclude every present relocation workflow state", () => {
+  const target = (
+    status: string,
+    relocationGuidanceState: "none" | "valid" | "invalid" = "none",
+    relocationSyncBarrierState: "none" | "incomplete" | "completed" | "invalid" = "none",
+  ) => ({ status, relocationGuidanceState, relocationSyncBarrierState });
+  const targets = [
+    target("needs_attention"),
+    target("needs_attention", "valid"),
+    target("needs_attention", "invalid"),
+    target("needs_attention", "none", "invalid"),
+    target("completed_with_warning"),
+    target("completed_with_warning", "invalid"),
+    target("completed_with_warning", "none", "incomplete"),
+  ];
+
+  assertEquals(retryableRelocationSafeTargetCount(targets, "needs_attention"), 1);
+  assertEquals(retryableRelocationSafeTargetCount(targets, "completed_with_warning"), 1);
 });
 
 Deno.test("terminal Plex warnings identify the pending service", () => {

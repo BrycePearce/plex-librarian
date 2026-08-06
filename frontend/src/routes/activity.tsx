@@ -178,12 +178,16 @@ function describeEvent(
         warningCount = 0,
         failedCount,
         cancelledCount,
+        supersededCount = 0,
       } = event.payload;
       const label = libraryLabel(libraryKey, titleByKey);
       const suffix = [
         failedCount > 0 ? `${failedCount} failed` : null,
         warningCount > 0 ? `${warningCount} warning` : null,
-        cancelledCount > 0 ? `${cancelledCount} cancelled` : null,
+        supersededCount > 0 ? `${supersededCount} superseded` : null,
+        cancelledCount - supersededCount > 0
+          ? `${cancelledCount - supersededCount} cancelled`
+          : null,
       ].filter(Boolean).join(", ");
       return `Deletion finished for ${label}: ${completedCount} completed${
         suffix ? ` (${suffix})` : ""
