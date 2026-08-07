@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { api } from "../../lib/api.ts";
+import { api, deletionOperationIdFromError } from "../../lib/api.ts";
 import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion.ts";
@@ -226,6 +227,8 @@ export function VersionPickerDialog({
     preview: preview.isError ? "error" : preview.isLoading || !preview.data ? "loading" : "ready",
     semanticBlock: selection.blocked,
   });
+  const blockingOperationId = deletionOperationIdFromError(preview.error) ??
+    deletionOperationIdFromError(error);
   return (
     <DeletionModalShell
       dialogRef={dialogRef}
@@ -374,8 +377,8 @@ export function VersionPickerDialog({
       )}
 
       <DeletionPreviewStatus
-        error={preview.isError ? preview.error.message : null}
-        onRetry={() => void preview.refetch()}
+        error={preview.isError && blockingOperationId === null ? preview.error.message : null}
+        onRetry={blockingOperationId === null ? () => void preview.refetch() : undefined}
         retrying={preview.isFetching}
         warnings={showFallbackWarning
           ? [
@@ -385,6 +388,20 @@ export function VersionPickerDialog({
           ]
           : []}
       />
+      {blockingOperationId && (
+        <div className="alert alert-warning mt-2 items-center py-2 text-sm">
+          <span className="min-w-0 flex-1">
+            An earlier deletion for this item still needs attention.
+          </span>
+          <Link
+            to="/deletion-operations/$id"
+            params={{ id: blockingOperationId }}
+            className="btn btn-ghost btn-xs shrink-0"
+          >
+            Review deletion
+          </Link>
+        </div>
+      )}
       {wouldDeleteAll && (
         <p className="mt-2 text-sm text-warning">
           {item.mediaType === "movie"
@@ -392,7 +409,7 @@ export function VersionPickerDialog({
             : "At least one version must be kept — uncheck one to continue."}
         </p>
       )}
-      {error != null && (
+      {error != null && blockingOperationId === null && (
         <p className="mt-2 text-sm text-error">
           {error instanceof Error ? error.message : "Delete failed"}
         </p>

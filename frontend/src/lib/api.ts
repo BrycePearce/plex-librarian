@@ -152,14 +152,24 @@ const BASE = "/api";
 // for "this row doesn't exist yet" (a legitimate not-yet-synced state) from a real failure.
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  operationId?: string;
+
+  constructor(status: number, message: string, operationId?: string) {
     super(message);
     this.status = status;
+    this.operationId = operationId;
   }
 }
 
 export function isNotFoundError(err: unknown): err is ApiError {
   return err instanceof ApiError && err.status === 404;
+}
+
+export function deletionOperationIdFromError(err: unknown): string | null {
+  return err instanceof ApiError && typeof err.operationId === "string" &&
+      err.operationId.length > 0
+    ? err.operationId
+    : null;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -172,11 +182,16 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       .json()
       .catch(() => ({ error: res.statusText }))) as {
         error?: string;
+        operationId?: unknown;
       };
     const message = body.error ?? res.statusText;
+    const operationId = typeof body.operationId === "string" && body.operationId.length > 0
+      ? body.operationId
+      : undefined;
     throw new ApiError(
       res.status,
       message.charAt(0).toUpperCase() + message.slice(1),
+      operationId,
     );
   }
   return res.json() as Promise<T>;
