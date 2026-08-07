@@ -1,10 +1,12 @@
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
+import { ArrApiError } from '../../integrations/arr/client.ts';
 import { activeServerMatches } from './coordination.ts';
 import { isRetryableDeletionFailure } from './policy.ts';
 import { recoverInterruptedDeletionWork } from './recovery.ts';
 import { refreshDeletionOperation } from './state.ts';
 import {
+  ArrMonitoringReconciliationError,
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
@@ -557,8 +559,11 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
         (target.targetKind !== 'whole_item' && phaseRow[2] !== null &&
           Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0);
       const warningAllowed = !(error instanceof PlexReconciliationError) || error.warningAllowed;
-      if (!permanent && phaseRow[1] <= PLEX_RETRY_DELAYS.length) {
-        const next = now + PLEX_RETRY_DELAYS[phaseRow[1] - 1];
+      const retryAttempt = error instanceof ArrMonitoringReconciliationError || phaseRow[1] <= 0
+        ? attempt
+        : phaseRow[1];
+      if (!permanent && retryAttempt > 0 && retryAttempt <= PLEX_RETRY_DELAYS.length) {
+        const next = now + PLEX_RETRY_DELAYS[retryAttempt - 1];
         client.prepare(
           "UPDATE deletion_targets SET status = 'waiting_retry', next_retry_at = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
         ).run(next, message, now, target.id);
@@ -579,6 +584,7 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
     }
     const retryable = !permanent &&
       (error instanceof DeletionConvergenceError ||
+        (error instanceof ArrApiError && error.retryable) ||
         isRetryableDeletionFailure(status, message, error instanceof TypeError));
     if (retryable && attempt <= RETRY_DELAYS.length) {
       const next = now + RETRY_DELAYS[attempt - 1];

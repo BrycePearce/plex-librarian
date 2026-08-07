@@ -18,6 +18,7 @@ function target(files: string[]): ArrDeleteTarget {
         Promise.resolve({ id: 7, title: 'Movie', path: '/movies/Movie', seasons: null }),
       radarrMovie: () => Promise.resolve({ id: 7, path: '/movies/Movie' }),
       fileVisibility: () => Promise.resolve('file'),
+      radarrMovieMonitorTarget: () => Promise.resolve({ id: 7, monitored: true }),
       monitorTarget: () => Promise.resolve({ id: 7, monitored: true }),
       mediaFiles: () =>
         Promise.resolve(
@@ -67,6 +68,7 @@ function sonarrTarget(): ArrDeleteTarget {
             size: 100,
           },
         }),
+      sonarrEpisodeMonitorTarget: () => Promise.resolve({ id: 9, monitored: true }),
     },
   } as unknown as ArrDeleteTarget;
 }
@@ -159,7 +161,35 @@ Deno.test('version plan keeps Radarr reassignment inside the exact current movie
   );
 });
 
-Deno.test('version plan returns bounded guidance for one safe retained parent mismatch', async () => {
+Deno.test('version reassignment fails closed with multiple eligible Arr owners', async () => {
+  const primary = target(['selected.mkv']);
+  const secondary = target(['selected.mkv']);
+  secondary.instanceId = 2;
+  secondary.instanceName = 'Second Radarr';
+  secondary.instanceUrl = 'http://radarr-2';
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/movies/Movie/retained.mkv'],
+        truncated: false,
+        projectedFileSize: 1,
+      },
+    ],
+    arrTargets: [primary, secondary],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+  });
+
+  assertEquals(plan.preview.arrReassignStatus, 'unavailable');
+  assertStringIncludes(plan.preview.arrReassignReason ?? '', 'multiple eligible Arr owners');
+});
+
+Deno.test('version plan fails closed for a retained Radarr parent mismatch', async () => {
   const radarr = target(['selected.mkv']);
   radarr.client.fileVisibility = (path: string) =>
     Promise.resolve(path === '/movies/retained.mkv' ? 'file' : 'folder');
@@ -183,29 +213,11 @@ Deno.test('version plan returns bounded guidance for one safe retained parent mi
   });
 
   assertEquals(plan.preview.arrReassignStatus, 'unavailable');
-  assertEquals(plan.relocationCandidate, {
-    service: 'radarr',
-    mediaType: 'movie',
-    reason: 'retained_parent_mismatch',
-    selectedMediaId: 1,
-    selectedPlexPath: '/movies/Movie/selected.mkv',
-    selectedArrPath: '/movies/Movie/selected.mkv',
-    retainedMediaId: 2,
-    retainedPlexPath: '/movies/retained.mkv',
-    retainedFileSize: 50_000,
-    managedDirectoryPath: '/movies/Movie',
-    sourceArrPath: '/movies/retained.mkv',
-    destinationArrPath: '/movies/Movie/retained.mkv',
-    destinationPlexPath: '/movies/Movie/retained.mkv',
-    arrInstanceId: 1,
-    arrInstanceName: 'Radarr 4K',
-    arrRecordId: 7,
-    arrManagedFileId: 1,
-    mappingIdentity: '{"addImportExclusion":true,"pathMappings":[]}',
-  });
+  assertEquals('relocationCandidate' in plan, false);
+  assertStringIncludes(plan.preview.arrReassignReason ?? '', 'exact current movie folder');
 });
 
-Deno.test('relocation guidance requires a known positive raw Plex Part byte size', async () => {
+Deno.test('outside-folder Radarr reassignment remains unavailable for incomplete size evidence', async () => {
   for (const fileSize of [null, 0] as const) {
     const radarr = target(['selected.mkv']);
     radarr.client.fileVisibility = (path: string) =>
@@ -229,11 +241,11 @@ Deno.test('relocation guidance requires a known positive raw Plex Part byte size
       cleanupConfigured: false,
     });
 
-    assertEquals(plan.relocationCandidate, undefined);
+    assertEquals('relocationCandidate' in plan, false);
   }
 });
 
-Deno.test('relocation guidance fails closed when another retained version is unsafe', async () => {
+Deno.test('outside-folder Radarr reassignment fails closed with another unsafe survivor', async () => {
   for (
     const unsafe of [
       { fileSize: null, visible: true },
@@ -274,11 +286,11 @@ Deno.test('relocation guidance fails closed when another retained version is uns
       cleanupConfigured: false,
     });
 
-    assertEquals(plan.relocationCandidate, undefined);
+    assertEquals('relocationCandidate' in plan, false);
   }
 });
 
-Deno.test('relocation guidance translates one configured local path into Radarr space', async () => {
+Deno.test('outside-folder Radarr reassignment stays unavailable through mapped namespaces', async () => {
   const radarr = target(['selected.mkv']);
   radarr.pathMappings = [{ kind: 'library', arrPath: '/movies', localPath: '/media' }];
   radarr.mappingIdentity = JSON.stringify({
@@ -306,13 +318,11 @@ Deno.test('relocation guidance translates one configured local path into Radarr 
     cleanupConfigured: false,
   });
 
-  assertEquals(plan.relocationCandidate?.retainedPlexPath, '/media/retained.mkv');
-  assertEquals(plan.relocationCandidate?.sourceArrPath, '/movies/retained.mkv');
-  assertEquals(plan.relocationCandidate?.destinationArrPath, '/movies/Movie/retained.mkv');
-  assertEquals(plan.relocationCandidate?.destinationPlexPath, '/media/Movie/retained.mkv');
+  assertEquals('relocationCandidate' in plan, false);
+  assertEquals(plan.preview.arrReassignStatus, 'unavailable');
 });
 
-Deno.test('relocation guidance rejects an uncovered third path namespace', async () => {
+Deno.test('outside-folder Radarr reassignment rejects an uncovered third path namespace', async () => {
   const radarr = target(['selected.mkv']);
   radarr.pathMappings = [{ kind: 'library', arrPath: '/movies', localPath: '/media' }];
   radarr.mappingIdentity = JSON.stringify({
@@ -338,14 +348,14 @@ Deno.test('relocation guidance rejects an uncovered third path namespace', async
     cleanupConfigured: false,
   });
 
-  assertEquals(plan.relocationCandidate, undefined);
+  assertEquals('relocationCandidate' in plan, false);
   assertStringIncludes(
     plan.preview.arrReassignReason ?? '',
     'could not resolve every known Plex version path safely',
   );
 });
 
-Deno.test('relocation guidance rejects a known Plex destination collision', async () => {
+Deno.test('outside-folder Radarr reassignment remains unavailable with a destination collision', async () => {
   const radarr = target(['selected.mkv']);
   radarr.client.fileVisibility = (path: string) =>
     Promise.resolve(path === '/movies/retained.mkv' ? 'file' : 'folder');
@@ -375,7 +385,7 @@ Deno.test('relocation guidance rejects a known Plex destination collision', asyn
     cleanupConfigured: false,
   });
 
-  assertEquals(plan.relocationCandidate, undefined);
+  assertEquals('relocationCandidate' in plan, false);
 });
 
 Deno.test('Radarr reassignment blocks flat-root, invisible, and unknown-size retained files', async () => {
@@ -815,6 +825,7 @@ Deno.test('version reassignment can recover every required instance after the so
         managedPath: '/movies/Movie/selected.mkv',
         retainedMediaId: 2,
         retainedPath: '/movies/Movie/retained.mkv',
+        originalMonitored: true,
       },
     ]]),
   });
@@ -860,6 +871,7 @@ Deno.test('version reassignment recovery rejects a changed mapped-instance set',
         managedPath: '/movies/Movie/selected.mkv',
         retainedMediaId: 2,
         retainedPath: '/movies/Movie/retained.mkv',
+        originalMonitored: true,
       },
     ]]),
   });
@@ -933,6 +945,7 @@ Deno.test('version reassignment recovery rejects new ownership on an unchanged m
         managedPath: primaryPlan.managedPath!,
         retainedMediaId: 2,
         retainedPath: primaryPlan.candidatePaths.get(2)!,
+        originalMonitored: true,
       },
     ]]),
   });
@@ -968,6 +981,7 @@ Deno.test('version reassignment rejects a required instance that changed managed
         managedPath: '/movies/Movie/selected.mkv',
         retainedMediaId: 2,
         retainedPath: '/movies/Movie/retained.mkv',
+        originalMonitored: true,
       },
     ]]),
   });
@@ -1011,6 +1025,7 @@ Deno.test('version reassignment rejects a replacement Radarr record after interr
         managedPath: '/movies/Movie/selected.mkv',
         retainedMediaId: 2,
         retainedPath: '/movies/Movie/retained.mkv',
+        originalMonitored: true,
       },
     ]]),
   });
@@ -1085,7 +1100,12 @@ Deno.test('episode plan can reassign Sonarr only within the managed series tree'
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/tv/Show/Season 01/old.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/tv/Show/Season 01/better.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/tv/Show/Season 01/better.mkv'],
+        truncated: false,
+        fileSize: 100,
+      },
       { mediaId: 3, paths: ['/tv-4k/Show/Season 01/other.mkv'], truncated: false },
     ],
     arrTargets: [sonarrTarget()],
@@ -1098,7 +1118,33 @@ Deno.test('episode plan can reassign Sonarr only within the managed series tree'
   assertEquals(plan.preview.arrReassignStatus, 'resolved');
   assertEquals(plan.arrManagedMediaIds, [1]);
   assertEquals(plan.arrReassignCandidateMediaIds, [2]);
-  assertEquals(plan.relocationCandidate, undefined);
+  assertEquals('relocationCandidate' in plan, false);
+});
+
+Deno.test('episode reassignment requires exact retained Plex size evidence', async () => {
+  for (const fileSize of [undefined, null, 0] as const) {
+    const plan = await buildVersionDeletionPlan({
+      mediaType: 'episode',
+      item: { ...item, type: 'show', tmdbId: null, tvdbId: 20 },
+      selectedMediaIds: new Set([1]),
+      liveVersions: [
+        { mediaId: 1, paths: ['/tv/Show/Season 01/old.mkv'], truncated: false },
+        {
+          mediaId: 2,
+          paths: ['/tv/Show/Season 01/better.mkv'],
+          truncated: false,
+          ...(fileSize === undefined ? {} : { fileSize }),
+        },
+      ],
+      arrTargets: [sonarrTarget()],
+      resolvedCleanup: null,
+      cleanupConfigured: false,
+      episodeIdentity: { seasonNumber: 1, episodeNumber: 1 },
+    });
+
+    assertEquals(plan.preview.arrReassignStatus, 'unavailable');
+    assertStringIncludes(plan.preview.arrReassignReason ?? '', 'known positive size');
+  }
 });
 
 Deno.test('Sonarr reassignment does not adopt a version managed by another instance', async () => {
@@ -1123,7 +1169,12 @@ Deno.test('Sonarr reassignment does not adopt a version managed by another insta
     selectedMediaIds: new Set([1]),
     liveVersions: [
       { mediaId: 1, paths: ['/tv/Show/Season 01/old.mkv'], truncated: false },
-      { mediaId: 2, paths: ['/tv/Show/Season 01/better.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/tv/Show/Season 01/better.mkv'],
+        truncated: false,
+        fileSize: 100,
+      },
     ],
     arrTargets: [sonarrTarget(), retainedOwner],
     resolvedCleanup: null,
@@ -1148,7 +1199,12 @@ Deno.test('episode reassignment rejects a replacement Sonarr episode after inter
     item: { ...item, type: 'show', tmdbId: null, tvdbId: 20 },
     selectedMediaIds: new Set([1]),
     liveVersions: [
-      { mediaId: 2, paths: ['/tv/Show/Season 01/better.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/tv/Show/Season 01/better.mkv'],
+        truncated: false,
+        fileSize: 100,
+      },
     ],
     arrTargets: [replacement],
     resolvedCleanup: null,
@@ -1169,6 +1225,8 @@ Deno.test('episode reassignment rejects a replacement Sonarr episode after inter
         managedPath: '/tv/Show/Season 01/old.mkv',
         retainedMediaId: 2,
         retainedPath: '/tv/Show/Season 01/better.mkv',
+        retainedFileSize: 100,
+        originalMonitored: true,
       },
     ]]),
   });

@@ -2,15 +2,11 @@ import type { SqliteClient } from '../../db/index.ts';
 import { withTransaction } from '../../db/index.ts';
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
 import { refreshDeletionOperation } from './state.ts';
-import type { DeletionWorkTarget } from './types.ts';
 import {
   assertOnlyRelocationDelta,
   canonicalJson,
-  createRelocationGuidance,
   RELOCATION_SUPERSEDED_REASON,
-  type RelocationCandidate,
   type RelocationGuidance,
-  relocationManualReason,
   relocationReservationKind,
   relocationSupersededPredicateSql,
   type RelocationSyncBarrier,
@@ -187,65 +183,6 @@ export function classifyRelocationLifecycle(
     ...(coherentBarrier ? { barrier: { ...barrier } } : {}),
     placement,
   };
-}
-
-export function persistRelocationGuidance(
-  target: DeletionWorkTarget,
-  candidate: RelocationCandidate,
-): void {
-  withTransaction((client) => {
-    const row = client.prepare(
-      `SELECT snapshot FROM deletion_targets
-       WHERE id = ? AND operation_id = ? AND status = 'running' AND phase = 'validating'
-         AND plex_attempt_count = 0 AND removal_confirmed_at IS NULL`,
-    ).value<[string]>(target.id, target.operationId);
-    if (!row || row[0] !== target.snapshot) {
-      throw new RelocationConflictError('Relocation guidance could not be persisted safely');
-    }
-    const before = parseObject(row[0]);
-    if (
-      workflowKeyPresent(before, 'relocationGuidance') ||
-      workflowKeyPresent(before, 'relocationSyncBarrier')
-    ) {
-      throw new RelocationConflictError('Relocation guidance already exists');
-    }
-    let guidance: RelocationGuidance;
-    try {
-      guidance = createRelocationGuidance(candidate);
-    } catch {
-      throw new RelocationConflictError('Relocation guidance exceeds its safe diagnostic bounds');
-    }
-    const identity: RelocationTargetIdentity = { targetKind: target.targetKind, ...before };
-    if (!validateRelocationGuidance(guidance, identity)) {
-      throw new RelocationConflictError(
-        'Relocation guidance is inconsistent with accepted evidence',
-      );
-    }
-    const after = { ...before, relocationGuidance: guidance };
-    try {
-      assertOnlyRelocationDelta(before, after);
-    } catch (error) {
-      throw new RelocationConflictError(
-        error instanceof Error ? error.message : 'Invalid snapshot',
-      );
-    }
-    const updated = client.prepare(
-      `UPDATE deletion_targets SET snapshot = ?, status = 'needs_attention',
-         next_retry_at = NULL, error = ?, updated_at = ?
-       WHERE id = ? AND operation_id = ? AND snapshot = ? AND status = 'running'
-         AND phase = 'validating' AND plex_attempt_count = 0
-         AND removal_confirmed_at IS NULL RETURNING id`,
-    ).value<[number]>(
-      JSON.stringify(after),
-      relocationManualReason(guidance),
-      guidance.observedAt,
-      target.id,
-      target.operationId,
-      row[0],
-    );
-    if (!updated) throw new RelocationConflictError('Relocation guidance lost a concurrency race');
-    refreshDeletionOperation(client, target.operationId);
-  });
 }
 
 const PRESENT_SQL = "json_type(snapshot, '$.%KEY%') IS NOT NULL";

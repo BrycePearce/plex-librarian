@@ -48,6 +48,19 @@ export interface ArrMonitorTarget {
   monitored: boolean;
 }
 
+export interface SonarrEpisodeMonitorIdentity {
+  episodeId: number;
+  seriesId: number;
+  seasonNumber: number;
+  episodeNumber: number;
+}
+
+export interface RadarrMovieMonitorIdentity {
+  movieId: number;
+  tmdbId: number;
+  path: string;
+}
+
 export interface ArrEpisodeManagedFile {
   episodeId: number;
   file: ArrManagedVersionFile | null;
@@ -55,7 +68,11 @@ export interface ArrEpisodeManagedFile {
 }
 
 export class ArrApiError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly retryable = false,
+  ) {
     super(message);
   }
 }
@@ -382,37 +399,6 @@ export class ArrClient {
     await this.request<void>(`/${resource}/${fileId}`, { method: 'DELETE' });
   }
 
-  async updateMoviePath(
-    mediaId: number,
-    expectedPath: string,
-    desiredPath: string,
-  ): Promise<boolean> {
-    if (this.type !== 'radarr') {
-      throw new ArrApiError('Movie path updates require Radarr');
-    }
-    const record = await this.request<Record<string, unknown> & { id?: number; path?: string }>(
-      `/movie/${mediaId}`,
-    );
-    if (
-      !record || typeof record !== 'object' || Array.isArray(record) ||
-      !Number.isInteger(record.id) || record.id !== mediaId ||
-      typeof record.path !== 'string' || record.path.trim().length === 0
-    ) {
-      throw new ArrApiError('Radarr returned an invalid movie record for path reassignment');
-    }
-    const currentPath = record.path.trim();
-    if (currentPath === desiredPath) return false;
-    if (currentPath !== expectedPath) {
-      throw new ArrApiError('Radarr changed the movie path before reassignment');
-    }
-    await this.request<void>(`/movie/${mediaId}?moveFiles=false`, {
-      method: 'PUT',
-      body: JSON.stringify({ ...record, path: desiredPath }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-    return true;
-  }
-
   async rescanMedia(mediaId: number): Promise<void> {
     const body = this.type === 'radarr'
       ? { name: 'RescanMovie', movieId: mediaId }
@@ -461,6 +447,145 @@ export class ArrClient {
       headers: { 'Content-Type': 'application/json' },
     });
     return true;
+  }
+
+  async sonarrEpisodeMonitorTarget(
+    identity: SonarrEpisodeMonitorIdentity,
+  ): Promise<ArrMonitorTarget> {
+    if (this.type !== 'sonarr') {
+      throw new ArrApiError('Episode monitoring reads require Sonarr');
+    }
+    if (
+      !Number.isSafeInteger(identity.episodeId) || identity.episodeId <= 0 ||
+      !Number.isSafeInteger(identity.seriesId) || identity.seriesId <= 0 ||
+      !Number.isSafeInteger(identity.seasonNumber) || identity.seasonNumber < 0 ||
+      !Number.isSafeInteger(identity.episodeNumber) || identity.episodeNumber <= 0
+    ) {
+      throw new ArrApiError('Sonarr episode monitoring identity is invalid');
+    }
+    const record = await this.request<{
+      id?: number;
+      seriesId?: number;
+      seasonNumber?: number;
+      episodeNumber?: number;
+      monitored?: boolean;
+    }>(`/episode/${identity.episodeId}`);
+    if (
+      !record || typeof record !== 'object' || Array.isArray(record) ||
+      record.id !== identity.episodeId || record.seriesId !== identity.seriesId ||
+      record.seasonNumber !== identity.seasonNumber ||
+      record.episodeNumber !== identity.episodeNumber ||
+      typeof record.monitored !== 'boolean'
+    ) {
+      throw new ArrApiError('Sonarr returned a conflicting or malformed targeted episode');
+    }
+    return { id: identity.episodeId, monitored: record.monitored };
+  }
+
+  private async radarrMovieMonitorResource(
+    identity: RadarrMovieMonitorIdentity,
+  ): Promise<Record<string, unknown> & { id: number; monitored: boolean }> {
+    if (this.type !== 'radarr') {
+      throw new ArrApiError('Movie monitoring reads require Radarr');
+    }
+    if (
+      !Number.isSafeInteger(identity.movieId) || identity.movieId <= 0 ||
+      !Number.isSafeInteger(identity.tmdbId) || identity.tmdbId <= 0 ||
+      typeof identity.path !== 'string' || identity.path.trim().length === 0 ||
+      identity.path.trim() !== identity.path
+    ) {
+      throw new ArrApiError('Radarr movie monitoring identity is invalid');
+    }
+    const record = await this.request<
+      Record<string, unknown> & {
+        id?: number;
+        tmdbId?: number;
+        path?: string;
+        monitored?: boolean;
+      }
+    >(`/movie/${identity.movieId}`);
+    if (
+      !record || typeof record !== 'object' || Array.isArray(record) ||
+      record.id !== identity.movieId || record.tmdbId !== identity.tmdbId ||
+      typeof record.path !== 'string' || record.path.trim() !== identity.path ||
+      typeof record.monitored !== 'boolean'
+    ) {
+      throw new ArrApiError('Radarr returned a conflicting or malformed targeted movie');
+    }
+    return record as Record<string, unknown> & { id: number; monitored: boolean };
+  }
+
+  async radarrMovieMonitorTarget(
+    identity: RadarrMovieMonitorIdentity,
+  ): Promise<ArrMonitorTarget> {
+    const record = await this.radarrMovieMonitorResource(identity);
+    return { id: identity.movieId, monitored: record.monitored };
+  }
+
+  async setSonarrEpisodeMonitored(
+    identity: SonarrEpisodeMonitorIdentity,
+    monitored: boolean,
+  ): Promise<boolean> {
+    const before = await this.sonarrEpisodeMonitorTarget(identity);
+    if (before.monitored === monitored) return false;
+    let writeError: unknown;
+    try {
+      await this.request<void>(`/episode/${identity.episodeId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ id: identity.episodeId, monitored }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      writeError = error;
+    }
+    let after: ArrMonitorTarget;
+    try {
+      after = await this.sonarrEpisodeMonitorTarget(identity);
+    } catch (error) {
+      throw new ArrApiError(
+        `Sonarr episode monitoring read-back was inconclusive: ${
+          error instanceof Error ? error.message : 'request failed'
+        }`,
+        undefined,
+        true,
+      );
+    }
+    if (after.monitored === monitored) return true;
+    if (writeError) throw writeError;
+    throw new ArrApiError('Sonarr episode monitoring update did not converge');
+  }
+
+  async setRadarrMovieMonitored(
+    identity: RadarrMovieMonitorIdentity,
+    monitored: boolean,
+  ): Promise<boolean> {
+    const before = await this.radarrMovieMonitorResource(identity);
+    if (before.monitored === monitored) return false;
+    let writeError: unknown;
+    try {
+      await this.request<void>(`/movie/${identity.movieId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ...before, monitored }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      writeError = error;
+    }
+    let after: ArrMonitorTarget;
+    try {
+      after = await this.radarrMovieMonitorTarget(identity);
+    } catch (error) {
+      throw new ArrApiError(
+        `Radarr movie monitoring read-back was inconclusive: ${
+          error instanceof Error ? error.message : 'request failed'
+        }`,
+        undefined,
+        true,
+      );
+    }
+    if (after.monitored === monitored) return true;
+    if (writeError) throw writeError;
+    throw new ArrApiError('Radarr movie monitoring update did not converge');
   }
 
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {

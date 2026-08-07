@@ -84,6 +84,24 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
   if (expected !== null && expected !== undefined && expected !== actual) mismatch(label);
 }
 
+function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (snapshot.arrReassignments === undefined) return;
+  if (!Array.isArray(snapshot.arrReassignments)) {
+    throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
+  }
+  for (const entry of snapshot.arrReassignments) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
+    }
+    if (
+      Object.hasOwn(entry, 'originalMonitored') &&
+      typeof entry.originalMonitored !== 'boolean'
+    ) {
+      throw new DeletionValidationError('durable Arr monitoring evidence is malformed');
+    }
+  }
+}
+
 function normalized(value: string | null): string | null {
   const result = value?.trim().toLowerCase();
   return result ? result : null;
@@ -247,6 +265,7 @@ export async function validateDeletionTarget(
     throw new DeletionValidationError('the active Plex server changed after deletion was accepted');
   }
   const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
+  validateArrMonitoringEvidence(snapshot);
   if (snapshot.serverUrl !== active.client.serverUrl) mismatch('Plex server address');
   if (await active.client.identity() !== snapshot.machineIdentifier) {
     mismatch('Plex machine identity');

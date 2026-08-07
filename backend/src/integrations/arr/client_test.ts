@@ -186,97 +186,6 @@ Deno.test('ArrClient rejects malformed Radarr file visibility and extra ownershi
   await assertRejects(() => malformedExtra.extraFiles(42), ArrApiError, 'extra-file record');
 });
 
-Deno.test('ArrClient updates only the path on the complete existing Radarr movie record', async () => {
-  const requests: Array<{ url: string; method: string; body: unknown }> = [];
-  const client = new ArrClient(
-    'radarr',
-    'http://radarr:7878',
-    'secret',
-    ((input: string | URL | Request, init?: RequestInit) => {
-      requests.push({
-        url: String(input),
-        method: init?.method ?? 'GET',
-        body: init?.body ? JSON.parse(String(init.body)) : null,
-      });
-      return Promise.resolve(Response.json({
-        id: 42,
-        title: 'Movie',
-        path: '/movies/Movie',
-        monitored: true,
-        qualityProfileId: 7,
-        tags: [3],
-      }));
-    }) as typeof fetch,
-  );
-
-  assertEquals(
-    await client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
-    true,
-  );
-  assertEquals(requests, [
-    {
-      url: 'http://radarr:7878/api/v3/movie/42',
-      method: 'GET',
-      body: null,
-    },
-    {
-      url: 'http://radarr:7878/api/v3/movie/42?moveFiles=false',
-      method: 'PUT',
-      body: {
-        id: 42,
-        title: 'Movie',
-        path: '/movies-4k/Movie',
-        monitored: true,
-        qualityProfileId: 7,
-        tags: [3],
-      },
-    },
-  ]);
-});
-
-Deno.test('ArrClient reconciles an already-updated Radarr path without another mutation', async () => {
-  let requests = 0;
-  const client = new ArrClient(
-    'radarr',
-    'http://radarr:7878',
-    'secret',
-    (() => {
-      requests++;
-      return Promise.resolve(Response.json({
-        id: 42,
-        title: 'Movie',
-        path: '/movies-4k/Movie',
-      }));
-    }) as typeof fetch,
-  );
-
-  assertEquals(
-    await client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
-    false,
-  );
-  assertEquals(requests, 1);
-});
-
-Deno.test('ArrClient rejects a Radarr path changed to an unexpected third location', async () => {
-  const client = new ArrClient(
-    'radarr',
-    'http://radarr:7878',
-    'secret',
-    (() =>
-      Promise.resolve(Response.json({
-        id: 42,
-        title: 'Movie',
-        path: '/unexpected/Movie',
-      }))) as typeof fetch,
-  );
-
-  await assertRejects(
-    () => client.updateMoviePath(42, '/movies/Movie', '/movies-4k/Movie'),
-    ArrApiError,
-    'changed the movie path',
-  );
-});
-
 Deno.test('ArrClient identifies a Sonarr file shared by multiple episodes', async () => {
   const client = new ArrClient(
     'sonarr',
@@ -353,65 +262,326 @@ Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', asyn
   ]);
 });
 
-Deno.test('ArrClient unmonitors a Radarr movie without deleting its record or files', async () => {
+Deno.test('ArrClient preserves a complete Radarr movie resource and verifies monitoring', async () => {
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  let monitored = true;
   const mockFetch = ((input: string | URL | Request, init?: RequestInit) => {
     requests.push({
       url: String(input),
       method: init?.method ?? 'GET',
       body: init?.body ? JSON.parse(String(init.body)) : null,
     });
-    return Promise.resolve(Response.json({ id: 42, title: 'Movie', monitored: true }));
+    if (init?.method === 'PUT') monitored = false;
+    return Promise.resolve(Response.json({
+      id: 42,
+      tmdbId: 123,
+      title: 'Movie',
+      path: '/movies/Movie',
+      monitored,
+      qualityProfileId: 7,
+      tags: [3],
+    }));
   }) as typeof fetch;
   const client = new ArrClient('radarr', 'http://radarr:7878', 'secret', mockFetch);
+  const identity = { movieId: 42, tmdbId: 123, path: '/movies/Movie' };
 
-  assertEquals(await client.monitorTarget(42), { id: 42, monitored: true });
-  assertEquals(await client.setMonitorTarget(42, false), true);
+  assertEquals(await client.radarrMovieMonitorTarget(identity), { id: 42, monitored: true });
+  assertEquals(await client.setRadarrMovieMonitored(identity, false), true);
   assertEquals(requests, [
     { url: 'http://radarr:7878/api/v3/movie/42', method: 'GET', body: null },
     { url: 'http://radarr:7878/api/v3/movie/42', method: 'GET', body: null },
     {
       url: 'http://radarr:7878/api/v3/movie/42',
       method: 'PUT',
-      body: { id: 42, title: 'Movie', monitored: false },
+      body: {
+        id: 42,
+        tmdbId: 123,
+        title: 'Movie',
+        path: '/movies/Movie',
+        monitored: false,
+        qualityProfileId: 7,
+        tags: [3],
+      },
     },
+    { url: 'http://radarr:7878/api/v3/movie/42', method: 'GET', body: null },
   ]);
 });
 
-Deno.test('ArrClient resolves and unmonitors one Sonarr episode', async () => {
-  const requests: Array<{ url: string; method: string }> = [];
+Deno.test('ArrClient updates only an exact Sonarr episode and verifies monitoring', async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  let monitored = true;
   const mockFetch = ((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
-    requests.push({ url, method: init?.method ?? 'GET' });
-    if (url.includes('/episode?')) {
-      return Promise.resolve(Response.json([
-        { id: 70, seasonNumber: 1, episodeNumber: 1, monitored: true },
-        { id: 71, seasonNumber: 1, episodeNumber: 2, monitored: true },
-      ]));
-    }
+    requests.push({
+      url,
+      method: init?.method ?? 'GET',
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    if (init?.method === 'PUT') monitored = false;
     return Promise.resolve(Response.json({
       id: 71,
       seriesId: 7,
       seasonNumber: 1,
       episodeNumber: 2,
-      monitored: true,
+      monitored,
     }));
   }) as typeof fetch;
   const client = new ArrClient('sonarr', 'http://sonarr:8989', 'secret', mockFetch);
+  const identity = { episodeId: 71, seriesId: 7, seasonNumber: 1, episodeNumber: 2 };
 
   assertEquals(
-    await client.monitorTarget(7, { seasonNumber: 1, episodeNumber: 2 }),
+    await client.sonarrEpisodeMonitorTarget(identity),
     { id: 71, monitored: true },
   );
-  assertEquals(await client.setMonitorTarget(71, false), true);
+  assertEquals(await client.setSonarrEpisodeMonitored(identity, false), true);
   assertEquals(requests, [
     {
-      url: 'http://sonarr:8989/api/v3/episode?seriesId=7&seasonNumber=1',
+      url: 'http://sonarr:8989/api/v3/episode/71',
       method: 'GET',
+      body: null,
     },
-    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'GET' },
-    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'PUT' },
+    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'GET', body: null },
+    {
+      url: 'http://sonarr:8989/api/v3/episode/71',
+      method: 'PUT',
+      body: { id: 71, monitored: false },
+    },
+    { url: 'http://sonarr:8989/api/v3/episode/71', method: 'GET', body: null },
   ]);
+});
+
+Deno.test('ArrClient rejects malformed exact monitoring identities and states', async () => {
+  const sonarr = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json({
+        id: 71,
+        seriesId: 8,
+        seasonNumber: 1,
+        episodeNumber: 2,
+      }))) as typeof fetch,
+  );
+  await assertRejects(
+    () =>
+      sonarr.sonarrEpisodeMonitorTarget({
+        episodeId: 71,
+        seriesId: 7,
+        seasonNumber: 1,
+        episodeNumber: 2,
+      }),
+    ArrApiError,
+    'conflicting or malformed',
+  );
+
+  const radarr = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() =>
+      Promise.resolve(Response.json({
+        id: 42,
+        tmdbId: 999,
+        path: '/movies/Movie',
+        monitored: false,
+      }))) as typeof fetch,
+  );
+  await assertRejects(
+    () =>
+      radarr.radarrMovieMonitorTarget({
+        movieId: 42,
+        tmdbId: 123,
+        path: '/movies/Movie',
+      }),
+    ArrApiError,
+    'conflicting or malformed',
+  );
+
+  let invalidIdentityRequests = 0;
+  const invalidSonarr = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() => {
+      invalidIdentityRequests++;
+      return Promise.resolve(Response.json({}));
+    }) as typeof fetch,
+  );
+  await assertRejects(
+    () =>
+      invalidSonarr.sonarrEpisodeMonitorTarget({
+        episodeId: 0,
+        seriesId: 7,
+        seasonNumber: 1,
+        episodeNumber: 2,
+      }),
+    ArrApiError,
+    'identity is invalid',
+  );
+
+  const invalidRadarr = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() => {
+      invalidIdentityRequests++;
+      return Promise.resolve(Response.json({}));
+    }) as typeof fetch,
+  );
+  await assertRejects(
+    () =>
+      invalidRadarr.radarrMovieMonitorTarget({
+        movieId: 42,
+        tmdbId: 0,
+        path: '/movies/Movie',
+      }),
+    ArrApiError,
+    'identity is invalid',
+  );
+  assertEquals(invalidIdentityRequests, 0);
+});
+
+Deno.test('ArrClient monitoring writes reconcile errors through exact read-back', async () => {
+  for (const failure of ['http', 'transport'] as const) {
+    let monitored = true;
+    let puts = 0;
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr:8989',
+      'secret',
+      ((_: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          puts++;
+          monitored = false;
+          return failure === 'http'
+            ? Promise.resolve(new Response('rejected', { status: 500 }))
+            : Promise.reject(new TypeError('lost response'));
+        }
+        return Promise.resolve(Response.json({
+          id: 71,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 2,
+          monitored,
+        }));
+      }) as typeof fetch,
+    );
+    const identity = { episodeId: 71, seriesId: 7, seasonNumber: 1, episodeNumber: 2 };
+    assertEquals(await client.setSonarrEpisodeMonitored(identity, false), true);
+    assertEquals(await client.setSonarrEpisodeMonitored(identity, false), false);
+    assertEquals(puts, 1);
+  }
+});
+
+Deno.test('ArrClient preserves a definite monitoring PUT error when read-back disproves it', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    ((_: string | URL | Request, init?: RequestInit) =>
+      init?.method === 'PUT'
+        ? Promise.resolve(new Response('forbidden', { status: 403 }))
+        : Promise.resolve(Response.json({
+          id: 71,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 2,
+          monitored: true,
+        }))) as typeof fetch,
+  );
+  await assertRejects(
+    () =>
+      client.setSonarrEpisodeMonitored(
+        { episodeId: 71, seriesId: 7, seasonNumber: 1, episodeNumber: 2 },
+        false,
+      ),
+    ArrApiError,
+    'returned 403',
+  );
+});
+
+Deno.test('Radarr monitoring writes reconcile HTTP and transport errors through read-back', async () => {
+  for (const failure of ['http', 'transport'] as const) {
+    let monitored = true;
+    let puts = 0;
+    const client = new ArrClient(
+      'radarr',
+      'http://radarr:7878',
+      'secret',
+      ((_: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          puts++;
+          monitored = false;
+          return failure === 'http'
+            ? Promise.resolve(new Response('rejected', { status: 500 }))
+            : Promise.reject(new TypeError('lost response'));
+        }
+        return Promise.resolve(Response.json({
+          id: 42,
+          tmdbId: 123,
+          path: '/movies/Movie',
+          monitored,
+          qualityProfileId: 7,
+        }));
+      }) as typeof fetch,
+    );
+    const identity = { movieId: 42, tmdbId: 123, path: '/movies/Movie' };
+    assertEquals(await client.setRadarrMovieMonitored(identity, false), true);
+    assertEquals(await client.setRadarrMovieMonitored(identity, false), false);
+    assertEquals(puts, 1);
+  }
+});
+
+Deno.test('ArrClient treats failed monitoring read-back as inconclusive', async () => {
+  for (const type of ['sonarr', 'radarr'] as const) {
+    let reads = 0;
+    const client = new ArrClient(
+      type,
+      `http://${type}`,
+      'secret',
+      ((_: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return Promise.resolve(new Response('rejected', { status: 503 }));
+        }
+        reads++;
+        if (reads > 1) return Promise.reject(new TypeError('read-back unavailable'));
+        return Promise.resolve(Response.json(
+          type === 'sonarr'
+            ? {
+              id: 71,
+              seriesId: 7,
+              seasonNumber: 1,
+              episodeNumber: 2,
+              monitored: true,
+            }
+            : {
+              id: 42,
+              tmdbId: 123,
+              path: '/movies/Movie',
+              monitored: true,
+              qualityProfileId: 7,
+            },
+        ));
+      }) as typeof fetch,
+    );
+    const error = await assertRejects(
+      () =>
+        type === 'sonarr'
+          ? client.setSonarrEpisodeMonitored(
+            { episodeId: 71, seriesId: 7, seasonNumber: 1, episodeNumber: 2 },
+            false,
+          )
+          : client.setRadarrMovieMonitored(
+            { movieId: 42, tmdbId: 123, path: '/movies/Movie' },
+            false,
+          ),
+      ArrApiError,
+      'read-back was inconclusive',
+    );
+    assertEquals((error as ArrApiError).retryable, true);
+    assertEquals((error as ArrApiError).status, undefined);
+  }
 });
 
 Deno.test('Sonarr lookup exposes bounded season summaries with managed files', async () => {

@@ -33,6 +33,8 @@ const {
   completeRelocationBarriers,
   finishRelocation,
 } = await import('./relocation.ts');
+const { createRelocationGuidance, relocationManualReason } = await import('./relocationModel.ts');
+const { refreshDeletionOperation } = await import('./state.ts');
 const {
   deletionRecoveryLibraryKeys,
   deletionRecoveryNeedsProjection,
@@ -63,6 +65,13 @@ let restoreArrPathOnRescan: string | null = null;
 let restoredArrPath: string | null = null;
 let arrMoviePath = '/library/Coordinated';
 let arrMonitored = true;
+let arrMonitorMutationCount = 0;
+let loseMonitorResponseAtMutation: number | null = null;
+let rejectMonitorAtMutation: number | null = null;
+let monitorDriftAfterSelectedDelete = false;
+let monitorDriftAfterRestorationReads: number | null = null;
+let monitorDriftAfterUnmonitoredEvidence = false;
+let rejectMonitoringWrites = false;
 let loseArrManagedDeleteResponse = false;
 let loseArrMoviePathResponse = false;
 let loseArrRescanResponse = false;
@@ -87,7 +96,9 @@ let sonarrManagedFileId = 10;
 let sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
 let sonarrManagedMediaId: number | null = null;
 let sonarrRescanTargetPath: string | null = null;
+let sonarrRescanCount = 0;
 let sonarrMonitorMutationCount = 0;
+let sonarrMonitored = true;
 let sonarrManagedFileShared = false;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
@@ -217,17 +228,49 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/movie/7' && (init?.method ?? 'GET') === 'GET') {
+      if (
+        monitorDriftAfterUnmonitoredEvidence && withTransaction((client) =>
+            client.prepare(
+              "SELECT COUNT(*) FROM deletion_targets WHERE json_extract(snapshot, '$.arrReassignments[0].originalMonitored') = 0",
+            ).value<[number]>()?.[0] ?? 0
+          ) > 0
+      ) {
+        monitorDriftAfterUnmonitoredEvidence = false;
+        arrMonitored = true;
+      }
+      const monitored = arrMonitored;
+      if (
+        arrMonitorMutationCount >= 2 && monitorDriftAfterRestorationReads !== null &&
+        --monitorDriftAfterRestorationReads === 0
+      ) {
+        monitorDriftAfterRestorationReads = null;
+        arrMonitored = false;
+      }
       return Promise.resolve(Response.json({
         id: 7,
+        tmdbId: 10,
         title: 'Coordinated movie',
         path: arrMoviePath,
-        monitored: arrMonitored,
+        monitored,
       }));
     }
     if (url.pathname === '/api/v3/movie/7' && init?.method === 'PUT') {
       const body = JSON.parse(String(init.body)) as { path?: string; monitored?: boolean };
+      if (
+        body.monitored !== undefined &&
+        (rejectMonitoringWrites || arrMonitorMutationCount + 1 === rejectMonitorAtMutation)
+      ) {
+        return Promise.resolve(new Response('monitoring rejected', { status: 503 }));
+      }
       if (body.path) arrMoviePath = body.path;
-      if (body.monitored !== undefined) arrMonitored = body.monitored;
+      if (body.monitored !== undefined) {
+        arrMonitorMutationCount++;
+        arrMonitored = body.monitored;
+      }
+      if (arrMonitorMutationCount === loseMonitorResponseAtMutation) {
+        loseMonitorResponseAtMutation = null;
+        return Promise.reject(new TypeError('lost Radarr monitoring response'));
+      }
       if (loseArrMoviePathResponse) {
         loseArrMoviePathResponse = false;
         return Promise.reject(new TypeError('lost Radarr movie path response'));
@@ -272,7 +315,6 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }
   }
   if (url.hostname === 'sonarr') {
-    if (init?.method === 'PUT') sonarrMonitorMutationCount++;
     if (url.pathname === '/api/v3/series') {
       return Promise.resolve(Response.json([{
         id: 8,
@@ -287,7 +329,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
           seasonNumber: 1,
           episodeNumber: 1,
           episodeFileId: sonarrManagedFilePresent ? sonarrManagedFileId : 0,
-          monitored: false,
+          monitored: sonarrMonitored,
         },
         ...(sonarrManagedFileShared
           ? [{
@@ -299,6 +341,49 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
           }]
           : []),
       ]));
+    }
+    if (url.pathname === '/api/v3/episode/9' && (init?.method ?? 'GET') === 'GET') {
+      if (
+        monitorDriftAfterUnmonitoredEvidence && withTransaction((client) =>
+            client.prepare(
+              "SELECT COUNT(*) FROM deletion_targets WHERE json_extract(snapshot, '$.arrReassignments[0].originalMonitored') = 0",
+            ).value<[number]>()?.[0] ?? 0
+          ) > 0
+      ) {
+        monitorDriftAfterUnmonitoredEvidence = false;
+        sonarrMonitored = true;
+      }
+      const monitored = sonarrMonitored;
+      if (
+        sonarrMonitorMutationCount >= 2 && monitorDriftAfterRestorationReads !== null &&
+        --monitorDriftAfterRestorationReads === 0
+      ) {
+        monitorDriftAfterRestorationReads = null;
+        sonarrMonitored = false;
+      }
+      return Promise.resolve(Response.json({
+        id: 9,
+        seriesId: 8,
+        seasonNumber: 1,
+        episodeNumber: 1,
+        monitored,
+      }));
+    }
+    if (url.pathname === '/api/v3/episode/9' && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as { monitored?: boolean };
+      if (
+        body.monitored !== undefined &&
+        (rejectMonitoringWrites || sonarrMonitorMutationCount + 1 === rejectMonitorAtMutation)
+      ) {
+        return Promise.resolve(new Response('monitoring rejected', { status: 503 }));
+      }
+      sonarrMonitorMutationCount++;
+      if (typeof body.monitored === 'boolean') sonarrMonitored = body.monitored;
+      if (sonarrMonitorMutationCount === loseMonitorResponseAtMutation) {
+        loseMonitorResponseAtMutation = null;
+        return Promise.reject(new TypeError('lost Sonarr monitoring response'));
+      }
+      return Promise.resolve(Response.json({ id: 9, monitored: sonarrMonitored }));
     }
     if (
       url.pathname === `/api/v3/episodefile/${sonarrManagedFileId}` &&
@@ -316,6 +401,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       init?.method === 'DELETE'
     ) {
       sonarrManagedFilePresent = false;
+      if (monitorDriftAfterSelectedDelete) sonarrMonitored = true;
       if (sonarrManagedMediaId !== null) {
         const episode = live.get('episode-1');
         if (episode?.Media) {
@@ -329,6 +415,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/command' && init?.method === 'POST') {
+      sonarrRescanCount++;
       if (sonarrRescanTargetPath) {
         sonarrManagedPath = sonarrRescanTargetPath;
         sonarrManagedFileId++;
@@ -386,6 +473,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }
     if (failDeleteBeforeMutation) return Promise.reject(new TypeError('fetch failed'));
     item.Media = item.Media.filter((media) => media.id !== mediaId);
+    if (monitorDriftAfterSelectedDelete) arrMonitored = true;
     if (loseDeleteResponse) return Promise.reject(new TypeError('fetch failed'));
     return Promise.resolve(new Response(null, { status: 200 }));
   }
@@ -451,6 +539,13 @@ function reset(): void {
   restoredArrPath = null;
   arrMoviePath = '/library/Coordinated';
   arrMonitored = true;
+  arrMonitorMutationCount = 0;
+  loseMonitorResponseAtMutation = null;
+  rejectMonitorAtMutation = null;
+  monitorDriftAfterSelectedDelete = false;
+  monitorDriftAfterRestorationReads = null;
+  monitorDriftAfterUnmonitoredEvidence = false;
+  rejectMonitoringWrites = false;
   loseArrManagedDeleteResponse = false;
   loseArrMoviePathResponse = false;
   loseArrRescanResponse = false;
@@ -467,7 +562,9 @@ function reset(): void {
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
   sonarrManagedMediaId = null;
   sonarrRescanTargetPath = null;
+  sonarrRescanCount = 0;
   sonarrMonitorMutationCount = 0;
+  sonarrMonitored = true;
   sonarrManagedFileShared = false;
   qbitPresent = false;
   qbitDeleteCount = 0;
@@ -682,17 +779,6 @@ function configureRadarr(withQbit = false): void {
   });
 }
 
-function configureSecondRadarr(): void {
-  withTransaction((client) => {
-    client.prepare(
-      "INSERT INTO arr_instances (id, server_id, type, name, url, api_key, created_at, updated_at) VALUES (3, 1, 'radarr', 'Second Radarr', 'http://radarr2', 'key', 1, 1)",
-    ).run();
-    client.prepare(
-      "INSERT INTO arr_library_mappings (server_id, library_key, arr_instance_id, add_import_exclusion) VALUES (1, 'movies', 3, 0)",
-    ).run();
-  });
-}
-
 function configureSonarr(): void {
   withTransaction((client) => {
     client.prepare(
@@ -804,15 +890,51 @@ async function prepareGuidedMovieRelocation(): Promise<{
   ];
 
   const operationId = await enqueueMovieReassignment('guided-relocation', 11);
-  await runDeletionWorkerOnceForTest();
+  const guidance = createRelocationGuidance({
+    service: 'radarr',
+    mediaType: 'movie',
+    reason: 'retained_parent_mismatch',
+    selectedMediaId: 11,
+    selectedPlexPath: arrManagedPath,
+    selectedArrPath: arrManagedPath,
+    retainedMediaId: 12,
+    retainedPlexPath: '/library/retained.mkv',
+    retainedFileSize: 50_000,
+    managedDirectoryPath: '/library/Coordinated',
+    sourceArrPath: '/library/retained.mkv',
+    destinationArrPath: '/library/Coordinated/retained.mkv',
+    destinationPlexPath: '/library/Coordinated/retained.mkv',
+    arrInstanceId: 1,
+    arrInstanceName: 'Radarr',
+    arrRecordId: 7,
+    arrManagedFileId,
+    mappingIdentity: '{"addImportExclusion":true,"pathMappings":[]}',
+  });
+  const targetId = withTransaction((client) => {
+    const durable = client.prepare(
+      'SELECT id, snapshot FROM deletion_targets WHERE operation_id = ?',
+    ).value<[number, string]>(operationId)!;
+    const snapshot = JSON.parse(durable[1]);
+    snapshot.relocationGuidance = guidance;
+    client.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, status = 'needs_attention', phase = 'validating', error = ?, updated_at = ? WHERE id = ?",
+    ).run(
+      JSON.stringify(snapshot),
+      relocationManualReason(guidance),
+      guidance.observedAt,
+      durable[0],
+    );
+    refreshDeletionOperation(client, operationId);
+    return durable[0];
+  });
   const operation = getDeletionOperation(operationId, 1)!;
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
-  const guidance = target.relocationGuidance as { guidanceId?: unknown } | undefined;
-  assertEquals(typeof guidance?.guidanceId, 'string', String(target.error));
+  const exposed = target.relocationGuidance as { guidanceId?: unknown } | undefined;
+  assertEquals(typeof exposed?.guidanceId, 'string', String(target.error));
   return {
     operationId,
-    targetId: target.id as number,
-    guidanceId: guidance!.guidanceId as string,
+    targetId,
+    guidanceId: exposed!.guidanceId as string,
   };
 }
 
@@ -2448,6 +2570,13 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
   assertEquals(arrMoviePath, '/library/Coordinated');
   assertEquals(arrManagedPath, '/library/Coordinated/better.mkv');
   assertEquals(arrMonitored, false);
+  assertEquals(arrMonitorMutationCount, 0);
+  const monitoringSnapshot = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<[string]>(
+      result.operationId,
+    )?.[0]
+  );
+  assertEquals(JSON.parse(monitoringSnapshot!).arrReassignments[0].originalMonitored, false);
   assertEquals(live.get('reassign-version')?.Media?.map((media) => media.id), [13]);
   assertEquals(
     withTransaction((client) =>
@@ -2457,6 +2586,238 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
     ),
     [[13]],
   );
+});
+
+Deno.test('Radarr reassignment reconciles lost monitoring responses at both boundaries', async () => {
+  for (const mutation of [1, 2]) {
+    reset();
+    configureRadarr();
+    addMovie(`radarr-monitor-response-${mutation}`, [12, 13], 10);
+    coordinatedRatingKey = `radarr-monitor-response-${mutation}`;
+    arrPresent = true;
+    arrManagedMediaId = 12;
+    arrManagedPath = '/library/Coordinated/movie.mkv';
+    arrRescanTargetPath = '/library/Coordinated/better.mkv';
+    live.get(coordinatedRatingKey)!.Media = [
+      { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+      { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+    ];
+    loseMonitorResponseAtMutation = mutation;
+
+    const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+    await settle();
+
+    const operation = getDeletionOperation(operationId, 1);
+    assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+    assertEquals(arrMonitored, true);
+    assertEquals(arrMonitorMutationCount, 2);
+    assertEquals(live.get(coordinatedRatingKey)?.Media?.map((media) => media.id), [13]);
+  }
+});
+
+Deno.test('Radarr reassignment retries a definite monitoring restoration rejection', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-restore-rejected', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-restore-rejected';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  rejectMonitorAtMutation = 2;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  let operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+  assertEquals(arrManagedPath, '/library/Coordinated/better.mkv');
+  assertEquals(arrMonitored, false);
+  assertEquals(arrMonitorMutationCount, 1);
+  assertEquals(live.get(coordinatedRatingKey)?.Media?.map((media) => media.id), [13]);
+
+  rejectMonitorAtMutation = null;
+  makeRetryReady(operationId);
+  await settle();
+
+  operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 2);
+  assertEquals(plexMediaDeleteCount, 1);
+});
+
+Deno.test('Radarr reassignment re-establishes protection after post-delete drift', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-monitor-drift', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-monitor-drift';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  monitorDriftAfterSelectedDelete = true;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 3);
+  assertEquals(live.get(coordinatedRatingKey)?.Media?.map((media) => media.id), [13]);
+});
+
+Deno.test('Radarr reassignment repairs monitoring drift before final Plex reconciliation', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-final-monitor-drift', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-final-monitor-drift';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  monitorDriftAfterRestorationReads = 3;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 3);
+  assertEquals(plexMediaDeleteCount, 1);
+});
+
+Deno.test('persistent final Radarr monitoring failure exhausts into attention', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-final-monitor-failure', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-final-monitor-failure';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  monitorDriftAfterRestorationReads = 3;
+  rejectMonitorAtMutation = 3;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+  for (let retry = 0; retry < 3; retry++) {
+    const operation = getDeletionOperation(operationId, 1);
+    assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+    makeRetryReady(operationId);
+    await settle();
+  }
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(arrMonitored, false);
+  assertEquals(arrMonitorMutationCount, 2);
+  assertEquals(plexMediaDeleteCount, 1);
+});
+
+Deno.test('originally unmonitored Radarr reassignment repairs post-delete drift', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-unmonitored-drift', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-unmonitored-drift';
+  arrPresent = true;
+  arrMonitored = false;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  monitorDriftAfterSelectedDelete = true;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrMonitored, false);
+  assertEquals(arrMonitorMutationCount, 1);
+  assertEquals(live.get(coordinatedRatingKey)?.Media?.map((media) => media.id), [13]);
+});
+
+Deno.test('originally unmonitored Radarr reassignment stops on pre-delete drift', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-unmonitored-pre-delete-drift', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-unmonitored-pre-delete-drift';
+  arrPresent = true;
+  arrMonitored = false;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  monitorDriftAfterUnmonitoredEvidence = true;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertStringIncludes(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
+    'monitoring changed before file deletion',
+  );
+  assertEquals(arrMonitorMutationCount, 0);
+  assertEquals(plexMediaDeleteCount, 0);
+  assertEquals(arrManagedFilePresent, true);
+});
+
+Deno.test('Radarr reassignment does not delete when protection cannot be confirmed', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-monitor-rejected', [12, 13], 10);
+  coordinatedRatingKey = 'radarr-monitor-rejected';
+  arrPresent = true;
+  arrManagedMediaId = 12;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/better.mkv';
+  rejectMonitoringWrites = true;
+  live.get(coordinatedRatingKey)!.Media = [
+    { id: 12, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 13, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueMovieReassignment(coordinatedRatingKey, 12);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+  assertStringIncludes(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
+    'returned 503',
+  );
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 0);
+  assertEquals(plexMediaDeleteCount, 0);
+  assertEquals(arrManagedFilePresent, true);
+  assertEquals(live.get(coordinatedRatingKey)?.Media?.map((media) => media.id), [12, 13]);
 });
 
 Deno.test('guided Radarr relocation supersedes only the untouched target and is exactly idempotent', async () => {
@@ -3259,13 +3620,11 @@ Deno.test('legacy Radarr external repair finalizes without mutation or lifetime 
   arrManagedFileSize = 50_000;
   withTransaction((client) => {
     const row = client.prepare(
-      'SELECT id, snapshot FROM deletion_targets WHERE operation_id = ?',
-    ).value<[number, string]>(operationId)!;
-    const snapshot = JSON.parse(row[1]);
-    snapshot.arrReassignments[0].retainedFileSize = 50_000;
+      'SELECT id FROM deletion_targets WHERE operation_id = ?',
+    ).value<[number]>(operationId)!;
     client.prepare(
-      'UPDATE deletion_targets SET plex_attempt_count = 0, removal_confirmed_at = NULL, snapshot = ? WHERE id = ?',
-    ).run(JSON.stringify(snapshot), row[0]);
+      'UPDATE deletion_targets SET plex_attempt_count = 0, removal_confirmed_at = NULL WHERE id = ?',
+    ).run(row[0]);
     client.prepare('DELETE FROM media_removals WHERE operation_id = ?').run(operationId);
     client.prepare(
       'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
@@ -3278,6 +3637,8 @@ Deno.test('legacy Radarr external repair finalizes without mutation or lifetime 
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
   assertEquals(operation.status, 'completed', JSON.stringify(operation));
   assertEquals(target.plexAttemptCount, 0);
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 2);
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
@@ -3288,7 +3649,7 @@ Deno.test('legacy Radarr external repair finalizes without mutation or lifetime 
   );
 });
 
-Deno.test('legacy Radarr repair preserves ambiguous historical accounting', async () => {
+Deno.test('legacy Radarr repair without monitoring evidence stays protected and blocked', async () => {
   reset();
   configureRadarr();
   addMovie('legacy-radarr-ambiguous', [12, 13], 10);
@@ -3306,9 +3667,14 @@ Deno.test('legacy Radarr repair preserves ambiguous historical accounting', asyn
   await settle();
   arrManagedFileSize = 50_000;
   withTransaction((client) => {
+    const row = client.prepare(
+      'SELECT id, snapshot FROM deletion_targets WHERE operation_id = ?',
+    ).value<[number, string]>(operationId)!;
+    const snapshot = JSON.parse(row[1]);
+    delete snapshot.arrReassignments[0].originalMonitored;
     client.prepare(
-      'UPDATE deletion_targets SET plex_attempt_count = 0 WHERE operation_id = ?',
-    ).run(operationId);
+      'UPDATE deletion_targets SET plex_attempt_count = 0, snapshot = ? WHERE id = ?',
+    ).run(JSON.stringify(snapshot), row[0]);
     client.prepare(
       'DELETE FROM item_media_versions WHERE item_rating_key = ? AND media_id = ?',
     ).run('legacy-radarr-ambiguous', 12);
@@ -3321,6 +3687,11 @@ Deno.test('legacy Radarr repair preserves ambiguous historical accounting', asyn
   assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
   assertEquals(target.plexAttemptCount, 0);
   assertEquals(target.removalConfirmedAt !== null, true);
+  assertStringIncludes(
+    String(target.error),
+    'cannot recover the original monitoring state',
+  );
+  assertEquals(arrMonitored, false);
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
@@ -3391,7 +3762,6 @@ Deno.test('direct Plex deletion adopts reassignment when Arr ownership changed a
 Deno.test('Radarr reassignment converges after a lost rescan response', async () => {
   reset();
   configureRadarr();
-  configureSecondRadarr();
   addMovie('reassign-retry', [12, 13], 10);
   coordinatedRatingKey = 'reassign-retry';
   arrPresent = true;
@@ -3409,6 +3779,8 @@ Deno.test('Radarr reassignment converges after a lost rescan response', async ()
 
   assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
   assertEquals(live.get('reassign-retry')?.Media?.map((media) => media.id), [13]);
+  assertEquals(arrMonitored, true);
+  assertEquals(arrMonitorMutationCount, 2);
   const storedSnapshot = withTransaction((client) =>
     client.prepare(
       'SELECT snapshot FROM deletion_targets WHERE operation_id = ?',
@@ -3418,7 +3790,7 @@ Deno.test('Radarr reassignment converges after a lost rescan response', async ()
     JSON.parse(storedSnapshot!).arrReassignments.map(
       (entry: { instanceId: number }) => entry.instanceId,
     ),
-    [1, 3],
+    [1],
   );
 
   assertEquals(arrMoviePath, '/library/Coordinated');
@@ -3924,7 +4296,8 @@ Deno.test('Sonarr reassignment keeps the episode monitored and adopts the retain
   const operation = getDeletionOperation(operationId, 1);
   assertEquals(operation?.status, 'completed', JSON.stringify(operation));
   assertEquals(sonarrManagedPath, '/tv/Show/Season 01/better.mkv');
-  assertEquals(sonarrMonitorMutationCount, 0);
+  assertEquals(sonarrMonitorMutationCount, 2);
+  assertEquals(sonarrMonitored, true);
   assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
   assertEquals(
     withTransaction((client) =>
@@ -3934,6 +4307,250 @@ Deno.test('Sonarr reassignment keeps the episode monitored and adopts the retain
     ),
     [[22]],
   );
+});
+
+Deno.test('Sonarr reassignment preserves an originally unmonitored episode without a PUT', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrMonitored = false;
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrMonitorMutationCount, 0);
+  const storedSnapshot = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<[string]>(
+      operationId,
+    )?.[0]
+  );
+  assertEquals(JSON.parse(storedSnapshot!).arrReassignments[0].originalMonitored, false);
+});
+
+Deno.test('Sonarr reassignment reconciles lost monitoring responses at both boundaries', async () => {
+  for (const mutation of [1, 2]) {
+    reset();
+    configureSonarr();
+    addEpisode();
+    sonarrManagedMediaId = 21;
+    sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+    sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+    live.get('episode-1')!.Media = [
+      { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+      { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+    ];
+    loseMonitorResponseAtMutation = mutation;
+
+    const operationId = await enqueueEpisodeReassignment(21);
+    await settle();
+
+    const operation = getDeletionOperation(operationId, 1);
+    assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+    assertEquals(sonarrMonitored, true);
+    assertEquals(sonarrMonitorMutationCount, 2);
+    assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
+  }
+});
+
+Deno.test('Sonarr reassignment retries a definite monitoring restoration rejection', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  rejectMonitorAtMutation = 2;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  let operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+  assertEquals(sonarrManagedPath, '/tv/Show/Season 01/better.mkv');
+  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrMonitorMutationCount, 1);
+  assertEquals(sonarrRescanCount, 1);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
+
+  rejectMonitorAtMutation = null;
+  makeRetryReady(operationId);
+  await settle();
+
+  operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, true);
+  assertEquals(sonarrMonitorMutationCount, 2);
+  assertEquals(sonarrRescanCount, 1);
+});
+
+Deno.test('Sonarr reassignment re-establishes protection after post-delete drift', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  monitorDriftAfterSelectedDelete = true;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, true);
+  assertEquals(sonarrMonitorMutationCount, 3);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
+});
+
+Deno.test('Sonarr reassignment repairs monitoring drift before final Plex reconciliation', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  monitorDriftAfterRestorationReads = 2;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, true);
+  assertEquals(sonarrMonitorMutationCount, 3);
+  assertEquals(sonarrRescanCount, 1);
+});
+
+Deno.test('persistent final Sonarr monitoring failure exhausts into attention', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  monitorDriftAfterRestorationReads = 2;
+  rejectMonitorAtMutation = 3;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+  for (let retry = 0; retry < 3; retry++) {
+    const operation = getDeletionOperation(operationId, 1);
+    assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+    makeRetryReady(operationId);
+    await settle();
+  }
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrMonitorMutationCount, 2);
+  assertEquals(sonarrRescanCount, 1);
+});
+
+Deno.test('originally unmonitored Sonarr reassignment repairs post-delete drift', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrMonitored = false;
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  monitorDriftAfterSelectedDelete = true;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrMonitorMutationCount, 1);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
+});
+
+Deno.test('originally unmonitored Sonarr reassignment stops on pre-delete drift', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrMonitored = false;
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  monitorDriftAfterUnmonitoredEvidence = true;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertStringIncludes(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
+    'monitoring changed before file deletion',
+  );
+  assertEquals(sonarrMonitorMutationCount, 0);
+  assertEquals(sonarrManagedFilePresent, true);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [21, 22]);
+});
+
+Deno.test('Sonarr reassignment does not delete when protection cannot be confirmed', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  rejectMonitoringWrites = true;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const operationId = await enqueueEpisodeReassignment(21);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
+  assertStringIncludes(
+    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
+    'returned 503',
+  );
+  assertEquals(sonarrMonitored, true);
+  assertEquals(sonarrMonitorMutationCount, 0);
+  assertEquals(sonarrManagedFilePresent, true);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [21, 22]);
 });
 
 Deno.test('direct Plex deletion fails closed when Sonarr managed-path ownership is unresolved', async () => {
@@ -4001,19 +4618,11 @@ Deno.test('Sonarr reassignment recovers lost file-delete and rescan responses', 
 
     const operationId = await enqueueEpisodeReassignment(21);
     await settle();
-    assertEquals(
-      getDeletionOperation(operationId, 1)?.status,
-      'waiting_retry',
-      boundary,
-    );
-
-    makeRetryReady(operationId);
-    await settle();
-
     const operation = getDeletionOperation(operationId, 1);
     assertEquals(operation?.status, 'completed', `${boundary}: ${JSON.stringify(operation)}`);
     assertEquals(sonarrManagedPath, '/tv/Show/Season 01/better.mkv');
-    assertEquals(sonarrMonitorMutationCount, 0);
+    assertEquals(sonarrMonitorMutationCount, 2);
+    assertEquals(sonarrMonitored, true);
     assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
   }
 });

@@ -29,3 +29,12 @@ export class PlexReconciliationError extends Error {
     super(message);
   }
 }
+
+// Monitoring restoration is a strict postcondition, not a Plex warning. Keep
+// its bounded retries separate from plex_attempt_count because no Plex request
+// is made while this error is being reconciled.
+export class ArrMonitoringReconciliationError extends PlexReconciliationError {
+  constructor(message: string, permanent = false) {
+    super(message, permanent, false);
+  }
+}

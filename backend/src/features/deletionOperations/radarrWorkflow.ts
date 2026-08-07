@@ -1,8 +1,10 @@
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import {
+  ensureArrMonitoringEvidence,
+  ensureArrReassignmentProtected,
   persistArrReassignmentPlan,
   radarrReassignmentAlreadyAdopted,
-  revalidateArrReassignment,
+  reconcileArrReassignmentFinalState,
   waitForRadarrManagedPath,
 } from './arrReassignment.ts';
 import {
@@ -37,6 +39,7 @@ export async function coordinateRadarrReassignment(
     !snapshot.arrReassignments?.length ||
     snapshot.arrReassignments.some((entry) => entry.instanceType !== 'radarr')
   ) throw new Error('The persisted Radarr reassignment plan is incomplete');
+  await ensureArrMonitoringEvidence(target, snapshot, client);
 
   const plexClient = await assertActivePlexIdentity(target, snapshot);
   let live = await plexClient.metadataIdentity(snapshot.ratingKey);
@@ -47,12 +50,10 @@ export async function coordinateRadarrReassignment(
 
   if (selectedPresent) {
     for (const persisted of snapshot.arrReassignments) {
-      const entry = await revalidateArrReassignment(
-        target,
-        snapshot,
-        client,
-        persisted.instanceId,
-      );
+      let entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
+      // Revalidate the complete destructive boundary after monitoring protection
+      // has converged and immediately before the Plex-first mutation.
+      entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
       if (
         entry.managedFileId !== persisted.managedFileId ||
         entry.managedPath === null ||
@@ -77,6 +78,7 @@ export async function coordinateRadarrReassignment(
   assertRetainedVersionPostcondition(target, snapshot, live);
   await waitForRadarrManagedPath(target, snapshot, client);
   advancePhase(target, 'plex_reconciliation');
+  await reconcileArrReassignmentFinalState(target, snapshot, client);
   await reconcilePlexTarget(target, snapshot);
 }
 
@@ -95,6 +97,7 @@ export async function tryRecoverRadarrWithoutSelectedProjection(
   await validateLiveDeletionIdentity(client, target.targetKind, snapshot, live);
   if (live.media.some((entry) => entry.mediaId === snapshot.mediaId)) return false;
   assertRetainedVersionPostcondition(target, snapshot, live);
+  await ensureArrMonitoringEvidence(target, snapshot, client);
 
   if (target.plexAttemptCount > 0) {
     await coordinateRadarrReassignment(target, snapshot, client);
@@ -108,6 +111,7 @@ export async function tryRecoverRadarrWithoutSelectedProjection(
   if (!await radarrReassignmentAlreadyAdopted(target, snapshot, client, true)) {
     throw new Error('Legacy Radarr reassignment requires manual Radarr repair');
   }
+  await reconcileArrReassignmentFinalState(target, snapshot, client);
   advancePhase(target, 'plex_reconciliation');
   await reconcilePlexTarget(target, snapshot);
   return true;

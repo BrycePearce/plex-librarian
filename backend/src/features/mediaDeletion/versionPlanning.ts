@@ -6,7 +6,6 @@ import type {
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
 import type { ArrExtraFile, ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
-import type { RadarrMovieRelocationCandidate } from '../deletionOperations/relocationModel.ts';
 import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
@@ -43,7 +42,6 @@ export interface VersionDeletionPlan {
   arrManagedMediaIds: number[];
   arrReassignCandidateMediaIds: number[];
   cleanup: ResolvedCleanupItem | null;
-  relocationCandidate?: RadarrMovieRelocationCandidate;
 }
 
 function normalizedComparison(path: string): string | null {
@@ -302,7 +300,6 @@ export async function buildVersionDeletionPlan({
     arrReassignCandidateMediaIds,
     arrReassignStatus,
     arrReassignReason,
-    relocationCandidate,
   } = await buildArrReassignmentPlan({
     mediaType,
     item,
@@ -409,7 +406,6 @@ export async function buildVersionDeletionPlan({
     arrManagedMediaIds,
     arrReassignCandidateMediaIds,
     cleanup,
-    ...(relocationCandidate ? { relocationCandidate } : {}),
     preview: {
       mediaType,
       arrService: mediaType === 'episode' ? 'sonarr' : 'radarr',
