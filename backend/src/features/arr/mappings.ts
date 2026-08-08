@@ -58,8 +58,6 @@ export function validPathMappings(value: unknown): ArrPathMapping[] | null {
     seen.add(key);
     result.push({ kind: raw.kind, arrPath, localPath });
   }
-  const kinds = new Set(result.map((mapping) => mapping.kind));
-  if (kinds.size === 1) return null;
   if (!pathMappingRootsAreDisjoint(result)) return null;
   return result;
 }

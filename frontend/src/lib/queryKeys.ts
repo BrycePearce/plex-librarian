@@ -75,7 +75,10 @@ export const queryKeys = {
     invitationList: <TParams>(params: TParams) => [roots.users, "invitations", params] as const,
   },
   events: { all: [roots.events] as const },
-  settings: { all: [roots.settings] as const },
+  settings: {
+    all: [roots.settings] as const,
+    plexPathMappings: [roots.settings, "plex-path-mappings"] as const,
+  },
   mediaRemovals: {
     all: [roots.mediaRemovals] as const,
     summary: [roots.mediaRemovals, "summary"] as const,
@@ -96,7 +99,15 @@ export const queryKeys = {
       mediaType: "movie" | "episode" | undefined,
       ratingKey: string,
       mediaIds: readonly number[],
-    ) => [roots.versionDeletionPreview, mediaType, ratingKey, mediaIds] as const,
+      inspectDownloadCleanup = false,
+    ) =>
+      [
+        roots.versionDeletionPreview,
+        mediaType,
+        ratingKey,
+        mediaIds,
+        inspectDownloadCleanup,
+      ] as const,
   },
   deletionOperations: {
     all: [roots.deletionOperations] as const,
@@ -124,7 +135,7 @@ const rootPolicies = {
   duplicates: { serverScoped: true, syncDerived: true },
   users: { serverScoped: true, syncDerived: true },
   events: { serverScoped: true, syncDerived: true },
-  settings: { serverScoped: false, syncDerived: false },
+  settings: { serverScoped: true, syncDerived: false },
   mediaRemovals: { serverScoped: true, syncDerived: false },
   arrIntegrations: { serverScoped: true, syncDerived: true },
   qbittorrentIntegrations: { serverScoped: true, syncDerived: false },

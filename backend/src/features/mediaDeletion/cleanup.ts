@@ -38,6 +38,68 @@ export interface ResolvedCleanupItem extends CleanupItemWithoutPlexPaths {
   observedDownloadJobKeys?: Set<string>;
 }
 
+export interface PersistedResolvedDownloadJob extends Omit<ResolvedDownloadJob, 'target'> {
+  targetIdentity: Omit<DownloadClientTarget, 'client'>;
+}
+
+export interface PersistedResolvedCleanupItem
+  extends Omit<ResolvedCleanupItem, 'downloadJobs' | 'observedDownloadJobKeys'> {
+  downloadJobs: PersistedResolvedDownloadJob[];
+}
+
+export function persistResolvedCleanup(
+  cleanup: ResolvedCleanupItem,
+): PersistedResolvedCleanupItem {
+  if (cleanup.status !== 'resolved') {
+    throw new Error('Only a fully resolved download cleanup can be persisted');
+  }
+  const { observedDownloadJobKeys: _observedDownloadJobKeys, ...persisted } = cleanup;
+  return {
+    ...persisted,
+    downloadJobs: cleanup.downloadJobs.map(({ target, ...job }) => ({
+      ...job,
+      targetIdentity: {
+        provider: target.provider,
+        instanceKey: target.instanceKey,
+        instanceId: target.instanceId,
+        instanceName: target.instanceName,
+      },
+    })),
+  };
+}
+
+export function rehydrateResolvedCleanup(
+  cleanup: PersistedResolvedCleanupItem,
+  targets: readonly DownloadClientTarget[],
+): ResolvedCleanupItem {
+  if (cleanup.status !== 'resolved') {
+    throw new Error('The durable download cleanup is not resolved');
+  }
+  const downloadJobs = cleanup.downloadJobs.map(({ targetIdentity, ...job }) => {
+    const matches = targets.filter((target) =>
+      target.provider === targetIdentity.provider &&
+      target.instanceKey === targetIdentity.instanceKey &&
+      target.instanceId === targetIdentity.instanceId &&
+      target.instanceName === targetIdentity.instanceName
+    );
+    if (matches.length !== 1) {
+      throw new Error('The configured download client changed after cleanup was accepted');
+    }
+    if (
+      typeof job.jobId !== 'string' || !job.jobId ||
+      job.provider !== targetIdentity.provider ||
+      job.instanceKey !== targetIdentity.instanceKey ||
+      job.instanceName !== targetIdentity.instanceName ||
+      !Array.isArray(job.authorizedSourcePaths) || job.authorizedSourcePaths.length === 0 ||
+      job.authorizedSourcePaths.some((path) => typeof path !== 'string' || !path)
+    ) {
+      throw new Error('The durable download cleanup identity is malformed');
+    }
+    return { ...job, target: matches[0]! };
+  });
+  return { ...cleanup, downloadJobs };
+}
+
 export interface DownloadedFileCleanupResult {
   deletedJobs: Array<{ provider: string; instanceName: string; jobId: string; name: string }>;
   alreadyRemovedJobs: Array<
@@ -205,6 +267,20 @@ export async function executeDownloadedFileCleanup(
     }
   }
   return result;
+}
+
+export async function confirmedAttemptedDownloadJobAbsences(
+  cleanup: ResolvedCleanupItem,
+  attemptedJobKeys: ReadonlySet<string>,
+): Promise<Set<string>> {
+  const confirmed = new Set<string>();
+  for (const job of cleanup.downloadJobs) {
+    const key = `${job.instanceKey}:${job.jobId}`;
+    if (attemptedJobKeys.has(key) && await job.target.client.findJob(job.jobId) === null) {
+      confirmed.add(key);
+    }
+  }
+  return confirmed;
 }
 
 function externalId(item: CoordinatedDeleteItem): number | null {

@@ -16,11 +16,13 @@ import type {
   MovieDetail,
   PendingInvitationsResponse,
   PinPollResult,
+  PlexPathMapping,
   PlexPin,
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
   RemoveUserResponse,
   SaveArrInstanceRequest,
+  SavePlexPathMappingRequest,
   SaveQbittorrentInstanceRequest,
   SaveSeerrInstanceRequest,
   SeerrInstance,
@@ -111,13 +113,7 @@ export type {
 } from "@shared/types";
 
 // Frontend-only types (not part of the API contract)
-export type SortKey =
-  | "fileSize"
-  | "lastViewedAt"
-  | "addedAt"
-  | "title"
-  | "year"
-  | "viewCount";
+export type SortKey = "fileSize" | "lastViewedAt" | "addedAt" | "title" | "year" | "viewCount";
 
 export interface StaleParams {
   days?: number;
@@ -166,7 +162,8 @@ export function isNotFoundError(err: unknown): err is ApiError {
 }
 
 export function deletionOperationIdFromError(err: unknown): string | null {
-  return err instanceof ApiError && typeof err.operationId === "string" &&
+  return err instanceof ApiError &&
+      typeof err.operationId === "string" &&
       err.operationId.length > 0
     ? err.operationId
     : null;
@@ -178,21 +175,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    const body = (await res
-      .json()
-      .catch(() => ({ error: res.statusText }))) as {
-        error?: string;
-        operationId?: unknown;
-      };
+    const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
+      error?: string;
+      operationId?: unknown;
+    };
     const message = body.error ?? res.statusText;
     const operationId = typeof body.operationId === "string" && body.operationId.length > 0
       ? body.operationId
       : undefined;
-    throw new ApiError(
-      res.status,
-      message.charAt(0).toUpperCase() + message.slice(1),
-      operationId,
-    );
+    throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1), operationId);
   }
   return res.json() as Promise<T>;
 }
@@ -248,9 +239,7 @@ export const api = {
       for (const [k, v] of Object.entries(params)) {
         if (v !== undefined) q.set(k, String(v));
       }
-      return apiFetch<StaleResponse>(
-        `/libraries/${encodeURIComponent(key)}/stale?${q}`,
-      );
+      return apiFetch<StaleResponse>(`/libraries/${encodeURIComponent(key)}/stale?${q}`);
     },
     staleQuickCleanup: (
       key: string,
@@ -260,24 +249,18 @@ export const api = {
     ) =>
       apiFetch<StaleQuickCleanupResponse>(
         `/libraries/${
-          encodeURIComponent(key)
+          encodeURIComponent(
+            key,
+          )
         }/stale/quick-cleanup?days=${days}&sort=${sort}&order=${order}`,
       ),
     showDetail: (key: string, ratingKey: string) =>
       apiFetch<ShowDetail>(
-        `/libraries/${encodeURIComponent(key)}/shows/${
-          encodeURIComponent(
-            ratingKey,
-          )
-        }`,
+        `/libraries/${encodeURIComponent(key)}/shows/${encodeURIComponent(ratingKey)}`,
       ),
     movieDetail: (key: string, ratingKey: string) =>
       apiFetch<MovieDetail>(
-        `/libraries/${encodeURIComponent(key)}/movies/${
-          encodeURIComponent(
-            ratingKey,
-          )
-        }`,
+        `/libraries/${encodeURIComponent(key)}/movies/${encodeURIComponent(ratingKey)}`,
       ),
     updateStaleMinAgeDays: (key: string, staleMinAgeDays: number | null) =>
       apiFetch<Library>(`/libraries/${encodeURIComponent(key)}`, {
@@ -292,20 +275,17 @@ export const api = {
       unmonitorRatingKeys: string[] = [],
       quickCleanupThresholdDays?: number,
     ) =>
-      apiFetch<DeletionOperationCreated>(
-        `/libraries/${encodeURIComponent(key)}/items`,
-        {
-          method: "DELETE",
-          body: JSON.stringify({
-            clientRequestId: uuidv4(),
-            ratingKeys,
-            coordinatedRatingKeys,
-            cleanupDownloads,
-            unmonitorRatingKeys,
-            quickCleanupThresholdDays,
-          }),
-        },
-      ),
+      apiFetch<DeletionOperationCreated>(`/libraries/${encodeURIComponent(key)}/items`, {
+        method: "DELETE",
+        body: JSON.stringify({
+          clientRequestId: uuidv4(),
+          ratingKeys,
+          coordinatedRatingKeys,
+          cleanupDownloads,
+          unmonitorRatingKeys,
+          quickCleanupThresholdDays,
+        }),
+      }),
     downloadCleanupPreview: (key: string, ratingKeys: string[]) =>
       apiFetch<DownloadCleanupPreviewResponse>(
         `/libraries/${encodeURIComponent(key)}/items/download-cleanup-preview`,
@@ -362,17 +342,27 @@ export const api = {
       mediaType: "movie" | "episode",
       ratingKey: string,
       mediaIds: number[],
+      inspectDownloadCleanup = false,
     ) =>
       apiFetch<VersionDeletionPreviewResponse>(
         `/duplicates/${mediaType === "movie" ? "movies" : "episodes"}/${
-          encodeURIComponent(ratingKey)
+          encodeURIComponent(
+            ratingKey,
+          )
         }/media/deletion-preview`,
-        { method: "POST", body: JSON.stringify({ mediaIds }) },
+        {
+          method: "POST",
+          body: JSON.stringify({ mediaIds, inspectDownloadCleanup }),
+        },
       ),
     deleteMovieMediaVersions: (
       ratingKey: string,
       mediaIds: number[],
       cleanupMediaIds: number[],
+      radarrDecision?: {
+        planFingerprint?: string;
+        allowRadarrMovieRemoval?: boolean;
+      },
     ) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media`,
@@ -382,25 +372,19 @@ export const api = {
             clientRequestId: uuidv4(),
             mediaIds,
             cleanupMediaIds,
+            ...radarrDecision,
           }),
         },
       ),
     deleteEpisodeMediaVersion: (episodeRatingKey: string, mediaId: number) =>
       apiFetch<DeletionOperationCreated>(
-        `/duplicates/episodes/${
-          encodeURIComponent(
-            episodeRatingKey,
-          )
-        }/media/${mediaId}`,
+        `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media/${mediaId}`,
         {
           method: "DELETE",
           body: JSON.stringify({ clientRequestId: uuidv4() }),
         },
       ),
-    deleteEpisodeMediaVersions: (
-      episodeRatingKey: string,
-      mediaIds: number[],
-    ) =>
+    deleteEpisodeMediaVersions: (episodeRatingKey: string, mediaIds: number[]) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media`,
         {
@@ -411,32 +395,35 @@ export const api = {
           }),
         },
       ),
-    refreshTechnicalDetails: (
-      mediaType: "movie" | "episode",
-      ratingKey: string,
-    ) =>
+    refreshTechnicalDetails: (mediaType: "movie" | "episode", ratingKey: string) =>
       apiFetch<MediaVersionsRefreshResponse>(
         `/duplicates/${mediaType === "movie" ? "movies" : "episodes"}/${
-          encodeURIComponent(ratingKey)
+          encodeURIComponent(
+            ratingKey,
+          )
         }/media/technical-refresh`,
         { method: "POST" },
       ),
   },
   deletionOperations: {
     get: (id: string) =>
-      apiFetch<DeletionOperation>(
-        `/deletion-operations/${encodeURIComponent(id)}`,
-      ),
+      apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}`),
     cancel: (id: string) =>
-      apiFetch<DeletionOperation>(
-        `/deletion-operations/${encodeURIComponent(id)}/cancel`,
-        { method: "POST" },
-      ),
+      apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+      }),
     retry: (id: string, outcome: "needs_attention" | "warning" = "needs_attention") =>
-      apiFetch<DeletionOperation>(
-        `/deletion-operations/${encodeURIComponent(id)}/retry`,
-        { method: "POST", body: JSON.stringify({ outcome }) },
-      ),
+      apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/retry`, {
+        method: "POST",
+        body: JSON.stringify({ outcome }),
+      }),
+    resolve: (id: string) =>
+      apiFetch<{
+        resolution: "resumed" | "cancelled";
+        operation: DeletionOperation;
+      }>(`/deletion-operations/${encodeURIComponent(id)}/resolve`, {
+        method: "POST",
+      }),
     finishRelocation: (
       id: string,
       targetId: number,
@@ -466,6 +453,16 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(partial),
       }),
+    plexPathMappings: () => apiFetch<PlexPathMapping[]>("/settings/plex-path-mappings"),
+    createPlexPathMapping: (mapping: SavePlexPathMappingRequest) =>
+      apiFetch<{ id: number; revision: number }>("/settings/plex-path-mappings", {
+        method: "POST",
+        body: JSON.stringify(mapping),
+      }),
+    deletePlexPathMapping: (id: number) =>
+      apiFetch<void>(`/settings/plex-path-mappings/${id}`, {
+        method: "DELETE",
+      }),
   },
   arr: {
     get: () => apiFetch<ArrIntegrationSettings>("/integrations/arr"),
@@ -480,26 +477,18 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string | null }>(
-        `/integrations/arr/instances/${id}/test`,
-        { method: "POST" },
-      ),
+      apiFetch<{ version: string | null }>(`/integrations/arr/instances/${id}/test`, {
+        method: "POST",
+      }),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/arr/instances/${id}`, {
         method: "DELETE",
       }),
-    saveLibraryMapping: (
-      libraryKey: string,
-      instanceIds: number[],
-      addImportExclusion: boolean,
-    ) =>
-      apiFetch<{ ok: true }>(
-        `/integrations/arr/libraries/${encodeURIComponent(libraryKey)}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ instanceIds, addImportExclusion }),
-        },
-      ),
+    saveLibraryMapping: (libraryKey: string, instanceIds: number[], addImportExclusion: boolean) =>
+      apiFetch<{ ok: true }>(`/integrations/arr/libraries/${encodeURIComponent(libraryKey)}`, {
+        method: "PUT",
+        body: JSON.stringify({ instanceIds, addImportExclusion }),
+      }),
   },
   qbittorrent: {
     get: () => apiFetch<QbittorrentIntegrationSettings>("/integrations/qbittorrent"),
@@ -509,15 +498,14 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     updateInstance: (id: number, instance: UpdateQbittorrentInstanceRequest) =>
-      apiFetch<QbittorrentInstance>(
-        `/integrations/qbittorrent/instances/${id}`,
-        { method: "PATCH", body: JSON.stringify(instance) },
-      ),
+      apiFetch<QbittorrentInstance>(`/integrations/qbittorrent/instances/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(instance),
+      }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string }>(
-        `/integrations/qbittorrent/instances/${id}/test`,
-        { method: "POST" },
-      ),
+      apiFetch<{ version: string }>(`/integrations/qbittorrent/instances/${id}/test`, {
+        method: "POST",
+      }),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/qbittorrent/instances/${id}`, {
         method: "DELETE",
@@ -536,10 +524,9 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string | null }>(
-        `/integrations/seerr/instances/${id}/test`,
-        { method: "POST" },
-      ),
+      apiFetch<{ version: string | null }>(`/integrations/seerr/instances/${id}/test`, {
+        method: "POST",
+      }),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/seerr/instances/${id}`, {
         method: "DELETE",
@@ -561,20 +548,13 @@ export const api = {
         if (value !== undefined && value !== "") q.set(key, String(value));
       }
       const query = q.toString();
-      return apiFetch<PendingInvitationsResponse>(
-        `/users/invitations${query ? `?${query}` : ""}`,
-      );
+      return apiFetch<PendingInvitationsResponse>(`/users/invitations${query ? `?${query}` : ""}`);
     },
     cancelInvitation: (inviteId: number) =>
-      apiFetch<CancelPendingInvitationResponse>(
-        `/users/invitations/${inviteId}`,
-        {
-          method: "DELETE",
-        },
-      ),
-    list: (
-      params: UsersParams = {},
-    ) => {
+      apiFetch<CancelPendingInvitationResponse>(`/users/invitations/${inviteId}`, {
+        method: "DELETE",
+      }),
+    list: (params: UsersParams = {}) => {
       const q = new URLSearchParams();
       for (const [k, v] of Object.entries(params)) {
         if (v !== undefined) q.set(k, String(v));
@@ -588,10 +568,9 @@ export const api = {
   sync: {
     trigger: () => apiFetch<SyncTriggerResponse>("/sync", { method: "POST" }),
     triggerLibrary: (key: string) =>
-      apiFetch<SyncTriggerResponse>(
-        `/sync/libraries/${encodeURIComponent(key)}`,
-        { method: "POST" },
-      ),
+      apiFetch<SyncTriggerResponse>(`/sync/libraries/${encodeURIComponent(key)}`, {
+        method: "POST",
+      }),
     poll: (id: number) => apiFetch<SyncLog>(`/sync/${id}`),
     history: (limit = 20) => apiFetch<SyncLog[]>(`/sync/history?limit=${limit}`),
     latestSuccess: () => apiFetch<{ finishedAt: number | null }>("/sync/latest-success"),

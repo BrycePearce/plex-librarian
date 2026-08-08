@@ -2,6 +2,12 @@ export interface PlexLibrary {
   key: string;
   title: string;
   type: string;
+  Location?: Array<{ id?: number; path?: string }>;
+}
+
+export interface PlexLibraryLocationEvidence {
+  libraryKey: string;
+  locations: Array<{ id: number; path: string }>;
 }
 
 export interface PlexItem {

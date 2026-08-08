@@ -53,6 +53,13 @@ let plexMediaDeleteCount = 0;
 let coordinatedRatingKey: string | null = null;
 let arrPresent = false;
 let arrDeleteCount = 0;
+let loseArrRemovalResponse = false;
+let radarrExclusion: {
+  id: number;
+  tmdbId: number;
+  movieTitle: string;
+  movieYear: number;
+} | null = null;
 let arrManagedFilePresent = true;
 let arrManagedFileId = 70;
 let arrManagedFileSize = 100_000;
@@ -102,11 +109,13 @@ let sonarrMonitored = true;
 let sonarrManagedFileShared = false;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
+let qbitRequestCount = 0;
 let fetchCount = 0;
 let historyAccountId: unknown = null;
 let reportedPlexLibraries: Array<{ key: string; title: string; type: string }> | null = null;
 const torrentHash = 'a'.repeat(40);
 const wholeDeleteOrder: string[] = [];
+const versionDeleteOrder: string[] = [];
 setAutomaticDeletionWorkerForTest(false);
 
 globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
@@ -166,9 +175,33 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     if (url.pathname === '/api/v3/movie') {
       return Promise.resolve(
         Response.json(
-          arrPresent ? [{ id: 7, title: 'Coordinated movie', path: arrMoviePath }] : [],
+          arrPresent
+            ? [{
+              id: 7,
+              tmdbId: 10,
+              title: 'Coordinated movie',
+              year: 2000,
+              path: arrMoviePath,
+              monitored: arrMonitored,
+            }]
+            : [],
         ),
       );
+    }
+    if (url.pathname === '/api/v3/exclusions/paged') {
+      const records = radarrExclusion ? [radarrExclusion] : [];
+      return Promise.resolve(Response.json({ records, totalRecords: records.length }));
+    }
+    if (url.pathname === '/api/v3/exclusions' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Omit<NonNullable<typeof radarrExclusion>, 'id'>;
+      radarrExclusion = { id: 91, ...body };
+      return Promise.resolve(Response.json(radarrExclusion));
+    }
+    if (url.pathname === '/api/v3/queue') {
+      return Promise.resolve(Response.json({ records: [] }));
+    }
+    if (url.pathname === '/api/v3/command' && (init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve(Response.json([]));
     }
     if (url.pathname === '/api/v3/moviefile') {
       arrManagedFileReads++;
@@ -223,11 +256,17 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(Response.json({ totalRecords: 1, records: [{ movieId: 7 }] }));
     }
     if (url.pathname === '/api/v3/movie/7' && init?.method === 'DELETE') {
+      versionDeleteOrder.push('radarr');
       arrDeleteCount++;
       arrPresent = false;
+      if (loseArrRemovalResponse) {
+        loseArrRemovalResponse = false;
+        return Promise.reject(new TypeError('lost Radarr removal response'));
+      }
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/movie/7' && (init?.method ?? 'GET') === 'GET') {
+      if (!arrPresent) return Promise.resolve(new Response(null, { status: 404 }));
       if (
         monitorDriftAfterUnmonitoredEvidence && withTransaction((client) =>
             client.prepare(
@@ -429,6 +468,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }
   }
   if (url.hostname === 'qbit') {
+    qbitRequestCount++;
     if (url.pathname === '/api/v2/app/version') return Promise.resolve(new Response('5.1.2'));
     if (url.pathname === '/api/v2/torrents/info') {
       return Promise.resolve(Response.json(
@@ -464,6 +504,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
   }
   const mediaDelete = url.pathname.match(/^\/library\/metadata\/([^/]+)\/media\/(\d+)$/);
   if (mediaDelete && init?.method === 'DELETE') {
+    versionDeleteOrder.push('plex');
     plexMediaDeleteCount++;
     const ratingKey = decodeURIComponent(mediaDelete[1]);
     const mediaId = Number(mediaDelete[2]);
@@ -527,6 +568,8 @@ function reset(): void {
   coordinatedRatingKey = null;
   arrPresent = false;
   arrDeleteCount = 0;
+  loseArrRemovalResponse = false;
+  radarrExclusion = null;
   arrManagedFilePresent = true;
   arrManagedFileId = 70;
   arrManagedFileSize = 100_000;
@@ -568,10 +611,12 @@ function reset(): void {
   sonarrManagedFileShared = false;
   qbitPresent = false;
   qbitDeleteCount = 0;
+  qbitRequestCount = 0;
   fetchCount = 0;
   historyAccountId = null;
   reportedPlexLibraries = null;
   wholeDeleteOrder.length = 0;
+  versionDeleteOrder.length = 0;
   live.clear();
   withTransaction((client) => {
     for (
@@ -866,6 +911,96 @@ async function enqueueMovieReassignment(
         mediaKind: 'movie',
         mediaId: fromMediaId,
         ratingKey,
+      },
+    }],
+  });
+  return result.operationId;
+}
+
+async function enqueueRadarrRemovalFallback(ratingKey: string): Promise<string> {
+  const mappingIdentity = '{"addImportExclusion":true,"pathMappings":[]}';
+  const planFingerprint = `remove-radarr:${ratingKey}`;
+  const selectedPath = '/library/Coordinated/movie.mkv';
+  const retainedPath = '/downloads/retained/movie.mkv';
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'movies',
+    kind: 'movie_version',
+    payload: {
+      ratingKey,
+      mediaIds: [11],
+      cleanupMediaIds: [],
+      planFingerprint,
+      allowRadarrMovieRemoval: true,
+    },
+    targets: [{
+      kind: 'movie_version',
+      key: `${ratingKey}:11`,
+      title: `Movie ${ratingKey}`,
+      logicalSize: 50,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'movies',
+        ratingKey,
+        mediaId: 11,
+        selectedMediaIds: [11],
+        operationMediaIds: [11],
+        title: `Movie ${ratingKey}`,
+        type: 'movie',
+        tmdbId: 10,
+        tvdbId: null,
+        fileSize: 50,
+        videoResolution: null,
+        bitrate: null,
+        videoCodec: null,
+        container: null,
+        cleanupDownloads: false,
+        arrReassignmentMappings: [{
+          instanceId: 1,
+          instanceType: 'radarr',
+          instanceUrl: 'http://radarr',
+          configurationUpdatedAt: 1,
+          mappingIdentity,
+        }],
+        arrOwnerships: [{
+          instanceId: 1,
+          recordId: 7,
+          episodeId: null,
+          managedFileId: 70,
+          managedPath: selectedPath,
+          managedMediaId: 11,
+        }],
+        radarrRemovalFallback: {
+          mode: 'remove_from_radarr',
+          arrInstanceId: 1,
+          arrConfigurationUpdatedAt: 1,
+          arrMappingIdentity: mappingIdentity,
+          movieId: 7,
+          tmdbId: 10,
+          movieTitle: 'Coordinated movie',
+          movieYear: 2000,
+          selectedMediaId: 11,
+          retainedMediaId: 12,
+          selectedPlexPath: selectedPath,
+          managedPath: selectedPath,
+          retainedPlexPath: retainedPath,
+          retainedFileSize: 50_000,
+          originalMoviePath: '/library/Coordinated',
+          originalMonitored: true,
+          createImportExclusion: true,
+          deleteFiles: false,
+          addImportExclusion: true,
+          userAuthorizedRadarrRemoval: true,
+          planFingerprint,
+        },
+      },
+      reservation: { mediaKind: 'movie', mediaId: 11, ratingKey },
+      radarrReservation: {
+        arrInstanceId: 1,
+        movieId: 7,
+        planFingerprint,
       },
     }],
   });
@@ -1910,6 +2045,25 @@ Deno.test('coordinated deletion executes verified qBittorrent cleanup before Rad
   assertEquals(arrDeleteCount, 1);
 });
 
+Deno.test('coordinated Radarr work never queries qBittorrent unless cleanup is selected', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('no-qbit-inspection', [11, 12], 10);
+  coordinatedRatingKey = 'no-qbit-inspection';
+  arrPresent = true;
+  qbitPresent = true;
+
+  const operationId = await enqueueCoordinated(['no-qbit-inspection'], false);
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(qbitRequestCount, 0);
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(qbitPresent, true);
+  assertEquals(arrDeleteCount, 1);
+});
+
 Deno.test({
   name: 'coordinated replay recognizes a durably attempted orphan file already absent',
   ignore: Deno.build.os === 'windows',
@@ -2586,6 +2740,57 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
     ),
     [[13]],
   );
+});
+
+Deno.test('Radarr removal fallback protects replacement before exact Plex deletion', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-removal-fallback', [11, 12], 10);
+  coordinatedRatingKey = 'radarr-removal-fallback';
+  arrPresent = true;
+  arrManagedMediaId = 11;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrManagedFileSize = 50_000;
+  live.get('radarr-removal-fallback')!.Media = [
+    { id: 11, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 12, Part: [{ file: '/downloads/retained/movie.mkv', size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueRadarrRemovalFallback('radarr-removal-fallback');
+  await settle();
+
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(versionDeleteOrder, ['radarr', 'plex']);
+  assertEquals(arrDeleteCount, 1);
+  assertEquals(arrPresent, false);
+  assertEquals(radarrExclusion?.tmdbId, 10);
+  assertEquals(arrMonitorMutationCount, 1);
+  assertEquals(qbitRequestCount, 0);
+  assertEquals(live.get('radarr-removal-fallback')?.Media?.map((media) => media.id), [12]);
+});
+
+Deno.test('Radarr removal fallback converges after a lost Radarr DELETE response', async () => {
+  reset();
+  configureRadarr();
+  addMovie('radarr-removal-lost-response', [11, 12], 10);
+  coordinatedRatingKey = 'radarr-removal-lost-response';
+  arrPresent = true;
+  arrManagedMediaId = 11;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrManagedFileSize = 50_000;
+  loseArrRemovalResponse = true;
+  live.get('radarr-removal-lost-response')!.Media = [
+    { id: 11, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 12, Part: [{ file: '/downloads/retained/movie.mkv', size: 50_000 }] },
+  ];
+
+  const operationId = await enqueueRadarrRemovalFallback('radarr-removal-lost-response');
+  await settle();
+
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(versionDeleteOrder, ['radarr', 'plex']);
+  assertEquals(arrDeleteCount, 1);
+  assertEquals(live.get('radarr-removal-lost-response')?.Media?.map((media) => media.id), [12]);
 });
 
 Deno.test('Radarr reassignment reconciles lost monitoring responses at both boundaries', async () => {
@@ -4905,5 +5110,82 @@ Deno.test('cancellation releases only reservations for targets that never starte
       ).value<[number]>(operationId)?.[0]
     ),
     0,
+  );
+});
+
+Deno.test('restart cancellation cannot release a transitioned Radarr path target', async () => {
+  reset();
+  addMovie('movie-transitioned-cancel');
+  const operationId = await enqueueVersion('movie-transitioned-cancel');
+  withTransaction((client) => {
+    client.prepare(
+      `UPDATE deletion_targets
+       SET status = 'queued', snapshot = json_set(
+         snapshot,
+         '$.arrReassignments[0].radarrPathPlan.mode', 'adopt_safe_path',
+         '$.arrReassignments[0].radarrPathPlan.transition.monitoringProtectionAttemptedAt', 100
+       )
+       WHERE operation_id = ?`,
+    ).run(operationId);
+  });
+
+  assertEquals(cancelDeletionOperation(operationId, 1), false);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'queued');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    1,
+  );
+});
+
+Deno.test('restart cancellation cannot release a transitioned Radarr removal target', async () => {
+  reset();
+  addMovie('movie-removal-transitioned-cancel');
+  const operationId = await enqueueVersion('movie-removal-transitioned-cancel');
+  withTransaction((client) => {
+    client.prepare(
+      `UPDATE deletion_targets
+       SET status = 'queued', snapshot = json_set(
+         snapshot,
+         '$.radarrRemovalFallback.mode', 'remove_from_radarr',
+         '$.radarrRemovalFallback.transition.monitoringProtectionAttemptedAt', 100
+       )
+       WHERE operation_id = ?`,
+    ).run(operationId);
+  });
+
+  assertEquals(cancelDeletionOperation(operationId, 1), false);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'queued');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    1,
+  );
+});
+
+Deno.test('unresolved Radarr removal protects its retained Plex version', async () => {
+  reset();
+  addMovie('movie-removal-retained-overlap');
+  const operationId = await enqueueVersion('movie-removal-retained-overlap', 11);
+  withTransaction((client) => {
+    client.prepare(
+      `UPDATE deletion_targets
+       SET status = 'needs_attention',
+           snapshot = json_set(snapshot, '$.radarrRemovalFallback.retainedMediaId', 12)
+       WHERE operation_id = ?`,
+    ).run(operationId);
+    refreshDeletionOperation(client, operationId);
+  });
+
+  await assertRejects(
+    () => enqueueVersion('movie-removal-retained-overlap', 12),
+    DeletionConflictError,
+    'retry it from Activity first',
   );
 });

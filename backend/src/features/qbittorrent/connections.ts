@@ -12,6 +12,14 @@ export function envQbittorrentConfigured(): boolean {
   return Boolean(Deno.env.get('QBITTORRENT_URL')?.trim());
 }
 
+export async function qbittorrentConfigured(serverId: number): Promise<boolean> {
+  if (envQbittorrentConfigured()) return true;
+  const [row] = await db.select({ id: qbittorrentInstances.id }).from(qbittorrentInstances).where(
+    eq(qbittorrentInstances.serverId, serverId),
+  ).limit(1);
+  return row !== undefined;
+}
+
 export async function getQbittorrentTargets(serverId: number): Promise<DownloadClientTarget[]> {
   const envUrl = Deno.env.get('QBITTORRENT_URL')?.trim();
   if (envUrl) {

@@ -323,6 +323,13 @@
       "when": 1785560229681,
       "tag": "0046_big_the_professor",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1786160000000,
+      "tag": "0047_radarr_path_adoption",
+      "breakpoints": true
     }
   ]
 }

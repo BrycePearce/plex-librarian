@@ -1,21 +1,15 @@
 import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 
-export function largestVersionId(
-  versions: readonly MediaVersion[],
-): number | null {
+export function largestVersionId(versions: readonly MediaVersion[]): number | null {
   if (versions.length === 0) return null;
   return versions.reduce((best, version) =>
     (version.fileSize ?? 0) > (best.fileSize ?? 0) ? version : best
   ).mediaId;
 }
 
-export function defaultVersionSelection(
-  versions: readonly MediaVersion[],
-): Set<number> {
+export function defaultVersionSelection(versions: readonly MediaVersion[]): Set<number> {
   const keep = largestVersionId(versions);
-  return new Set(
-    versions.map((version) => version.mediaId).filter((id) => id !== keep),
-  );
+  return new Set(versions.map((version) => version.mediaId).filter((id) => id !== keep));
 }
 
 export function versionSelectionSemantics(
@@ -40,11 +34,10 @@ export function versionDeletionExecutionTarget(
   return mediaType === "movie" && deleteWholeItem ? "whole-item" : "versions";
 }
 
-export function versionDestinationState(
-  preview: VersionDeletionPreviewResponse | undefined,
-) {
+export function versionDestinationState(preview: VersionDeletionPreviewResponse | undefined) {
   const arrDeleteAvailable = preview?.arrStatus === "resolved";
-  const arrReassignAvailable = preview?.arrReassignStatus === "resolved";
+  const arrReassignAvailable = preview?.arrReassignStatus === "resolved" ||
+    preview?.radarrPathAdoption.mode === "remove_from_radarr";
   const arrAvailable = arrDeleteAvailable || arrReassignAvailable;
   const arrVisible = preview?.arrConfigured === true && arrAvailable;
   const cleanupAvailable = preview?.cleanupStatus === "resolved";
@@ -55,8 +48,7 @@ export function versionDestinationState(
     arrReassignAvailable,
     arrSelectedByDefault: arrVisible,
     cleanupAvailable,
-    cleanupVisible: arrDeleteAvailable && preview?.cleanupConfigured === true &&
-      cleanupAvailable,
+    cleanupVisible: arrDeleteAvailable && preview?.cleanupConfigured === true,
   };
 }
 
@@ -78,11 +70,48 @@ export function versionPlexFallbackWarning(
   preview: VersionDeletionPreviewResponse | undefined,
 ): boolean {
   if (
-    preview?.arrConfigured !== true || preview.arrStatus === "resolved" ||
+    preview?.arrConfigured !== true ||
+    preview.arrStatus === "resolved" ||
     preview.arrReassignStatus === "resolved"
-  ) return false;
-  return preview.arrStatus === "error" || preview.arrSelectionMatched ||
-    preview.mediaType === "episode";
+  ) {
+    return false;
+  }
+  return (
+    preview.arrStatus === "error" || preview.arrSelectionMatched || preview.mediaType === "episode"
+  );
+}
+
+export function radarrRemovalConsentState(
+  preview: VersionDeletionPreviewResponse | undefined,
+  authorized: boolean,
+): { visible: boolean; blocked: boolean } {
+  const visible = preview?.radarrPathAdoption.mode === "remove_from_radarr";
+  return { visible, blocked: visible && !authorized };
+}
+
+export function versionArrDestinationCopy(
+  preview: VersionDeletionPreviewResponse | undefined,
+  arrLabel: string,
+  arrReassignAvailable: boolean,
+): { label: string; info: string } {
+  if (preview?.radarrPathAdoption.mode === "remove_from_radarr") {
+    return {
+      label: `Remove from ${arrLabel}`,
+      info:
+        `Required to complete this deletion safely: ${arrLabel} will stop managing the movie without deleting either file.`,
+    };
+  }
+  return arrReassignAvailable
+    ? {
+      label: `${arrLabel} reassignment`,
+      info:
+        `Required to keep the ${arrLabel} record: ${arrLabel} will adopt an unselected Plex version before removing its currently managed file.`,
+    }
+    : {
+      label: arrLabel,
+      info:
+        `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
+    };
 }
 
 export function versionDeletionPresentation(
@@ -91,12 +120,10 @@ export function versionDeletionPresentation(
   cleanupDownloads: boolean,
 ) {
   const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
-  const downloadJobs = deleteFromArr && cleanupDownloads &&
-      preview?.cleanupStatus === "resolved"
+  const downloadJobs = deleteFromArr && cleanupDownloads && preview?.cleanupStatus === "resolved"
     ? preview.downloadJobs
     : [];
-  const orphanFiles = deleteFromArr && cleanupDownloads &&
-      preview?.cleanupStatus === "resolved"
+  const orphanFiles = deleteFromArr && cleanupDownloads && preview?.cleanupStatus === "resolved"
     ? preview.orphanFiles
     : [];
   return {

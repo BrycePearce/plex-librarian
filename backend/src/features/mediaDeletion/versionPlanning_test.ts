@@ -1,6 +1,39 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
-import { buildVersionDeletionPlan } from './versionPlanning.ts';
+import { buildVersionDeletionPlan, selectVersionDownloadCleanup } from './versionPlanning.ts';
+Deno.test('version cleanup excludes download mutations associated with the retained path', () => {
+  const selectedJob = {
+    instanceKey: 'qb:1',
+    jobId: 'selected',
+    authorizedSourcePaths: ['/downloads/selected.mkv'],
+  };
+  const retainedJob = {
+    instanceKey: 'qb:1',
+    jobId: 'retained',
+    authorizedSourcePaths: ['/downloads/retained.mkv'],
+  };
+  const cleanup = {
+    ratingKey: 'movie',
+    status: 'resolved' as const,
+    downloadJobs: [selectedJob, retainedJob],
+    orphanFiles: [
+      { path: '/downloads/selected.mkv', importedPath: '/library/selected.mkv' },
+      { path: '/downloads/retained.mkv', importedPath: '/library/retained.mkv' },
+    ],
+    sources: [
+      { downloadId: 'selected', importedPath: '/library/selected.mkv' },
+      { downloadId: 'retained', importedPath: '/library/retained.mkv' },
+    ],
+  } as unknown as Parameters<typeof selectVersionDownloadCleanup>[0];
+
+  const selected = selectVersionDownloadCleanup(
+    cleanup,
+    new Set(['/library/selected.mkv']),
+  );
+
+  assertEquals(selected?.downloadJobs.map((job) => job.jobId), ['selected']);
+  assertEquals(selected?.orphanFiles.map((file) => file.path), ['/downloads/selected.mkv']);
+});
 
 function target(files: string[]): ArrDeleteTarget {
   return {
@@ -671,6 +704,105 @@ Deno.test('version reassignment rejects a Plex path shared by selected and retai
 
   assertEquals(plan.preview.arrReassignStatus, 'unavailable');
   assertStringIncludes(plan.preview.arrReassignReason ?? '', 'differ only by case');
+});
+
+Deno.test('Radarr removal fallback rejects selected and retained media sharing one path', async () => {
+  const radarr = target(['shared.mkv']);
+  radarr.client.lookup = () =>
+    Promise.resolve({
+      id: 7,
+      title: 'Movie',
+      path: '/movies/Movie',
+      seasons: null,
+      tmdbId: 10,
+      year: 2000,
+      monitored: true,
+    });
+  radarr.client.radarrMovieActivity = () => Promise.resolve({ quiet: true, blocking: [] });
+  radarr.client.radarrImportExclusions = () => Promise.resolve([]);
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/movies/Movie/shared.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['\\movies\\Movie\\shared.mkv'],
+        truncated: false,
+        projectedFileSize: 100,
+      },
+    ],
+    arrTargets: [radarr],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+    serverId: 1,
+    plexClient: {
+      identity: () => Promise.resolve('plex-machine'),
+      libraryLocations: () =>
+        Promise.resolve({ libraryKey: 'movies', locations: [{ id: 1, path: '/movies' }] }),
+    },
+    versionRanks: [{
+      mediaId: 2,
+      videoResolution: null,
+      height: null,
+      bitrate: null,
+      fileSize: 100,
+    }],
+  });
+
+  assertEquals(plan.preview.radarrPathAdoption.mode, 'unavailable');
+  assertEquals(plan.radarrRemovalFallback, undefined);
+});
+
+Deno.test('Radarr removal fallback durably binds the exact retained Plex size', async () => {
+  const radarr = target(['selected.mkv']);
+  radarr.client.lookup = () =>
+    Promise.resolve({
+      id: 7,
+      title: 'Movie',
+      path: '/movies/Movie',
+      seasons: null,
+      tmdbId: 10,
+      year: 2000,
+      monitored: true,
+    });
+  radarr.client.radarrMovieActivity = () => Promise.resolve({ quiet: true, blocking: [] });
+  radarr.client.radarrImportExclusions = () => Promise.resolve([]);
+  const plan = await buildVersionDeletionPlan({
+    mediaType: 'movie',
+    item,
+    selectedMediaIds: new Set([1]),
+    liveVersions: [
+      { mediaId: 1, paths: ['/movies/Movie/selected.mkv'], truncated: false },
+      {
+        mediaId: 2,
+        paths: ['/downloads/Movie/retained.mkv'],
+        truncated: false,
+        fileSize: 123_456,
+        projectedFileSize: 121,
+      },
+    ],
+    arrTargets: [radarr],
+    resolvedCleanup: null,
+    cleanupConfigured: false,
+    serverId: 1,
+    plexClient: {
+      identity: () => Promise.resolve('plex-machine'),
+      libraryLocations: () =>
+        Promise.resolve({ libraryKey: 'movies', locations: [{ id: 1, path: '/movies' }] }),
+    },
+    versionRanks: [{
+      mediaId: 2,
+      videoResolution: null,
+      height: null,
+      bitrate: null,
+      fileSize: 121,
+    }],
+  });
+
+  assertEquals(plan.preview.radarrPathAdoption.mode, 'remove_from_radarr');
+  assertEquals(plan.radarrRemovalFallback?.retainedFileSize, 123_456);
 });
 
 Deno.test('version reassignment rejects a selected Plex version with multiple file paths', async () => {

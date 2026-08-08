@@ -4,6 +4,11 @@ import type {
   VersionDeletionPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
+import type { PlexClient } from '../../integrations/plex/client.ts';
+import {
+  bestMediaVersionCandidate,
+  type MediaVersionQualityCandidate,
+} from '@plex-librarian/shared/mediaVersionRanking.ts';
 import type { ArrExtraFile, ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
@@ -15,6 +20,7 @@ import {
   type PersistedArrMappingIdentity,
   type PersistedArrOwnership,
   type PersistedArrReassignment,
+  type PersistedRadarrRemovalFallback,
 } from './arrReassignmentPlanning.ts';
 
 export type {
@@ -42,6 +48,15 @@ export interface VersionDeletionPlan {
   arrManagedMediaIds: number[];
   arrReassignCandidateMediaIds: number[];
   cleanup: ResolvedCleanupItem | null;
+  radarrRemovalFallback?: Omit<PersistedRadarrRemovalFallback, 'userAuthorizedRadarrRemoval'>;
+}
+
+async function stableFingerprint(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(value)),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function normalizedComparison(path: string): string | null {
@@ -54,10 +69,10 @@ function pathIsWithin(path: string, root: string): boolean {
   if (!normalizedPath || !normalizedRoot || normalizedPath.separator !== normalizedRoot.separator) {
     return false;
   }
-  return normalizedPath.comparison === normalizedRoot.comparison ||
-    normalizedPath.comparison.startsWith(
-      `${normalizedRoot.comparison}${normalizedRoot.separator}`,
-    );
+  return (
+    normalizedPath.comparison === normalizedRoot.comparison ||
+    normalizedPath.comparison.startsWith(`${normalizedRoot.comparison}${normalizedRoot.separator}`)
+  );
 }
 
 function publicVersionPreviews(
@@ -82,9 +97,11 @@ function publicVersionPreviews(
       plexPaths: version.paths,
       arrPaths: [],
       cleanupPaths: [],
-      status: version.paths.length > 0 ? 'resolved' as const : 'unavailable' as const,
+      status: version.paths.length > 0 ? ('resolved' as const) : ('unavailable' as const),
       ...(version.paths.length === 0
-        ? { reason: 'Plex did not report an underlying path for this Media version' }
+        ? {
+          reason: 'Plex did not report an underlying path for this Media version',
+        }
         : {}),
       truncated: version.truncated,
     };
@@ -98,9 +115,13 @@ export function selectVersionDownloadCleanup(
 ): ResolvedCleanupItem | null {
   if (!cleanup || selectedPaths.size === 0 || cleanup.status === 'error') return null;
   if (
-    cleanup.status === 'resolved' && cleanup.downloadJobs.length === 0 &&
-    cleanup.orphanFiles.length === 0 && cleanup.reason?.includes('previously started')
-  ) return cleanup;
+    cleanup.status === 'resolved' &&
+    cleanup.downloadJobs.length === 0 &&
+    cleanup.orphanFiles.length === 0 &&
+    cleanup.reason?.includes('previously started')
+  ) {
+    return cleanup;
+  }
   const coveredPaths = new Set<string>();
   const downloadJobs = cleanup.downloadJobs.filter((job) => {
     const associations = cleanup.sources.filter((source) => source.downloadId === job.jobId);
@@ -123,16 +144,16 @@ export function selectVersionDownloadCleanup(
   if (
     (downloadJobs.length === 0 && orphanFiles.length === 0) ||
     (!allowPartialCoverage && [...selectedPaths].some((path) => !coveredPaths.has(path)))
-  ) return null;
+  ) {
+    return null;
+  }
   return {
     ...cleanup,
     status: 'resolved',
     reason: undefined,
     downloadJobs,
     orphanFiles,
-    observedDownloadJobKeys: new Set(
-      downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`),
-    ),
+    observedDownloadJobKeys: new Set(downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`)),
   };
 }
 
@@ -151,6 +172,10 @@ export async function buildVersionDeletionPlan({
   requiredMappingIdentities,
   requiredReassignments = new Map<number, PersistedArrReassignment>(),
   requiredOwnerships = new Map<number, PersistedArrOwnership>(),
+  serverId,
+  libraryKey,
+  plexClient,
+  versionRanks = [],
 }: {
   mediaType: 'movie' | 'episode';
   item: CoordinatedDeleteItem;
@@ -166,13 +191,19 @@ export async function buildVersionDeletionPlan({
   requiredMappingIdentities?: readonly PersistedArrMappingIdentity[];
   requiredReassignments?: ReadonlyMap<number, PersistedArrReassignment>;
   requiredOwnerships?: ReadonlyMap<number, PersistedArrOwnership>;
+  serverId?: number;
+  libraryKey?: string;
+  plexClient?: Pick<PlexClient, 'libraryLocations' | 'identity'>;
+  versionRanks?: readonly MediaVersionQualityCandidate[];
 }): Promise<VersionDeletionPlan> {
   const versions = publicVersionPreviews(liveVersions, selectedMediaIds);
   const selectedPaths = new Set(
-    versions.flatMap((version) => version.plexPaths).flatMap((path) => {
-      const normalized = normalizedComparison(path);
-      return normalized ? [normalized] : [];
-    }),
+    versions
+      .flatMap((version) => version.plexPaths)
+      .flatMap((path) => {
+        const normalized = normalizedComparison(path);
+        return normalized ? [normalized] : [];
+      }),
   );
   const unselectedPlexPaths = liveVersions
     .filter((version) => !selectedMediaIds.has(version.mediaId))
@@ -192,9 +223,7 @@ export async function buildVersionDeletionPlan({
       'Sonarr deletion is series-wide; Plex Librarian cannot safely apply it to one episode version',
     );
   } else if (!pathsComplete) {
-    arrUnsafeReasons.push(
-      'Plex returned more version paths than the bounded preview can verify',
-    );
+    arrUnsafeReasons.push('Plex returned more version paths than the bounded preview can verify');
   } else if (selectedPaths.size === 0) {
     arrUnsafeReasons.push('An exact Plex path is required before Radarr can be matched safely');
   } else if (item.tmdbId === null) {
@@ -242,7 +271,10 @@ export async function buildVersionDeletionPlan({
           path: record.path,
           seasons: record.seasons,
           mediaFiles,
-          extraFiles: extraFiles.map(({ relativePath, type }) => ({ relativePath, type })),
+          extraFiles: extraFiles.map(({ relativePath, type }) => ({
+            relativePath,
+            type,
+          })),
         } satisfies ArrCleanupTarget;
         if (!record.path || !mediaFiles || mediaFiles.length === 0) continue;
         const managedPaths = mediaFiles.flatMap((file) => {
@@ -285,9 +317,7 @@ export async function buildVersionDeletionPlan({
     [...selectedPaths].some((path) => !arrCoveredPaths.has(path))
   ) {
     eligibleArrTargets.length = 0;
-    arrUnsafeReasons.push(
-      'Not every selected Plex version path has an exact Radarr-managed match',
-    );
+    arrUnsafeReasons.push('Not every selected Plex version path has an exact Radarr-managed match');
   }
 
   const {
@@ -300,6 +330,7 @@ export async function buildVersionDeletionPlan({
     arrReassignCandidateMediaIds,
     arrReassignStatus,
     arrReassignReason,
+    radarrPathAdoption,
   } = await buildArrReassignmentPlan({
     mediaType,
     item,
@@ -313,35 +344,151 @@ export async function buildVersionDeletionPlan({
     requiredOwnerships,
     lookupRecords,
     radarrExtraFiles,
+    serverId,
+    libraryKey,
+    plexClient,
+    versionRanks,
   });
+  let effectiveRadarrDecision = radarrPathAdoption;
+  let radarrRemovalFallback: VersionDeletionPlan['radarrRemovalFallback'];
+  if (
+    mediaType === 'movie' &&
+    item.tmdbId !== null &&
+    selectedMediaIds.size === 1 &&
+    radarrPathAdoption.mode === 'unavailable' &&
+    eligibleArrTargets.length === 1 &&
+    !eligibleArrTargets[0]!.alreadyAbsent &&
+    serverId !== undefined &&
+    plexClient
+  ) {
+    const selectedMediaId = [...selectedMediaIds][0]!;
+    const retainedCandidates = liveVersions.filter(
+      (version) =>
+        !selectedMediaIds.has(version.mediaId) &&
+        !version.truncated &&
+        version.paths.length === 1 &&
+        (version.projectedFileSize ?? version.fileSize ?? 0) > 0,
+    );
+    const retainedMediaId = bestMediaVersionCandidate(
+      versionRanks,
+      retainedCandidates.map((version) => version.mediaId),
+    );
+    const retained = retainedCandidates.find((version) => version.mediaId === retainedMediaId);
+    const selected = liveVersions.find((version) => version.mediaId === selectedMediaId);
+    const owner = eligibleArrTargets[0]!;
+    const ownership = arrOwnerships.find((entry) =>
+      entry.instanceId === owner.target.instanceId && entry.managedMediaId === selectedMediaId
+    );
+    try {
+      if (
+        !retained || !selected || selected.paths.length !== 1 || selected.truncated ||
+        !ownership?.managedPath || ownership.managedFileId === null
+      ) {
+        throw new Error('one deterministic complete retained Plex version is required');
+      }
+      const selectedPath = normalizedComparison(selected.paths[0]!);
+      const retainedPath = normalizedComparison(retained.paths[0]!);
+      const retainedFileSize = retained.fileSize ?? retained.projectedFileSize;
+      if (!selectedPath || !retainedPath || selectedPath === retainedPath) {
+        throw new Error('the selected and retained Plex versions must use distinct exact paths');
+      }
+      if (!Number.isSafeInteger(retainedFileSize) || retainedFileSize! <= 0) {
+        throw new Error('the retained Plex version must have one exact positive size');
+      }
+      const record = await owner.target.client.lookup(item.tmdbId);
+      if (
+        !record ||
+        record.id !== owner.recordId ||
+        record.tmdbId !== item.tmdbId ||
+        !record.path ||
+        typeof record.year !== 'number' ||
+        typeof record.monitored !== 'boolean'
+      ) {
+        throw new Error('the exact Radarr movie identity is incomplete');
+      }
+      const activity = await owner.target.client.radarrMovieActivity(record.id);
+      if (!activity.quiet) throw new Error('Radarr has conflicting movie activity');
+      await owner.target.client.radarrImportExclusions();
+      const decision = {
+        mode: 'remove_from_radarr' as const,
+        serverId,
+        machineIdentifier: await plexClient.identity(),
+        arrInstanceId: owner.target.instanceId,
+        arrConfigurationUpdatedAt: owner.target.configurationUpdatedAt,
+        arrMappingIdentity: owner.target.mappingIdentity,
+        movieId: record.id,
+        tmdbId: item.tmdbId,
+        movieTitle: record.title,
+        movieYear: record.year,
+        selectedMediaId,
+        retainedMediaId: retained.mediaId,
+        selectedPlexPath: selected.paths[0]!,
+        managedPath: ownership.managedPath,
+        retainedPlexPath: retained.paths[0]!,
+        retainedFileSize: retainedFileSize!,
+        originalMoviePath: record.path,
+        originalMonitored: record.monitored,
+        createImportExclusion: true as const,
+        deleteFiles: false as const,
+        addImportExclusion: true as const,
+        reasonSafeAdoptionUnavailable: radarrPathAdoption.reason ??
+          'Radarr cannot safely adopt the retained Plex path',
+      };
+      const planFingerprint = await stableFingerprint(decision);
+      radarrRemovalFallback = { ...decision, planFingerprint };
+      effectiveRadarrDecision = {
+        mode: 'remove_from_radarr',
+        arrInstanceId: decision.arrInstanceId,
+        movieId: decision.movieId,
+        tmdbId: decision.tmdbId,
+        movieTitle: decision.movieTitle,
+        movieYear: decision.movieYear,
+        selectedMediaId,
+        retainedMediaId: decision.retainedMediaId,
+        selectedPlexPath: decision.selectedPlexPath,
+        managedPath: decision.managedPath,
+        retainedPlexPath: decision.retainedPlexPath,
+        retainedFileSize: decision.retainedFileSize,
+        originalMonitored: decision.originalMonitored,
+        createImportExclusion: true,
+        addImportExclusion: true,
+        deleteFiles: false,
+        requiresConsent: true,
+        planFingerprint,
+        reasonSafeAdoptionUnavailable: decision.reasonSafeAdoptionUnavailable,
+      };
+    } catch {
+      // Keep the ordinary unavailable decision when the removal fallback cannot be proven.
+    }
+  }
 
   const cleanup = mediaType === 'movie' && pathsComplete
     ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths, allowPartialCoverage)
     : null;
   const publicCleanup = cleanup ? publicCleanupItem(cleanup) : null;
   const arrStatus = eligibleArrTargets.length > 0
-    ? 'resolved' as const
+    ? ('resolved' as const)
     : arrErrors.length > 0
-    ? 'error' as const
-    : 'unavailable' as const;
+    ? ('error' as const)
+    : ('unavailable' as const);
   const arrReason = arrStatus === 'error'
     ? arrErrors.join('; ')
     : arrStatus === 'unavailable'
-    ? arrUnsafeReasons[0] ??
-      'No Radarr record could be matched exactly to only the selected Plex version paths'
+    ? (arrUnsafeReasons[0] ??
+      'No Radarr record could be matched exactly to only the selected Plex version paths')
     : undefined;
   const cleanupStatus = cleanup
-    ? 'resolved' as const
+    ? ('resolved' as const)
     : resolvedCleanup?.status === 'error'
-    ? 'error' as const
-    : 'unavailable' as const;
+    ? ('error' as const)
+    : ('unavailable' as const);
   const cleanupReason = cleanupStatus === 'error'
     ? resolvedCleanup?.reason
     : cleanupStatus === 'unavailable'
     ? mediaType === 'episode'
       ? 'Version-level qBittorrent cleanup is unavailable for episodes and season packs'
-      : resolvedCleanup?.reason ??
-        'No download payload could be tied exclusively to the selected Plex version paths'
+      : (resolvedCleanup?.reason ??
+        'No download payload could be tied exclusively to the selected Plex version paths')
     : undefined;
 
   const cleanupCoveredPaths = new Set<string>();
@@ -371,27 +518,30 @@ export async function buildVersionDeletionPlan({
       return normalized !== null && cleanupCoveredPaths.has(normalized);
     });
     const arrApplies = paths.length > 0 && arrPaths.length === paths.length;
-    const cleanupApplies = arrApplies && paths.length > 0 &&
-      cleanupPaths.length === paths.length;
+    const cleanupApplies = arrApplies && paths.length > 0 && cleanupPaths.length === paths.length;
     return {
       ...version,
       arrPaths,
       cleanupPaths,
       arrStatus: arrApplies
-        ? 'resolved' as const
+        ? ('resolved' as const)
         : arrStatus === 'error'
-        ? 'error' as const
-        : 'unavailable' as const,
+        ? ('error' as const)
+        : ('unavailable' as const),
       ...(!arrApplies
-        ? { arrReason: arrReason ?? 'No exact Radarr-managed match for this version' }
+        ? {
+          arrReason: arrReason ?? 'No exact Radarr-managed match for this version',
+        }
         : {}),
       cleanupStatus: cleanupApplies
-        ? 'resolved' as const
+        ? ('resolved' as const)
         : cleanupStatus === 'error'
-        ? 'error' as const
-        : 'unavailable' as const,
+        ? ('error' as const)
+        : ('unavailable' as const),
       ...(!cleanupApplies
-        ? { cleanupReason: cleanupReason ?? 'No verified download cleanup for this version' }
+        ? {
+          cleanupReason: cleanupReason ?? 'No verified download cleanup for this version',
+        }
         : {}),
     };
   });
@@ -406,6 +556,7 @@ export async function buildVersionDeletionPlan({
     arrManagedMediaIds,
     arrReassignCandidateMediaIds,
     cleanup,
+    ...(radarrRemovalFallback ? { radarrRemovalFallback } : {}),
     preview: {
       mediaType,
       arrService: mediaType === 'episode' ? 'sonarr' : 'radarr',
@@ -421,6 +572,7 @@ export async function buildVersionDeletionPlan({
       arrSelectionMatched,
       arrReassignStatus,
       arrReassignReason,
+      radarrPathAdoption: effectiveRadarrDecision,
       cleanupConfigured,
       cleanupStatus,
       cleanupReason,

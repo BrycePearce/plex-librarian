@@ -42,6 +42,7 @@ export function persistedArrOwnershipMap(
 }
 
 export function persistedRetainedMediaId(snapshot: DurableTargetSnapshot): number | null {
+  if (snapshot.radarrRemovalFallback) return snapshot.radarrRemovalFallback.retainedMediaId;
   const retained = new Set(
     (snapshot.arrReassignments ?? []).map((entry) => entry.retainedMediaId),
   );
@@ -144,6 +145,7 @@ export function persistArrReassignmentPlan(
       retainedRecordPath,
       retainedFileSize: entry.candidateFileSizes.get(retainMediaId) ?? null,
       originalMonitored: entry.monitored,
+      ...(entry.radarrPathPlan ? { radarrPathPlan: entry.radarrPathPlan } : {}),
     } satisfies PersistedArrReassignment;
   }).sort((left, right) => left.instanceId - right.instanceId);
   const persistedSnapshot = {
@@ -224,10 +226,12 @@ export async function revalidateArrReassignment(
   const excludedIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
   const retainedMediaId = persistedRetainedMediaId(snapshot);
   if (retainedMediaId === null) throw new Error('The Arr reassignment plan is incomplete');
-  const [liveVersions, arrTargets] = await Promise.all([
+  const [liveVersions, arrTargets, live] = await Promise.all([
     client.mediaVersionPathPreviews(snapshot.ratingKey),
     getArrDeleteTargets(target.serverId, snapshot.libraryKey),
+    client.metadataIdentity(snapshot.ratingKey),
   ]);
+  if (!live) throw new Error('The retained Plex item disappeared during Arr reassignment');
   const plan = await buildVersionDeletionPlan({
     mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
     item: snapshot,
@@ -240,6 +244,10 @@ export async function revalidateArrReassignment(
     requiredMappingIdentities: snapshot.arrReassignmentMappings,
     requiredReassignments: persistedArrReassignmentMap(snapshot),
     requiredOwnerships: persistedArrOwnershipMap(snapshot),
+    serverId: target.serverId,
+    libraryKey: snapshot.libraryKey,
+    plexClient: client,
+    versionRanks: live.media,
     ...(snapshot.type === 'episode' &&
         snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
         snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
@@ -255,8 +263,6 @@ export async function revalidateArrReassignment(
     throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified');
   }
 
-  const live = await client.metadataIdentity(snapshot.ratingKey);
-  if (!live) throw new Error('The retained Plex item disappeared during Arr reassignment');
   await validateLiveDeletionIdentity(client, target.targetKind, snapshot, live);
   const liveIds = new Set(live.media.map((version) => version.mediaId));
   if (![...liveIds].some((id) => !excludedIds.has(id))) {
@@ -325,7 +331,7 @@ async function setExactMonitoring(
     await entry.target.client.setRadarrMovieMonitored({
       movieId: persisted.recordId,
       tmdbId: snapshot.tmdbId,
-      path: persisted.recordPath,
+      path: entry.recordPath,
     }, monitored);
   } else {
     if (
@@ -374,6 +380,33 @@ function persistMonitoringUpgrade(
   snapshot.arrReassignments = next.arrReassignments;
 }
 
+function persistRadarrMonitoringTransition(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  instanceId: number,
+  field: 'monitoringProtectionAttemptedAt' | 'monitoringProtectedAt',
+): void {
+  const before = JSON.stringify(snapshot);
+  const next = structuredClone(snapshot);
+  const entry = next.arrReassignments?.find((candidate) => candidate.instanceId === instanceId);
+  if (!entry?.radarrPathPlan || entry.radarrPathPlan.mode === 'existing_path') return;
+  entry.radarrPathPlan.transition = {
+    ...entry.radarrPathPlan.transition,
+    [field]: Math.floor(Date.now() / 1000),
+  };
+  const now = Math.floor(Date.now() / 1000);
+  const changed = withTransaction((db) =>
+    db.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'running' AND snapshot = ?",
+    ).run(JSON.stringify(next), now, target.id, before)
+  );
+  if (changed !== 1) {
+    throw new DeletionConvergenceError('Could not persist Radarr monitoring progress');
+  }
+  snapshot.arrReassignments = next.arrReassignments;
+  target.snapshot = JSON.stringify(next);
+}
+
 export async function ensureArrMonitoringEvidence(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
@@ -413,10 +446,31 @@ export async function ensureArrReassignmentProtected(
 ): Promise<VersionDeletionPlan['eligibleArrReassignments'][number]> {
   const original = originalMonitored(persisted);
   let entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
-  if (retainedFileIsAdopted(entry, persisted)) return entry;
+  const alreadyAdopted = retainedFileIsAdopted(entry, persisted);
+  const outsidePathPlan = persisted.radarrPathPlan?.mode !== undefined &&
+    persisted.radarrPathPlan.mode !== 'existing_path';
+  const protectionAttempted =
+    persisted.radarrPathPlan?.transition?.monitoringProtectionAttemptedAt !== undefined;
+  if (
+    outsidePathPlan && !protectionAttempted && !alreadyAdopted &&
+    oldManagedFileIsPresent(entry, persisted) && entry.monitored !== original
+  ) {
+    throw new Error(`${entry.target.instanceName} monitoring changed before file deletion`);
+  }
   if (entry.monitored) {
-    if (!original && !selectedPlexFileRemoved && oldManagedFileIsPresent(entry, persisted)) {
+    if (
+      !original && !selectedPlexFileRemoved && !alreadyAdopted &&
+      oldManagedFileIsPresent(entry, persisted)
+    ) {
       throw new Error(`${entry.target.instanceName} monitoring changed before file deletion`);
+    }
+    if (outsidePathPlan && !protectionAttempted) {
+      persistRadarrMonitoringTransition(
+        target,
+        snapshot,
+        persisted.instanceId,
+        'monitoringProtectionAttemptedAt',
+      );
     }
     await setExactMonitoring(entry, persisted, snapshot, false);
     entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
@@ -424,6 +478,17 @@ export async function ensureArrReassignmentProtected(
   if (entry.monitored !== false) {
     throw new DeletionConvergenceError(
       `${entry.target.instanceName} did not retain the protective unmonitored state`,
+    );
+  }
+  if (
+    outsidePathPlan &&
+    persisted.radarrPathPlan?.transition?.monitoringProtectedAt === undefined
+  ) {
+    persistRadarrMonitoringTransition(
+      target,
+      snapshot,
+      persisted.instanceId,
+      'monitoringProtectedAt',
     );
   }
   return entry;
@@ -499,12 +564,18 @@ export async function radarrReassignmentAlreadyAdopted(
     const projectedSize = useFreshProjectedSize
       ? entry.candidateFileSizes.get(persisted.retainedMediaId)
       : persisted.retainedFileSize;
+    const outsidePathPlan = persisted.radarrPathPlan?.mode !== undefined &&
+      persisted.radarrPathPlan.mode !== 'existing_path';
+    const expectedRecordPath = outsidePathPlan
+      ? persisted.radarrPathPlan!.targetMoviePath
+      : persisted.recordPath;
+    const oldPathVisibility = await entry.target.client.fileVisibility(persisted.managedPath);
     if (
-      !sameRemotePath(entry.recordPath, persisted.recordPath) ||
+      !sameRemotePath(entry.recordPath, expectedRecordPath) ||
       !sameRemotePath(entry.managedPath, persisted.retainedPath) ||
       entry.managedFileId === null || entry.managedFileId === persisted.managedFileId ||
       !radarrBytesMatchProjectedKilobytes(entry.managedFileSize, projectedSize) ||
-      await entry.target.client.fileVisibility(persisted.managedPath) !== 'folder' ||
+      (outsidePathPlan ? oldPathVisibility === 'file' : oldPathVisibility !== 'folder') ||
       await entry.target.client.fileVisibility(persisted.retainedPath) !== 'file'
     ) return false;
   }

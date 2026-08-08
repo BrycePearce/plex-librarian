@@ -1,4 +1,4 @@
-import { getQbittorrentTargets } from '../qbittorrent/connections.ts';
+import { getQbittorrentTargets, qbittorrentConfigured } from '../qbittorrent/connections.ts';
 import type { DownloadClientTarget } from './downloadClient.ts';
 
 /**
@@ -14,4 +14,9 @@ export async function getDownloadClientTargets(
     getQbittorrentTargets(serverId),
   ]);
   return providers.flat();
+}
+
+/** Reports configuration without constructing a provider client or contacting it. */
+export async function downloadClientsConfigured(serverId: number): Promise<boolean> {
+  return await qbittorrentConfigured(serverId);
 }

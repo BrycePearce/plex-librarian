@@ -12,7 +12,7 @@ import {
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
 } from '../mediaDeletion/planning.ts';
-import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import { downloadClientsConfigured, getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import {
   assertRelocationWorkflowClear,
@@ -22,6 +22,7 @@ import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import smartCleanupRoute from './smartCleanupRoute.ts';
 import { technicalDetailUpdate } from './technicalDetails.ts';
+import { findRadarrMovieReservation } from '../deletionOperations/service.ts';
 import type {
   MediaVersionsRefreshResponse,
   VersionDeletionPreviewResponse,
@@ -47,8 +48,16 @@ router.route('/', listRoute);
 
 router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
   const ratingKey = c.req.param('ratingKey');
-  const mediaIds = parseMediaIds(await c.req.json().catch(() => null));
+  const body = await c.req.json().catch(() => null);
+  const mediaIds = parseMediaIds(body);
   if (!mediaIds) return c.json({ error: 'mediaIds must contain between 1 and 50 integers' }, 400);
+  if (
+    body && typeof body === 'object' &&
+    (body as { inspectDownloadCleanup?: unknown }).inspectDownloadCleanup !== undefined &&
+    typeof (body as { inspectDownloadCleanup?: unknown }).inspectDownloadCleanup !== 'boolean'
+  ) return c.json({ error: 'inspectDownloadCleanup must be boolean' }, 400);
+  const inspectDownloadCleanup =
+    (body as { inspectDownloadCleanup?: boolean } | null)?.inspectDownloadCleanup === true;
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'movie not found' }, 404);
 
@@ -76,22 +85,35 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
 
   try {
     const client = await createPlexClient();
-    const [liveVersions, arrTargets, downloadTargets, attemptedKeys, attemptedOrphans] =
-      await Promise.all([
-        client.mediaVersionPathPreviews(ratingKey),
-        getArrDeleteTargets(serverId, item.libraryKey),
-        getDownloadClientTargets(serverId),
-        loadAttemptedDownloadJobKeysByItem(serverId, [ratingKey]),
-        loadAttemptedOrphanFilesByItem(serverId, [ratingKey]),
-      ]);
-    const cleanup = await resolveDownloadCleanup(
-      ratingKey,
-      item,
+    const [
+      liveVersions,
       arrTargets,
+      cleanupConfigured,
       downloadTargets,
-      attemptedKeys.get(ratingKey),
-      attemptedOrphans.get(ratingKey),
-    );
+      attemptedKeys,
+      attemptedOrphans,
+    ] = await Promise.all([
+      client.mediaVersionPathPreviews(ratingKey),
+      getArrDeleteTargets(serverId, item.libraryKey),
+      downloadClientsConfigured(serverId),
+      inspectDownloadCleanup ? getDownloadClientTargets(serverId) : Promise.resolve([]),
+      inspectDownloadCleanup
+        ? loadAttemptedDownloadJobKeysByItem(serverId, [ratingKey])
+        : Promise.resolve(new Map()),
+      inspectDownloadCleanup
+        ? loadAttemptedOrphanFilesByItem(serverId, [ratingKey])
+        : Promise.resolve(new Map()),
+    ]);
+    const cleanup = inspectDownloadCleanup
+      ? await resolveDownloadCleanup(
+        ratingKey,
+        item,
+        arrTargets,
+        downloadTargets,
+        attemptedKeys.get(ratingKey),
+        attemptedOrphans.get(ratingKey),
+      )
+      : null;
     const attemptedArrInstances = await loadAttemptedArrInstancesByItem(
       serverId,
       [item],
@@ -104,10 +126,35 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
       liveVersions,
       arrTargets,
       resolvedCleanup: cleanup,
-      cleanupConfigured: downloadTargets.length > 0,
+      cleanupConfigured,
       attemptedArrInstanceIds: attemptedArrInstances.get(ratingKey),
       allowPartialCoverage: true,
+      serverId,
+      libraryKey: item.libraryKey,
+      plexClient: client,
+      versionRanks: versions,
     });
+    const blockingOperationId = findRadarrMovieReservation(
+      serverId,
+      [
+        ...plan.eligibleArrReassignments.map((entry) => ({
+          arrInstanceId: entry.target.instanceId,
+          movieId: entry.recordId,
+        })),
+        ...(plan.radarrRemovalFallback
+          ? [{
+            arrInstanceId: plan.radarrRemovalFallback.arrInstanceId,
+            movieId: plan.radarrRemovalFallback.movieId,
+          }]
+          : []),
+      ],
+    );
+    if (blockingOperationId) {
+      return c.json({
+        error: 'another operation already reserves this Radarr movie',
+        operationId: blockingOperationId,
+      }, 409);
+    }
     return c.json(plan.preview satisfies VersionDeletionPreviewResponse);
   } catch (error) {
     return c.json({
@@ -146,10 +193,10 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
 
   try {
     const client = await createPlexClient();
-    const [liveVersions, arrTargets, downloadTargets] = await Promise.all([
+    const [liveVersions, arrTargets, cleanupConfigured] = await Promise.all([
       client.mediaVersionPathPreviews(ratingKey),
       getArrDeleteTargets(serverId, target.libraryKey),
-      getDownloadClientTargets(serverId),
+      downloadClientsConfigured(serverId),
     ]);
     const plan = await buildVersionDeletionPlan({
       mediaType: 'episode',
@@ -158,7 +205,7 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
       liveVersions,
       arrTargets,
       resolvedCleanup: null,
-      cleanupConfigured: downloadTargets.length > 0,
+      cleanupConfigured,
       allowPartialCoverage: true,
       episodeIdentity: {
         seasonNumber: target.seasonIndex,

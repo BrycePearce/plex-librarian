@@ -10,7 +10,9 @@ import type {
   PersistedArrMappingIdentity,
   PersistedArrOwnership,
   PersistedArrReassignment,
+  PersistedRadarrRemovalFallback,
 } from '../mediaDeletion/arrReassignmentPlanning.ts';
+import type { PersistedResolvedCleanupItem } from '../mediaDeletion/cleanup.ts';
 import { isStaleQuickCleanupCandidate } from '../libraries/quickCleanup.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from './relocationModel.ts';
 
@@ -63,6 +65,9 @@ export interface DurableTargetSnapshot {
   arrReassignmentMappings?: PersistedArrMappingIdentity[];
   arrOwnerships?: PersistedArrOwnership[];
   arrReassignments?: PersistedArrReassignment[];
+  radarrRemovalFallback?: PersistedRadarrRemovalFallback;
+  radarrRemovalDownloadCleanup?: PersistedResolvedCleanupItem;
+  resolutionState?: 'management_hold';
   relocationGuidance?: RelocationGuidance | unknown;
   relocationSyncBarrier?: RelocationSyncBarrier | unknown;
   unmonitorFromArr?: boolean;
@@ -84,7 +89,45 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
   if (expected !== null && expected !== undefined && expected !== actual) mismatch(label);
 }
 
-function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  const removal = snapshot.radarrRemovalFallback;
+  if (removal !== undefined) {
+    if (
+      !removal || removal.mode !== 'remove_from_radarr' ||
+      !Number.isSafeInteger(removal.arrInstanceId) || removal.arrInstanceId <= 0 ||
+      !Number.isSafeInteger(removal.arrConfigurationUpdatedAt) ||
+      typeof removal.arrMappingIdentity !== 'string' || !removal.arrMappingIdentity ||
+      !Number.isSafeInteger(removal.movieId) || removal.movieId <= 0 ||
+      !Number.isSafeInteger(removal.tmdbId) || removal.tmdbId <= 0 ||
+      removal.tmdbId !== snapshot.tmdbId ||
+      !Number.isSafeInteger(removal.selectedMediaId) ||
+      removal.selectedMediaId !== snapshot.mediaId ||
+      !Number.isSafeInteger(removal.retainedMediaId) ||
+      removal.retainedMediaId === removal.selectedMediaId ||
+      typeof removal.movieTitle !== 'string' || !removal.movieTitle ||
+      !Number.isSafeInteger(removal.movieYear) || removal.movieYear <= 0 ||
+      typeof removal.selectedPlexPath !== 'string' || !removal.selectedPlexPath ||
+      typeof removal.managedPath !== 'string' || !removal.managedPath ||
+      typeof removal.retainedPlexPath !== 'string' || !removal.retainedPlexPath ||
+      !Number.isSafeInteger(removal.retainedFileSize) || removal.retainedFileSize <= 0 ||
+      typeof removal.originalMoviePath !== 'string' || !removal.originalMoviePath ||
+      typeof removal.originalMonitored !== 'boolean' ||
+      removal.createImportExclusion !== true || removal.deleteFiles !== false ||
+      removal.addImportExclusion !== true || removal.userAuthorizedRadarrRemoval !== true ||
+      typeof removal.planFingerprint !== 'string' || !removal.planFingerprint
+    ) throw new DeletionValidationError('durable Radarr movie-removal evidence is malformed');
+    const mapping = snapshot.arrReassignmentMappings?.find(
+      (entry) => entry.instanceId === removal.arrInstanceId,
+    );
+    if (
+      !mapping || mapping.configurationUpdatedAt !== removal.arrConfigurationUpdatedAt ||
+      mapping.mappingIdentity !== removal.arrMappingIdentity
+    ) {
+      throw new DeletionValidationError(
+        'durable Radarr movie-removal mapping identity is inconsistent',
+      );
+    }
+  }
   if (snapshot.arrReassignments === undefined) return;
   if (!Array.isArray(snapshot.arrReassignments)) {
     throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
@@ -93,11 +136,49 @@ function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
     }
-    if (
-      Object.hasOwn(entry, 'originalMonitored') &&
-      typeof entry.originalMonitored !== 'boolean'
-    ) {
+    if (Object.hasOwn(entry, 'originalMonitored') && typeof entry.originalMonitored !== 'boolean') {
       throw new DeletionValidationError('durable Arr monitoring evidence is malformed');
+    }
+    const plan = entry.radarrPathPlan;
+    if (plan === undefined) continue;
+    if (
+      entry.instanceType !== 'radarr' ||
+      !['existing_path', 'adopt_safe_path', 'adopt_path_with_consent'].includes(plan.mode) ||
+      !Number.isSafeInteger(plan.arrInstanceId) ||
+      plan.arrInstanceId !== entry.instanceId ||
+      !Number.isSafeInteger(plan.movieId) ||
+      plan.movieId !== entry.recordId ||
+      !Number.isSafeInteger(plan.retainedMediaId) ||
+      typeof plan.originalMoviePath !== 'string' ||
+      !plan.originalMoviePath ||
+      typeof plan.targetMoviePath !== 'string' ||
+      !plan.targetMoviePath ||
+      typeof plan.retainedPath !== 'string' ||
+      !plan.retainedPath ||
+      typeof plan.radarrVersion !== 'string' ||
+      !plan.radarrVersion ||
+      typeof plan.radarrBehaviorFingerprint !== 'string' ||
+      !plan.radarrBehaviorFingerprint ||
+      typeof plan.originalMovieFile?.id !== 'number' ||
+      typeof plan.originalMovieFile?.path !== 'string' ||
+      typeof plan.originalMovieFile?.relativePath !== 'string' ||
+      typeof plan.originalMovieFile?.size !== 'number' ||
+      plan.originalMovieFile.size <= 0 ||
+      !plan.namespaceEvidence?.selected ||
+      !plan.namespaceEvidence?.retained ||
+      !Array.isArray(plan.namespaceEvidence?.libraryLocations) ||
+      !plan.physicalIdentityEvidence
+    ) {
+      throw new DeletionValidationError('durable Radarr path-adoption evidence is malformed');
+    }
+    if (
+      plan.mode !== 'existing_path' &&
+      (typeof plan.planFingerprint !== 'string' || !plan.planFingerprint)
+    ) {
+      throw new DeletionValidationError('durable Radarr path-adoption fingerprint is missing');
+    }
+    if (plan.mode === 'adopt_path_with_consent' && plan.userAuthorizedPathManagement !== true) {
+      throw new DeletionValidationError('durable Radarr path-management consent is missing');
     }
   }
 }
@@ -121,7 +202,10 @@ function normalizedStream(stream: PlexMediaStreamSummary): Record<string, unknow
 
 function technicalFingerprint(details: DurableVersionTechnicalSnapshot): string {
   const streams = (values: PlexMediaStreamSummary[]) =>
-    values.map(normalizedStream).map((stream) => JSON.stringify(stream)).sort();
+    values
+      .map(normalizedStream)
+      .map((stream) => JSON.stringify(stream))
+      .sort();
   return JSON.stringify({
     width: details.width,
     height: details.height,
@@ -145,10 +229,7 @@ function validateTechnicalDetails(
   actual: PlexMediaTechnicalDetails | undefined,
   label: string,
 ): void {
-  if (
-    !actual ||
-    technicalFingerprint(expected) !== technicalFingerprint(actual)
-  ) mismatch(label);
+  if (!actual || technicalFingerprint(expected) !== technicalFingerprint(actual)) mismatch(label);
 }
 
 function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIdentity): void {
@@ -162,10 +243,7 @@ function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIde
     equalNullable(snapshot.tmdbId, live.tmdbId, 'TMDB identity');
     equalNullable(snapshot.tvdbId, live.tvdbId, 'TVDB identity');
   }
-  if (
-    snapshot.quickCleanupEvidence && snapshot.type === 'movie' &&
-    live.media.length >= 2
-  ) {
+  if (snapshot.quickCleanupEvidence && snapshot.type === 'movie' && live.media.length >= 2) {
     mismatch('quick cleanup Plex versions');
   }
 }
@@ -177,18 +255,24 @@ function validateLocalTarget(
 ): void {
   const row = withTransaction((client) => {
     if (kind === 'whole_item') {
-      return client.prepare(
-        'SELECT library_key, title, type, tmdb_id, tvdb_id, last_viewed_at, added_at FROM items WHERE server_id = ? AND rating_key = ?',
-      ).value<unknown[]>(serverId, snapshot.ratingKey);
+      return client
+        .prepare(
+          'SELECT library_key, title, type, tmdb_id, tvdb_id, last_viewed_at, added_at FROM items WHERE server_id = ? AND rating_key = ?',
+        )
+        .value<unknown[]>(serverId, snapshot.ratingKey);
     }
     if (kind === 'movie_version') {
-      return client.prepare(
-        'SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
-      ).value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
+      return client
+        .prepare(
+          'SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+        )
+        .value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
     }
-    return client.prepare(
-      'SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM episode_media_versions v WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
-    ).value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
+    return client
+      .prepare(
+        'SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM episode_media_versions v WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+      )
+      .value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
   });
   if (!row) throw new DeletionValidationError('local target disappeared before finalization');
   if (row[0] !== snapshot.libraryKey) mismatch('local library ownership');
@@ -207,7 +291,9 @@ function validateLocalTarget(
           evidence.thresholdDays,
           snapshot.ratingKey,
         )
-      ) mismatch('quick cleanup eligibility');
+      ) {
+        mismatch('quick cleanup eligibility');
+      }
     }
     return;
   }
@@ -223,8 +309,7 @@ function validateLocalTarget(
         'bitrate',
         'videoCodec',
         'container',
-      ]
-        .entries()
+      ].entries()
     ) {
       equalNullable(
         snapshot[key as keyof DurableTargetSnapshot],
@@ -267,7 +352,7 @@ export async function validateDeletionTarget(
   const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
   validateArrMonitoringEvidence(snapshot);
   if (snapshot.serverUrl !== active.client.serverUrl) mismatch('Plex server address');
-  if (await active.client.identity() !== snapshot.machineIdentifier) {
+  if ((await active.client.identity()) !== snapshot.machineIdentifier) {
     mismatch('Plex machine identity');
   }
   validateLocalTarget(serverId, target.targetKind, snapshot);
@@ -286,8 +371,9 @@ export async function validateLiveDeletionIdentity(
 ): Promise<void> {
   validateLiveItem(snapshot, live);
   if (
-    snapshot.quickCleanupEvidence && live.type === 'show' &&
-    await client.showHasMultiVersionEpisodes(snapshot.ratingKey)
+    snapshot.quickCleanupEvidence &&
+    live.type === 'show' &&
+    (await client.showHasMultiVersionEpisodes(snapshot.ratingKey))
   ) {
     mismatch('quick cleanup Plex versions');
   }
@@ -309,8 +395,8 @@ export async function validateLiveDeletionIdentity(
     }
     const expectedRetained = snapshot.expectedRetainedVersion;
     if (expectedRetained) {
-      const liveRetained = live.media.find((version) =>
-        version.mediaId === expectedRetained.mediaId
+      const liveRetained = live.media.find(
+        (version) => version.mediaId === expectedRetained.mediaId,
       );
       if (!liveRetained) {
         throw new DeletionValidationError(
@@ -357,7 +443,9 @@ export async function validateLiveDeletionIdentity(
       live.parentRatingKey !== snapshot.seasonRatingKey ||
       live.seasonIndex !== snapshot.seasonIndex ||
       live.index !== snapshot.episodeIndex
-    ) mismatch('Plex episode ancestry');
+    ) {
+      mismatch('Plex episode ancestry');
+    }
     const show = await client.metadataIdentity(snapshot.showRatingKey!);
     if (!show || show.title !== snapshot.showTitle) mismatch('Plex show identity');
     equalNullable(snapshot.tvdbId, show.tvdbId, 'Plex show TVDB identity');

@@ -18,13 +18,20 @@ import {
 } from '../arr/delete.ts';
 import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import {
+  confirmedAttemptedDownloadJobAbsences,
   executeDownloadedFileCleanup,
+  persistResolvedCleanup,
   reconcileSharedDownloadCleanups,
+  rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
   selectVerifiedDownloadCleanups,
 } from '../mediaDeletion/cleanup.ts';
-import { orphanRootIdentity } from '../mediaDeletion/hardlinks.ts';
+import {
+  completedOrphanFileAttempt,
+  normalizeRemoteAbsolute,
+  orphanRootIdentity,
+} from '../mediaDeletion/hardlinks.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
@@ -32,7 +39,10 @@ import {
   resolveDownloadCleanupBatch,
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import {
+  buildVersionDeletionPlan,
+  selectVersionDownloadCleanup,
+} from '../mediaDeletion/versionPlanning.ts';
 import {
   assertAcceptedArrMappingsUnchanged,
   assertVersionIsNotPlaying,
@@ -48,7 +58,9 @@ import {
 import { advancePhase, confirmReassignedRemoval } from './deletionState.ts';
 import { reconcilePlexTarget } from './plexReconciliation.ts';
 import {
+  assertRadarrRemovalPlexVersions,
   coordinateRadarrReassignment,
+  coordinateRadarrRemovalFallback,
   tryRecoverRadarrWithoutSelectedProjection,
 } from './radarrWorkflow.ts';
 import {
@@ -57,6 +69,29 @@ import {
   PlexReconciliationError,
 } from './types.ts';
 import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
+
+function persistRadarrRemovalDownloadCleanup(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  cleanup: ResolvedCleanupItem,
+): void {
+  const before = JSON.stringify(snapshot);
+  const next = structuredClone(snapshot);
+  next.radarrRemovalDownloadCleanup = persistResolvedCleanup(cleanup);
+  const now = Math.floor(Date.now() / 1000);
+  const changed = withTransaction((client) =>
+    client
+      .prepare(
+        "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'running' AND snapshot = ?",
+      )
+      .run(JSON.stringify(next), now, target.id, before)
+  );
+  if (changed !== 1) {
+    throw new DeletionConvergenceError('Could not persist the Radarr removal cleanup plan');
+  }
+  snapshot.radarrRemovalDownloadCleanup = next.radarrRemovalDownloadCleanup;
+  target.snapshot = JSON.stringify(next);
+}
 
 function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
@@ -67,25 +102,28 @@ async function markArrAttempt(
   snapshot: DurableTargetSnapshot,
   target: ArrDeleteTarget,
 ): Promise<void> {
-  await db.insert(arrDeleteAttempts).values({
-    serverId,
-    ratingKey: snapshot.ratingKey,
-    libraryKey: snapshot.libraryKey,
-    arrInstanceId: target.instanceId,
-    externalId: externalId(snapshot)!,
-    startedAt: Math.floor(Date.now() / 1000),
-  }).onConflictDoUpdate({
-    target: [
-      arrDeleteAttempts.serverId,
-      arrDeleteAttempts.ratingKey,
-      arrDeleteAttempts.arrInstanceId,
-    ],
-    set: {
+  await db
+    .insert(arrDeleteAttempts)
+    .values({
+      serverId,
+      ratingKey: snapshot.ratingKey,
       libraryKey: snapshot.libraryKey,
+      arrInstanceId: target.instanceId,
       externalId: externalId(snapshot)!,
       startedAt: Math.floor(Date.now() / 1000),
-    },
-  });
+    })
+    .onConflictDoUpdate({
+      target: [
+        arrDeleteAttempts.serverId,
+        arrDeleteAttempts.ratingKey,
+        arrDeleteAttempts.arrInstanceId,
+      ],
+      set: {
+        libraryKey: snapshot.libraryKey,
+        externalId: externalId(snapshot)!,
+        startedAt: Math.floor(Date.now() / 1000),
+      },
+    });
 }
 
 async function executeCleanup(
@@ -93,34 +131,62 @@ async function executeCleanup(
   associations: ReadonlyMap<string, ResolvedCleanupItem>,
   cleanup: ResolvedCleanupItem,
   attemptParentRatingKey?: string,
+  reconcileAttemptedAbsence = false,
 ): Promise<void> {
+  const attemptRatingKey = attemptParentRatingKey ?? cleanup.ratingKey;
+  const confirmedJobAbsences = new Set<string>();
+  const confirmedOrphanAbsences = new Set<string>();
+  if (reconcileAttemptedAbsence) {
+    const [attemptedJobsByItem, attemptedOrphansByItem] = await Promise.all([
+      loadAttemptedDownloadJobKeysByItem(serverId, [attemptRatingKey]),
+      loadAttemptedOrphanFilesByItem(serverId, [attemptRatingKey]),
+    ]);
+    const attemptedJobs = attemptedJobsByItem.get(attemptRatingKey) ?? new Set<string>();
+    for (const key of await confirmedAttemptedDownloadJobAbsences(cleanup, attemptedJobs)) {
+      confirmedJobAbsences.add(key);
+    }
+    const configuredRoots = new Set(cleanup.orphanFiles.map((file) => file.root));
+    for (const attempt of attemptedOrphansByItem.get(attemptRatingKey) ?? []) {
+      if (
+        cleanup.orphanFiles.some((file) => file.path === attempt.path) &&
+        await completedOrphanFileAttempt(attempt, configuredRoots)
+      ) {
+        confirmedOrphanAbsences.add(attempt.path);
+      }
+    }
+  }
   await executeDownloadedFileCleanup(
     cleanup,
-    new Set(),
-    new Set(),
+    confirmedJobAbsences,
+    confirmedOrphanAbsences,
     async (job) => {
       const jobKey = `${job.instanceKey}:${job.jobId}`;
       for (const [ratingKey, associated] of associations) {
         if (
-          !associated.downloadJobs.some((candidate) =>
-            `${candidate.instanceKey}:${candidate.jobId}` === jobKey
+          !associated.downloadJobs.some(
+            (candidate) => `${candidate.instanceKey}:${candidate.jobId}` === jobKey,
           )
-        ) continue;
-        await db.insert(torrentDeleteAttempts).values({
-          serverId,
-          ratingKey: attemptParentRatingKey ?? ratingKey,
-          instanceKey: job.instanceKey,
-          torrentHash: job.jobId,
-          startedAt: Math.floor(Date.now() / 1000),
-        }).onConflictDoUpdate({
-          target: [
-            torrentDeleteAttempts.serverId,
-            torrentDeleteAttempts.ratingKey,
-            torrentDeleteAttempts.instanceKey,
-            torrentDeleteAttempts.torrentHash,
-          ],
-          set: { startedAt: Math.floor(Date.now() / 1000) },
-        });
+        ) {
+          continue;
+        }
+        await db
+          .insert(torrentDeleteAttempts)
+          .values({
+            serverId,
+            ratingKey: attemptParentRatingKey ?? ratingKey,
+            instanceKey: job.instanceKey,
+            torrentHash: job.jobId,
+            startedAt: Math.floor(Date.now() / 1000),
+          })
+          .onConflictDoUpdate({
+            target: [
+              torrentDeleteAttempts.serverId,
+              torrentDeleteAttempts.ratingKey,
+              torrentDeleteAttempts.instanceKey,
+              torrentDeleteAttempts.torrentHash,
+            ],
+            set: { startedAt: Math.floor(Date.now() / 1000) },
+          });
       }
     },
     undefined,
@@ -128,27 +194,30 @@ async function executeCleanup(
       const root = await orphanRootIdentity(file.root);
       for (const [ratingKey, associated] of associations) {
         if (!associated.orphanFiles.some((candidate) => candidate.path === file.path)) continue;
-        await db.insert(downloadFileDeleteAttempts).values({
-          serverId,
-          ratingKey: attemptParentRatingKey ?? ratingKey,
-          localPath: file.path,
-          rootPath: file.root,
-          rootDevice: root.rootDevice,
-          rootInode: root.rootInode,
-          startedAt: Math.floor(Date.now() / 1000),
-        }).onConflictDoUpdate({
-          target: [
-            downloadFileDeleteAttempts.serverId,
-            downloadFileDeleteAttempts.ratingKey,
-            downloadFileDeleteAttempts.localPath,
-          ],
-          set: {
+        await db
+          .insert(downloadFileDeleteAttempts)
+          .values({
+            serverId,
+            ratingKey: attemptParentRatingKey ?? ratingKey,
+            localPath: file.path,
             rootPath: file.root,
             rootDevice: root.rootDevice,
             rootInode: root.rootInode,
             startedAt: Math.floor(Date.now() / 1000),
-          },
-        });
+          })
+          .onConflictDoUpdate({
+            target: [
+              downloadFileDeleteAttempts.serverId,
+              downloadFileDeleteAttempts.ratingKey,
+              downloadFileDeleteAttempts.localPath,
+            ],
+            set: {
+              rootPath: file.root,
+              rootDevice: root.rootDevice,
+              rootInode: root.rootInode,
+              startedAt: Math.floor(Date.now() / 1000),
+            },
+          });
       }
     },
   );
@@ -204,12 +273,9 @@ async function ensureWholeItemDeleted(
   const id = externalId(item);
   if (id === null) throw new Error('the target has no Arr external ID');
   const ambiguous = withTransaction((sqlite) =>
-    findAmbiguousExternalIds(
-      sqlite,
-      target.serverId,
-      item.type === 'movie' ? 'movie' : 'show',
-      [id],
-    )
+    findAmbiguousExternalIds(sqlite, target.serverId, item.type === 'movie' ? 'movie' : 'show', [
+      id,
+    ])
   );
   assertArrDeleteIsUnambiguous(item, ambiguous);
   const attemptedArr = await loadAttemptedArrInstancesByItem(
@@ -224,16 +290,16 @@ async function ensureWholeItemDeleted(
   ) {
     if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
     const selectedKeys = snapshot.selectedRatingKeys ?? [snapshot.ratingKey];
-    const selected = await db.select({
-      ratingKey: items.ratingKey,
-      title: items.title,
-      type: items.type,
-      tmdbId: items.tmdbId,
-      tvdbId: items.tvdbId,
-    }).from(items).where(and(
-      eq(items.serverId, target.serverId),
-      inArray(items.ratingKey, selectedKeys),
-    ));
+    const selected = await db
+      .select({
+        ratingKey: items.ratingKey,
+        title: items.title,
+        type: items.type,
+        tmdbId: items.tmdbId,
+        tvdbId: items.tvdbId,
+      })
+      .from(items)
+      .where(and(eq(items.serverId, target.serverId), inArray(items.ratingKey, selectedKeys)));
     const downloadTargets = await getDownloadClientTargets(target.serverId);
     const attemptedJobs = await loadAttemptedDownloadJobKeysByItem(target.serverId, selectedKeys);
     const attemptedOrphans = await loadAttemptedOrphanFilesByItem(target.serverId, selectedKeys);
@@ -242,16 +308,18 @@ async function ensureWholeItemDeleted(
       selected,
       arrTargets.map((entry) => entry.instanceId),
     );
-    const cleanups = selectVerifiedDownloadCleanups(reconcileSharedDownloadCleanups(
-      await resolveDownloadCleanupBatch(
-        selected,
-        arrTargets,
-        downloadTargets,
-        attemptedJobs,
-        attemptedOrphans,
-        attemptedByItem,
+    const cleanups = selectVerifiedDownloadCleanups(
+      reconcileSharedDownloadCleanups(
+        await resolveDownloadCleanupBatch(
+          selected,
+          arrTargets,
+          downloadTargets,
+          attemptedJobs,
+          attemptedOrphans,
+          attemptedByItem,
+        ),
       ),
-    ));
+    );
     const cleanup = cleanups.get(snapshot.ratingKey);
     if (!cleanup) throw new Error('no verified downloaded-file cleanup is available');
     await executeCleanup(target.serverId, cleanups, cleanup);
@@ -305,8 +373,10 @@ async function ensureVersionDeleted(
         requiredMappingIdentities: snapshot.arrReassignmentMappings,
         requiredOwnerships: persistedArrOwnershipMap(snapshot),
         ...(snapshot.type === 'episode' &&
-            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+            snapshot.seasonIndex !== null &&
+            snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null &&
+            snapshot.episodeIndex !== undefined
           ? {
             episodeIdentity: {
               seasonNumber: snapshot.seasonIndex,
@@ -356,8 +426,10 @@ async function ensureVersionDeleted(
       requiredMappingIdentities: snapshot.arrReassignmentMappings,
       requiredOwnerships: persistedArrOwnershipMap(snapshot),
       ...(snapshot.type === 'episode' &&
-          snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-          snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+          snapshot.seasonIndex !== null &&
+          snapshot.seasonIndex !== undefined &&
+          snapshot.episodeIndex !== null &&
+          snapshot.episodeIndex !== undefined
         ? {
           episodeIdentity: {
             seasonNumber: snapshot.seasonIndex,
@@ -378,6 +450,76 @@ async function ensureVersionDeleted(
   }
   await assertVersionIsNotPlaying(client, snapshot.ratingKey);
 
+  if (snapshot.radarrRemovalFallback) {
+    let cleanup: ResolvedCleanupItem | null = null;
+    if (snapshot.cleanupDownloads) {
+      const attemptRatingKey = snapshot.ratingKey;
+      const downloadTargets = await getDownloadClientTargets(target.serverId);
+      if (snapshot.radarrRemovalDownloadCleanup) {
+        if (snapshot.radarrRemovalDownloadCleanup.ratingKey !== snapshot.ratingKey) {
+          throw new Error('The durable download cleanup belongs to a different Plex item');
+        }
+        cleanup = rehydrateResolvedCleanup(
+          snapshot.radarrRemovalDownloadCleanup,
+          downloadTargets,
+        );
+      } else {
+        const [arrTargets, attemptedJobs, attemptedOrphans] = await Promise.all([
+          getArrDeleteTargets(target.serverId, snapshot.libraryKey),
+          loadAttemptedDownloadJobKeysByItem(target.serverId, [attemptRatingKey]),
+          loadAttemptedOrphanFilesByItem(target.serverId, [attemptRatingKey]),
+        ]);
+        cleanup = await resolveDownloadCleanup(
+          snapshot.ratingKey,
+          snapshot,
+          arrTargets,
+          downloadTargets,
+          attemptedJobs.get(attemptRatingKey),
+          attemptedOrphans.get(attemptRatingKey),
+        );
+        const selectedPath = normalizeRemoteAbsolute(
+          snapshot.radarrRemovalFallback.selectedPlexPath,
+        )?.comparison;
+        cleanup = selectedPath
+          ? selectVersionDownloadCleanup(cleanup, new Set([selectedPath]))
+          : null;
+        if (!cleanup) throw new Error('no verified downloaded-file cleanup is available');
+        persistRadarrRemovalDownloadCleanup(target, snapshot, cleanup);
+      }
+    }
+    if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+    await coordinateRadarrRemovalFallback(target, snapshot, client);
+    if (cleanup) {
+      await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+      await coordinateRadarrRemovalFallback(target, snapshot, client);
+      await executeCleanup(
+        target.serverId,
+        new Map([[snapshot.ratingKey, cleanup]]),
+        cleanup,
+        undefined,
+        true,
+      );
+    }
+    const after = await client.metadataIdentity(snapshot.ratingKey);
+    if (
+      !after ||
+      !after.media.some(
+        (entry) => entry.mediaId === snapshot.radarrRemovalFallback!.retainedMediaId,
+      )
+    ) {
+      throw new Error('The retained Plex version disappeared after Radarr removal');
+    }
+    assertRadarrRemovalPlexVersions(
+      await client.mediaVersionPathPreviews(snapshot.ratingKey),
+      snapshot.radarrRemovalFallback,
+      { allowSelectedAbsent: true },
+    );
+    await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
+  }
+
   if (hasRemainingVersion && retainedMediaId === null) {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
@@ -395,8 +537,10 @@ async function ensureVersionDeleted(
         requiredMappingIdentities: snapshot.arrReassignmentMappings,
         requiredOwnerships: persistedArrOwnershipMap(snapshot),
         ...(snapshot.type === 'episode' &&
-            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+            snapshot.seasonIndex !== null &&
+            snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null &&
+            snapshot.episodeIndex !== undefined
           ? {
             episodeIdentity: {
               seasonNumber: snapshot.seasonIndex,
@@ -406,15 +550,12 @@ async function ensureVersionDeleted(
           : {}),
       });
       if (!plan.arrOwnershipValid) {
-        throw new Error(
-          plan.arrOwnershipReason ?? 'Arr ownership could not be verified',
-        );
+        throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
       }
       if (plan.arrManagedMediaIds.includes(snapshot.mediaId!)) {
         if (plan.preview.arrReassignStatus !== 'resolved') {
           throw new Error(
-            plan.preview.arrReassignReason ??
-              'The Arr-managed version cannot be safely reassigned',
+            plan.preview.arrReassignReason ?? 'The Arr-managed version cannot be safely reassigned',
           );
         }
         const candidateMediaId = bestLiveReassignmentCandidate(
@@ -442,22 +583,29 @@ async function ensureVersionDeleted(
     const attemptRatingKey = target.targetKind === 'episode_version'
       ? snapshot.showRatingKey!
       : snapshot.ratingKey;
+    const inspectDownloadCleanup = snapshot.cleanupDownloads === true;
     const [liveVersions, arrTargets, downloadTargets, attemptedJobs, attemptedOrphans] =
       await Promise.all([
         client.mediaVersionPathPreviews(snapshot.ratingKey),
         getArrDeleteTargets(target.serverId, snapshot.libraryKey),
-        getDownloadClientTargets(target.serverId),
-        loadAttemptedDownloadJobKeysByItem(target.serverId, [attemptRatingKey]),
-        loadAttemptedOrphanFilesByItem(target.serverId, [attemptRatingKey]),
+        inspectDownloadCleanup ? getDownloadClientTargets(target.serverId) : Promise.resolve([]),
+        inspectDownloadCleanup
+          ? loadAttemptedDownloadJobKeysByItem(target.serverId, [attemptRatingKey])
+          : Promise.resolve(new Map()),
+        inspectDownloadCleanup
+          ? loadAttemptedOrphanFilesByItem(target.serverId, [attemptRatingKey])
+          : Promise.resolve(new Map()),
       ]);
-    const resolvedCleanup = await resolveDownloadCleanup(
-      snapshot.ratingKey,
-      item,
-      arrTargets,
-      downloadTargets,
-      attemptedJobs.get(attemptRatingKey),
-      attemptedOrphans.get(attemptRatingKey),
-    );
+    const resolvedCleanup = inspectDownloadCleanup
+      ? await resolveDownloadCleanup(
+        snapshot.ratingKey,
+        item,
+        arrTargets,
+        downloadTargets,
+        attemptedJobs.get(attemptRatingKey),
+        attemptedOrphans.get(attemptRatingKey),
+      )
+      : null;
     const attemptedArr = await loadAttemptedArrInstancesByItem(
       target.serverId,
       [{ ...item, ratingKey: snapshot.ratingKey }],
@@ -470,15 +618,21 @@ async function ensureVersionDeleted(
       liveVersions,
       arrTargets,
       resolvedCleanup,
-      cleanupConfigured: downloadTargets.length > 0,
+      cleanupConfigured: inspectDownloadCleanup && downloadTargets.length > 0,
       attemptedArrInstanceIds: attemptedArr.get(snapshot.ratingKey),
       excludedReassignMediaIds: excludedReassignIds,
       requiredMappingIdentities: snapshot.arrReassignmentMappings,
       requiredReassignments: persistedArrReassignmentMap(snapshot),
       requiredOwnerships: persistedArrOwnershipMap(snapshot),
+      serverId: target.serverId,
+      libraryKey: snapshot.libraryKey,
+      plexClient: client,
+      versionRanks: liveAtStart.media,
       ...(snapshot.type === 'episode' &&
-          snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-          snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+          snapshot.seasonIndex !== null &&
+          snapshot.seasonIndex !== undefined &&
+          snapshot.episodeIndex !== null &&
+          snapshot.episodeIndex !== undefined
         ? {
           episodeIdentity: {
             seasonNumber: snapshot.seasonIndex,
@@ -502,9 +656,10 @@ async function ensureVersionDeleted(
         attemptRatingKey,
       );
       if (retainedMediaId !== null) {
-        const [freshVersions, freshArrTargets] = await Promise.all([
+        const [freshVersions, freshArrTargets, freshIdentity] = await Promise.all([
           client.mediaVersionPathPreviews(snapshot.ratingKey),
           getArrDeleteTargets(target.serverId, snapshot.libraryKey),
+          client.metadataIdentity(snapshot.ratingKey),
         ]);
         plan = await buildVersionDeletionPlan({
           mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
@@ -518,9 +673,15 @@ async function ensureVersionDeleted(
           requiredMappingIdentities: snapshot.arrReassignmentMappings,
           requiredReassignments: persistedArrReassignmentMap(snapshot),
           requiredOwnerships: persistedArrOwnershipMap(snapshot),
+          serverId: target.serverId,
+          libraryKey: snapshot.libraryKey,
+          plexClient: client,
+          versionRanks: freshIdentity?.media ?? [],
           ...(snapshot.type === 'episode' &&
-              snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-              snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+              snapshot.seasonIndex !== null &&
+              snapshot.seasonIndex !== undefined &&
+              snapshot.episodeIndex !== null &&
+              snapshot.episodeIndex !== undefined
             ? {
               episodeIdentity: {
                 seasonNumber: snapshot.seasonIndex,
@@ -533,26 +694,12 @@ async function ensureVersionDeleted(
     }
     if (retainedMediaId !== null) {
       if (plan.preview.arrReassignStatus !== 'resolved') {
-        throw new Error(
-          plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified',
-        );
+        throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified');
       }
       if (target.targetKind === 'movie_version') {
-        await coordinateRadarrReassignment(
-          target,
-          snapshot,
-          client,
-          plan,
-          retainedMediaId,
-        );
+        await coordinateRadarrReassignment(target, snapshot, client, plan, retainedMediaId);
       } else {
-        await waitForArrManagedPath(
-          target,
-          plan,
-          snapshot,
-          client,
-          retainedMediaId,
-        );
+        await waitForArrManagedPath(target, plan, snapshot, client, retainedMediaId);
         confirmReassignedRemoval(target);
         await reconcileArrReassignmentFinalState(target, snapshot, client);
         await reconcilePlexTarget(target, snapshot);
@@ -568,7 +715,9 @@ async function ensureVersionDeleted(
     if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
       const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
       const planInput = {
-        mediaType: target.targetKind === 'movie_version' ? 'movie' as const : 'episode' as const,
+        mediaType: target.targetKind === 'movie_version'
+          ? ('movie' as const)
+          : ('episode' as const),
         item: snapshot,
         selectedMediaIds: selectedIds,
         liveVersions,
@@ -578,8 +727,10 @@ async function ensureVersionDeleted(
         excludedReassignMediaIds: excludedReassignIds,
         requiredMappingIdentities: snapshot.arrReassignmentMappings,
         ...(snapshot.type === 'episode' &&
-            snapshot.seasonIndex !== null && snapshot.seasonIndex !== undefined &&
-            snapshot.episodeIndex !== null && snapshot.episodeIndex !== undefined
+            snapshot.seasonIndex !== null &&
+            snapshot.seasonIndex !== undefined &&
+            snapshot.episodeIndex !== null &&
+            snapshot.episodeIndex !== undefined
           ? {
             episodeIdentity: {
               seasonNumber: snapshot.seasonIndex,
@@ -625,21 +776,9 @@ async function ensureVersionDeleted(
         }
         if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
         if (target.targetKind === 'movie_version') {
-          await coordinateRadarrReassignment(
-            target,
-            snapshot,
-            client,
-            finalPlan,
-            candidateMediaId,
-          );
+          await coordinateRadarrReassignment(target, snapshot, client, finalPlan, candidateMediaId);
         } else {
-          await waitForArrManagedPath(
-            target,
-            finalPlan,
-            snapshot,
-            client,
-            candidateMediaId,
-          );
+          await waitForArrManagedPath(target, finalPlan, snapshot, client, candidateMediaId);
           confirmReassignedRemoval(target);
           await reconcileArrReassignmentFinalState(target, snapshot, client);
           await reconcilePlexTarget(target, snapshot);
@@ -647,7 +786,7 @@ async function ensureVersionDeleted(
         return;
       }
     }
-    if (!await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds)) {
+    if (!(await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds))) {
       throw new PlexReconciliationError(
         'at least one unselected live Plex version must remain',
         true,
@@ -672,11 +811,7 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
     if (target.phase === 'plex_reconciliation') {
       if ((snapshot.arrReassignments?.length ?? 0) > 0) {
         const validation = await validateDeletionTarget(target.serverId, target);
-        await reconcileArrReassignmentFinalState(
-          target,
-          snapshot,
-          validation.client,
-        );
+        await reconcileArrReassignmentFinalState(target, snapshot, validation.client);
       }
       await reconcilePlexTarget(target, snapshot);
       return;
@@ -684,12 +819,7 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
     if (await tryRecoverRadarrWithoutSelectedProjection(target, snapshot)) return;
     const validation = await validateDeletionTarget(target.serverId, target);
     if (target.targetKind === 'whole_item') {
-      await ensureWholeItemDeleted(
-        target,
-        validation.snapshot,
-        validation.client,
-        validation.live,
-      );
+      await ensureWholeItemDeleted(target, validation.snapshot, validation.client, validation.live);
     } else {
       await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
     }

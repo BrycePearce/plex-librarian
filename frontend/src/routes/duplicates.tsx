@@ -38,10 +38,10 @@ function validateDuplicatesSearch(search: Record<string, unknown>): {
   const comparison = search.comparison;
   return {
     type: type === "movie" || type === "tv" ? type : "all",
-    comparison: comparison === "same-profile" || comparison === "different" ||
-        comparison === "unknown"
-      ? comparison
-      : "all",
+    comparison:
+      comparison === "same-profile" || comparison === "different" || comparison === "unknown"
+        ? comparison
+        : "all",
     search: normalizeSearchQuery(search.search),
   };
 }
@@ -49,9 +49,7 @@ function validateDuplicatesSearch(search: Record<string, unknown>): {
 export const Route = createFileRoute("/duplicates")({
   validateSearch: validateDuplicatesSearch,
   search: {
-    middlewares: [
-      stripSearchParams({ type: "all", comparison: "all", search: "" }),
-    ],
+    middlewares: [stripSearchParams({ type: "all", comparison: "all", search: "" })],
   },
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
   component: DuplicatesPage,
@@ -122,22 +120,27 @@ function DuplicatesPage() {
       group,
       mediaIds,
       cleanupMediaIds,
+      planFingerprint,
+      allowRadarrMovieRemoval,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
       cleanupMediaIds: number[];
+      planFingerprint?: string;
+      allowRadarrMovieRemoval?: boolean;
     }) => {
       if (group.mediaType === "movie") {
         return await api.duplicates.deleteMovieMediaVersions(
           group.ratingKey,
           mediaIds,
           cleanupMediaIds,
+          {
+            ...(planFingerprint ? { planFingerprint } : {}),
+            ...(allowRadarrMovieRemoval ? { allowRadarrMovieRemoval: true } : {}),
+          },
         );
       }
-      return await api.duplicates.deleteEpisodeMediaVersions(
-        group.episodeRatingKey,
-        mediaIds,
-      );
+      return await api.duplicates.deleteEpisodeMediaVersions(group.episodeRatingKey, mediaIds);
     },
     onSuccess: (res) => {
       trackDeletionOperation(res.operationId, [
@@ -161,6 +164,8 @@ function DuplicatesPage() {
       deleteFromArr: boolean;
       cleanupDownloads: boolean;
       cleanupMediaIds: number[];
+      planFingerprint?: string;
+      allowRadarrMovieRemoval?: boolean;
     },
   ) {
     if (
@@ -188,6 +193,8 @@ function DuplicatesPage() {
       group,
       mediaIds: plan.mediaIds,
       cleanupMediaIds: plan.cleanupMediaIds,
+      planFingerprint: plan.planFingerprint,
+      allowRadarrMovieRemoval: plan.allowRadarrMovieRemoval,
     });
   }
 
@@ -256,16 +263,11 @@ function DuplicatesPage() {
                     <select
                       className="select select-bordered select-sm w-44 max-w-full"
                       value={comparison}
-                      onChange={(e) =>
-                        setComparison(
-                          e.target.value as DuplicateComparisonFilter,
-                        )}
+                      onChange={(e) => setComparison(e.target.value as DuplicateComparisonFilter)}
                       aria-label="Filter by technical comparison"
                     >
                       <option value="all">All comparisons</option>
-                      <option value="same-profile">
-                        Same technical profile
-                      </option>
+                      <option value="same-profile">Same technical profile</option>
                       <option value="different">Meaningful differences</option>
                       <option value="unknown">Needs review</option>
                     </select>
@@ -281,10 +283,7 @@ function DuplicatesPage() {
             />
 
             {data && data.groups.length > 0 && (
-              <section
-                className="duplicates-summary"
-                aria-label="Duplicate storage summary"
-              >
+              <section className="duplicates-summary" aria-label="Duplicate storage summary">
                 <div className="duplicates-summary-card duplicates-summary-card-versions">
                   <span className="duplicates-summary-icon">
                     <Layers3 className="size-4" />
@@ -372,8 +371,7 @@ function DuplicatesPage() {
       <VersionPickerDialog
         dialogRef={versionDialogRef}
         item={reviewItem}
-        pending={deleteVersionsMutation.isPending ||
-          deleteWholeItemMutation.isPending}
+        pending={deleteVersionsMutation.isPending || deleteWholeItemMutation.isPending}
         error={deleteVersionsMutation.error ?? deleteWholeItemMutation.error}
         onConfirm={(plan) => reviewItem && handleConfirm(reviewItem, plan)}
         onCancel={closeReview}

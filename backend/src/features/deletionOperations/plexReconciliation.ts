@@ -39,51 +39,58 @@ function finalizeTarget(
   attributable: boolean,
 ): void {
   const now = Math.floor(Date.now() / 1000);
-  const changed = client.prepare(
-    "UPDATE deletion_targets SET status = 'completed', phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = NULL, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
-  ).run(now, now, now, target.id);
+  const changed = client
+    .prepare(
+      "UPDATE deletion_targets SET status = 'completed', phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = NULL, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+    )
+    .run(now, now, now, target.id);
   if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
   let removed = 0;
   if (target.targetKind === 'whole_item') {
-    removed = client.prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?').run(
-      target.serverId,
-      snapshot.ratingKey,
-    );
+    removed = client
+      .prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?')
+      .run(target.serverId, snapshot.ratingKey);
   } else if (target.targetKind === 'movie_version') {
-    removed = client.prepare(
-      'DELETE FROM item_media_versions WHERE server_id = ? AND item_rating_key = ? AND media_id = ?',
-    ).run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
-    client.prepare(
-      'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
-    ).run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
+    removed = client
+      .prepare(
+        'DELETE FROM item_media_versions WHERE server_id = ? AND item_rating_key = ? AND media_id = ?',
+      )
+      .run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
+    client
+      .prepare(
+        'UPDATE items SET file_size = (SELECT SUM(file_size) FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?) WHERE server_id = ? AND rating_key = ?',
+      )
+      .run(target.serverId, snapshot.ratingKey, target.serverId, snapshot.ratingKey);
   } else {
-    removed = client.prepare(
-      'DELETE FROM episode_media_versions WHERE server_id = ? AND episode_rating_key = ? AND media_id = ?',
-    ).run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
+    removed = client
+      .prepare(
+        'DELETE FROM episode_media_versions WHERE server_id = ? AND episode_rating_key = ? AND media_id = ?',
+      )
+      .run(target.serverId, snapshot.ratingKey, snapshot.mediaId!);
     if (removed > 0) {
       const size = snapshot.fileSize ?? 0;
-      client.prepare(
-        'UPDATE seasons SET file_size = MAX(0, COALESCE(file_size, 0) - ?) WHERE server_id = ? AND rating_key = ?',
-      ).run(size, target.serverId, snapshot.seasonRatingKey!);
-      client.prepare(
-        "UPDATE items SET file_size = MAX(0, COALESCE(file_size, 0) - ?) WHERE server_id = ? AND rating_key = ? AND type = 'show'",
-      ).run(size, target.serverId, snapshot.showRatingKey!);
+      client
+        .prepare(
+          'UPDATE seasons SET file_size = MAX(0, COALESCE(file_size, 0) - ?) WHERE server_id = ? AND rating_key = ?',
+        )
+        .run(size, target.serverId, snapshot.seasonRatingKey!);
+      client
+        .prepare(
+          "UPDATE items SET file_size = MAX(0, COALESCE(file_size, 0) - ?) WHERE server_id = ? AND rating_key = ? AND type = 'show'",
+        )
+        .run(size, target.serverId, snapshot.showRatingKey!);
     }
   }
   if (attributable) {
     const kind = target.targetKind === 'whole_item' ? 'item' : target.targetKind;
-    client.prepare(
-      'INSERT OR IGNORE INTO media_removals (server_id, operation_id, target_kind, target_key, media_size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(
-      target.serverId,
-      target.operationId,
-      kind,
-      target.targetKey,
-      target.logicalSize,
-      now,
-    );
+    client
+      .prepare(
+        'INSERT OR IGNORE INTO media_removals (server_id, operation_id, target_kind, target_key, media_size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(target.serverId, target.operationId, kind, target.targetKey, target.logicalSize, now);
   }
   client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(target.id);
+  client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(target.id);
 }
 
 function permanentPlexFailure(error: unknown): boolean {
@@ -91,7 +98,9 @@ function permanentPlexFailure(error: unknown): boolean {
   const status = error instanceof PlexDeleteError ? error.status : null;
   if (status === 401 || status === 403) return true;
   return /(?:delet(?:e|ion).*(?:disabled|not allowed)|permission|unauthori[sz]ed|forbidden|read[- ]only|policy rejection)/i
-    .test(error.message);
+    .test(
+      error.message,
+    );
 }
 
 export function assertRetainedVersionPostcondition(
@@ -180,12 +189,34 @@ async function assertVersionArrPostcondition(
   snapshot: DurableTargetSnapshot,
   plexClient: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
 ): Promise<void> {
+  if (snapshot.radarrRemovalFallback) {
+    const plan = snapshot.radarrRemovalFallback;
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    const arrTarget = arrTargets.find((entry) => entry.instanceId === plan.arrInstanceId);
+    if (
+      !arrTarget ||
+      (await arrTarget.client.radarrMovieExistsById(plan.movieId)) ||
+      (await arrTarget.client.lookup(plan.tmdbId))
+    ) {
+      throw new Error('Radarr movie absence is no longer confirmed');
+    }
+    if (
+      !(await arrTarget.client.radarrImportExclusions()).some(
+        (entry) => entry.tmdbId === plan.tmdbId,
+      )
+    ) {
+      throw new Error('Radarr import exclusion is no longer confirmed');
+    }
+    return;
+  }
   if (snapshot.arrOwnerships === undefined && snapshot.arrReassignments === undefined) return;
   const selectedIds = new Set(snapshot.selectedMediaIds ?? [snapshot.mediaId!]);
   const excludedIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
-  const [arrTargets, liveVersions] = await Promise.all([
+  const [arrTargets, liveVersions, liveIdentity] = await Promise.all([
     getArrDeleteTargets(target.serverId, snapshot.libraryKey),
     plexClient.mediaVersionPathPreviews(snapshot.ratingKey),
+    plexClient.metadataIdentity(snapshot.ratingKey),
   ]);
   try {
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
@@ -201,7 +232,12 @@ async function assertVersionArrPostcondition(
       requiredMappingIdentities: snapshot.arrReassignmentMappings,
       requiredOwnerships: persistedArrOwnershipMap(snapshot),
       requiredReassignments: persistedArrReassignmentMap(snapshot),
-      ...(snapshot.type === 'episode' && snapshot.seasonIndex != null &&
+      serverId: target.serverId,
+      libraryKey: snapshot.libraryKey,
+      plexClient,
+      versionRanks: liveIdentity?.media ?? [],
+      ...(snapshot.type === 'episode' &&
+          snapshot.seasonIndex != null &&
           snapshot.episodeIndex != null
         ? {
           episodeIdentity: {
@@ -218,21 +254,24 @@ async function assertVersionArrPostcondition(
       throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment is no longer confirmed');
     }
     if (
-      target.targetKind === 'movie_version' && snapshot.arrReassignments?.length &&
-      target.plexAttemptCount === 0 && radarrLegacyAccountingIsAmbiguous(target)
+      target.targetKind === 'movie_version' &&
+      snapshot.arrReassignments?.length &&
+      target.plexAttemptCount === 0 &&
+      radarrLegacyAccountingIsAmbiguous(target)
     ) {
       throw new Error(
         'Legacy Radarr reassignment has ambiguous removal accounting and requires manual review',
       );
     }
     if (
-      target.targetKind === 'movie_version' && snapshot.arrReassignments?.length &&
-      !await radarrReassignmentAlreadyAdopted(
+      target.targetKind === 'movie_version' &&
+      snapshot.arrReassignments?.length &&
+      !(await radarrReassignmentAlreadyAdopted(
         target,
         snapshot,
         plexClient,
         target.plexAttemptCount === 0,
-      )
+      ))
     ) {
       throw new Error('Radarr no longer reports the exact retained-file adoption');
     }
@@ -259,11 +298,13 @@ export async function deleteExactPlexTarget(
   }
   const attemptStartedAt = Math.floor(Date.now() / 1000);
   const attemptChanged = withTransaction((sqlite) =>
-    sqlite.prepare(
-      `UPDATE deletion_targets
+    sqlite
+      .prepare(
+        `UPDATE deletion_targets
        SET plex_attempt_count = plex_attempt_count + 1, updated_at = ?
        WHERE id = ? AND status = 'running' AND phase = ?`,
-    ).run(attemptStartedAt, target.id, target.phase)
+      )
+      .run(attemptStartedAt, target.id, target.phase)
   );
   if (attemptChanged !== 1) throw new DeletionConvergenceError('deletion target state changed');
   target.plexAttemptCount++;
@@ -338,7 +379,7 @@ export async function assertActivePlexIdentity(
       false,
     );
   }
-  if (await active.client.identity() !== snapshot.machineIdentifier) {
+  if ((await active.client.identity()) !== snapshot.machineIdentifier) {
     throw new PlexReconciliationError(
       'Plex machine identity changed after deletion was accepted',
       true,

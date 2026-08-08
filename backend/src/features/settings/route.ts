@@ -1,8 +1,13 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import { settings } from '../../db/schema.ts';
-import type { Settings } from '@plex-librarian/shared/types.ts';
+import type {
+  PlexPathMapping,
+  SavePlexPathMappingRequest,
+  Settings,
+} from '@plex-librarian/shared/types.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { MAX_INACTIVITY_DAYS, MIN_USER_ACTIVITY_RETENTION_DAYS } from '../../configLimits.ts';
 import {
   DEFAULT_AUTO_SYNC_HOUR,
@@ -11,6 +16,62 @@ import {
 } from '@plex-librarian/shared/schedule.ts';
 
 const router = new Hono();
+
+function normalizedPrefix(value: string, local: boolean): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes('\0')) return null;
+  if (local && (!trimmed.startsWith('/') || trimmed.includes('\\'))) return null;
+  const windows = !local && /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(trimmed);
+  if (!local && !windows && !trimmed.startsWith('/')) return null;
+  const separator = windows ? '\\' : '/';
+  const normalized = trimmed.replace(windows ? /\//g : /\\/g, separator);
+  if (normalized.split(separator).includes('..')) return null;
+  if (normalized === separator || /^[a-zA-Z]:\\$/.test(normalized)) return normalized;
+  return normalized.replace(windows ? /\\+$/ : /\/+$/, '');
+}
+
+function mappedPath(
+  path: string,
+  source: string,
+  destination: string,
+  caseSensitive: boolean,
+): string | null {
+  const windows = source.includes('\\');
+  const separator = windows ? '\\' : '/';
+  const fold = (value: string) => caseSensitive ? value : value.toLocaleLowerCase('en-US');
+  if (
+    fold(path) !== fold(source) &&
+    !fold(path).startsWith(`${fold(source)}${separator}`)
+  ) return null;
+  const suffix = path.slice(source.length).replace(/^[/\\]+/, '');
+  return suffix
+    ? `${destination.replace(/\/+$/, '')}/${suffix.replaceAll('\\', '/')}`
+    : destination;
+}
+
+function prefixesOverlap(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value.replaceAll('\\', '/').replace(/\/+$/, '').toLocaleLowerCase('en-US');
+  const a = normalize(left);
+  const b = normalize(right);
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+function publicPlexMapping(row: {
+  id: number;
+  serverId: number;
+  libraryKey: string;
+  plexPath: string;
+  localPath: string;
+  caseSensitive: number;
+  revision: number;
+  validationPlexPath: string;
+  validationLocalPath: string;
+  validationSize: number;
+  validatedAt: number;
+}): PlexPathMapping {
+  return { ...row, caseSensitive: row.caseSensitive === 1 };
+}
 
 // GET /api/settings
 router.get('/', async (c) => {
@@ -253,6 +314,225 @@ router.patch('/', async (c) => {
       ipHistoryRetentionDays: row!.ipHistoryRetentionDays,
     } satisfies Settings,
   );
+});
+
+// App-managed Plex -> Plex Librarian namespace mappings. They intentionally live
+// under settings rather than Arr mappings: a separately-containerized Plex server
+// is an independent namespace edge.
+router.get('/plex-path-mappings', async (c) => {
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ error: 'Plex is not configured' }, 404);
+  const rows = withTransaction((client) =>
+    client.prepare(
+      `SELECT id, server_id, library_key, plex_path, local_path, case_sensitive, revision,
+              validation_plex_path, validation_local_path, validation_size, validated_at
+       FROM plex_path_mappings WHERE server_id = ? ORDER BY library_key, plex_path`,
+    ).all<{
+      id: number;
+      server_id: number;
+      library_key: string;
+      plex_path: string;
+      local_path: string;
+      case_sensitive: number;
+      revision: number;
+      validation_plex_path: string;
+      validation_local_path: string;
+      validation_size: number;
+      validated_at: number;
+    }>(active.serverId)
+  );
+  return c.json(rows.map((row) =>
+    publicPlexMapping({
+      id: row.id,
+      serverId: row.server_id,
+      libraryKey: row.library_key,
+      plexPath: row.plex_path,
+      localPath: row.local_path,
+      caseSensitive: row.case_sensitive,
+      revision: row.revision,
+      validationPlexPath: row.validation_plex_path,
+      validationLocalPath: row.validation_local_path,
+      validationSize: row.validation_size,
+      validatedAt: row.validated_at,
+    })
+  ));
+});
+
+async function validatePlexMappingRequest(
+  body: Partial<SavePlexPathMappingRequest>,
+  excludeId?: number,
+): Promise<
+  | {
+    active: Awaited<ReturnType<typeof resolveActiveServer>>;
+    request: SavePlexPathMappingRequest;
+    plexPath: string;
+    localPath: string;
+    validationPlexPath: string;
+    validationLocalPath: string;
+    validationSize: number;
+  }
+  | { error: string; status: 400 | 404 | 409 }
+> {
+  if (
+    typeof body.libraryKey !== 'string' || typeof body.plexPath !== 'string' ||
+    typeof body.localPath !== 'string' || typeof body.caseSensitive !== 'boolean' ||
+    typeof body.sampleRatingKey !== 'string' ||
+    !Number.isSafeInteger(body.sampleMediaId) || body.sampleMediaId! < 0
+  ) return { error: 'invalid Plex path mapping request', status: 400 };
+  const plexPath = normalizedPrefix(body.plexPath, false);
+  const localPath = normalizedPrefix(body.localPath, true);
+  if (!plexPath || !localPath) {
+    return { error: 'mapping prefixes must be absolute and traversal-free', status: 400 };
+  }
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return { error: 'Plex is not configured', status: 404 };
+  const libraryExists = withTransaction((client) =>
+    client.prepare('SELECT 1 FROM libraries WHERE server_id = ? AND key = ?').value<[number]>(
+      active.serverId,
+      body.libraryKey!,
+    ) !== undefined
+  );
+  if (!libraryExists) return { error: 'Plex library was not found', status: 404 };
+  const overlapping = withTransaction((client) =>
+    client.prepare(
+      'SELECT id, plex_path, local_path FROM plex_path_mappings WHERE server_id = ? AND library_key = ?',
+    ).all<{ id: number; plex_path: string; local_path: string }>(active.serverId, body.libraryKey!)
+      .some((mapping) =>
+        mapping.id !== excludeId &&
+        (prefixesOverlap(mapping.plex_path, plexPath) ||
+          prefixesOverlap(mapping.local_path, localPath))
+      )
+  );
+  if (overlapping) {
+    return {
+      error: 'Plex path mappings for one library cannot overlap or case-collide',
+      status: 409,
+    };
+  }
+  let live: { path: string; size: number };
+  try {
+    live = await active.client.exactLibraryMediaPath(
+      body.libraryKey,
+      body.sampleRatingKey,
+      body.sampleMediaId!,
+    );
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Plex mapping validation failed',
+      status: 409,
+    };
+  }
+  const validationLocalPath = mappedPath(
+    live.path,
+    plexPath,
+    localPath,
+    body.caseSensitive,
+  );
+  if (!validationLocalPath) {
+    return { error: 'The live Plex sample is not beneath the Plex mapping prefix', status: 409 };
+  }
+  try {
+    const stat = await Deno.stat(validationLocalPath);
+    if (!stat.isFile || stat.size !== live.size) {
+      return {
+        error: 'The mapped local sample is not a file with the exact Plex-reported size',
+        status: 409,
+      };
+    }
+  } catch {
+    return { error: 'The mapped local sample is not visible to Plex Librarian', status: 409 };
+  }
+  return {
+    active,
+    request: body as SavePlexPathMappingRequest,
+    plexPath,
+    localPath,
+    validationPlexPath: live.path,
+    validationLocalPath,
+    validationSize: live.size,
+  };
+}
+
+router.post('/plex-path-mappings', async (c) => {
+  const validated = await validatePlexMappingRequest(
+    await c.req.json().catch(() => ({})) as Partial<SavePlexPathMappingRequest>,
+  );
+  if ('error' in validated) return c.json({ error: validated.error }, validated.status);
+  const now = Math.floor(Date.now() / 1000);
+  const id = withTransaction((client) =>
+    client.prepare(
+      `INSERT INTO plex_path_mappings
+       (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+        validation_plex_path, validation_local_path, validation_size, validated_at,
+        created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    ).value<[number]>(
+      validated.active.serverId,
+      validated.request.libraryKey,
+      validated.plexPath,
+      validated.localPath,
+      validated.request.caseSensitive ? 1 : 0,
+      validated.validationPlexPath,
+      validated.validationLocalPath,
+      validated.validationSize,
+      now,
+      now,
+      now,
+    )![0]
+  );
+  return c.json({ id, revision: 1 }, 201);
+});
+
+router.put('/plex-path-mappings/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isSafeInteger(id) || id <= 0) return c.json({ error: 'invalid mapping id' }, 400);
+  const owner = withTransaction((client) =>
+    client.prepare('SELECT server_id FROM plex_path_mappings WHERE id = ?').value<[number]>(id)
+  );
+  if (!owner) return c.json({ error: 'mapping not found' }, 404);
+  const validated = await validatePlexMappingRequest(
+    await c.req.json().catch(() => ({})) as Partial<SavePlexPathMappingRequest>,
+    id,
+  );
+  if ('error' in validated) return c.json({ error: validated.error }, validated.status);
+  if (owner[0] !== validated.active.serverId) return c.json({ error: 'mapping not found' }, 404);
+  const now = Math.floor(Date.now() / 1000);
+  const revision = withTransaction((client) =>
+    client.prepare(
+      `UPDATE plex_path_mappings SET library_key = ?, plex_path = ?, local_path = ?,
+       case_sensitive = ?, revision = revision + 1, validation_plex_path = ?,
+       validation_local_path = ?, validation_size = ?, validated_at = ?, updated_at = ?
+       WHERE id = ? AND server_id = ? RETURNING revision`,
+    ).value<[number]>(
+      validated.request.libraryKey,
+      validated.plexPath,
+      validated.localPath,
+      validated.request.caseSensitive ? 1 : 0,
+      validated.validationPlexPath,
+      validated.validationLocalPath,
+      validated.validationSize,
+      now,
+      now,
+      id,
+      validated.active.serverId,
+    )![0]
+  );
+  return c.json({ id, revision });
+});
+
+router.delete('/plex-path-mappings/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isSafeInteger(id) || id <= 0) return c.json({ error: 'invalid mapping id' }, 400);
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ error: 'Plex is not configured' }, 404);
+  const changes = withTransaction((client) =>
+    client.prepare('DELETE FROM plex_path_mappings WHERE id = ? AND server_id = ?').run(
+      id,
+      active.serverId,
+    )
+  );
+  if (changes !== 1) return c.json({ error: 'mapping not found' }, 404);
+  return c.body(null, 204);
 });
 
 export default router;

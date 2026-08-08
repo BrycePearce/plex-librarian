@@ -29,14 +29,13 @@ function DeletionOperationPage() {
     queryFn: () => api.deletionOperations.get(id),
     refetchInterval: (state) => {
       if (
-        state.state.data?.targets.some((target) =>
-          target.relocationSyncBarrier && !target.relocationSyncBarrier.finishedAt
+        state.state.data?.targets.some(
+          (target) => target.relocationSyncBarrier && !target.relocationSyncBarrier.finishedAt,
         )
-      ) return 1_000;
-      return deletionOperationPollInterval(
-        state.state.data?.status,
-        state.state.data?.nextRetryAt,
-      );
+      ) {
+        return 1_000;
+      }
+      return deletionOperationPollInterval(state.state.data?.status, state.state.data?.nextRetryAt);
     },
   });
   const cancel = useMutation({
@@ -47,6 +46,10 @@ function DeletionOperationPage() {
     mutationFn: (outcome: "needs_attention" | "warning") =>
       api.deletionOperations.retry(id, outcome),
     onSuccess: (data) => qc.setQueryData(queryKey, data),
+  });
+  const resolveHold = useMutation({
+    mutationFn: () => api.deletionOperations.resolve(id),
+    onSuccess: ({ operation }) => qc.setQueryData(queryKey, operation),
   });
 
   if (query.isLoading) {
@@ -66,11 +69,11 @@ function DeletionOperationPage() {
   }
   const operation = query.data;
   const current = operation.targets.find((target) => target.status === "running") ??
-    operation.targets.find((target) =>
-      target.status === "waiting_retry" || target.status === "queued"
+    operation.targets.find(
+      (target) => target.status === "waiting_retry" || target.status === "queued",
     );
   const retryableFailedCount = retryableRelocationSafeTargetCount(
-    operation.targets,
+    operation.targets.filter((target) => target.resolutionState !== "management_hold"),
     "needs_attention",
   );
   const retryableWarningCount = retryableRelocationSafeTargetCount(
@@ -86,14 +89,11 @@ function DeletionOperationPage() {
             Deletion operation
           </p>
           <h1 className="text-3xl font-semibold mt-1">
-            {operation.status === "completed_with_warning" &&
-                operation.removalConfirmedCount === 0
+            {operation.status === "completed_with_warning" && operation.removalConfirmedCount === 0
               ? "Arr removal completed; Plex removal was not confirmed"
               : deletionOperationTitle(operation.status)}
           </h1>
-          <p className="text-sm text-base-content/55 mt-2">
-            Operation {operation.id}
-          </p>
+          <p className="text-sm text-base-content/55 mt-2">Operation {operation.id}</p>
         </div>
         <span className={`badge badge-lg ${statusBadge(operation.status)}`}>
           {operation.status.replace(/_/g, " ")}
@@ -113,9 +113,10 @@ function DeletionOperationPage() {
             <Stat
               label="Updating Plex"
               value={String(
-                operation.targets.filter((target) =>
-                  target.phase === "plex_reconciliation" &&
-                  activeDeletionStatuses.has(target.status)
+                operation.targets.filter(
+                  (target) =>
+                    target.phase === "plex_reconciliation" &&
+                    activeDeletionStatuses.has(target.status),
                 ).length,
               )}
             />
@@ -126,10 +127,7 @@ function DeletionOperationPage() {
             <Stat
               label="Cancelled"
               value={String(
-                nonSupersededCancelledCount(
-                  operation.cancelledCount,
-                  operation.supersededCount,
-                ),
+                nonSupersededCancelledCount(operation.cancelledCount, operation.supersededCount),
               )}
             />
             <Stat label="Superseded" value={String(operation.supersededCount)} />
@@ -150,16 +148,24 @@ function DeletionOperationPage() {
                     ? current.phase === "plex_reconciliation" ? "Updating Plex" : "Deleting"
                     : "Queued"}
                   {current.nextRetryAt
-                    ? ` · retrying ${
-                      new Date(current.nextRetryAt * 1000)
-                        .toLocaleTimeString()
-                    }`
+                    ? ` · retrying ${new Date(current.nextRetryAt * 1000).toLocaleTimeString()}`
                     : ""}
                 </p>
               </div>
             </div>
           )}
           <div className="flex flex-wrap gap-2">
+            {operation.targets.some((target) => target.resolutionState === "management_hold") && (
+              <button
+                type="button"
+                className="btn btn-warning btn-sm"
+                disabled={resolveHold.isPending}
+                onClick={() => resolveHold.mutate()}
+              >
+                <RotateCcw className="size-4" />
+                Verify repaired Radarr state
+              </button>
+            )}
             {operation.targets.some((target) => target.status === "queued") && (
               <button
                 type="button"
@@ -171,15 +177,15 @@ function DeletionOperationPage() {
                 Cancel queued targets
               </button>
             )}
-            {retryableFailedCount > 0 &&
-              !activeDeletionStatuses.has(operation.status) && (
+            {retryableFailedCount > 0 && !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 disabled={retry.isPending}
                 onClick={() => retry.mutate("needs_attention")}
               >
-                <RotateCcw className="size-4" />Retry failed targets
+                <RotateCcw className="size-4" />
+                Retry failed targets
               </button>
             )}
             {retryableWarningCount > 0 && !activeDeletionStatuses.has(operation.status) && (
@@ -189,7 +195,8 @@ function DeletionOperationPage() {
                 disabled={retry.isPending}
                 onClick={() => retry.mutate("warning")}
               >
-                <RotateCcw className="size-4" />Retry Plex cleanup
+                <RotateCcw className="size-4" />
+                Retry Plex cleanup
               </button>
             )}
             <Link to="/dashboard" className="btn btn-ghost btn-sm">
@@ -247,6 +254,79 @@ function DeletionOperationPage() {
                 {target.supersededReason && (
                   <p className="text-xs text-base-content/55 mt-1">{target.supersededReason}</p>
                 )}
+                {target.resolutionState === "management_hold" && (
+                  <div className="alert alert-warning mt-3 block text-xs">
+                    <p className="font-semibold">Radarr management hold</p>
+                    <p className="mt-1">
+                      This Radarr movie is reserved, so another coordinated deletion cannot begin.
+                      Repair Radarr to the exact retained target state to resume, or restore its
+                      exact original movie path and file to cancel safely. Verification reads live
+                      Plex and Radarr state; it does not accept a claimed outcome.
+                    </p>
+                  </div>
+                )}
+                {target.radarrPathAdoption &&
+                  target.radarrPathAdoption.mode !== "existing_path" && (
+                  <div className="mt-3 rounded-lg border border-base-300 bg-base-200/40 p-3 text-xs">
+                    <p className="font-semibold">Radarr retained-path adoption</p>
+                    <dl className="mt-2 grid gap-1 break-all">
+                      <div>Original path: {target.radarrPathAdoption.originalMoviePath}</div>
+                      <div>Target path: {target.radarrPathAdoption.targetMoviePath}</div>
+                      <div>Retained file: {target.radarrPathAdoption.retainedPath}</div>
+                      <div>
+                        Movie protected:{" "}
+                        {target.radarrPathAdoption.transition?.pathUpdateAttemptedAt
+                          ? "yes"
+                          : "pending"}
+                      </div>
+                      <div>
+                        Path changed: {target.radarrPathAdoption.transition?.pathConfirmedAt
+                          ? "confirmed"
+                          : "pending"}
+                      </div>
+                      <div>
+                        Retained file adopted: {target.radarrPathAdoption.adoptedMovieFile
+                          ? `yes (movie-file ${target.radarrPathAdoption.adoptedMovieFile.id})`
+                          : "pending"}
+                      </div>
+                      <div>
+                        Original monitored value restored:{" "}
+                        {target.radarrPathAdoption.transition?.monitoringRestoredAt
+                          ? "confirmed"
+                          : "not yet"}
+                      </div>
+                    </dl>
+                  </div>
+                )}
+                {target.radarrRemovalFallback && (
+                  <div className="mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
+                    <p className="font-semibold">Radarr movie removal</p>
+                    <dl className="mt-2 grid gap-1 break-all">
+                      <div>Selected Plex file: {target.radarrRemovalFallback.selectedPlexPath}</div>
+                      <div>Retained Plex file: {target.radarrRemovalFallback.retainedPlexPath}</div>
+                      <div>
+                        Monitoring protection:{" "}
+                        {target.radarrRemovalFallback.transition?.monitoringProtectedAt
+                          ? "confirmed"
+                          : "pending"}
+                      </div>
+                      <div>
+                        Import exclusion:{" "}
+                        {target.radarrRemovalFallback.transition?.exclusionConfirmedAt
+                          ? "confirmed"
+                          : "pending"}
+                      </div>
+                      <div>
+                        Radarr removal:{" "}
+                        {target.radarrRemovalFallback.transition?.movieAbsenceConfirmedAt
+                          ? "confirmed"
+                          : target.radarrRemovalFallback.transition?.removalAttemptedAt
+                          ? "attempted"
+                          : "pending"}
+                      </div>
+                    </dl>
+                  </div>
+                )}
               </div>
             </summary>
             {(target.relocationGuidanceState !== "none" ||
@@ -261,6 +341,12 @@ function DeletionOperationPage() {
           </details>
         ))}
       </section>
+      {resolveHold.isError && (
+        <ErrorAlert
+          message={resolveHold.error.message}
+          onRetry={() => resolveHold.mutate()}
+        />
+      )}
     </div>
   );
 }
@@ -272,9 +358,11 @@ function TargetTimeline({
 }) {
   const stages = [
     ["validating", "Safety checks"],
-    ...(target.downloadCleanupSelected ? [["download_cleanup", "Download cleanup"]] as const : []),
+    ...(target.downloadCleanupSelected
+      ? ([["download_cleanup", "Download cleanup"]] as const)
+      : []),
     ...(target.arrCoordinationConfigured
-      ? [["arr_coordination", "Sonarr/Radarr coordination"]] as const
+      ? ([["arr_coordination", "Sonarr/Radarr coordination"]] as const)
       : []),
     ["plex_reconciliation", "Plex reconciliation"],
     ["finalizing", "Finalization"],
@@ -304,9 +392,7 @@ function TargetTimeline({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs uppercase tracking-wide text-base-content/45">
-        {label}
-      </p>
+      <p className="text-xs uppercase tracking-wide text-base-content/45">{label}</p>
       <p className="text-lg font-semibold mt-1">{value}</p>
     </div>
   );
@@ -321,13 +407,17 @@ function statusBadge(status: string): string {
 }
 
 function phaseLabel(phase: string): string {
-  return ({
-    validating: "Safety checks",
-    download_cleanup: "Download cleanup",
-    arr_coordination: "Sonarr/Radarr coordination",
-    plex_reconciliation: "Plex reconciliation",
-    finalizing: "Finalization",
-  } as Record<string, string>)[phase] ?? phase;
+  return (
+    (
+      {
+        validating: "Safety checks",
+        download_cleanup: "Download cleanup",
+        arr_coordination: "Sonarr/Radarr coordination",
+        plex_reconciliation: "Plex reconciliation",
+        finalizing: "Finalization",
+      } as Record<string, string>
+    )[phase] ?? phase
+  );
 }
 
 function lastConfirmedAction(

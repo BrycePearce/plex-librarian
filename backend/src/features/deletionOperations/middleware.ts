@@ -16,6 +16,9 @@ import {
 } from '../libraries/quickCleanup.ts';
 import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts';
+import { getArrDeleteTargets } from '../arr/delete.ts';
+import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning.ts';
 
 const QUICK_CLEANUP_LIVE_READ_CONCURRENCY = 3;
 
@@ -35,7 +38,9 @@ async function hasLiveMultiVersionTitle(
   let nextIndex = 0;
   let found = false;
   const workers = Array.from(
-    { length: Math.min(QUICK_CLEANUP_LIVE_READ_CONCURRENCY, candidateList.length) },
+    {
+      length: Math.min(QUICK_CLEANUP_LIVE_READ_CONCURRENCY, candidateList.length),
+    },
     async () => {
       while (!found && nextIndex < candidateList.length) {
         const candidate = candidateList[nextIndex++];
@@ -43,8 +48,7 @@ async function hasLiveMultiVersionTitle(
         if (!live) continue;
         if (
           (live.type === 'movie' && live.media.length >= 2) ||
-          (live.type === 'show' &&
-            await client.showHasMultiVersionEpisodes(candidate.ratingKey))
+          (live.type === 'show' && (await client.showHasMultiVersionEpisodes(candidate.ratingKey)))
         ) {
           found = true;
         }
@@ -70,7 +74,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     await next();
     return;
   }
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const clientRequestId = body.clientRequestId;
   if (typeof clientRequestId !== 'string') {
     return c.json({ error: 'clientRequestId is required' }, 400);
@@ -96,7 +100,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         : parseStaleQuickCleanupDays(body.quickCleanupThresholdDays);
       if (body.quickCleanupThresholdDays !== undefined && quickCleanupDays === null) {
         return c.json(
-          { error: 'quickCleanupThresholdDays must be an integer between 180 and 3650' },
+          {
+            error: 'quickCleanupThresholdDays must be an integer between 180 and 3650',
+          },
           400,
         );
       }
@@ -128,11 +134,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       };
       const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
       if (repeated) return c.json(repeated, 202);
-      const warningOperationId = findWarningOverlap(
-        serverId,
-        'whole_item',
-        ratingKeys,
-      );
+      const warningOperationId = findWarningOverlap(serverId, 'whole_item', ratingKeys);
       if (warningOperationId) {
         throw new DeletionConflictError(
           'this item has unresolved Plex cleanup; retry Plex cleanup from Activity first',
@@ -143,17 +145,17 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       activeServer ??= await resolveActiveServer().catch(() => null);
       if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
       if (activeServer.serverId !== serverId) {
-        return c.json({ error: 'the active Plex server changed during deletion validation' }, 409);
+        return c.json(
+          {
+            error: 'the active Plex server changed during deletion validation',
+          },
+          409,
+        );
       }
       const serverUrl = activeServer.client.serverUrl;
       const initialQuickCleanupCandidates = quickCleanupDays === null
         ? null
-        : validateStaleQuickCleanupSelection(
-          serverId,
-          libraryKey,
-          quickCleanupDays,
-          ratingKeys,
-        );
+        : validateStaleQuickCleanupSelection(serverId, libraryKey, quickCleanupDays, ratingKeys);
       if (quickCleanupDays !== null && initialQuickCleanupCandidates === null) {
         return c.json(
           {
@@ -164,10 +166,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       }
       if (
         initialQuickCleanupCandidates &&
-        await hasLiveMultiVersionTitle(
-          initialQuickCleanupCandidates,
-          activeServer.client,
-        )
+        (await hasLiveMultiVersionTitle(initialQuickCleanupCandidates, activeServer.client))
       ) {
         return c.json(
           {
@@ -197,30 +196,29 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       // that gap before the operation is enqueued.
       const quickCleanupCandidates = quickCleanupDays === null
         ? null
-        : validateStaleQuickCleanupSelection(
-          serverId,
-          libraryKey,
-          quickCleanupDays,
-          ratingKeys,
-        );
+        : validateStaleQuickCleanupSelection(serverId, libraryKey, quickCleanupDays, ratingKeys);
       if (quickCleanupDays !== null && quickCleanupCandidates === null) {
         return c.json(
-          { error: 'the quick cleanup plan changed; analyze stale items again before deleting' },
+          {
+            error: 'the quick cleanup plan changed; analyze stale items again before deleting',
+          },
           409,
         );
       }
       const rows = withTransaction((client) => {
-        const machine = client.prepare('SELECT machine_identifier FROM servers WHERE id = ?').value<
-          [string]
-        >(serverId)?.[0];
+        const machine = client
+          .prepare('SELECT machine_identifier FROM servers WHERE id = ?')
+          .value<[string]>(serverId)?.[0];
         return ratingKeys.map((ratingKey) => {
-          const item = client.prepare(
-            'SELECT title, type, file_size, tmdb_id, tvdb_id FROM items WHERE server_id = ? AND library_key = ? AND rating_key = ?',
-          ).value<[string, string, number | null, number | null, number | null]>(
-            serverId,
-            libraryKey,
-            ratingKey,
-          );
+          const item = client
+            .prepare(
+              'SELECT title, type, file_size, tmdb_id, tvdb_id FROM items WHERE server_id = ? AND library_key = ? AND rating_key = ?',
+            )
+            .value<[string, string, number | null, number | null, number | null]>(
+              serverId,
+              libraryKey,
+              ratingKey,
+            );
           return item ? { ratingKey, machine, item } : null;
         });
       });
@@ -279,20 +277,22 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     const ratingKey = decode(match[1]);
     const kind = episodeBatchMatch || episodeMatch ? 'episode_version' : 'movie_version';
     const mediaIds = movieBatchMatch || episodeBatchMatch
-      ? (Array.isArray(body.mediaIds)
+      ? Array.isArray(body.mediaIds)
         ? [
           ...new Set(
             body.mediaIds.filter((id): id is number => Number.isSafeInteger(id) && id >= 0),
           ),
         ]
-        : [])
+        : []
       : [Number(match[2])];
     if (mediaIds.length === 0 || mediaIds.length > 50) {
       return c.json({ error: 'mediaIds must contain between 1 and 50 integers' }, 400);
     }
     if (body.arrMediaIds !== undefined || body.deleteFromArr !== undefined) {
       return c.json(
-        { error: 'Arr handling for media versions is determined by the backend' },
+        {
+          error: 'Arr handling for media versions is determined by the backend',
+        },
         400,
       );
     }
@@ -303,18 +303,34 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         ? mediaIds
         : [],
     );
+    if (body.planFingerprint !== undefined && typeof body.planFingerprint !== 'string') {
+      return c.json({ error: 'planFingerprint must be a string' }, 400);
+    }
+    if (body.allowRadarrRetainedPathManagement !== undefined) {
+      return c.json({ error: 'allowRadarrRetainedPathManagement is no longer supported' }, 400);
+    }
+    if (
+      body.allowRadarrMovieRemoval !== undefined &&
+      typeof body.allowRadarrMovieRemoval !== 'boolean'
+    ) {
+      return c.json({ error: 'allowRadarrMovieRemoval must be boolean' }, 400);
+    }
+    const requestedPlanFingerprint = typeof body.planFingerprint === 'string'
+      ? body.planFingerprint
+      : null;
+    const allowRadarrMovieRemoval = body.allowRadarrMovieRemoval === true;
     if (body.unmonitorFromArr === true) {
       return c.json({ error: 'unmonitorFromArr is no longer supported for media versions' }, 400);
     }
-    if (
-      [...cleanupMediaIds].some((id) => !mediaIds.includes(id))
-    ) {
+    if ([...cleanupMediaIds].some((id) => !mediaIds.includes(id))) {
       return c.json({ error: 'invalid deletion destinations' }, 400);
     }
     const payload = {
       path,
       mediaIds,
       cleanupMediaIds: [...cleanupMediaIds].sort((a, b) => a - b),
+      ...(requestedPlanFingerprint ? { planFingerprint: requestedPlanFingerprint } : {}),
+      ...(allowRadarrMovieRemoval ? { allowRadarrMovieRemoval: true } : {}),
     };
     const repeated = await repeatedDeletionOperation(serverId, clientRequestId, payload);
     if (repeated) return c.json(repeated, 202);
@@ -333,19 +349,31 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     }
     const serverUrl = activeServer.client.serverUrl;
     const found = withTransaction((client) => {
-      const machine = client.prepare('SELECT machine_identifier FROM servers WHERE id = ?').value<
-        [string]
-      >(serverId)?.[0];
+      const machine = client
+        .prepare('SELECT machine_identifier FROM servers WHERE id = ?')
+        .value<[string]>(serverId)?.[0];
       return mediaIds.map((mediaId) => {
         if (kind === 'movie_version') {
-          const row = client.prepare(
-            'SELECT v.library_key, i.title, v.file_size FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
-          ).value<[string, string, number | null]>(serverId, ratingKey, mediaId);
-          return row ? { mediaId, libraryKey: row[0], title: row[1], size: row[2], machine } : null;
+          const row = client
+            .prepare(
+              'SELECT v.library_key, i.title, v.file_size FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+            )
+            .value<[string, string, number | null]>(serverId, ratingKey, mediaId);
+          return row
+            ? {
+              mediaId,
+              libraryKey: row[0],
+              title: row[1],
+              size: row[2],
+              machine,
+            }
+            : null;
         }
-        const row = client.prepare(
-          'SELECT v.library_key, i.title, v.episode_title, v.file_size FROM episode_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
-        ).value<[string, string, string, number | null]>(serverId, ratingKey, mediaId);
+        const row = client
+          .prepare(
+            'SELECT v.library_key, i.title, v.episode_title, v.file_size FROM episode_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+          )
+          .value<[string, string, string, number | null]>(serverId, ratingKey, mediaId);
         if (!row) return null;
         return {
           mediaId,
@@ -363,17 +391,21 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       found.map((base) => {
         const target = base!;
         if (kind === 'movie_version') {
-          const row = client.prepare(
-            'SELECT i.type, i.tmdb_id, i.tvdb_id, v.video_resolution, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
-          ).value<[
-            string,
-            number | null,
-            number | null,
-            string | null,
-            number | null,
-            string | null,
-            string | null,
-          ]>(serverId, ratingKey, target.mediaId)!;
+          const row = client
+            .prepare(
+              'SELECT i.type, i.tmdb_id, i.tvdb_id, v.video_resolution, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+            )
+            .value<
+              [
+                string,
+                number | null,
+                number | null,
+                string | null,
+                number | null,
+                string | null,
+                string | null,
+              ]
+            >(serverId, ratingKey, target.mediaId)!;
           return {
             ...target,
             type: row[0],
@@ -391,21 +423,25 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             episodeIndex: null,
           };
         }
-        const row = client.prepare(
-          'SELECT i.tvdb_id, i.title, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.video_resolution, v.bitrate, v.video_codec, v.container FROM episode_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
-        ).value<[
-          number | null,
-          string,
-          string,
-          string,
-          string,
-          number,
-          number,
-          string | null,
-          number | null,
-          string | null,
-          string | null,
-        ]>(serverId, ratingKey, target.mediaId)!;
+        const row = client
+          .prepare(
+            'SELECT i.tvdb_id, i.title, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.video_resolution, v.bitrate, v.video_codec, v.container FROM episode_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+          )
+          .value<
+            [
+              number | null,
+              string,
+              string,
+              string,
+              string,
+              number,
+              number,
+              string | null,
+              number | null,
+              string | null,
+              string | null,
+            ]
+          >(serverId, ratingKey, target.mediaId)!;
         return {
           ...target,
           type: 'episode',
@@ -428,7 +464,156 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     if (found.some((row) => row!.libraryKey !== libraryKey)) {
       return c.json({ error: 'targets must belong to one library' }, 409);
     }
+    let acceptedPlan: Awaited<ReturnType<typeof buildVersionDeletionPlan>> | null = null;
+    let acceptedReassignments: PersistedArrReassignment[] = [];
+    if (kind === 'movie_version') {
+      const activeMovies = activeWholeItemRatingKeys(
+        new Set([ratingKey]),
+        await activeServer.client.activeSessions(),
+      );
+      if (activeMovies.has(ratingKey)) {
+        return c.json(
+          {
+            error: 'this movie started playing; preview the deletion again later',
+          },
+          409,
+        );
+      }
+      const [liveVersions, arrTargets] = await Promise.all([
+        activeServer.client.mediaVersionPathPreviews(ratingKey),
+        getArrDeleteTargets(serverId, libraryKey),
+      ]);
+      const versionRanks = withTransaction((client) =>
+        client
+          .prepare(
+            `SELECT media_id, video_resolution, height, bitrate, file_size
+           FROM item_media_versions WHERE server_id = ? AND item_rating_key = ?`,
+          )
+          .values(serverId, ratingKey)
+          .map((row) => ({
+            mediaId: Number(row[0]),
+            videoResolution: row[1] === null ? null : String(row[1]),
+            height: row[2] === null ? null : Number(row[2]),
+            bitrate: row[3] === null ? null : Number(row[3]),
+            fileSize: row[4] === null ? null : Number(row[4]),
+          }))
+      );
+      const item = enriched[0]!;
+      acceptedPlan = await buildVersionDeletionPlan({
+        mediaType: 'movie',
+        item,
+        selectedMediaIds: new Set(mediaIds),
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        allowPartialCoverage: true,
+        serverId,
+        libraryKey,
+        plexClient: activeServer.client,
+        versionRanks,
+      });
+      const pathPreview = acceptedPlan.preview.radarrPathAdoption;
+      const outsideMode = pathPreview.mode === 'adopt_safe_path';
+      if (outsideMode) {
+        if (
+          !pathPreview.planFingerprint ||
+          requestedPlanFingerprint !== pathPreview.planFingerprint
+        ) {
+          return c.json(
+            {
+              error: 'the Radarr retained-path plan changed; preview the deletion again',
+            },
+            409,
+          );
+        }
+        if (allowRadarrMovieRemoval) {
+          return c.json({ error: 'Radarr movie-removal authorization is not valid here' }, 400);
+        }
+      } else if (pathPreview.mode === 'remove_from_radarr') {
+        if (
+          !pathPreview.planFingerprint ||
+          requestedPlanFingerprint !== pathPreview.planFingerprint
+        ) {
+          return c.json(
+            {
+              error: 'the Radarr movie-removal plan changed; preview the deletion again',
+            },
+            409,
+          );
+        }
+        if (!allowRadarrMovieRemoval) {
+          return c.json({ error: 'Radarr movie removal must be explicitly authorized' }, 400);
+        }
+      } else if (requestedPlanFingerprint || allowRadarrMovieRemoval) {
+        return c.json({ error: 'Radarr path-adoption authorization is not valid here' }, 400);
+      }
+      if (
+        acceptedPlan.arrManagedMediaIds.some((mediaId) => mediaIds.includes(mediaId)) &&
+        acceptedPlan.preview.arrReassignStatus !== 'resolved' &&
+        pathPreview.mode !== 'remove_from_radarr'
+      ) {
+        return c.json(
+          {
+            error: acceptedPlan.preview.arrReassignReason ??
+              'Radarr cannot safely adopt the retained Plex version',
+          },
+          409,
+        );
+      }
+      const retainedMediaId = pathPreview.retainedMediaId;
+      if (retainedMediaId !== undefined && pathPreview.mode !== 'remove_from_radarr') {
+        acceptedReassignments = acceptedPlan.eligibleArrReassignments.map((entry) => {
+          const retainedPath = entry.candidatePaths.get(retainedMediaId);
+          const retainedRecordPath = entry.candidateRecordPaths.get(retainedMediaId);
+          if (
+            !retainedPath ||
+            !retainedRecordPath ||
+            entry.managedFileId === null ||
+            entry.managedPath === null
+          ) {
+            throw new Error('The accepted Radarr reassignment identity is incomplete');
+          }
+          return {
+            instanceId: entry.target.instanceId,
+            instanceType: entry.target.instanceType,
+            instanceUrl: entry.target.instanceUrl,
+            configurationUpdatedAt: entry.target.configurationUpdatedAt,
+            mappingIdentity: entry.target.mappingIdentity,
+            recordId: entry.recordId,
+            recordPath: entry.recordPath,
+            episodeId: entry.episodeId,
+            managedFileId: entry.managedFileId,
+            managedPath: entry.managedPath,
+            retainedMediaId,
+            retainedPath,
+            retainedRecordPath,
+            retainedFileSize: entry.candidateFileSizes.get(retainedMediaId) ?? null,
+            originalMonitored: entry.monitored,
+            ...(entry.radarrPathPlan ? { radarrPathPlan: entry.radarrPathPlan } : {}),
+          } satisfies PersistedArrReassignment;
+        });
+      }
+    } else if (requestedPlanFingerprint || allowRadarrMovieRemoval) {
+      return c.json({ error: 'Radarr path adoption is unavailable for Sonarr episodes' }, 400);
+    }
     const targets: NewDeletionTarget[] = enriched.map((target) => {
+      const reassignment = acceptedReassignments.find(
+        (entry) =>
+          acceptedPlan?.arrManagedMediaIds.includes(target.mediaId) && entry.managedFileId !== null,
+      );
+      const removalFallback =
+        acceptedPlan?.radarrRemovalFallback?.selectedMediaId === target.mediaId
+          ? {
+            ...acceptedPlan.radarrRemovalFallback,
+            userAuthorizedRadarrRemoval: true as const,
+          }
+          : undefined;
+      const reservationFingerprint = reassignment?.radarrPathPlan?.planFingerprint ??
+        removalFallback?.planFingerprint ??
+        (reassignment
+          ? `existing-path:${reassignment.instanceId}:${reassignment.recordId}:${reassignment.retainedMediaId}`
+          : null);
       return {
         kind,
         key: `${ratingKey}:${target.mediaId}`,
@@ -458,12 +643,35 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
           selectedMediaIds: [target.mediaId],
           operationMediaIds: mediaIds,
+          ...(reassignment && acceptedPlan
+            ? {
+              arrReassignmentMappings: acceptedPlan.arrMappingIdentities,
+              arrOwnerships: acceptedPlan.arrOwnerships,
+              arrReassignments: [reassignment],
+            }
+            : {}),
+          ...(removalFallback && acceptedPlan
+            ? {
+              arrReassignmentMappings: acceptedPlan.arrMappingIdentities,
+              arrOwnerships: acceptedPlan.arrOwnerships,
+              radarrRemovalFallback: removalFallback,
+            }
+            : {}),
         },
         reservation: {
           mediaKind: kind === 'movie_version' ? 'movie' : 'episode',
           mediaId: target.mediaId,
           ratingKey,
         },
+        ...((reassignment || removalFallback) && reservationFingerprint
+          ? {
+            radarrReservation: {
+              arrInstanceId: reassignment?.instanceId ?? removalFallback!.arrInstanceId,
+              movieId: reassignment?.recordId ?? removalFallback!.movieId,
+              planFingerprint: reservationFingerprint,
+            },
+          }
+          : {}),
       };
     });
     const result = await enqueueDeletionOperation({
@@ -478,7 +686,10 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
   } catch (error) {
     if (error instanceof DeletionConflictError) {
       return c.json(
-        { error: error.message, ...(error.operationId ? { operationId: error.operationId } : {}) },
+        {
+          error: error.message,
+          ...(error.operationId ? { operationId: error.operationId } : {}),
+        },
         error.status as 400 | 409,
       );
     }

@@ -5,6 +5,16 @@ export interface ArrMediaRecord {
   title: string;
   path: string | null;
   seasons: ArrSeasonSummary[] | null;
+  tmdbId?: number | null;
+  year?: number | null;
+  monitored?: boolean | null;
+}
+
+export interface RadarrImportExclusion {
+  id: number;
+  tmdbId: number;
+  movieTitle: string;
+  movieYear: number;
 }
 
 export interface ArrSeasonSummary {
@@ -31,6 +41,66 @@ export interface ArrExtraFile {
 export interface RadarrMovieRecord {
   id: number;
   path: string;
+}
+
+export const RADARR_PATH_ADOPTION_MIN_VERSION = '6.3.0.10514';
+export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
+export const RADARR_CATALOG_MAX_RECORDS = 50_000;
+export const RADARR_FILESYSTEM_MAX_BYTES = 2 * 1024 * 1024;
+export const RADARR_FILESYSTEM_MAX_ENTRIES = 2_000;
+
+export interface RadarrFilesystemEntry {
+  path: string;
+  name: string;
+  type: 'file' | 'folder';
+}
+
+export interface RadarrRootFolder {
+  id: number;
+  path: string;
+}
+
+export interface RadarrCatalogMoviePath {
+  id: number;
+  tmdbId: number;
+  path: string;
+}
+
+export interface RadarrActivityEvidence {
+  quiet: boolean;
+  blocking: Array<{ source: 'queue' | 'command'; id: number; name: string }>;
+}
+
+export interface RadarrPathAdoptionCapabilities {
+  available: boolean;
+  version: string | null;
+  minimumVersion: typeof RADARR_PATH_ADOPTION_MIN_VERSION;
+  behaviorFingerprint: string | null;
+  behavior: {
+    autoUnmonitorPreviouslyDownloadedMovies: boolean;
+    deleteEmptyFolders: boolean;
+    fileDate: string;
+    rescanAfterRefresh: string;
+    metadataConsumerCount: number;
+    notificationConsumerCount: number;
+  } | null;
+  reason?: string;
+}
+
+export interface RadarrMoviePathUpdateResult {
+  before: Record<string, unknown> & {
+    id: number;
+    tmdbId: number;
+    path: string;
+    monitored: boolean;
+  };
+  after: Record<string, unknown> & {
+    id: number;
+    tmdbId: number;
+    path: string;
+    monitored: boolean;
+  };
+  changed: boolean;
 }
 
 export interface ArrManagedFile {
@@ -89,6 +159,70 @@ export function normalizeArrUrl(raw: string): string {
   return parsed.toString().replace(/\/$/, '');
 }
 
+function versionAtLeast(actual: string, minimum: string): boolean {
+  const parse = (value: string): number[] | null => {
+    const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(value.trim());
+    return match ? match.slice(1).map(Number) : null;
+  };
+  const left = parse(actual);
+  const right = parse(minimum)!;
+  if (!left || left.some((part) => !Number.isSafeInteger(part) || part < 0)) return false;
+  for (let index = 0; index < right.length; index++) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
+        .join(',')
+    }}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function sha256(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stableJson(value)));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function radarrPathComparison(path: string): string {
+  return path.trim().replaceAll('\\', '/').replace(/\/+$/, '').toLocaleLowerCase('en-US');
+}
+
+const RADARR_COMPUTED_MOVIE_FIELDS = new Set([
+  'movieFileId',
+  'hasFile',
+  'sizeOnDisk',
+  'statistics',
+  'lastInfoSync',
+  'rootFolderPath',
+  'tags',
+]);
+
+function assertOnlyRadarrMovieChanges(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  intendedFields: readonly string[],
+): void {
+  const allowed = new Set([...RADARR_COMPUTED_MOVIE_FIELDS, ...intendedFields]);
+  const stableBefore = Object.fromEntries(
+    Object.entries(before).filter(([key]) => !allowed.has(key)),
+  );
+  const stableAfter = Object.fromEntries(
+    Object.entries(after).filter(([key]) => !allowed.has(key)),
+  );
+  if (stableJson(stableBefore) !== stableJson(stableAfter)) {
+    throw new ArrApiError('Radarr changed unrelated movie fields during the update');
+  }
+}
+
 export class ArrClient {
   private readonly baseUrl: string;
 
@@ -107,7 +241,7 @@ export class ArrClient {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
           'X-Api-Key': this.apiKey,
           ...init?.headers,
         },
@@ -133,7 +267,60 @@ export class ArrClient {
 
     if (response.status === 204) return undefined as T;
     const text = await response.text();
-    return text ? JSON.parse(text) as T : undefined as T;
+    return text ? (JSON.parse(text) as T) : (undefined as T);
+  }
+
+  private async boundedRequest<T>(path: string, maxBytes: number, description: string): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new ArrApiError(
+          `Radarr returned ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
+          response.status,
+        );
+      }
+      if (!response.body) throw new ArrApiError(`Radarr returned an empty ${description}`);
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        total += next.value.byteLength;
+        if (total > maxBytes) {
+          controller.abort();
+          throw new ArrApiError(`Radarr ${description} exceeded the ${maxBytes}-byte safety limit`);
+        }
+        chunks.push(next.value);
+      }
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        return JSON.parse(new TextDecoder().decode(bytes)) as T;
+      } catch {
+        throw new ArrApiError(`Radarr returned malformed ${description}`);
+      }
+    } catch (error) {
+      if (error instanceof ArrApiError) throw error;
+      throw new ArrApiError(
+        `Radarr is unreachable while reading ${description}: ${
+          error instanceof Error ? error.message : 'request failed'
+        }`,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async testConnection(): Promise<{ version: string | null }> {
@@ -158,6 +345,9 @@ export class ArrClient {
         id: number;
         title?: string;
         path?: string;
+        tmdbId?: number;
+        year?: number;
+        monitored?: boolean;
         seasons?: Array<{
           seasonNumber?: number;
           statistics?: { episodeFileCount?: number; sizeOnDisk?: number };
@@ -179,8 +369,11 @@ export class ArrClient {
     const record = records[0];
     if (record === undefined) return null;
     if (
-      record === null || typeof record !== 'object' || Array.isArray(record) ||
-      !Number.isInteger(record.id) || record.id <= 0
+      record === null ||
+      typeof record !== 'object' ||
+      Array.isArray(record) ||
+      !Number.isInteger(record.id) ||
+      record.id <= 0
     ) {
       throw new ArrApiError(
         `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned an invalid managed record`,
@@ -190,29 +383,65 @@ export class ArrClient {
       id: record.id,
       title: record.title ?? String(record.id),
       path: record.path?.trim() || null,
+      tmdbId: Number.isSafeInteger(record.tmdbId) ? record.tmdbId! : null,
+      year: Number.isSafeInteger(record.year) ? record.year! : null,
+      monitored: typeof record.monitored === 'boolean' ? record.monitored : null,
       seasons: this.type === 'sonarr'
-        ? (record.seasons ?? []).flatMap((season) => {
-          const seasonNumber = Number(season.seasonNumber);
-          if (!Number.isInteger(seasonNumber) || seasonNumber < 0) return [];
-          const rawFileCount = Number(season.statistics?.episodeFileCount);
-          const episodeFileCount = Number.isInteger(rawFileCount) && rawFileCount >= 0
-            ? rawFileCount
-            : null;
-          const rawSize = Number(season.statistics?.sizeOnDisk);
-          const size = Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null;
-          // Sonarr also returns future/empty season metadata. Only show seasons with
-          // managed files so the deletion tree describes disk contents being removed.
-          if (episodeFileCount === 0 && (size === null || size === 0)) return [];
-          return [{ seasonNumber, episodeFileCount, size } satisfies ArrSeasonSummary];
-        }).sort((a, b) => a.seasonNumber - b.seasonNumber)
+        ? (record.seasons ?? [])
+          .flatMap((season) => {
+            const seasonNumber = Number(season.seasonNumber);
+            if (!Number.isInteger(seasonNumber) || seasonNumber < 0) return [];
+            const rawFileCount = Number(season.statistics?.episodeFileCount);
+            const episodeFileCount = Number.isInteger(rawFileCount) && rawFileCount >= 0
+              ? rawFileCount
+              : null;
+            const rawSize = Number(season.statistics?.sizeOnDisk);
+            const size = Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null;
+            // Sonarr also returns future/empty season metadata. Only show seasons with
+            // managed files so the deletion tree describes disk contents being removed.
+            if (episodeFileCount === 0 && (size === null || size === 0)) return [];
+            return [
+              {
+                seasonNumber,
+                episodeFileCount,
+                size,
+              } satisfies ArrSeasonSummary,
+            ];
+          })
+          .sort((a, b) => a.seasonNumber - b.seasonNumber)
         : null,
     };
+  }
+
+  async radarrMovieExistsById(movieId: number): Promise<boolean> {
+    if (this.type !== 'radarr') throw new ArrApiError('Movie reads require Radarr');
+    if (!Number.isSafeInteger(movieId) || movieId <= 0) {
+      throw new ArrApiError('Radarr movie ID is invalid');
+    }
+    let record: unknown;
+    try {
+      record = await this.request<unknown>(`/movie/${movieId}`);
+    } catch (error) {
+      if (error instanceof ArrApiError && error.status === 404) return false;
+      throw error;
+    }
+    if (
+      !record || typeof record !== 'object' || Array.isArray(record) ||
+      (record as { id?: unknown }).id !== movieId
+    ) {
+      throw new ArrApiError('Radarr returned a conflicting or malformed targeted movie');
+    }
+    return true;
   }
 
   async extraFiles(mediaId: number): Promise<ArrExtraFile[]> {
     if (this.type !== 'radarr') return [];
     const records = await this.request<
-      Array<{ relativePath?: string; type?: number | string; movieFileId?: number | null }>
+      Array<{
+        relativePath?: string;
+        type?: number | string;
+        movieFileId?: number | null;
+      }>
     >(`/extrafile?movieId=${mediaId}`);
     if (!Array.isArray(records)) {
       throw new ArrApiError('Radarr returned an invalid extra-file response');
@@ -229,10 +458,7 @@ export class ArrClient {
       if (!Object.hasOwn(record, 'movieFileId') || movieFileId === undefined) {
         throw new ArrApiError('Radarr returned missing extra-file ownership');
       }
-      if (
-        movieFileId !== null &&
-        (!Number.isInteger(movieFileId) || movieFileId <= 0)
-      ) {
+      if (movieFileId !== null && (!Number.isInteger(movieFileId) || movieFileId <= 0)) {
         throw new ArrApiError('Radarr returned invalid extra-file ownership');
       }
       const rawType = String(record.type ?? '').toLowerCase();
@@ -256,9 +482,15 @@ export class ArrClient {
     const record = await this.request<{ id?: number; path?: string }>(`/movie/${mediaId}`);
     const path = record?.path?.trim();
     if (
-      !record || typeof record !== 'object' || Array.isArray(record) ||
-      !Number.isInteger(record.id) || record.id !== mediaId || !path
-    ) throw new ArrApiError('Radarr returned an invalid targeted movie record');
+      !record ||
+      typeof record !== 'object' ||
+      Array.isArray(record) ||
+      !Number.isInteger(record.id) ||
+      record.id !== mediaId ||
+      !path
+    ) {
+      throw new ArrApiError('Radarr returned an invalid targeted movie record');
+    }
     return { id: mediaId, path };
   }
 
@@ -268,9 +500,13 @@ export class ArrClient {
       `/filesystem/type?path=${encodeURIComponent(path)}`,
     );
     if (
-      !result || typeof result !== 'object' || Array.isArray(result) ||
+      !result ||
+      typeof result !== 'object' ||
+      Array.isArray(result) ||
       (result.type !== 'file' && result.type !== 'folder')
-    ) throw new ArrApiError('Radarr returned an invalid file visibility response');
+    ) {
+      throw new ArrApiError('Radarr returned an invalid file visibility response');
+    }
     return result.type;
   }
 
@@ -286,7 +522,10 @@ export class ArrClient {
     return records.flatMap((record) => {
       const absolutePath = record.path?.trim();
       const relativePath = record.relativePath?.trim() ||
-        absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
+        absolutePath
+          ?.split(/[\\/]+/)
+          .filter(Boolean)
+          .at(-1);
       if (!relativePath) return [];
       const size = Number(record.size);
       return [
@@ -301,7 +540,12 @@ export class ArrClient {
   async radarrManagedFile(mediaId: number): Promise<ArrManagedVersionFile | null> {
     if (this.type !== 'radarr') return null;
     const records = await this.request<
-      Array<{ id?: number; relativePath?: string; path?: string; size?: number }>
+      Array<{
+        id?: number;
+        relativePath?: string;
+        path?: string;
+        size?: number;
+      }>
     >(`/moviefile?movieId=${mediaId}`);
     if (!Array.isArray(records)) {
       throw new ArrApiError('Radarr returned an invalid managed-file response');
@@ -316,7 +560,10 @@ export class ArrClient {
     }
     const absolutePath = record.path?.trim() || null;
     const relativePath = record.relativePath?.trim() ||
-      absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
+      absolutePath
+        ?.split(/[\\/]+/)
+        .filter(Boolean)
+        .at(-1);
     if (!Number.isInteger(record.id) || record.id! <= 0 || !relativePath) {
       throw new ArrApiError('Radarr returned an invalid managed movie file');
     }
@@ -346,8 +593,9 @@ export class ArrClient {
     if (!Array.isArray(episodes)) {
       throw new ArrApiError('Sonarr returned an invalid episode response');
     }
-    const matchingEpisodes = episodes.filter((candidate) =>
-      candidate.seasonNumber === seasonNumber && candidate.episodeNumber === episodeNumber
+    const matchingEpisodes = episodes.filter(
+      (candidate) =>
+        candidate.seasonNumber === seasonNumber && candidate.episodeNumber === episodeNumber,
     );
     if (matchingEpisodes.length > 1) {
       throw new ArrApiError('Sonarr returned multiple records for the requested episode');
@@ -363,8 +611,9 @@ export class ArrClient {
     if (!Number.isInteger(episode.episodeFileId) || episode.episodeFileId! < 0) {
       throw new ArrApiError('Sonarr returned an invalid episode file identity');
     }
-    const shared = episodes.some((candidate) =>
-      candidate.id !== episode.id && candidate.episodeFileId === episode.episodeFileId
+    const shared = episodes.some(
+      (candidate) =>
+        candidate.id !== episode.id && candidate.episodeFileId === episode.episodeFileId,
     );
     const record = await this.request<{
       id?: number;
@@ -374,11 +623,11 @@ export class ArrClient {
     }>(`/episodefile/${episode.episodeFileId}`);
     const absolutePath = record.path?.trim() || null;
     const relativePath = record.relativePath?.trim() ||
-      absolutePath?.split(/[\\/]+/).filter(Boolean).at(-1);
-    if (
-      !Number.isInteger(record.id) || record.id !== episode.episodeFileId ||
-      !relativePath
-    ) {
+      absolutePath
+        ?.split(/[\\/]+/)
+        .filter(Boolean)
+        .at(-1);
+    if (!Number.isInteger(record.id) || record.id !== episode.episodeFileId || !relativePath) {
       throw new ArrApiError('Sonarr returned an invalid managed episode file');
     }
     const size = Number(record.size);
@@ -422,13 +671,17 @@ export class ArrClient {
     }
     if (!episode) throw new ArrApiError('Sonarr episode identity is required');
     const records = await this.request<
-      Array<{ id?: number; seasonNumber?: number; episodeNumber?: number; monitored?: boolean }>
-    >(
-      `/episode?seriesId=${mediaId}&seasonNumber=${episode.seasonNumber}`,
-    );
-    const record = records.find((candidate) =>
-      candidate.seasonNumber === episode.seasonNumber &&
-      candidate.episodeNumber === episode.episodeNumber
+      Array<{
+        id?: number;
+        seasonNumber?: number;
+        episodeNumber?: number;
+        monitored?: boolean;
+      }>
+    >(`/episode?seriesId=${mediaId}&seasonNumber=${episode.seasonNumber}`);
+    const record = records.find(
+      (candidate) =>
+        candidate.seasonNumber === episode.seasonNumber &&
+        candidate.episodeNumber === episode.episodeNumber,
     );
     return record && Number.isInteger(record.id)
       ? { id: record.id!, monitored: record.monitored === true }
@@ -456,10 +709,14 @@ export class ArrClient {
       throw new ArrApiError('Episode monitoring reads require Sonarr');
     }
     if (
-      !Number.isSafeInteger(identity.episodeId) || identity.episodeId <= 0 ||
-      !Number.isSafeInteger(identity.seriesId) || identity.seriesId <= 0 ||
-      !Number.isSafeInteger(identity.seasonNumber) || identity.seasonNumber < 0 ||
-      !Number.isSafeInteger(identity.episodeNumber) || identity.episodeNumber <= 0
+      !Number.isSafeInteger(identity.episodeId) ||
+      identity.episodeId <= 0 ||
+      !Number.isSafeInteger(identity.seriesId) ||
+      identity.seriesId <= 0 ||
+      !Number.isSafeInteger(identity.seasonNumber) ||
+      identity.seasonNumber < 0 ||
+      !Number.isSafeInteger(identity.episodeNumber) ||
+      identity.episodeNumber <= 0
     ) {
       throw new ArrApiError('Sonarr episode monitoring identity is invalid');
     }
@@ -471,8 +728,11 @@ export class ArrClient {
       monitored?: boolean;
     }>(`/episode/${identity.episodeId}`);
     if (
-      !record || typeof record !== 'object' || Array.isArray(record) ||
-      record.id !== identity.episodeId || record.seriesId !== identity.seriesId ||
+      !record ||
+      typeof record !== 'object' ||
+      Array.isArray(record) ||
+      record.id !== identity.episodeId ||
+      record.seriesId !== identity.seriesId ||
       record.seasonNumber !== identity.seasonNumber ||
       record.episodeNumber !== identity.episodeNumber ||
       typeof record.monitored !== 'boolean'
@@ -489,9 +749,12 @@ export class ArrClient {
       throw new ArrApiError('Movie monitoring reads require Radarr');
     }
     if (
-      !Number.isSafeInteger(identity.movieId) || identity.movieId <= 0 ||
-      !Number.isSafeInteger(identity.tmdbId) || identity.tmdbId <= 0 ||
-      typeof identity.path !== 'string' || identity.path.trim().length === 0 ||
+      !Number.isSafeInteger(identity.movieId) ||
+      identity.movieId <= 0 ||
+      !Number.isSafeInteger(identity.tmdbId) ||
+      identity.tmdbId <= 0 ||
+      typeof identity.path !== 'string' ||
+      identity.path.trim().length === 0 ||
       identity.path.trim() !== identity.path
     ) {
       throw new ArrApiError('Radarr movie monitoring identity is invalid');
@@ -505,19 +768,24 @@ export class ArrClient {
       }
     >(`/movie/${identity.movieId}`);
     if (
-      !record || typeof record !== 'object' || Array.isArray(record) ||
-      record.id !== identity.movieId || record.tmdbId !== identity.tmdbId ||
-      typeof record.path !== 'string' || record.path.trim() !== identity.path ||
+      !record ||
+      typeof record !== 'object' ||
+      Array.isArray(record) ||
+      record.id !== identity.movieId ||
+      record.tmdbId !== identity.tmdbId ||
+      typeof record.path !== 'string' ||
+      record.path.trim() !== identity.path ||
       typeof record.monitored !== 'boolean'
     ) {
       throw new ArrApiError('Radarr returned a conflicting or malformed targeted movie');
     }
-    return record as Record<string, unknown> & { id: number; monitored: boolean };
+    return record as Record<string, unknown> & {
+      id: number;
+      monitored: boolean;
+    };
   }
 
-  async radarrMovieMonitorTarget(
-    identity: RadarrMovieMonitorIdentity,
-  ): Promise<ArrMonitorTarget> {
+  async radarrMovieMonitorTarget(identity: RadarrMovieMonitorIdentity): Promise<ArrMonitorTarget> {
     const record = await this.radarrMovieMonitorResource(identity);
     return { id: identity.movieId, monitored: record.monitored };
   }
@@ -563,7 +831,7 @@ export class ArrClient {
     if (before.monitored === monitored) return false;
     let writeError: unknown;
     try {
-      await this.request<void>(`/movie/${identity.movieId}`, {
+      await this.request<void>(`/movie/${identity.movieId}?moveFiles=false`, {
         method: 'PUT',
         body: JSON.stringify({ ...before, monitored }),
         headers: { 'Content-Type': 'application/json' },
@@ -571,9 +839,9 @@ export class ArrClient {
     } catch (error) {
       writeError = error;
     }
-    let after: ArrMonitorTarget;
+    let after: Record<string, unknown> & { id: number; monitored: boolean };
     try {
-      after = await this.radarrMovieMonitorTarget(identity);
+      after = await this.radarrMovieMonitorResource(identity);
     } catch (error) {
       throw new ArrApiError(
         `Radarr movie monitoring read-back was inconclusive: ${
@@ -583,9 +851,337 @@ export class ArrClient {
         true,
       );
     }
-    if (after.monitored === monitored) return true;
+    if (after.monitored === monitored) {
+      assertOnlyRadarrMovieChanges(before, after, ['monitored']);
+      return true;
+    }
     if (writeError) throw writeError;
     throw new ArrApiError('Radarr movie monitoring update did not converge');
+  }
+
+  async radarrImmediateChildren(path: string): Promise<RadarrFilesystemEntry[]> {
+    if (this.type !== 'radarr') {
+      throw new ArrApiError('Filesystem enumeration requires Radarr');
+    }
+    const records = await this.boundedRequest<unknown>(
+      `/filesystem?path=${encodeURIComponent(path)}&includeFiles=true`,
+      RADARR_FILESYSTEM_MAX_BYTES,
+      'filesystem response',
+    );
+    if (!Array.isArray(records)) {
+      throw new ArrApiError('Radarr returned an unsupported filesystem response');
+    }
+    if (records.length > RADARR_FILESYSTEM_MAX_ENTRIES) {
+      throw new ArrApiError(
+        `Radarr filesystem response exceeded the ${RADARR_FILESYSTEM_MAX_ENTRIES}-entry safety limit`,
+      );
+    }
+    const requested = radarrPathComparison(path);
+    return records.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Radarr returned a malformed filesystem entry');
+      }
+      const record = raw as Record<string, unknown>;
+      const childPath = typeof record.path === 'string' ? record.path.trim() : '';
+      const name = typeof record.name === 'string' ? record.name.trim() : '';
+      const type = String(record.type ?? '').toLowerCase();
+      if (!childPath || !name || (type !== 'file' && type !== 'folder')) {
+        throw new ArrApiError('Radarr returned an incomplete filesystem entry');
+      }
+      const normalizedChild = childPath.trim().replaceAll('\\', '/').replace(/\/+$/, '');
+      const childParent = normalizedChild.slice(0, normalizedChild.lastIndexOf('/'));
+      const childName = normalizedChild.slice(normalizedChild.lastIndexOf('/') + 1);
+      if (
+        radarrPathComparison(childParent) !== requested ||
+        childName.toLocaleLowerCase('en-US') !== name.toLocaleLowerCase('en-US')
+      ) {
+        throw new ArrApiError('Radarr returned a non-immediate or conflicting filesystem entry');
+      }
+      return { path: childPath, name, type } as RadarrFilesystemEntry;
+    });
+  }
+
+  async radarrRootFolders(): Promise<RadarrRootFolder[]> {
+    if (this.type !== 'radarr') throw new ArrApiError('Root-folder reads require Radarr');
+    const records = await this.boundedRequest<unknown>(
+      '/rootfolder',
+      RADARR_FILESYSTEM_MAX_BYTES,
+      'root-folder response',
+    );
+    if (!Array.isArray(records) || records.length > 1_000) {
+      throw new ArrApiError('Radarr returned an unsupported root-folder response');
+    }
+    return records.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Radarr returned a malformed root-folder record');
+      }
+      const record = raw as Record<string, unknown>;
+      const id = Number(record.id);
+      const path = typeof record.path === 'string' ? record.path.trim() : '';
+      if (!Number.isSafeInteger(id) || id <= 0 || !path) {
+        throw new ArrApiError('Radarr returned an incomplete root-folder record');
+      }
+      return { id, path };
+    });
+  }
+
+  async radarrMovieCatalogPaths(): Promise<RadarrCatalogMoviePath[]> {
+    if (this.type !== 'radarr') throw new ArrApiError('Movie-catalog reads require Radarr');
+    const records = await this.boundedRequest<unknown>(
+      '/movie',
+      RADARR_CATALOG_MAX_BYTES,
+      'movie catalog',
+    );
+    if (!Array.isArray(records)) throw new ArrApiError('Radarr returned an invalid movie catalog');
+    if (records.length > RADARR_CATALOG_MAX_RECORDS) {
+      throw new ArrApiError(
+        `Radarr movie catalog exceeded the ${RADARR_CATALOG_MAX_RECORDS}-record safety limit`,
+      );
+    }
+    return records.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Radarr returned a malformed movie catalog record');
+      }
+      const record = raw as Record<string, unknown>;
+      const id = Number(record.id);
+      const tmdbId = Number(record.tmdbId);
+      const path = typeof record.path === 'string' ? record.path.trim() : '';
+      if (
+        !Number.isSafeInteger(id) ||
+        id <= 0 ||
+        !Number.isSafeInteger(tmdbId) ||
+        tmdbId <= 0 ||
+        !path
+      ) {
+        throw new ArrApiError('Radarr returned an incomplete movie catalog record');
+      }
+      return { id, tmdbId, path };
+    });
+  }
+
+  async radarrPathAdoptionCapabilities(): Promise<RadarrPathAdoptionCapabilities> {
+    if (this.type !== 'radarr') {
+      return {
+        available: false,
+        version: null,
+        minimumVersion: RADARR_PATH_ADOPTION_MIN_VERSION,
+        behaviorFingerprint: null,
+        behavior: null,
+        reason: 'Path adoption requires Radarr',
+      };
+    }
+    const status = await this.request<{ version?: string; appName?: string }>('/system/status');
+    const version = typeof status.version === 'string' ? status.version.trim() : null;
+    if (!version || !versionAtLeast(version, RADARR_PATH_ADOPTION_MIN_VERSION)) {
+      return {
+        available: false,
+        version,
+        minimumVersion: RADARR_PATH_ADOPTION_MIN_VERSION,
+        behaviorFingerprint: null,
+        behavior: null,
+        reason: version
+          ? `Radarr ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer is required for retained-path adoption; this instance reports ${version}`
+          : `Radarr version could not be verified; ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer is required for retained-path adoption`,
+      };
+    }
+    const [mediaManagement, metadata, notifications] = await Promise.all([
+      this.request<Record<string, unknown>>('/config/mediamanagement'),
+      this.boundedRequest<unknown[]>('/metadata', 2 * 1024 * 1024, 'metadata-consumer response'),
+      this.boundedRequest<unknown[]>(
+        '/notification',
+        2 * 1024 * 1024,
+        'notification-consumer response',
+      ),
+    ]);
+    if (!Array.isArray(metadata) || !Array.isArray(notifications)) {
+      throw new ArrApiError('Radarr returned unsupported behavior configuration');
+    }
+    const behavior = {
+      autoUnmonitorPreviouslyDownloadedMovies:
+        mediaManagement.autoUnmonitorPreviouslyDownloadedMovies === true,
+      deleteEmptyFolders: mediaManagement.deleteEmptyFolders === true,
+      fileDate: String(mediaManagement.fileDate ?? 'unknown'),
+      rescanAfterRefresh: String(mediaManagement.rescanAfterRefresh ?? 'unknown'),
+      metadataConsumerCount: metadata.filter(
+        (entry) =>
+          entry && typeof entry === 'object' && (entry as Record<string, unknown>).enable !== false,
+      ).length,
+      notificationConsumerCount: notifications.filter(
+        (entry) =>
+          entry && typeof entry === 'object' && (entry as Record<string, unknown>).enable !== false,
+      ).length,
+    };
+    return {
+      available: true,
+      version,
+      minimumVersion: RADARR_PATH_ADOPTION_MIN_VERSION,
+      behaviorFingerprint: await sha256({ version, behavior }),
+      behavior,
+    };
+  }
+
+  async radarrMovieActivity(
+    movieId: number,
+    allowedCommandIds: readonly number[] = [],
+  ): Promise<RadarrActivityEvidence> {
+    if (this.type !== 'radarr') throw new ArrApiError('Activity reads require Radarr');
+    const [queue, commands] = await Promise.all([
+      this.boundedRequest<unknown>(
+        `/queue?movieIds=${movieId}&includeMovie=true&pageSize=100`,
+        2 * 1024 * 1024,
+        'queue response',
+      ),
+      this.boundedRequest<unknown>(
+        '/command?includeCompleted=false',
+        2 * 1024 * 1024,
+        'command response',
+      ),
+    ]);
+    const queueRecords = queue &&
+        typeof queue === 'object' &&
+        !Array.isArray(queue) &&
+        Array.isArray((queue as Record<string, unknown>).records)
+      ? (queue as { records: unknown[] }).records
+      : null;
+    if (!queueRecords || !Array.isArray(commands)) {
+      throw new ArrApiError('Radarr returned unsupported queue or command evidence');
+    }
+    const blocking: RadarrActivityEvidence['blocking'] = [];
+    for (const raw of queueRecords) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const record = raw as Record<string, unknown>;
+      if (Number(record.movieId) !== movieId) continue;
+      const id = Number(record.id);
+      blocking.push({
+        source: 'queue',
+        id: Number.isSafeInteger(id) ? id : 0,
+        name: String(record.trackedDownloadStatus ?? record.status ?? 'download/import'),
+      });
+    }
+    const allowedCommands = new Set(allowedCommandIds);
+    const blockedNames = /(import|download|search|rescan|refresh|rename|move)/i;
+    for (const raw of commands) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const record = raw as Record<string, unknown>;
+      const body = record.body && typeof record.body === 'object' && !Array.isArray(record.body)
+        ? (record.body as Record<string, unknown>)
+        : {};
+      const commandMovieIds = [
+        record.movieId,
+        body.movieId,
+        ...(Array.isArray(record.movieIds) ? record.movieIds : []),
+        ...(Array.isArray(body.movieIds) ? body.movieIds : []),
+      ].map(Number).filter(Number.isSafeInteger);
+      const name = String(record.name ?? body.name ?? record.commandName ?? '');
+      const id = Number(record.id);
+      if (
+        !commandMovieIds.includes(movieId) ||
+        !blockedNames.test(name) ||
+        (Number.isSafeInteger(id) && allowedCommands.has(id))
+      ) {
+        continue;
+      }
+      blocking.push({
+        source: 'command',
+        id: Number.isSafeInteger(id) ? id : 0,
+        name,
+      });
+    }
+    return { quiet: blocking.length === 0, blocking };
+  }
+
+  async startRadarrRescan(movieId: number): Promise<{ id: number; status: string }> {
+    if (this.type !== 'radarr') throw new ArrApiError('Targeted movie rescans require Radarr');
+    const record = await this.request<{ id?: number; status?: string }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'RescanMovie', movieId }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!Number.isSafeInteger(record.id) || record.id! <= 0 || typeof record.status !== 'string') {
+      throw new ArrApiError('Radarr returned an invalid rescan command');
+    }
+    return { id: record.id!, status: record.status };
+  }
+
+  async radarrCommand(
+    commandId: number,
+  ): Promise<{ id: number; status: string; message: string | null }> {
+    if (this.type !== 'radarr') throw new ArrApiError('Command reads require Radarr');
+    const record = await this.request<{
+      id?: number;
+      status?: string;
+      message?: string | null;
+    }>(`/command/${commandId}`);
+    if (record.id !== commandId || typeof record.status !== 'string') {
+      throw new ArrApiError('Radarr returned a conflicting rescan command');
+    }
+    return {
+      id: commandId,
+      status: record.status,
+      message: typeof record.message === 'string' ? record.message : null,
+    };
+  }
+
+  async updateRadarrMoviePath(
+    identity: RadarrMovieMonitorIdentity,
+    targetPath: string,
+  ): Promise<RadarrMoviePathUpdateResult> {
+    const before = (await this.radarrMovieMonitorResource(
+      identity,
+    )) as RadarrMoviePathUpdateResult['before'];
+    if (
+      radarrPathComparison(before.path) === radarrPathComparison(targetPath) &&
+      !before.monitored
+    ) {
+      return { before, after: before, changed: false };
+    }
+    const intended = { ...before, path: targetPath, monitored: false };
+    let writeError: unknown;
+    try {
+      await this.request<void>(`/movie/${identity.movieId}?moveFiles=false`, {
+        method: 'PUT',
+        body: JSON.stringify(intended),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      writeError = error;
+    }
+    let after: RadarrMoviePathUpdateResult['after'];
+    try {
+      const raw = await this.request<
+        Record<string, unknown> & {
+          id?: number;
+          tmdbId?: number;
+          path?: string;
+          monitored?: boolean;
+        }
+      >(`/movie/${identity.movieId}`);
+      if (
+        raw.id !== identity.movieId ||
+        raw.tmdbId !== identity.tmdbId ||
+        typeof raw.path !== 'string' ||
+        typeof raw.monitored !== 'boolean'
+      ) {
+        throw new Error('conflicting targeted movie');
+      }
+      after = raw as RadarrMoviePathUpdateResult['after'];
+    } catch (error) {
+      throw new ArrApiError(
+        `Radarr movie path read-back was inconclusive: ${
+          error instanceof Error ? error.message : 'request failed'
+        }`,
+        undefined,
+        true,
+      );
+    }
+    const converged = radarrPathComparison(after.path) === radarrPathComparison(targetPath) &&
+      after.monitored === false;
+    if (!converged) {
+      if (writeError) throw writeError;
+      throw new ArrApiError('Radarr movie path update did not converge');
+    }
+    assertOnlyRadarrMovieChanges(before, after, ['path', 'monitored']);
+    return { before, after, changed: true };
   }
 
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {
@@ -598,7 +1194,11 @@ export class ArrClient {
         date?: string;
         eventType?: string;
         downloadId?: string;
-        data?: { droppedPath?: string; sourcePath?: string; importedPath?: string };
+        data?: {
+          droppedPath?: string;
+          sourcePath?: string;
+          importedPath?: string;
+        };
       }>
     >(path);
     const associations = new Map<string, ArrTorrentAssociation>();
@@ -644,7 +1244,8 @@ export class ArrClient {
         records?: Array<{ movieId?: number; seriesId?: number }>;
       }>(`/history?${params}`);
       if (
-        !Array.isArray(response.records) || !Number.isInteger(response.totalRecords) ||
+        !Array.isArray(response.records) ||
+        !Number.isInteger(response.totalRecords) ||
         response.totalRecords! < 0
       ) {
         throw new ArrApiError('Arr returned an invalid download history response');
@@ -668,5 +1269,77 @@ export class ArrClient {
       `/${resource}/${id}?deleteFiles=true&${exclusionParam}=${addImportExclusion}`,
       { method: 'DELETE' },
     );
+  }
+
+  async radarrImportExclusions(): Promise<RadarrImportExclusion[]> {
+    if (this.type !== 'radarr') throw new ArrApiError('Import exclusions require Radarr');
+    const records: unknown[] = [];
+    for (let page = 1; page <= 50; page++) {
+      const raw = await this.boundedRequest<unknown>(
+        `/exclusions/paged?page=${page}&pageSize=1000&sortKey=movieTitle&sortDirection=ascending`,
+        4 * 1024 * 1024,
+        'import exclusion response',
+      );
+      if (
+        !raw || typeof raw !== 'object' || !Array.isArray((raw as { records?: unknown }).records)
+      ) {
+        throw new ArrApiError('Radarr returned malformed import exclusions');
+      }
+      const response = raw as { records: unknown[]; totalRecords?: unknown };
+      records.push(...response.records);
+      const totalRecords = Number(response.totalRecords);
+      if (
+        response.records.length < 1000 ||
+        (Number.isSafeInteger(totalRecords) && totalRecords >= 0 && records.length >= totalRecords)
+      ) break;
+      if (page === 50) throw new ArrApiError('Radarr import exclusion read exceeded its bound');
+    }
+    return records.map((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new ArrApiError('Radarr returned malformed import exclusion evidence');
+      }
+      const record = value as Record<string, unknown>;
+      const id = Number(record.id);
+      const tmdbId = Number(record.tmdbId);
+      const movieYear = Number(record.movieYear);
+      if (
+        !Number.isSafeInteger(id) ||
+        id <= 0 ||
+        !Number.isSafeInteger(tmdbId) ||
+        tmdbId <= 0 ||
+        typeof record.movieTitle !== 'string' ||
+        record.movieTitle.trim().length === 0 ||
+        !Number.isSafeInteger(movieYear) ||
+        movieYear <= 0
+      ) {
+        throw new ArrApiError('Radarr returned malformed import exclusion evidence');
+      }
+      return { id, tmdbId, movieTitle: record.movieTitle, movieYear };
+    });
+  }
+
+  async createRadarrImportExclusion(input: {
+    tmdbId: number;
+    movieTitle: string;
+    movieYear: number;
+  }): Promise<RadarrImportExclusion> {
+    if (this.type !== 'radarr') throw new ArrApiError('Import exclusions require Radarr');
+    const record = await this.request<Record<string, unknown>>('/exclusions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const id = Number(record.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new ArrApiError('Radarr returned a malformed created import exclusion');
+    }
+    return { id, ...input };
+  }
+
+  async removeRadarrMovieWithoutFiles(movieId: number): Promise<void> {
+    if (this.type !== 'radarr') throw new ArrApiError('Movie removal requires Radarr');
+    await this.request<void>(`/movie/${movieId}?deleteFiles=false&addImportExclusion=true`, {
+      method: 'DELETE',
+    });
   }
 }

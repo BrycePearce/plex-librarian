@@ -161,6 +161,42 @@ export const arrPathMappings = sqliteTable(
   }),
 );
 
+// Explicit Plex-container -> Plex Librarian-container namespace translations.
+// These are scoped to one PMS and exact library section; equal-looking path text
+// never creates an implicit mapping. Revision changes invalidate destructive plans.
+export const plexPathMappings = sqliteTable(
+  'plex_path_mappings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, {
+      onDelete: 'cascade',
+    }),
+    libraryKey: text('library_key').notNull(),
+    plexPath: text('plex_path').notNull(),
+    localPath: text('local_path').notNull(),
+    caseSensitive: integer('case_sensitive', { mode: 'boolean' }).notNull().default(true),
+    revision: integer('revision').notNull().default(1),
+    validationPlexPath: text('validation_plex_path').notNull(),
+    validationLocalPath: text('validation_local_path').notNull(),
+    validationSize: integer('validation_size').notNull(),
+    validatedAt: integer('validated_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    libraryFk: foreignKey({
+      columns: [table.serverId, table.libraryKey],
+      foreignColumns: [libraries.serverId, libraries.key],
+    }).onDelete('cascade'),
+    libraryIdx: index('plex_path_mappings_library_idx').on(table.serverId, table.libraryKey),
+    uniquePrefix: uniqueIndex('plex_path_mappings_unique_prefix').on(
+      table.serverId,
+      table.libraryKey,
+      table.plexPath,
+    ),
+  }),
+);
+
 // Durable marker written after every Arr lookup succeeds but immediately before the
 // first destructive request. If the response is lost after Arr commits the deletion,
 // a later retry can distinguish "already absent after our attempt" from "never found".
@@ -890,6 +926,34 @@ export const mediaVersionReservations = sqliteTable(
       table.mediaKind,
       table.ratingKey,
     ),
+  }),
+);
+
+// Serializes every coordinated operation that can mutate one Radarr movie. A
+// management hold is the same identity reservation with a different state, so
+// recovery never creates an unlock/reacquire gap.
+export const radarrMovieReservations = sqliteTable(
+  'radarr_movie_reservations',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    arrInstanceId: integer('arr_instance_id').notNull().references(() => arrInstances.id, {
+      onDelete: 'cascade',
+    }),
+    movieId: integer('movie_id').notNull(),
+    operationId: text('operation_id').notNull().references(() => deletionOperations.id, {
+      onDelete: 'cascade',
+    }),
+    targetId: integer('target_id').notNull().references(() => deletionTargets.id, {
+      onDelete: 'cascade',
+    }),
+    planFingerprint: text('plan_fingerprint').notNull(),
+    state: text('state', { enum: ['reserved', 'management_hold'] }).notNull().default('reserved'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.arrInstanceId, table.movieId] }),
+    operationIdx: index('radarr_movie_reservations_operation_idx').on(table.operationId),
   }),
 );
 

@@ -29,6 +29,58 @@ interface DeletionOperationTargetBase {
   error: string | null;
   logicalSize: number | null;
   supersededReason: string | null;
+  resolutionState?: 'management_hold';
+  radarrPathAdoption?: {
+    mode: 'existing_path' | 'adopt_safe_path' | 'adopt_path_with_consent';
+    originalMoviePath: string;
+    targetMoviePath: string;
+    retainedPath: string;
+    originalMonitored: boolean;
+    userAuthorizedPathManagement: boolean;
+    adoptedMovieFile?: {
+      id: number;
+      path: string;
+      relativePath: string;
+      size: number;
+    };
+    transition?: {
+      monitoringProtectionAttemptedAt?: number;
+      monitoringProtectedAt?: number;
+      pathUpdateAttemptedAt?: number;
+      pathConfirmedAt?: number;
+      rescanAttemptedAt?: number;
+      rescanCommandId?: number;
+      rescanCommandStatus?: string;
+      adoptedAt?: number;
+      monitoringRestoredAt?: number;
+    };
+  };
+  radarrRemovalFallback?: {
+    mode: 'remove_from_radarr';
+    movieId: number;
+    tmdbId: number;
+    movieTitle: string;
+    movieYear: number;
+    selectedMediaId: number;
+    retainedMediaId: number;
+    selectedPlexPath: string;
+    managedPath: string;
+    retainedPlexPath: string;
+    retainedFileSize: number;
+    originalMonitored: boolean;
+    exclusionPreexisting?: boolean;
+    createdExclusionId?: number;
+    transition?: {
+      monitoringProtectionAttemptedAt?: number;
+      monitoringProtectedAt?: number;
+      exclusionCreationAttemptedAt?: number;
+      exclusionConfirmedAt?: number;
+      removalAttemptedAt?: number;
+      movieAbsenceConfirmedAt?: number;
+      plexDeletionAttemptedAt?: number;
+      retainedSurvivalConfirmedAt?: number;
+    };
+  };
 }
 
 export interface RadarrMovieRelocationGuidanceV1 {
@@ -79,7 +131,10 @@ export type RelocationSyncBarrier =
 type RelocationGuidanceApiState =
   | { relocationGuidanceState: 'none'; relocationGuidance?: never }
   | { relocationGuidanceState: 'invalid'; relocationGuidance?: never }
-  | { relocationGuidanceState: 'valid'; relocationGuidance: RelocationGuidance };
+  | {
+    relocationGuidanceState: 'valid';
+    relocationGuidance: RelocationGuidance;
+  };
 
 type RelocationBarrierApiState =
   | { relocationSyncBarrierState: 'none'; relocationSyncBarrier?: never }

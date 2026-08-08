@@ -8,6 +8,7 @@ import type {
   PlexHistoryEntry,
   PlexItem,
   PlexLibrary,
+  PlexLibraryLocationEvidence,
   PlexLocalAccount,
   PlexMediaPathPreview,
   PlexMediaStreamSummary,
@@ -417,11 +418,85 @@ export class PlexClient {
     throw lastError;
   }
 
+  private async getBounded<T>(path: string, maxBytes: number, description: string): Promise<T> {
+    const response = await this.fetchImpl(`${this.url}${path}`, {
+      headers: buildPlexHeaders(this.clientId, this.token),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      response.body?.cancel();
+      throw new Error(`Plex ${response.status}: ${path}`);
+    }
+    if (!response.body) throw new Error(`Plex returned an empty ${description}`);
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error(`Plex ${description} exceeded the ${maxBytes}-byte safety limit`);
+      }
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    } catch {
+      throw new Error(`Plex returned malformed ${description}`);
+    }
+  }
+
   async libraries(): Promise<PlexLibrary[]> {
     const data = await this.get<{ MediaContainer: { Directory?: PlexLibrary[] } }>(
       '/library/sections',
     );
     return data.MediaContainer.Directory ?? [];
+  }
+
+  async libraryLocations(libraryKey: string): Promise<PlexLibraryLocationEvidence> {
+    const data = await this.getBounded<{
+      MediaContainer?: { Directory?: PlexLibrary[]; size?: number };
+    }>(
+      `/library/sections/${encodeURIComponent(libraryKey)}`,
+      1024 * 1024,
+      'library-section response',
+    );
+    const directories = data.MediaContainer?.Directory;
+    if (!Array.isArray(directories) || directories.length !== 1) {
+      throw new Error('Plex returned an incomplete exact library-section response');
+    }
+    const section = directories[0]!;
+    if (String(section.key) !== libraryKey || !Array.isArray(section.Location)) {
+      throw new Error('Plex returned a conflicting library section or omitted its locations');
+    }
+    if (section.Location.length === 0 || section.Location.length > 100) {
+      throw new Error('Plex library location coverage is empty or exceeds the safety limit');
+    }
+    const locations = section.Location.map((location) => {
+      const id = Number(location.id);
+      const path = location.path?.trim() ?? '';
+      if (!Number.isSafeInteger(id) || id < 0 || !path) {
+        throw new Error('Plex returned an incomplete library location');
+      }
+      return { id, path };
+    });
+    const folded = new Set(
+      locations.map((location) =>
+        location.path.replaceAll('\\', '/').replace(/\/+$/, '').toLocaleLowerCase('en-US')
+      ),
+    );
+    if (folded.size !== locations.length) {
+      throw new Error('Plex returned case-colliding or duplicate library locations');
+    }
+    return { libraryKey, locations };
   }
 
   async hasPlexPass(): Promise<boolean> {
@@ -662,6 +737,37 @@ export class PlexClient {
         }];
       })
     );
+  }
+
+  async exactLibraryMediaPath(
+    libraryKey: string,
+    ratingKey: string,
+    mediaId: number,
+  ): Promise<{ path: string; size: number }> {
+    const data = await this.getBounded<{ MediaContainer?: { Metadata?: PlexRawMetadata[] } }>(
+      `/library/metadata/${encodeURIComponent(ratingKey)}`,
+      2 * 1024 * 1024,
+      'metadata path response',
+    );
+    const metadata = data.MediaContainer?.Metadata;
+    if (!Array.isArray(metadata) || metadata.length !== 1) {
+      throw new Error('Plex returned incomplete metadata for mapping validation');
+    }
+    const item = metadata[0]!;
+    if (String(item.librarySectionID ?? '') !== libraryKey) {
+      throw new Error('The validation item is not in the selected Plex library section');
+    }
+    const matches = (item.Media ?? []).filter((media) => media.id === mediaId);
+    if (matches.length !== 1) throw new Error('Plex did not return one exact validation Media');
+    const parts = matches[0]!.Part ?? [];
+    if (parts.length !== 1 || typeof parts[0]!.file !== 'string') {
+      throw new Error('The validation Media does not have one exact Plex Part path');
+    }
+    const size = Number(parts[0]!.size);
+    if (!Number.isSafeInteger(size) || size <= 0) {
+      throw new Error('The validation Plex Part does not have a known positive size');
+    }
+    return { path: parts[0]!.file!, size };
   }
 
   // Fetches full per-item Media/Part/Stream detail live from Plex, keyed by Media id.

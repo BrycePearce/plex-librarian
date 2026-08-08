@@ -1,11 +1,20 @@
-import { assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from '@std/assert';
 import { ArrClient } from '../../integrations/arr/client.ts';
 import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
+  confirmedAttemptedDownloadJobAbsences,
   DownloadedFileCleanupError,
   executeDownloadedFileCleanup,
+  persistResolvedCleanup,
   reconcileSharedDownloadCleanups,
+  rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
   selectDirectOrphanFiles,
@@ -14,6 +23,86 @@ import {
 import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './ownership.ts';
 
 const hash = 'a'.repeat(40);
+
+Deno.test('persisted cleanup confirms a lost-response download deletion from live absence', async () => {
+  const cleanup = {
+    downloadJobs: [
+      {
+        instanceKey: 'qb:1',
+        jobId: 'gone',
+        target: { client: { findJob: () => Promise.resolve(null) } },
+      },
+      {
+        instanceKey: 'qb:1',
+        jobId: 'present',
+        target: { client: { findJob: () => Promise.resolve({ id: 'present' }) } },
+      },
+    ],
+  } as unknown as Parameters<typeof confirmedAttemptedDownloadJobAbsences>[0];
+
+  assertEquals(
+    await confirmedAttemptedDownloadJobAbsences(
+      cleanup,
+      new Set(['qb:1:gone', 'qb:1:present']),
+    ),
+    new Set(['qb:1:gone']),
+  );
+});
+
+Deno.test('resolved cleanup survives Radarr-removal replay only with the exact client', () => {
+  const target = {
+    provider: 'qbittorrent',
+    instanceKey: 'qbittorrent:7',
+    instanceId: 7,
+    instanceName: 'Downloads',
+    client: {
+      findJob: () => Promise.resolve(null),
+      deleteJob: () => Promise.resolve(),
+    },
+  };
+  const cleanup = {
+    ratingKey: 'movie',
+    status: 'resolved',
+    downloadJobs: [{
+      provider: 'qbittorrent',
+      instanceKey: 'qbittorrent:7',
+      instanceName: 'Downloads',
+      jobId: hash,
+      name: 'Movie',
+      state: 'pausedUP',
+      size: 100,
+      uploaded: 0,
+      completedAt: null,
+      ratio: null,
+      seedingTime: 0,
+      contentPath: '/downloads/movie',
+      savePath: '/downloads',
+      trackerHost: null,
+      fileCount: 1,
+      files: [{ path: 'movie/file.mkv', size: 100 }],
+      filesTruncated: false,
+      manifestFiles: [{ path: 'movie/file.mkv', size: 100 }],
+      authorizedSourcePaths: ['/downloads/movie/file.mkv'],
+      target,
+    }],
+    arrStatus: 'resolved',
+    arrTargets: [],
+    sources: [],
+    orphanFiles: [],
+    retainedPaths: [],
+  } as unknown as ResolvedCleanupItem;
+
+  const persisted = persistResolvedCleanup(cleanup);
+  assert(!Object.hasOwn(persisted.downloadJobs[0]!, 'target'));
+  const replayed = rehydrateResolvedCleanup(persisted, [target]);
+  assert(replayed.downloadJobs[0]!.target === target);
+
+  assertThrows(
+    () => rehydrateResolvedCleanup(persisted, [{ ...target, instanceName: 'Replacement' }]),
+    Error,
+    'configured download client changed',
+  );
+});
 
 Deno.test('live torrent ownership requires an exact manifest path, not only the hash', () => {
   const torrent = {

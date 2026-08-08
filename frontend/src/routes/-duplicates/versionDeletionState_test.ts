@@ -2,7 +2,9 @@ import { assertEquals } from "@std/assert";
 import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 import {
   defaultVersionSelection,
+  radarrRemovalConsentState,
   versionArrDeletionActive,
+  versionArrDestinationCopy,
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
   versionDestinationOptionVisibility,
@@ -71,6 +73,7 @@ function preview(
     arrTargets: [],
     arrSelectionMatched: false,
     arrReassignStatus: "unavailable",
+    radarrPathAdoption: { mode: "unavailable", requiresConsent: false },
     cleanupConfigured: false,
     cleanupStatus: "unavailable",
     downloadJobs: [],
@@ -85,23 +88,17 @@ Deno.test("largest version is retained by default", () => {
 });
 
 Deno.test("all movie versions stay in the duplicate flow as whole-item deletion", () => {
-  assertEquals(
-    versionSelectionSemantics("movie", versions, new Set([1, 2])),
-    {
-      selectedVersions: versions,
-      wouldDeleteAll: true,
-      deleteWholeItem: true,
-      blocked: false,
-    },
-  );
+  assertEquals(versionSelectionSemantics("movie", versions, new Set([1, 2])), {
+    selectedVersions: versions,
+    wouldDeleteAll: true,
+    deleteWholeItem: true,
+    blocked: false,
+  });
   assertEquals(versionDeletionExecutionTarget("movie", true), "whole-item");
 });
 
 Deno.test("all episode versions remain blocked", () => {
-  assertEquals(
-    versionSelectionSemantics("episode", versions, new Set([1, 2])).blocked,
-    true,
-  );
+  assertEquals(versionSelectionSemantics("episode", versions, new Set([1, 2])).blocked, true);
   assertEquals(versionDeletionExecutionTarget("episode", true), "versions");
 });
 
@@ -118,18 +115,15 @@ Deno.test("unconfigured destinations stay hidden", () => {
 });
 
 Deno.test("configured unavailable Arr stays hidden when it has no safe action", () => {
-  assertEquals(
-    versionDestinationState(preview({ arrConfigured: true })),
-    {
-      arrVisible: false,
-      arrAvailable: false,
-      arrDeleteAvailable: false,
-      arrReassignAvailable: false,
-      arrSelectedByDefault: false,
-      cleanupAvailable: false,
-      cleanupVisible: false,
-    },
-  );
+  assertEquals(versionDestinationState(preview({ arrConfigured: true })), {
+    arrVisible: false,
+    arrAvailable: false,
+    arrDeleteAvailable: false,
+    arrReassignAvailable: false,
+    arrSelectedByDefault: false,
+    cleanupAvailable: false,
+    cleanupVisible: false,
+  });
 });
 
 Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsafe", () => {
@@ -155,13 +149,15 @@ Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsa
 
 Deno.test("reassignment keeps known destination controls visible", () => {
   assertEquals(
-    versionDestinationOptionVisibility(preview({
-      arrConfigured: true,
-      arrStatus: "resolved",
-      arrReassignStatus: "resolved",
-      cleanupConfigured: true,
-      cleanupStatus: "resolved",
-    })),
+    versionDestinationOptionVisibility(
+      preview({
+        arrConfigured: true,
+        arrStatus: "resolved",
+        arrReassignStatus: "resolved",
+        cleanupConfigured: true,
+        cleanupStatus: "resolved",
+      }),
+    ),
     { arr: true, cleanup: true },
   );
 });
@@ -171,34 +167,22 @@ Deno.test("an unsafe Arr match is not exposed as a deletion destination", () => 
     arrConfigured: true,
     arrSelectionMatched: true,
   });
-  assertEquals(
-    versionDestinationState(unsafePreview),
-    {
-      arrVisible: false,
-      arrAvailable: false,
-      arrDeleteAvailable: false,
-      arrReassignAvailable: false,
-      arrSelectedByDefault: false,
-      cleanupAvailable: false,
-      cleanupVisible: false,
-    },
-  );
-  assertEquals(
-    versionDeletionPresentation(unsafePreview, true, false).services,
-    ["plex"],
-  );
-  assertEquals(
-    versionArrDeletionActive(true, unsafePreview.arrStatus),
-    false,
-  );
+  assertEquals(versionDestinationState(unsafePreview), {
+    arrVisible: false,
+    arrAvailable: false,
+    arrDeleteAvailable: false,
+    arrReassignAvailable: false,
+    arrSelectedByDefault: false,
+    cleanupAvailable: false,
+    cleanupVisible: false,
+  });
+  assertEquals(versionDeletionPresentation(unsafePreview, true, false).services, ["plex"]);
+  assertEquals(versionArrDeletionActive(true, unsafePreview.arrStatus), false);
   assertEquals(versionPlexFallbackWarning(unsafePreview), true);
 });
 
 Deno.test("an unmanaged Plex copy needs no Arr fallback warning", () => {
-  assertEquals(
-    versionPlexFallbackWarning(preview({ arrConfigured: true })),
-    false,
-  );
+  assertEquals(versionPlexFallbackWarning(preview({ arrConfigured: true })), false);
 });
 
 Deno.test("advanced keeps Plex paths alongside selected deletion services", () => {
@@ -206,22 +190,26 @@ Deno.test("advanced keeps Plex paths alongside selected deletion services", () =
     preview({
       arrConfigured: true,
       arrStatus: "resolved",
-      arrTargets: [{
-        instanceName: "Radarr",
-        type: "radarr",
-        title: "Movie",
-        path: "/movies/Movie",
-        seasons: null,
-        mediaFiles: [],
-        extraFiles: [],
-      }],
+      arrTargets: [
+        {
+          instanceName: "Radarr",
+          type: "radarr",
+          title: "Movie",
+          path: "/movies/Movie",
+          seasons: null,
+          mediaFiles: [],
+          extraFiles: [],
+        },
+      ],
       cleanupConfigured: true,
       cleanupStatus: "resolved",
-      orphanFiles: [{
-        path: "/downloads/Movie.mkv",
-        size: 1_000,
-        method: "hardlink",
-      }],
+      orphanFiles: [
+        {
+          path: "/downloads/Movie.mkv",
+          size: 1_000,
+          method: "hardlink",
+        },
+      ],
     }),
     true,
     true,
@@ -234,20 +222,21 @@ Deno.test("advanced keeps Plex paths alongside selected deletion services", () =
 
 Deno.test("cleanup cannot appear unless its destination is configured", () => {
   assertEquals(
-    versionDestinationState(preview({ cleanupStatus: "resolved" }))
-      .cleanupVisible,
+    versionDestinationState(preview({ cleanupStatus: "resolved" })).cleanupVisible,
     false,
   );
 });
 
 Deno.test("verified cleanup makes the qBittorrent destination visible", () => {
   assertEquals(
-    versionDestinationState(preview({
-      arrConfigured: true,
-      arrStatus: "resolved",
-      cleanupConfigured: true,
-      cleanupStatus: "resolved",
-    })).cleanupVisible,
+    versionDestinationState(
+      preview({
+        arrConfigured: true,
+        arrStatus: "resolved",
+        cleanupConfigured: true,
+        cleanupStatus: "resolved",
+      }),
+    ).cleanupVisible,
     true,
   );
 });
@@ -256,15 +245,17 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
   const selected = versionDeletionPresentation(
     preview({
       arrConfigured: true,
-      versions: [{
-        mediaId: 1,
-        plexPaths: [],
-        arrPaths: [],
-        cleanupPaths: [],
-        status: "unavailable",
-        reason: "Plex did not report a path",
-        truncated: false,
-      }],
+      versions: [
+        {
+          mediaId: 1,
+          plexPaths: [],
+          arrPaths: [],
+          cleanupPaths: [],
+          status: "unavailable",
+          reason: "Plex did not report a path",
+          truncated: false,
+        },
+      ],
     }),
     true,
     false,
@@ -272,4 +263,51 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
   assertEquals(selected.services, ["plex"]);
   assertEquals(selected.showPlexPaths, true);
   assertEquals(selected.arrTargets, []);
+});
+
+Deno.test("Radarr removal consent blocks only the exact removal preview", () => {
+  const consentPreview = preview({
+    arrConfigured: true,
+    arrReassignStatus: "unavailable",
+    radarrPathAdoption: {
+      mode: "remove_from_radarr",
+      requiresConsent: true,
+      planFingerprint: "exact-plan",
+    },
+  });
+  assertEquals(radarrRemovalConsentState(consentPreview, false), {
+    visible: true,
+    blocked: true,
+  });
+  assertEquals(radarrRemovalConsentState(consentPreview, true), {
+    visible: true,
+    blocked: false,
+  });
+  assertEquals(
+    radarrRemovalConsentState(
+      preview({
+        radarrPathAdoption: {
+          mode: "adopt_safe_path",
+          requiresConsent: false,
+        },
+      }),
+      false,
+    ),
+    { visible: false, blocked: false },
+  );
+});
+
+Deno.test("Radarr removal destination copy does not describe reassignment", () => {
+  const removal = preview({
+    arrConfigured: true,
+    radarrPathAdoption: {
+      mode: "remove_from_radarr",
+      requiresConsent: true,
+    } as VersionDeletionPreviewResponse["radarrPathAdoption"],
+  });
+  assertEquals(versionArrDestinationCopy(removal, "Radarr", true), {
+    label: "Remove from Radarr",
+    info:
+      "Required to complete this deletion safely: Radarr will stop managing the movie without deleting either file.",
+  });
 });

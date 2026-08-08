@@ -9,6 +9,7 @@ import {
 import { finishRelocation, RelocationConflictError } from './relocation.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { triggerLibrarySync } from '../sync/manager.ts';
+import { ManagementHoldConflictError, resolveRadarrManagementHold } from './resolution.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -45,6 +46,21 @@ router.post('/:id/retry', async (c) => {
   }
   wakeDeletionWorker();
   return c.json(getDeletionOperation(c.req.param('id'), serverId));
+});
+
+router.post('/:id/resolve', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
+  try {
+    const resolution = await resolveRadarrManagementHold(c.req.param('id'), serverId);
+    if (resolution === 'resumed') wakeDeletionWorker();
+    return c.json({ resolution, operation: getDeletionOperation(c.req.param('id'), serverId) });
+  } catch (error) {
+    if (error instanceof ManagementHoldConflictError) {
+      return c.json({ error: error.message }, error.status);
+    }
+    throw error;
+  }
 });
 
 router.post('/:id/targets/:targetId/finish-relocation', async (c) => {
