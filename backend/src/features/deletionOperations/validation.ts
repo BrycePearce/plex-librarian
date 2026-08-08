@@ -11,7 +11,7 @@ import type {
   PersistedArrOwnership,
   PersistedArrReassignment,
   PersistedRadarrRemovalFallback,
-} from '../mediaDeletion/arrReassignmentPlanning.ts';
+} from '../mediaDeletion/arrReassignmentPlanning/types.ts';
 import type { PersistedResolvedCleanupItem } from '../mediaDeletion/cleanup.ts';
 import { isStaleQuickCleanupCandidate } from '../libraries/quickCleanup.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from './relocationModel.ts';

@@ -58,11 +58,13 @@ import {
 import { advancePhase, confirmReassignedRemoval } from './deletionState.ts';
 import { reconcilePlexTarget } from './plexReconciliation.ts';
 import {
-  assertRadarrRemovalPlexVersions,
   coordinateRadarrReassignment,
-  coordinateRadarrRemovalFallback,
   tryRecoverRadarrWithoutSelectedProjection,
-} from './radarrWorkflow.ts';
+} from './radarrReassignmentWorkflow.ts';
+import {
+  assertRadarrRemovalPlexVersions,
+  coordinateRadarrRemovalFallback,
+} from './radarrRemovalWorkflow.ts';
 import {
   DeletionConvergenceError,
   type DeletionWorkTarget,

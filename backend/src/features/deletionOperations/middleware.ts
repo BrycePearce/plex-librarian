@@ -18,7 +18,7 @@ import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
-import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning.ts';
+import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning/types.ts';
 
 const QUICK_CLEANUP_LIVE_READ_CONCURRENCY = 3;
 

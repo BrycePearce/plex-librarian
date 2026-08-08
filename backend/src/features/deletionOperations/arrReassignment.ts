@@ -7,7 +7,7 @@ import { mediaRatingKeyIsPlaying } from '../mediaDeletion/activePlayback.ts';
 import {
   type PersistedArrOwnership,
   type PersistedArrReassignment,
-} from '../mediaDeletion/arrReassignmentPlanning.ts';
+} from '../mediaDeletion/arrReassignmentPlanning/types.ts';
 import {
   buildVersionDeletionPlan,
   type VersionDeletionPlan,

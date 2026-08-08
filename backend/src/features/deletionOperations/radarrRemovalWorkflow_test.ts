@@ -1,9 +1,10 @@
+// Focused invariants for the destructive Radarr-removal fallback.
 import { assertThrows } from '@std/assert';
 import {
   assertRadarrRemovalActivityIsQuiet,
   assertRadarrRemovalPlexVersions,
   assertRecoverableRadarrRemovalMonitoringState,
-} from './radarrWorkflow.ts';
+} from './radarrRemovalWorkflow.ts';
 
 Deno.test('Radarr removal blocks cleanup when movie activity appears after removal', () => {
   assertRadarrRemovalActivityIsQuiet({ quiet: true }, 'after_removal');

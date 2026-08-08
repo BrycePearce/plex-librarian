@@ -15,20 +15,20 @@ import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
 import {
-  buildArrReassignmentPlan,
   type EligibleArrReassignment,
   type PersistedArrMappingIdentity,
   type PersistedArrOwnership,
   type PersistedArrReassignment,
   type PersistedRadarrRemovalFallback,
-} from './arrReassignmentPlanning.ts';
+} from './arrReassignmentPlanning/types.ts';
+import { buildArrReassignmentPlan } from './arrReassignmentPlanning.ts';
 
 export type {
   EligibleArrReassignment,
   PersistedArrMappingIdentity,
   PersistedArrOwnership,
   PersistedArrReassignment,
-} from './arrReassignmentPlanning.ts';
+} from './arrReassignmentPlanning/types.ts';
 
 export interface EligibleVersionArrTarget {
   target: ArrDeleteTarget;
