@@ -18,6 +18,7 @@ export function UsersFilters({
   onRiskChange,
   onSortChange,
   onOrderChange,
+  insightsUpdating,
 }: {
   filter: UsersActivityFilter;
   inactiveDays: number | undefined;
@@ -30,6 +31,7 @@ export function UsersFilters({
   onRiskChange: (risk: UsersRiskFilter) => void;
   onSortChange: (sort: UsersSortKey) => void;
   onOrderChange: (order: "asc" | "desc") => void;
+  insightsUpdating: boolean;
 }) {
   const [customActivityFilter, setCustomActivityFilter] = useState<
     UsersActivityFilter | null
@@ -121,6 +123,8 @@ export function UsersFilters({
           className="select select-bordered select-sm"
           value={risk}
           onChange={(e) => onRiskChange(e.target.value as UsersRiskFilter)}
+          disabled={insightsUpdating}
+          title={insightsUpdating ? "Available when the current sync finishes" : undefined}
         >
           <option value="all">Any risk</option>
           <option value="attention">Needs attention</option>
@@ -139,7 +143,9 @@ export function UsersFilters({
         >
           <option value="username">User</option>
           <option value="lastViewedAt">Last watched</option>
-          <option value="sharingRisk">Sharing risk</option>
+          <option value="sharingRisk" disabled={insightsUpdating}>
+            Sharing risk{insightsUpdating ? " (updating)" : ""}
+          </option>
         </select>
       </label>
       <label className="form-control gap-1">

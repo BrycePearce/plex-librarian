@@ -13,6 +13,7 @@ export function UserRow({
   onOpenRiskDetails,
   onOpenFollowThrough,
   onRemove,
+  insightsUpdating,
 }: {
   user: PlexUser;
   monitorStatus: MonitorStatus;
@@ -20,6 +21,7 @@ export function UserRow({
   onOpenRiskDetails: (user: PlexUser) => void;
   onOpenFollowThrough: (user: PlexUser) => void;
   onRemove: (user: PlexUser) => void;
+  insightsUpdating: boolean;
 }) {
   return (
     <tr className="group polished-row">
@@ -98,6 +100,7 @@ export function UserRow({
           assessment={user.sharingRisk}
           monitorStatus={monitorStatus}
           onOpen={() => onOpenRiskDetails(user)}
+          updating={insightsUpdating}
         />
       </td>
       {requestFollowThroughAvailable && (
@@ -105,6 +108,7 @@ export function UserRow({
           <RequestFollowThroughCell
             assessment={user.requestFollowThrough}
             onOpen={() => onOpenFollowThrough(user)}
+            updating={insightsUpdating}
           />
         </td>
       )}
@@ -129,11 +133,15 @@ function SharingRiskCell({
   assessment,
   monitorStatus,
   onOpen,
+  updating,
 }: {
   assessment: PlexUser["sharingRisk"];
   monitorStatus: MonitorStatus;
   onOpen: () => void;
+  updating: boolean;
 }) {
+  if (updating) return <UpdatingInsightCell label="Sharing risk" />;
+
   const label = assessment.riskLevel === "insufficient_data"
     ? assessment.observationCount > 0 ? "Limited data" : "Not enough data"
     : assessment.riskLevel === "review"
@@ -185,10 +193,14 @@ function SharingRiskCell({
 function RequestFollowThroughCell({
   assessment,
   onOpen,
+  updating,
 }: {
   assessment: PlexUser["requestFollowThrough"];
   onOpen: () => void;
+  updating: boolean;
 }) {
+  if (updating) return <UpdatingInsightCell label="Request follow-through" />;
+
   const { label, detail, badgeClass } = getRequestFollowThroughPresentation(assessment);
   return (
     <button
@@ -209,5 +221,17 @@ function RequestFollowThroughCell({
       </span>
       <ChevronRight className="size-4 shrink-0 text-base-content/30 transition-all group-hover/follow:translate-x-0.5 group-hover/follow:text-base-content/65" />
     </button>
+  );
+}
+
+function UpdatingInsightCell({ label }: { label: string }) {
+  return (
+    <div
+      className="flex min-h-12 min-w-48 items-center gap-3 px-3 py-1.5"
+      aria-label={`${label} is updating during sync`}
+    >
+      <span className="skeleton h-5 w-16 rounded-full" aria-hidden="true" />
+      <span className="text-xs font-medium text-info/75">Updating…</span>
+    </div>
   );
 }

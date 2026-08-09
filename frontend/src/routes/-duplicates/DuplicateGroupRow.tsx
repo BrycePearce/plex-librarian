@@ -10,9 +10,11 @@ import "../../components/dataSurfaces.css";
 export function DuplicateGroupRow({
   item,
   onReview,
+  disabled = false,
 }: {
   item: DuplicateGroup;
   onReview: () => void;
+  disabled?: boolean;
 }) {
   const reclaimable = reclaimableKilobytes(item.versions);
   const reclaimablePercent = reclaimable != null && item.combinedFileSize
@@ -42,17 +44,24 @@ export function DuplicateGroupRow({
 
   return (
     <tr
-      className={`duplicates-group-row duplicates-group-row-${comparison.kind} row-hover group polished-row cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary`}
-      onClick={onReview}
+      className={`duplicates-group-row duplicates-group-row-${comparison.kind} ${
+        disabled ? "duplicates-group-row-disabled" : "cursor-pointer"
+      } row-hover group polished-row focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary`}
+      onClick={() => {
+        if (!disabled) onReview();
+      }}
       onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
+        if (disabled || event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onReview();
         }
       }}
-      tabIndex={0}
-      aria-label={`Review duplicate versions for ${itemLabel}`}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled}
+      aria-label={disabled
+        ? `Duplicate versions for ${itemLabel}; review unavailable during sync`
+        : `Review duplicate versions for ${itemLabel}`}
     >
       <td>
         <div className="inline-flex items-center gap-3 max-w-full">

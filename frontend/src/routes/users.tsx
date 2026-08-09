@@ -1,6 +1,6 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, AlertTriangle, UserCheck, Users } from "lucide-react";
 import { api } from "../lib/api.ts";
 import type { PlexUser, UsersActivityFilter, UsersRiskFilter, UsersSortKey } from "../lib/api.ts";
@@ -22,6 +22,8 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { CollectionToolbar, PageHeader } from "../components/Workspace.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
+import { useSyncHistory } from "../lib/useLibrarySync.tsx";
+import { SyncDataNotice } from "../components/SyncDataNotice.tsx";
 
 const PAGE_SIZE = 100;
 const MAX_INACTIVITY_DAYS = 36_500;
@@ -99,6 +101,8 @@ function UsersPage() {
   };
   const navigate = Route.useNavigate();
   const qc = useQueryClient();
+  const { data: syncHistory, isLoading: isSyncStatusLoading } = useSyncHistory();
+  const isSyncing = syncHistory?.some((sync) => sync.status === "pending") ?? false;
 
   const [offset, setOffset] = useState(0);
 
@@ -119,11 +123,18 @@ function UsersPage() {
     setSort(sort);
   }
 
+  const usersQueryKey = queryKeys.users.list({ ...search, offset });
+  // Keep the last settled directory snapshot throughout a sync. Per-library completion
+  // invalidations otherwise expose progressively recomputed risk and follow-through
+  // assessments before the whole run has finished. A first visit during a sync may
+  // fetch once so the access directory is still useful; volatile cells are masked below.
+  const hasCachedSnapshot = qc.getQueryData(usersQueryKey) !== undefined;
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: queryKeys.users.list({ ...search, offset }),
+    queryKey: usersQueryKey,
     queryFn: () => api.users.list({ ...search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
-    refetchInterval: 30_000,
+    enabled: !isSyncing || !hasCachedSnapshot,
+    refetchInterval: isSyncing ? false : 30_000,
   });
 
   const [reviewUser, setReviewUser] = useState<PlexUser | null>(null);
@@ -135,6 +146,14 @@ function UsersPage() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const riskDialogRef = useRef<HTMLDialogElement>(null);
   const followThroughDialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (!isSyncing) return;
+    riskDialogRef.current?.close();
+    followThroughDialogRef.current?.close();
+    setRiskDetailsUser(null);
+    setFollowThroughUser(null);
+  }, [isSyncing]);
 
   const removeMutation = useMutation({
     mutationFn: (accountId: number) => api.users.remove(accountId),
@@ -210,12 +229,21 @@ function UsersPage() {
           onRiskChange={(risk) => updateSearch({ risk })}
           onSortChange={setSort}
           onOrderChange={(order) => updateSearch({ order })}
+          insightsUpdating={isSyncing}
         />
       </div>
 
-      {data && (
+      {isSyncing && (
+        <SyncDataNotice>
+          Sharing risk and request follow-through are hidden until the sync finishes. The
+          directory will refresh with the complete results automatically.
+        </SyncDataNotice>
+      )}
+
+      {data && !isSyncing && (
         <HistorySyncWarning
           historySyncedAt={data.historyComplete ? data.usersSyncedAt : null}
+          isSyncStatusLoading={isSyncStatusLoading}
           warningMessage={data.usersSyncedAt === null
             ? "The user roster hasn't synced yet — this list may be incomplete or stale. Run a sync to populate it."
             : (
@@ -336,6 +364,7 @@ function UsersPage() {
                     onOpenRiskDetails={openRiskDetails}
                     onOpenFollowThrough={openFollowThrough}
                     onRemove={openReview}
+                    insightsUpdating={isSyncing}
                   />
                 )
               )}

@@ -1,6 +1,6 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
 import { api } from "../lib/api.ts";
 import type { DuplicateGroup } from "../lib/api.ts";
@@ -24,6 +24,8 @@ import { formatKilobytes } from "../lib/format.ts";
 import { duplicatePageSummary } from "./-duplicates/duplicatePresentation.ts";
 import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
 import "./duplicates.css";
+import { useSyncHistory } from "../lib/useLibrarySync.tsx";
+import { SyncDataNotice } from "../components/SyncDataNotice.tsx";
 
 const PAGE_SIZE = 50;
 
@@ -59,6 +61,9 @@ function DuplicatesPage() {
   const { type, comparison, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
   const { trackDeletionOperation } = useDeletionOperationTracker();
+  const queryClient = useQueryClient();
+  const { data: syncHistory } = useSyncHistory();
+  const isSyncing = syncHistory?.some((sync) => sync.status === "pending") ?? false;
 
   const [offset, setOffset] = useState(0);
 
@@ -86,8 +91,13 @@ function DuplicatesPage() {
     });
   }
 
+  const duplicatesQueryKey = queryKeys.duplicates.list({ type, comparison, search, offset });
+  // Keep an already-rendered, settled snapshot from being replaced by intermediate
+  // version rows as individual libraries complete. A first visit may still fetch the
+  // directory, but review and deletion remain gated for the entire active sync.
+  const hasCachedSnapshot = queryClient.getQueryData(duplicatesQueryKey) !== undefined;
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: queryKeys.duplicates.list({ type, comparison, search, offset }),
+    queryKey: duplicatesQueryKey,
     queryFn: () =>
       api.duplicates.list({
         type,
@@ -95,12 +105,19 @@ function DuplicatesPage() {
         search,
         limit: PAGE_SIZE,
         offset,
-      }),
+    }),
     placeholderData: (prev) => prev,
+    enabled: !isSyncing || !hasCachedSnapshot,
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
   const versionDialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (!isSyncing) return;
+    versionDialogRef.current?.close();
+    setReviewItem(null);
+  }, [isSyncing]);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
   // uses the shared hook (same endpoint the stale page's bulk delete calls), the
@@ -168,6 +185,7 @@ function DuplicatesPage() {
       allowRadarrMovieRemoval?: boolean;
     },
   ) {
+    if (isSyncing) return;
     if (
       group.mediaType === "movie" &&
       versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) === "whole-item"
@@ -199,6 +217,7 @@ function DuplicatesPage() {
   }
 
   function openReview(item: DuplicateGroup) {
+    if (isSyncing) return;
     setReviewItem(item);
   }
 
@@ -224,9 +243,16 @@ function DuplicatesPage() {
               `${data.total.toLocaleString()} with multiple synced versions`
             )
             : <span className="skeleton inline-block h-3 w-40 align-middle" />}
-          actions={<QuickCleanupAction />}
+          actions={<QuickCleanupAction disabled={isSyncing} />}
         />
       </div>
+
+      {isSyncing && (
+        <SyncDataNotice>
+          Counts and version details may be incomplete while Plex syncs. Review and cleanup actions
+          are paused until the finished results load automatically.
+        </SyncDataNotice>
+      )}
 
       {isError
         ? (
@@ -353,6 +379,7 @@ function DuplicatesPage() {
                           key={item.mediaType === "movie" ? item.ratingKey : item.episodeRatingKey}
                           item={item}
                           onReview={() => openReview(item)}
+                          disabled={isSyncing}
                         />
                       ))}
                     </tbody>

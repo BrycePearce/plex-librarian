@@ -10,20 +10,24 @@ function UserSortTh({
   sort,
   order,
   onSort,
+  disabled = false,
 }: {
   label: string;
   field: UsersSortKey;
   sort: UsersSortKey;
   order: "asc" | "desc";
   onSort: (field: UsersSortKey) => void;
+  disabled?: boolean;
 }) {
   const active = sort === field;
   return (
     <th>
       <button
         type="button"
-        className="flex items-center gap-1 hover:text-primary transition-colors"
+        className="flex items-center gap-1 transition-colors enabled:hover:text-primary disabled:cursor-default disabled:opacity-50"
         onClick={() => onSort(field)}
+        disabled={disabled}
+        title={disabled ? "Available when the current sync finishes" : undefined}
       >
         {label}
         {active
@@ -50,6 +54,7 @@ export function UsersTable({
   onOpenRiskDetails,
   onOpenFollowThrough,
   onRemove,
+  insightsUpdating,
 }: {
   users: PlexUser[];
   sort: UsersSortKey;
@@ -60,6 +65,7 @@ export function UsersTable({
   onOpenRiskDetails: (user: PlexUser) => void;
   onOpenFollowThrough: (user: PlexUser) => void;
   onRemove: (user: PlexUser) => void;
+  insightsUpdating: boolean;
 }) {
   return (
     <DataSurface className="overflow-x-auto">
@@ -73,6 +79,7 @@ export function UsersTable({
               sort={sort}
               order={order}
               onSort={onSort}
+              disabled={insightsUpdating}
             />
             <UserSortTh
               label="Sharing risk"
@@ -97,6 +104,7 @@ export function UsersTable({
               onOpenRiskDetails={onOpenRiskDetails}
               onOpenFollowThrough={onOpenFollowThrough}
               onRemove={onRemove}
+              insightsUpdating={insightsUpdating}
             />
           ))}
         </tbody>

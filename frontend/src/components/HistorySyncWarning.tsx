@@ -1,13 +1,13 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
+import { SyncDataNotice } from "./SyncDataNotice.tsx";
 import "./HistorySyncWarning.css";
 
-// Callers that track a live per-library sync signal (`isSyncing`) get a softer "in
-// progress" info variant while a sync is actually running, only falling through to the
-// scarier warning variant once it isn't (or once `isSyncStatusLoading` resolves, to
-// avoid flashing the warning for one frame before sync status is known). Callers with no
-// such signal (both omitted) just get the unconditional warning — same as before this was
-// a shared component.
+// Callers that track a live per-library sync signal (`isSyncing`) use the same shared
+// in-progress notice as Users and Duplicates, only falling through to the warning variant
+// once syncing has settled (or once `isSyncStatusLoading` resolves, to avoid flashing the
+// warning for one frame before sync status is known). Callers with no such signal keep the
+// unconditional warning behavior.
 export function HistorySyncWarning({
   historySyncedAt,
   isSyncing,
@@ -24,12 +24,7 @@ export function HistorySyncWarning({
   if (historySyncedAt !== null) return null;
 
   if (isSyncing && syncingMessage) {
-    return (
-      <div className="alert alert-info alert-soft py-2 text-sm banner-beam banner-beam-info">
-        <RefreshCw className="w-4 h-4 animate-spin" />
-        <span>{syncingMessage}</span>
-      </div>
-    );
+    return <SyncDataNotice>{syncingMessage}</SyncDataNotice>;
   }
 
   if (isSyncStatusLoading) return null;

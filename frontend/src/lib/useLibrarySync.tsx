@@ -158,28 +158,44 @@ export function useLibrarySync(libraryKey: string) {
   useEffect(() => {
     if (attached === null) return;
     if (!isThisLibraryDone && syncError === null) return;
+    const completedSync = attached;
+    let cancelled = false;
+
     debouncedInvalidateLibraries(qc);
-    // Roster reconciliation runs before every sync, and each completed library history
-    // walk can advance users.lastViewedAt, so refresh the Users page as well.
-    void qc.invalidateQueries({ queryKey: queryKeys.users.all });
-    // Not debounced — this key is scoped to this one library, so there's nothing for
-    // it to coalesce with, and this is likely the page the user is actually watching.
-    void qc.invalidateQueries({ queryKey: queryKeys.stale.library(libraryKey) });
-    void qc.invalidateQueries({
-      queryKey: queryKeys.staleQuickCleanup.library(libraryKey),
-    });
+    // Keep `attached` alive until visible, library-scoped queries finish refreshing.
+    // SSE completion arrives before those requests can return; detaching immediately
+    // creates a render where cached historySyncedAt is still null but isSyncing is false,
+    // which briefly flashes the incomplete-history warning after a successful sync.
+    const refreshVisibleData = Promise.allSettled([
+      // Roster reconciliation runs before every sync, and each completed library history
+      // walk can advance users.lastViewedAt, so refresh the Users page as well.
+      qc.invalidateQueries({ queryKey: queryKeys.users.all }),
+      // Not debounced — these keys are scoped to this one library, so there's nothing
+      // for them to coalesce with, and this is likely the page the user is watching.
+      qc.invalidateQueries({ queryKey: queryKeys.stale.library(libraryKey) }),
+      qc.invalidateQueries({
+        queryKey: queryKeys.staleQuickCleanup.library(libraryKey),
+      }),
+    ]);
     // A global run's own history-list entry doesn't flip to 'success' until every
     // library finishes, so only invalidate it once the whole thing is actually over.
     // The backend logs its sync.completed/sync.failed activity event on that same
     // whole-run boundary, so the events feed is invalidated on the same condition.
-    if (attached.scope !== "global" || isDone || syncError !== null) {
+    if (completedSync.scope !== "global" || isDone || syncError !== null) {
       // Refresh both the history feed and the latest-success value used by the
       // automatic-sync preview.
       debouncedInvalidateSyncQueries(qc);
       debouncedInvalidateEvents(qc);
     }
-    handledSyncId.current = attached.id;
-    setAttached(null);
+    handledSyncId.current = completedSync.id;
+    void refreshVisibleData.then(() => {
+      if (cancelled) return;
+      setAttached((current) => current?.id === completedSync.id ? null : current);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [isThisLibraryDone, isDone, syncError, attached, libraryKey, qc]);
 
   const mutation = useMutation({
@@ -190,7 +206,10 @@ export function useLibrarySync(libraryKey: string) {
     },
   });
 
-  const isSyncing = (attached !== null && !isThisLibraryDone) ||
+  // `attached` intentionally stays non-null during the completion cache refresh above.
+  // Treat that handoff as part of syncing so consumers never render an intermediate
+  // warning/error state from the previous cached response.
+  const isSyncing = attached !== null ||
     mutation.isPending ||
     pendingFromHistory !== undefined;
 

@@ -120,6 +120,23 @@
   --comparison-color: var(--color-accent);
 }
 
+.duplicates-group-row-disabled {
+  cursor: default;
+}
+
+.duplicates-group-row-disabled > td {
+  opacity: 0.68;
+}
+
+.duplicates-group-row-disabled .duplicates-version-summary {
+  cursor: help;
+}
+
+.duplicates-group-row-disabled.polished-row:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
 .duplicates-group-row-same-profile {
   --comparison-color: var(--color-success);
 }
