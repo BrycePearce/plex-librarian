@@ -1,6 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle, Copy, History, RotateCcw, Trash2, UserX } from "lucide-react";
+import { useRef, useState } from "react";
+import {
+  AlertCircle,
+  CheckCircle,
+  Copy,
+  History,
+  RotateCcw,
+  Trash2,
+  UserX,
+  XCircle,
+} from "lucide-react";
 import { api } from "../lib/api.ts";
 import type { ActivityEvent, EventType } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
@@ -10,6 +20,8 @@ import { EmptyState } from "../components/EmptyState.tsx";
 import "../components/dataSurfaces.css";
 import { requireAuth } from "../lib/requireAuth.ts";
 import { DataSurface, PageHeader } from "../components/Workspace.tsx";
+import { deletionRecoverySummary } from "../features/deletionOperations/recoveryGuidance.ts";
+import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRecoveryDialog.tsx";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -20,6 +32,8 @@ const PAGE_SIZE = 30;
 
 function ActivityPage() {
   const queryClient = useQueryClient();
+  const dismissDialogRef = useRef<HTMLDialogElement>(null);
+  const [dismissTarget, setDismissTarget] = useState<{ id: string; title: string } | null>(null);
   const {
     data,
     isLoading,
@@ -48,11 +62,19 @@ function ActivityPage() {
   const attention = useQuery({
     queryKey: queryKeys.deletionOperations.list(attentionParams),
     queryFn: () => api.deletionOperations.list(attentionParams),
+    refetchInterval: (query) => (query.state.data?.total ?? 0) > 0 ? 5_000 : false,
   });
   const retry = useMutation({
-    mutationFn: ({ id, outcome }: { id: string; outcome: "needs_attention" | "warning" }) =>
-      api.deletionOperations.retry(id, outcome),
-    onSuccess: (_operation, { id }) => {
+    mutationFn: (id: string) => api.deletionOperations.retry(id),
+    onSuccess: (_operation, id) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.lists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.detail(id) });
+    },
+  });
+  const dismiss = useMutation({
+    mutationFn: (id: string) => api.deletionOperations.dismiss(id),
+    onSuccess: (_operation, id) => {
+      dismissDialogRef.current?.close();
       void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.lists });
       void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.detail(id) });
     },
@@ -92,13 +114,18 @@ function ActivityPage() {
               {attention.data.operations.map((operation) => (
                 <div key={operation.id} className="px-4 py-4 space-y-2">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 max-w-2xl">
                       <p className="font-medium">
                         {operation.titles.join(", ") ||
                           `${operation.targetCount} deletion target(s)`}
                       </p>
                       <p className="text-sm text-error mt-1">
                         {operation.failureReasons.join(" · ") || "Deletion needs attention"}
+                      </p>
+                      <p className="text-xs text-base-content/60 mt-2">
+                        <span className="font-semibold text-base-content/75">Recommended:</span>
+                        {" "}
+                        {deletionRecoverySummary(operation.failureReasons, operation.status)}
                       </p>
                     </div>
                     <div className="flex gap-2 shrink-0">
@@ -113,27 +140,58 @@ function ActivityPage() {
                         <button
                           type="button"
                           className="btn btn-primary btn-sm"
-                          disabled={retry.isPending && retry.variables?.id === operation.id}
-                          onClick={() =>
-                            retry.mutate({
-                              id: operation.id,
-                              outcome: operation.status === "completed_with_warning"
-                                ? "warning"
-                                : "needs_attention",
-                            })}
+                          disabled={retry.isPending && retry.variables === operation.id}
+                          onClick={() => retry.mutate(operation.id)}
                         >
                           <RotateCcw className="size-4" />
-                          Retry
+                          Recheck
+                        </button>
+                      )}
+                      {operation.retryable && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={dismiss.isPending && dismiss.variables === operation.id}
+                          onClick={() => {
+                            dismiss.reset();
+                            setDismissTarget({
+                              id: operation.id,
+                              title: operation.titles.join(", ") || "Deletion problem",
+                            });
+                            queueMicrotask(() => dismissDialogRef.current?.showModal());
+                          }}
+                        >
+                          <XCircle className="size-4" />
+                          Dismiss
                         </button>
                       )}
                     </div>
                   </div>
+                  {retry.isError && retry.variables === operation.id && (
+                    <p className="text-sm text-error" role="alert">
+                      {retry.error.message}
+                    </p>
+                  )}
                 </div>
               ))}
             </DataSurface>
           )}
         </section>
       )}
+
+      <DismissRecoveryDialog
+        dialogRef={dismissDialogRef}
+        title={dismissTarget?.title ?? "Deletion problem"}
+        pending={dismiss.isPending}
+        error={dismiss.error}
+        onConfirm={() => dismissTarget && dismiss.mutate(dismissTarget.id)}
+        onClose={() => {
+          if (dismiss.isPending) return;
+          if (dismissDialogRef.current?.open) dismissDialogRef.current.close();
+          dismiss.reset();
+          setDismissTarget(null);
+        }}
+      />
 
       {isLoading && <ActivityListSkeleton />}
 

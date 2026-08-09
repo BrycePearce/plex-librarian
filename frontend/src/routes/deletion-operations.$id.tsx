@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
 import { AlertTriangle, CheckCircle2, Clock3, RotateCcw, XCircle } from "lucide-react";
 import { api } from "../lib/api.ts";
 import { formatKilobytes } from "../lib/format.ts";
@@ -7,6 +8,8 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { RelocationWorkflowCard } from "../features/deletionOperations/RelocationWorkflowCard.tsx";
+import { deletionRecoveryGuidance } from "../features/deletionOperations/recoveryGuidance.ts";
+import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRecoveryDialog.tsx";
 import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
@@ -23,6 +26,7 @@ export const Route = createFileRoute("/deletion-operations/$id")({
 function DeletionOperationPage() {
   const { id } = Route.useParams();
   const qc = useQueryClient();
+  const dismissDialogRef = useRef<HTMLDialogElement>(null);
   const queryKey = queryKeys.deletionOperations.detail(id);
   const query = useQuery({
     queryKey,
@@ -35,6 +39,16 @@ function DeletionOperationPage() {
       ) {
         return 1_000;
       }
+      if (
+        state.state.data?.targets.some(
+          (target) =>
+            target.phase === "plex_reconciliation" &&
+            (target.status === "needs_attention" ||
+              target.status === "completed_with_warning"),
+        )
+      ) {
+        return 5_000;
+      }
       return deletionOperationPollInterval(state.state.data?.status, state.state.data?.nextRetryAt);
     },
   });
@@ -43,9 +57,16 @@ function DeletionOperationPage() {
     onSuccess: (data) => qc.setQueryData(queryKey, data),
   });
   const retry = useMutation({
-    mutationFn: (outcome: "needs_attention" | "warning") =>
-      api.deletionOperations.retry(id, outcome),
+    mutationFn: () => api.deletionOperations.retry(id),
     onSuccess: (data) => qc.setQueryData(queryKey, data),
+  });
+  const dismiss = useMutation({
+    mutationFn: () => api.deletionOperations.dismiss(id),
+    onSuccess: (data) => {
+      dismissDialogRef.current?.close();
+      qc.setQueryData(queryKey, data);
+      void qc.invalidateQueries({ queryKey: queryKeys.deletionOperations.lists });
+    },
   });
   const resolveHold = useMutation({
     mutationFn: () => api.deletionOperations.resolve(id),
@@ -72,13 +93,20 @@ function DeletionOperationPage() {
     operation.targets.find(
       (target) => target.status === "waiting_retry" || target.status === "queued",
     );
+  const ordinaryTargets = operation.targets.filter(
+    (target) => target.resolutionState !== "management_hold",
+  );
   const retryableFailedCount = retryableRelocationSafeTargetCount(
-    operation.targets.filter((target) => target.resolutionState !== "management_hold"),
+    ordinaryTargets,
     "needs_attention",
   );
   const retryableWarningCount = retryableRelocationSafeTargetCount(
-    operation.targets,
+    ordinaryTargets,
     "completed_with_warning",
+  );
+  const retryableCount = retryableFailedCount + retryableWarningCount;
+  const manuallyDismissed = operation.targets.some((target) =>
+    target.warning?.startsWith("Dismissed after manual intervention")
   );
 
   return (
@@ -89,7 +117,10 @@ function DeletionOperationPage() {
             Deletion operation
           </p>
           <h1 className="text-3xl font-semibold mt-1">
-            {operation.status === "completed_with_warning" && operation.removalConfirmedCount === 0
+            {manuallyDismissed
+              ? "Problem dismissed after manual intervention"
+              : operation.status === "completed_with_warning" &&
+                  operation.removalConfirmedCount === 0
               ? "Arr removal completed; Plex removal was not confirmed"
               : deletionOperationTitle(operation.status)}
           </h1>
@@ -177,32 +208,37 @@ function DeletionOperationPage() {
                 Cancel queued targets
               </button>
             )}
-            {retryableFailedCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+            {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 disabled={retry.isPending}
-                onClick={() => retry.mutate("needs_attention")}
+                onClick={() => retry.mutate()}
               >
                 <RotateCcw className="size-4" />
-                Retry failed targets
+                Recheck
               </button>
             )}
-            {retryableWarningCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+            {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
-                className="btn btn-warning btn-sm"
-                disabled={retry.isPending}
-                onClick={() => retry.mutate("warning")}
+                className="btn btn-ghost btn-sm"
+                disabled={dismiss.isPending}
+                onClick={() => {
+                  dismiss.reset();
+                  dismissDialogRef.current?.showModal();
+                }}
               >
-                <RotateCcw className="size-4" />
-                Retry Plex cleanup
+                <XCircle className="size-4" />
+                Dismiss unresolved
               </button>
             )}
             <Link to="/dashboard" className="btn btn-ghost btn-sm">
               Back to dashboard
             </Link>
           </div>
+          {retry.isError && <p className="text-sm text-error" role="alert">{retry.error.message}
+          </p>}
         </div>
       </section>
 
@@ -254,6 +290,7 @@ function DeletionOperationPage() {
                 {target.supersededReason && (
                   <p className="text-xs text-base-content/55 mt-1">{target.supersededReason}</p>
                 )}
+                <RecoveryAdvice target={target} />
                 {target.resolutionState === "management_hold" && (
                   <div className="alert alert-warning mt-3 block text-xs">
                     <p className="font-semibold">Radarr management hold</p>
@@ -347,6 +384,43 @@ function DeletionOperationPage() {
           onRetry={() => resolveHold.mutate()}
         />
       )}
+      <DismissRecoveryDialog
+        dialogRef={dismissDialogRef}
+        title={operation.targets.filter((target) =>
+          target.status === "needs_attention" ||
+          (target.status === "completed_with_warning" && target.phase !== "finalizing")
+        ).map((target) => target.title).join(", ") || "Unresolved deletion targets"}
+        pending={dismiss.isPending}
+        error={dismiss.error}
+        onConfirm={() => dismiss.mutate()}
+        onClose={() => {
+          if (dismiss.isPending) return;
+          if (dismissDialogRef.current?.open) dismissDialogRef.current.close();
+          dismiss.reset();
+        }}
+      />
+    </div>
+  );
+}
+
+function RecoveryAdvice({
+  target,
+}: {
+  target: import("@plex-librarian/shared/types.ts").DeletionOperationTarget;
+}) {
+  if (
+    target.status !== "needs_attention" &&
+    !(target.status === "completed_with_warning" && target.phase !== "finalizing")
+  ) {
+    return null;
+  }
+  const recovery = deletionRecoveryGuidance(target);
+  return (
+    <div className="mt-3 rounded-lg border border-info/30 bg-info/10 p-3 text-xs">
+      <p className="font-semibold">Recommended: {recovery.title}</p>
+      <ol className="mt-2 list-decimal space-y-1 pl-4">
+        {recovery.steps.map((step) => <li key={step}>{step}</li>)}
+      </ol>
     </div>
   );
 }

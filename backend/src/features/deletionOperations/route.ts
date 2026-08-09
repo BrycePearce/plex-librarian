@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import {
   cancelDeletionOperation,
+  dismissDeletionOperation,
   getDeletionOperation,
   listDeletionOperations,
   retryDeletionOperation,
@@ -81,9 +82,9 @@ router.post('/:id/cancel', (c) => {
 router.post('/:id/retry', async (c) => {
   const serverId = c.get('activeServerId');
   const body = await c.req.json().catch(() => ({})) as { outcome?: unknown };
-  const outcome = body.outcome ?? 'needs_attention';
-  if (outcome !== 'needs_attention' && outcome !== 'warning') {
-    return c.json({ error: 'outcome must be needs_attention or warning' }, 400);
+  const outcome = body.outcome ?? 'all';
+  if (outcome !== 'needs_attention' && outcome !== 'warning' && outcome !== 'all') {
+    return c.json({ error: 'outcome must be needs_attention, warning, or all' }, 400);
   }
   if (serverId === null) return c.json({ error: 'operation not found' }, 404);
   if (!getDeletionOperation(c.req.param('id'), serverId)) {
@@ -93,6 +94,21 @@ router.post('/:id/retry', async (c) => {
     return c.json({ error: 'no matching targets can be retried' }, 409);
   }
   wakeDeletionWorker();
+  return c.json(getDeletionOperation(c.req.param('id'), serverId));
+});
+
+router.post('/:id/dismiss', async (c) => {
+  const serverId = c.get('activeServerId');
+  const body = await c.req.json().catch(() => ({})) as { acknowledge?: unknown };
+  if (body.acknowledge !== true) {
+    return c.json({ error: 'acknowledge must be true' }, 400);
+  }
+  if (serverId === null || !getDeletionOperation(c.req.param('id'), serverId)) {
+    return c.json({ error: 'operation not found' }, 404);
+  }
+  if (!dismissDeletionOperation(c.req.param('id'), serverId)) {
+    return c.json({ error: 'no matching targets can be dismissed' }, 409);
+  }
   return c.json(getDeletionOperation(c.req.param('id'), serverId));
 });
 

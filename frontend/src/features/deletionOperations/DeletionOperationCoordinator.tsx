@@ -10,6 +10,7 @@ import { queryKeys } from "../../lib/queryKeys.ts";
 import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
+  retryableRelocationSafeTargetCount,
 } from "../../routes/-deletionOperationState.ts";
 
 interface TrackedDeletion {
@@ -94,14 +95,24 @@ function DeletionOperationToast({
     queryKey: queryKeys.deletionOperations.detail(operation.id),
     queryFn: () => api.deletionOperations.get(operation.id),
     refetchInterval: (state) => {
+      if (
+        state.state.data?.targets.some(
+          (target) =>
+            target.phase === "plex_reconciliation" &&
+            (target.status === "needs_attention" ||
+              target.status === "completed_with_warning"),
+        )
+      ) {
+        return 5_000;
+      }
       const status = state.state.data?.status;
       return status ? deletionOperationPollInterval(status, state.state.data?.nextRetryAt) : 2_000;
     },
   });
   const data = query.data;
   const active = !data || activeDeletionStatuses.has(data.status);
-  const retryWarning = useMutation({
-    mutationFn: () => api.deletionOperations.retry(operation.id, "warning"),
+  const recheck = useMutation({
+    mutationFn: () => api.deletionOperations.retry(operation.id),
     onSuccess: (updated) => {
       qc.setQueryData(queryKeys.deletionOperations.detail(operation.id), updated);
     },
@@ -138,6 +149,11 @@ function DeletionOperationToast({
   const needsAttention = data?.status === "needs_attention";
   const completed = data?.status === "completed";
   const warning = data?.status === "completed_with_warning";
+  const ordinaryTargets = data?.targets.filter(
+    (target) => target.resolutionState !== "management_hold",
+  ) ?? [];
+  const recheckable = retryableRelocationSafeTargetCount(ordinaryTargets, "needs_attention") +
+      retryableRelocationSafeTargetCount(ordinaryTargets, "completed_with_warning") > 0;
 
   return (
     <motion.div
@@ -199,15 +215,18 @@ function DeletionOperationToast({
               ? `${data.removalConfirmedCount} removed · ${data.failedCount} failed`
               : "Starting operation"}
           </p>
-          {warning && (
+          {(warning || needsAttention) && recheckable && (
             <button
               type="button"
               className="btn btn-warning btn-xs mt-2"
-              disabled={retryWarning.isPending}
-              onClick={() => retryWarning.mutate()}
+              disabled={recheck.isPending}
+              onClick={() => recheck.mutate()}
             >
-              Retry Plex cleanup
+              Recheck
             </button>
+          )}
+          {recheck.isError && (
+            <p className="mt-2 text-xs text-error" role="alert">{recheck.error.message}</p>
           )}
           {!viewingThisOperation && (
             <Link

@@ -440,10 +440,15 @@ export const api = {
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/cancel`, {
         method: "POST",
       }),
-    retry: (id: string, outcome: "needs_attention" | "warning" = "needs_attention") =>
+    retry: (id: string, outcome: "needs_attention" | "warning" | "all" = "all") =>
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/retry`, {
         method: "POST",
         body: JSON.stringify({ outcome }),
+      }),
+    dismiss: (id: string) =>
+      apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/dismiss`, {
+        method: "POST",
+        body: JSON.stringify({ acknowledge: true }),
       }),
     resolve: (id: string) =>
       apiFetch<{

@@ -45,6 +45,7 @@ export function nonSupersededCancelledCount(
 export function retryableRelocationSafeTargetCount(
   targets: ReadonlyArray<{
     status: string;
+    phase: string;
     relocationGuidanceState: "none" | "valid" | "invalid";
     relocationSyncBarrierState: "none" | "incomplete" | "completed" | "invalid";
   }>,
@@ -52,6 +53,7 @@ export function retryableRelocationSafeTargetCount(
 ): number {
   return targets.filter((target) =>
     target.status === status && target.relocationGuidanceState === "none" &&
-    target.relocationSyncBarrierState === "none"
+    target.relocationSyncBarrierState === "none" &&
+    (status !== "completed_with_warning" || target.phase !== "finalizing")
   ).length;
 }

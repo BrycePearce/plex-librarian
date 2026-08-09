@@ -299,3 +299,47 @@ Deno.test('current attention listing includes unresolved warnings exactly once',
     false,
   );
 });
+
+Deno.test('dismiss releases recovery ownership but preserves an audit warning', async () => {
+  const response = await app.request('/api/deletion-operations/op-owned-movie/dismiss', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ acknowledge: true }),
+  });
+  assertEquals(response.status, 200);
+  const operation = await response.json();
+  assertEquals(operation.status, 'completed_with_warning');
+  assertEquals(operation.targets[0].status, 'completed_with_warning');
+  assertEquals(operation.targets[0].phase, 'finalizing');
+  assertEquals(operation.targets[0].warning, 'Dismissed after manual intervention');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = 'op-owned-movie'",
+      ).value<[number]>()![0]
+    ),
+    0,
+  );
+  const attention = await (await app.request(
+    '/api/deletion-operations?attention=true&limit=20&offset=0',
+  )).json();
+  assertEquals(
+    attention.operations.some((entry: { id: string }) => entry.id === 'op-owned-movie'),
+    false,
+  );
+});
+
+Deno.test('finalized audit warnings cannot be rechecked or dismissed', async () => {
+  const retry = await app.request('/api/deletion-operations/op-warning-finalized/retry', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ outcome: 'all' }),
+  });
+  assertEquals(retry.status, 409);
+  const dismiss = await app.request('/api/deletion-operations/op-warning-finalized/dismiss', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ acknowledge: true }),
+  });
+  assertEquals(dismiss.status, 409);
+});

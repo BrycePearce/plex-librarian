@@ -43,13 +43,15 @@ Deno.test("generic retry counts exclude every present relocation workflow state"
     status: string,
     relocationGuidanceState: "none" | "valid" | "invalid" = "none",
     relocationSyncBarrierState: "none" | "incomplete" | "completed" | "invalid" = "none",
-  ) => ({ status, relocationGuidanceState, relocationSyncBarrierState });
+    phase = "validating",
+  ) => ({ status, phase, relocationGuidanceState, relocationSyncBarrierState });
   const targets = [
     target("needs_attention"),
     target("needs_attention", "valid"),
     target("needs_attention", "invalid"),
     target("needs_attention", "none", "invalid"),
     target("completed_with_warning"),
+    target("completed_with_warning", "none", "none", "finalizing"),
     target("completed_with_warning", "invalid"),
     target("completed_with_warning", "none", "incomplete"),
   ];

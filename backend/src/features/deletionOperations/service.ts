@@ -1133,7 +1133,7 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
 export function retryDeletionOperation(
   id: string,
   serverId: number,
-  outcome: 'needs_attention' | 'warning' = 'needs_attention',
+  outcome: 'needs_attention' | 'warning' | 'all' = 'all',
 ): boolean {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
@@ -1160,18 +1160,23 @@ export function retryDeletionOperation(
     ) {
       return false;
     }
-    const targetStatus = outcome === 'warning' ? 'completed_with_warning' : 'needs_attention';
+    const targetStatusSql = outcome === 'all'
+      ? "(status = 'needs_attention' OR (status = 'completed_with_warning' AND phase <> 'finalizing'))"
+      : outcome === 'warning'
+      ? "status = 'completed_with_warning' AND phase <> 'finalizing'"
+      : "status = 'needs_attention'";
     const eligiblePredicate =
-      "operation_id = ? AND status = ? AND json_type(snapshot, '$.relocationGuidance') IS NULL AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL AND json_type(snapshot, '$.resolutionState') IS NULL";
+      `operation_id = ? AND ${targetStatusSql} AND json_type(snapshot, '$.relocationGuidance') IS NULL AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL AND json_type(snapshot, '$.resolutionState') IS NULL`;
+    const eligibleParams = [id];
     const matching = client
       .prepare(`SELECT COUNT(*) FROM deletion_targets WHERE ${eligiblePredicate}`)
-      .value<[number]>(id, targetStatus)?.[0] ?? 0;
+      .value<[number]>(...eligibleParams)?.[0] ?? 0;
     if (matching === 0) return false;
     client
       .prepare(
         `UPDATE deletion_targets
        SET status = 'queued',
-           attempt_count = CASE WHEN ? = 'needs_attention' THEN 0 ELSE attempt_count END,
+           attempt_count = CASE WHEN status = 'needs_attention' THEN 0 ELSE attempt_count END,
            plex_attempt_count = CASE
              WHEN phase = 'plex_reconciliation'
               AND COALESCE(json_extract(snapshot, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
@@ -1179,12 +1184,123 @@ export function retryDeletionOperation(
              ELSE plex_attempt_count
            END,
            next_retry_at = NULL,
-           warning = CASE WHEN ? = 'warning' THEN NULL ELSE warning END,
+           warning = CASE WHEN status = 'completed_with_warning' THEN NULL ELSE warning END,
            error = NULL,
            updated_at = ?
        WHERE ${eligiblePredicate}`,
       )
-      .run(outcome, outcome, now, id, targetStatus);
+      .run(now, ...eligibleParams);
+    refreshDeletionOperation(client, id);
+    return true;
+  });
+}
+
+// A successful Plex sync may have resolved stale metadata without any further user action.
+// Requeue only targets already waiting in Plex reconciliation: earlier phases can still
+// perform destructive work and must remain behind the explicit Recheck action.
+export function recheckPlexReconciliationAfterSync(
+  serverId: number,
+  libraryKey: string | null,
+): number {
+  return withTransaction((client) => {
+    if (!activeServerMatches(client, serverId)) return 0;
+    const now = Math.floor(Date.now() / 1000);
+    const rows = client.prepare(
+      `SELECT DISTINCT o.id, o.library_key
+       FROM deletion_operations o
+       JOIN deletion_targets t ON t.operation_id = o.id
+       WHERE o.server_id = ?
+         AND (? IS NULL OR o.library_key = ?)
+         AND t.phase = 'plex_reconciliation'
+         AND t.status IN ('needs_attention','completed_with_warning')
+         AND json_type(t.snapshot, '$.relocationGuidance') IS NULL
+         AND json_type(t.snapshot, '$.relocationSyncBarrier') IS NULL
+         AND json_type(t.snapshot, '$.resolutionState') IS NULL
+       ORDER BY o.updated_at, o.created_at, o.id`,
+    ).values<[string, string]>(serverId, libraryKey, libraryKey);
+
+    const busyLibraries = new Set(
+      client.prepare(
+        `SELECT DISTINCT library_key
+         FROM deletion_operations
+         WHERE server_id = ?
+           AND (? IS NULL OR library_key = ?)
+           AND status IN ('queued','running','waiting_retry')`,
+      ).values<[string]>(serverId, libraryKey, libraryKey).map(([key]) => key),
+    );
+
+    let requeued = 0;
+    for (const [operationId, operationLibraryKey] of rows) {
+      // Do not add recovery work behind an operation that was already active when the
+      // sync completed. For an idle library, queue every eligible operation together;
+      // the deletion worker and library-operation lock serialize their execution.
+      if (busyLibraries.has(operationLibraryKey)) continue;
+
+      const changed = client.prepare(
+        `UPDATE deletion_targets
+         SET status = 'queued',
+             plex_attempt_count = CASE
+               WHEN COALESCE(json_extract(snapshot, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
+               THEN 0
+               ELSE plex_attempt_count
+             END,
+             next_retry_at = NULL,
+             warning = CASE WHEN status = 'completed_with_warning' THEN NULL ELSE warning END,
+             error = NULL,
+             updated_at = ?
+         WHERE operation_id = ?
+           AND phase = 'plex_reconciliation'
+           AND status IN ('needs_attention','completed_with_warning')
+           AND json_type(snapshot, '$.relocationGuidance') IS NULL
+           AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
+           AND json_type(snapshot, '$.resolutionState') IS NULL`,
+      ).run(now, operationId);
+      if (changed === 0) continue;
+      refreshDeletionOperation(client, operationId);
+      requeued++;
+    }
+    return requeued;
+  });
+}
+
+export function dismissDeletionOperation(id: string, serverId: number): boolean {
+  return withTransaction((client) => {
+    const now = Math.floor(Date.now() / 1000);
+    const operation = client
+      .prepare('SELECT id FROM deletion_operations WHERE id = ? AND server_id = ?')
+      .value<[string]>(id, serverId);
+    if (!operation || !activeServerMatches(client, serverId)) return false;
+
+    const targets = client.prepare(
+      `SELECT id FROM deletion_targets
+       WHERE operation_id = ?
+         AND (
+           status = 'needs_attention'
+           OR (status = 'completed_with_warning' AND phase <> 'finalizing')
+         )
+         AND json_type(snapshot, '$.relocationGuidance') IS NULL
+         AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
+         AND json_type(snapshot, '$.resolutionState') IS NULL`,
+    ).values<[number]>(id);
+    if (targets.length === 0) return false;
+
+    for (const [targetId] of targets) {
+      client.prepare(
+        `UPDATE deletion_targets
+         SET status = 'completed_with_warning',
+             phase = 'finalizing',
+             next_retry_at = NULL,
+             warning = CASE
+               WHEN COALESCE(error, warning) IS NULL THEN 'Dismissed after manual intervention'
+               ELSE 'Dismissed after manual intervention: ' || COALESCE(error, warning)
+             END,
+             error = NULL,
+             updated_at = ?
+         WHERE id = ?`,
+      ).run(now, targetId);
+      client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(targetId);
+      client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(targetId);
+    }
     refreshDeletionOperation(client, id);
     return true;
   });

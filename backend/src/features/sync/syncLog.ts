@@ -3,6 +3,10 @@ import { db, withTransaction } from '../../db/index.ts';
 import { syncLog } from '../../db/schema.ts';
 import { type LogEventInput, logEvents } from '../events/service.ts';
 import { completeRelocationBarriers } from '../deletionOperations/relocation/relocation.ts';
+import {
+  recheckPlexReconciliationAfterSync,
+  wakeDeletionWorker,
+} from '../deletionOperations/service.ts';
 
 export type SuccessfulSyncResult = {
   ok: true;
@@ -43,6 +47,7 @@ export async function finalizeSyncLog(
       return row !== undefined;
     });
     if (!published) return;
+    if (recheckPlexReconciliationAfterSync(serverId, libraryKey) > 0) wakeDeletionWorker();
     await logEvents([{
       serverId,
       type: 'sync.completed',
@@ -57,6 +62,10 @@ export async function finalizeSyncLog(
   const rows = await db.update(syncLog).set(setPayload).where(where).returning({ id: syncLog.id });
 
   if (rows.length === 0) return;
+
+  if (result.ok && recheckPlexReconciliationAfterSync(serverId, null) > 0) {
+    wakeDeletionWorker();
+  }
 
   await logEvents([
     result.ok

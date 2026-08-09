@@ -1999,6 +1999,119 @@ Deno.test('warning retry refreshes aggregates before the worker reclaims the tar
   assertEquals(target.phase, 'plex_reconciliation');
 });
 
+Deno.test('Recheck queues both ordinary failures and unresolved warnings', async () => {
+  reset();
+  addMovie('recheck-all', [11, 12]);
+  const operationId = await enqueueVersion('recheck-all');
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'completed_with_warning', phase = 'plex_reconciliation', warning = 'warning' WHERE operation_id = ?",
+    ).run(operationId);
+    client.prepare(
+      `INSERT INTO deletion_targets
+         (operation_id, ordinal, target_kind, target_key, title, snapshot, status, phase,
+          attempt_count, plex_attempt_count, error, created_at, updated_at)
+       SELECT operation_id, 1, target_kind, target_key || '-failed', title, snapshot,
+              'needs_attention', 'validating', 3, plex_attempt_count, 'failure', created_at, updated_at
+       FROM deletion_targets WHERE operation_id = ?`,
+    ).run(operationId);
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'needs_attention', target_count = 2, warning_count = 1, failed_count = 1 WHERE id = ?",
+    ).run(operationId);
+  });
+
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  const targets = getDeletionOperation(operationId, 1)!.targets as Array<Record<string, unknown>>;
+  assertEquals(targets.map((target) => target.status), ['queued', 'queued']);
+  assertEquals(targets.map((target) => target.error), [null, null]);
+  assertEquals(targets.map((target) => target.warning), [null, null]);
+  assertEquals(targets.map((target) => target.attemptCount), [0, 0]);
+});
+
+Deno.test('successful sync rechecks only targets already in Plex reconciliation', async () => {
+  reset();
+  addMovie('sync-recheck', [11, 12]);
+  const operationId = await enqueueVersion('sync-recheck');
+  const validatingTargetId = withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'needs_attention', phase = 'plex_reconciliation', error = 'Plex metadata is stale' WHERE operation_id = ?",
+    ).run(operationId);
+    const targetId = client.prepare(
+      `INSERT INTO deletion_targets
+         (operation_id, ordinal, target_kind, target_key, title, snapshot, status, phase,
+          attempt_count, plex_attempt_count, error, created_at, updated_at)
+       SELECT operation_id, 1, target_kind, target_key || '-validation', title, snapshot,
+              'needs_attention', 'validating', attempt_count, plex_attempt_count,
+              'Mapping requires review', created_at, updated_at
+       FROM deletion_targets WHERE operation_id = ? RETURNING id`,
+    ).value<[number]>(operationId)![0];
+    client.prepare(
+      "UPDATE deletion_operations SET status = 'needs_attention', target_count = 2, failed_count = 2 WHERE id = ?",
+    ).run(operationId);
+    return targetId;
+  });
+  const syncId = withTransaction((client) =>
+    client.prepare(
+      "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (1, 'movies', ?, 'pending', 0) RETURNING id",
+    ).value<[number]>(Math.floor(Date.now() / 1000))![0]
+  );
+
+  await finalizeSyncLog(syncId, 1, 'movies', {
+    ok: true,
+    itemsProcessed: 1,
+    generation: Math.floor(Date.now() / 1000),
+    pruneCompleted: false,
+  });
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const targets = operation.targets as Array<Record<string, unknown>>;
+  assertEquals(operation.status, 'queued');
+  assertEquals(
+    targets.find((target) => target.id === validatingTargetId)?.status,
+    'needs_attention',
+  );
+  assertEquals(
+    targets.find((target) => target.id !== validatingTargetId)?.status,
+    'queued',
+  );
+});
+
+Deno.test('successful sync rechecks every unresolved Plex operation in an idle library', async () => {
+  reset();
+
+  const enqueueUnresolved = async (ratingKey: string, mediaIds: number[]) => {
+    addMovie(ratingKey, mediaIds);
+    const operationId = await enqueueVersion(ratingKey, mediaIds[0]);
+    withTransaction((client) => {
+      client.prepare(
+        "UPDATE deletion_targets SET status = 'needs_attention', phase = 'plex_reconciliation', error = 'Plex metadata is stale' WHERE operation_id = ?",
+      ).run(operationId);
+      client.prepare(
+        "UPDATE deletion_operations SET status = 'needs_attention', failed_count = 1 WHERE id = ?",
+      ).run(operationId);
+    });
+    return operationId;
+  };
+
+  const firstOperationId = await enqueueUnresolved('sync-recheck-first', [11, 12]);
+  const secondOperationId = await enqueueUnresolved('sync-recheck-second', [21, 22]);
+  const syncId = withTransaction((client) =>
+    client.prepare(
+      "INSERT INTO sync_log (server_id, library_key, started_at, status, items_processed) VALUES (1, 'movies', ?, 'pending', 0) RETURNING id",
+    ).value<[number]>(Math.floor(Date.now() / 1000))![0]
+  );
+
+  await finalizeSyncLog(syncId, 1, 'movies', {
+    ok: true,
+    itemsProcessed: 2,
+    generation: Math.floor(Date.now() / 1000),
+    pruneCompleted: false,
+  });
+
+  assertEquals(getDeletionOperation(firstOperationId, 1)?.status, 'queued');
+  assertEquals(getDeletionOperation(secondOperationId, 1)?.status, 'queued');
+});
+
 Deno.test('warning overlap is returned before Plex I/O or current projection lookup', async () => {
   reset();
   addMovie('warning-pruned', [11, 12]);
