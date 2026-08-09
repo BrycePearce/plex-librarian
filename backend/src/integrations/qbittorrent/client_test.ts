@@ -131,5 +131,9 @@ Deno.test('client rejects failed authentication', async () => {
           : new Response('Fails.', { status: 200 }),
       ),
   );
-  await assertRejects(() => client.testConnection(), QbittorrentApiError);
+  await assertRejects(
+    () => client.testConnection(),
+    QbittorrentApiError,
+    'qBittorrent login failed',
+  );
 });

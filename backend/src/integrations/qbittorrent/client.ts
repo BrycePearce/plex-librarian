@@ -119,7 +119,12 @@ export class QbittorrentClient {
       // proves authentication succeeded instead of trusting status or body alone.
       const setCookie = response.headers.get('set-cookie') ?? '';
       const sid = setCookie.split(';', 1)[0]?.trim();
-      if (!sid) throw new QbittorrentApiError('qBittorrent did not return a session cookie');
+      if (!sid) {
+        throw new QbittorrentApiError(
+          'qBittorrent login failed: no session cookie returned',
+          response.status,
+        );
+      }
       this.sessionCookie = sid;
       this.accessReady = true;
     })();
