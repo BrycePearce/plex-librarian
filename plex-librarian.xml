@@ -13,7 +13,8 @@
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL />
-  <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png</Icon>
+  <!-- Increment the query value when replacing the icon so Unraid invalidates its local icon cache. -->
+  <Icon>https://raw.githubusercontent.com/BrycePearce/plex-librarian/main/assets/icon.png?v=2</Icon>
   <!-- Docker init mode ensures proper signal handling and graceful shutdown. -->
   <ExtraParams>--init</ExtraParams>
   <PostArgs />
