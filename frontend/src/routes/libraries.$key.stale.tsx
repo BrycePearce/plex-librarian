@@ -498,6 +498,7 @@ function StalePage() {
                 historySyncedAt={data.historySyncedAt}
                 isSyncing={isSyncing}
                 isSyncStatusLoading={isSyncStatusLoading}
+                isDataRefreshing={isFetching || isPlaceholderData}
                 syncingMessage={
                   <>
                     Watch-history sync is running — "unknown" items may update once it finishes.
