@@ -37,7 +37,7 @@ function RootLayout() {
         </nav>
         <main className="scroll-area flex-1 overflow-y-auto">
           <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
-            <Outlet key={pathname} />
+            <Outlet />
           </div>
         </main>
       </div>
@@ -52,12 +52,7 @@ function RootLayout() {
         <main className="scroll-area app-main overflow-y-auto">
           <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
             <div className="flex flex-col flex-1">
-              {
-                /* Page-local state such as row selections and native dialogs must not survive
-                  navigation into a different workflow. Search-param changes stay mounted and
-                  are scoped by the owning page when appropriate. */
-              }
-              <Outlet key={pathname} />
+              <Outlet />
             </div>
           </div>
         </main>
