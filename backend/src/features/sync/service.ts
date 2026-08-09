@@ -7,7 +7,7 @@ import {
   deletionRecoveryLibraryKeys,
   deletionRecoveryNeedsProjection,
   deletionRecoveryProjectionRoots,
-} from '../deletionOperations/coordination.ts';
+} from '../deletionOperations/core/coordination.ts';
 import { PLEX_TYPE } from '../../integrations/plex/index.ts';
 import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
 import { syncLibraryHistory } from './historySync.ts';

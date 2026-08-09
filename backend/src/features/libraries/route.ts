@@ -10,6 +10,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  not,
   or,
   type SQL,
   sql,
@@ -54,9 +55,13 @@ import {
 } from './quickCleanup.ts';
 import { staleCutoffs } from './staleFilters.ts';
 import {
+  movieRootIsWorkflowOwned,
+  showRootIsWorkflowOwned,
+} from '../deletionOperations/core/ownership.ts';
+import {
   assertRelocationWorkflowClear,
   RelocationConflictError,
-} from '../deletionOperations/relocation.ts';
+} from '../deletionOperations/relocation/relocation.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -274,8 +279,13 @@ router.get('/:key/stale', async (c) => {
   // support, so a request for them is silently a no-op and must not claim otherwise.
   const duplicatesOnly = duplicatesCond !== undefined;
 
+  const workflowOwnedCond = library.type === 'show'
+    ? showRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`)
+    : movieRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`);
+
   const staleWhere = and(
     itemsByLibrary(serverId, key),
+    not(workflowOwnedCond),
     staleCond,
     duplicatesCond,
     titleSearchCond,
@@ -463,7 +473,7 @@ router.patch('/:key', async (c) => {
 
 // Whole-item deletion is handled entirely by the durable deletion pipeline —
 // see deletionOperations/middleware.ts (which intercepts DELETE /:key/items
-// before it reaches this router) and deletionOperations/workflow.ts (the
+// before it reaches this router) and deletionOperations/workflow/targetWorkflow.ts (the
 // actual Arr/Plex/download-cleanup execution).
 router.get('/:key/shows/:ratingKey', async (c) => {
   const key = c.req.param('key');

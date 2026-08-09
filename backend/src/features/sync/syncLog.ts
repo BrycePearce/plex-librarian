@@ -2,7 +2,7 @@ import { and, eq, lt, notInArray, type SQL } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { syncLog } from '../../db/schema.ts';
 import { type LogEventInput, logEvents } from '../events/service.ts';
-import { completeRelocationBarriers } from '../deletionOperations/relocation.ts';
+import { completeRelocationBarriers } from '../deletionOperations/relocation/relocation.ts';
 
 export type SuccessfulSyncResult = {
   ok: true;

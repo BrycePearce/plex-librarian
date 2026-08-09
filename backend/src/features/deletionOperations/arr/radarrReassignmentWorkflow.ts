@@ -1,5 +1,5 @@
 // Retained-version reassignment only; Radarr removal fallback is coordinated separately.
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import { buildVersionDeletionPlan } from '../../mediaDeletion/versionPlanning.ts';
 import {
   ensureArrMonitoringEvidence,
   ensureArrReassignmentProtected,
@@ -12,24 +12,24 @@ import {
   advancePhase,
   confirmRadarrPlexRemoval,
   radarrLegacyAccountingIsAmbiguous,
-} from './deletionState.ts';
+} from '../core/deletionState.ts';
 import {
   assertActivePlexIdentity,
   assertRetainedVersionPostcondition,
   deleteExactPlexTarget,
   reconcilePlexTarget,
-} from './plexReconciliation.ts';
-import type { DeletionWorkTarget } from './types.ts';
+} from '../workflow/plexReconciliation.ts';
+import type { DeletionWorkTarget } from '../core/types.ts';
 import {
   type DurableTargetSnapshot,
   validateDeletionTarget,
   validateLiveDeletionIdentity,
-} from './validation.ts';
-import { withTransaction } from '../../db/index.ts';
-import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
-import { radarrBytesMatchProjectedKilobytes } from '../mediaDeletion/radarrSize.ts';
-import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning/types.ts';
-import { DeletionConvergenceError } from './types.ts';
+} from '../core/validation.ts';
+import { withTransaction } from '../../../db/index.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
+import { radarrBytesMatchProjectedKilobytes } from '../../mediaDeletion/radarrSize.ts';
+import type { PersistedArrReassignment } from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
+import { DeletionConvergenceError } from '../core/types.ts';
 
 function samePath(left: string | null, right: string): boolean {
   return (

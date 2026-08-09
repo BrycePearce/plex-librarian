@@ -1,28 +1,28 @@
-import { type SqliteClient, withTransaction } from '../../db/index.ts';
-import { PlexDeleteError } from '../../integrations/plex/client.ts';
-import { resolveActiveServer } from '../../integrations/plex/index.ts';
-import { getArrDeleteTargets } from '../arr/delete.ts';
-import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import { type SqliteClient, withTransaction } from '../../../db/index.ts';
+import { PlexDeleteError } from '../../../integrations/plex/client.ts';
+import { resolveActiveServer } from '../../../integrations/plex/index.ts';
+import { getArrDeleteTargets } from '../../arr/delete.ts';
+import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
+import { buildVersionDeletionPlan } from '../../mediaDeletion/versionPlanning.ts';
 import {
   assertAcceptedArrMappingsUnchanged,
   persistedArrOwnershipMap,
   persistedArrReassignmentMap,
   persistedRetainedMediaId,
   radarrReassignmentAlreadyAdopted,
-} from './arrReassignment.ts';
-import { radarrLegacyAccountingIsAmbiguous } from './deletionState.ts';
-import { refreshDeletionOperation } from './state.ts';
+} from '../arr/arrReassignment.ts';
+import { radarrLegacyAccountingIsAmbiguous } from '../core/deletionState.ts';
+import { refreshDeletionOperation } from '../core/state.ts';
 import {
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
-} from './types.ts';
+} from '../core/types.ts';
 import {
   type DurableTargetSnapshot,
   validateDeletionTarget,
   validateLiveDeletionIdentity,
-} from './validation.ts';
+} from '../core/validation.ts';
 
 function externalId(snapshot: DurableTargetSnapshot): number | null {
   return snapshot.type === 'movie'
@@ -37,13 +37,18 @@ function finalizeTarget(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
   attributable: boolean,
+  removedOutsideApp = false,
 ): void {
   const now = Math.floor(Date.now() / 1000);
+  const status = removedOutsideApp ? 'completed_with_warning' : 'completed';
+  const warning = removedOutsideApp
+    ? 'The target was removed outside Plex Librarian; the requested safe final state was verified.'
+    : null;
   const changed = client
     .prepare(
-      "UPDATE deletion_targets SET status = 'completed', phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = NULL, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+      "UPDATE deletion_targets SET status = ?, phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
     )
-    .run(now, now, now, target.id);
+    .run(status, now, now, warning, now, target.id);
   if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
   let removed = 0;
   if (target.targetKind === 'whole_item') {
@@ -436,7 +441,13 @@ export async function reconcilePlexTarget(
     : !live!.media.some((entry) => entry.mediaId === snapshot.mediaId);
   if (alreadyAbsent) {
     withTransaction((sqlite) => {
-      finalizeTarget(sqlite, target, snapshot, false);
+      finalizeTarget(
+        sqlite,
+        target,
+        snapshot,
+        false,
+        target.plexAttemptCount === 0 && target.removalConfirmedAt === null,
+      );
       refreshDeletionOperation(sqlite, target.operationId);
     });
     return;

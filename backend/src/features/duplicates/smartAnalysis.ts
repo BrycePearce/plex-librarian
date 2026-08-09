@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, not, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
 import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
@@ -11,6 +11,10 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import { technicalDetailUpdate } from './technicalDetails.ts';
+import {
+  episodeRootIsWorkflowOwned,
+  movieRootIsWorkflowOwned,
+} from '../deletionOperations/core/ownership.ts';
 
 const READ_BATCH_SIZE = 400;
 const READ_CONCURRENCY = 3;
@@ -198,7 +202,14 @@ export async function buildSmartDuplicateAnalysis(
         ratingKey: itemMediaVersions.itemRatingKey,
       })
         .from(itemMediaVersions)
-        .where(eq(itemMediaVersions.serverId, serverId))
+        .where(and(
+          eq(itemMediaVersions.serverId, serverId),
+          not(movieRootIsWorkflowOwned(
+            serverId,
+            sql`${itemMediaVersions.libraryKey}`,
+            sql`${itemMediaVersions.itemRatingKey}`,
+          )),
+        ))
         .groupBy(itemMediaVersions.itemRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${itemMediaVersions.fileSize})`))
@@ -209,7 +220,15 @@ export async function buildSmartDuplicateAnalysis(
         ratingKey: episodeMediaVersions.episodeRatingKey,
       })
         .from(episodeMediaVersions)
-        .where(eq(episodeMediaVersions.serverId, serverId))
+        .where(and(
+          eq(episodeMediaVersions.serverId, serverId),
+          not(episodeRootIsWorkflowOwned(
+            serverId,
+            sql`${episodeMediaVersions.libraryKey}`,
+            sql`${episodeMediaVersions.episodeRatingKey}`,
+            sql`${episodeMediaVersions.showRatingKey}`,
+          )),
+        ))
         .groupBy(episodeMediaVersions.episodeRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${episodeMediaVersions.fileSize})`))

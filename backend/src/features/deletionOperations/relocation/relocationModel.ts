@@ -3,8 +3,8 @@ import type {
   RadarrMovieRelocationGuidanceV1 as SharedRadarrGuidance,
   RelocationGuidance as SharedRelocationGuidance,
 } from '@plex-librarian/shared/types.ts';
-import { arrBasename, arrDirname, resolveArrPath } from '../mediaDeletion/arrPaths.ts';
-import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import { arrBasename, arrDirname, resolveArrPath } from '../../mediaDeletion/arrPaths.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 
 export const RELOCATION_SUPERSEDED_REASON =
   'Superseded after guided retained-version relocation; no deletion was attempted for this target';

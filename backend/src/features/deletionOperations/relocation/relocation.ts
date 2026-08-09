@@ -1,7 +1,7 @@
-import type { SqliteClient } from '../../db/index.ts';
-import { withTransaction } from '../../db/index.ts';
-import { activeLibraryOperation } from '../../services/libraryOperations.ts';
-import { refreshDeletionOperation } from './state.ts';
+import type { SqliteClient } from '../../../db/index.ts';
+import { withTransaction } from '../../../db/index.ts';
+import { activeLibraryOperation } from '../../../services/libraryOperations.ts';
+import { refreshDeletionOperation } from '../core/state.ts';
 import {
   assertOnlyRelocationDelta,
   canonicalJson,

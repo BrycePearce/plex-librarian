@@ -1,12 +1,12 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db, withTransaction } from '../../db/index.ts';
+import { db, withTransaction } from '../../../db/index.ts';
 import {
   arrDeleteAttempts,
   downloadFileDeleteAttempts,
   items,
   torrentDeleteAttempts,
-} from '../../db/schema.ts';
-import { tryAcquireLibraryOperation } from '../../services/libraryOperations.ts';
+} from '../../../db/schema.ts';
+import { tryAcquireLibraryOperation } from '../../../services/libraryOperations.ts';
 import {
   arrDeleteDisposition,
   type ArrDeleteTarget,
@@ -15,8 +15,8 @@ import {
   deleteThroughArr,
   findAmbiguousExternalIds,
   getArrDeleteTargets,
-} from '../arr/delete.ts';
-import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
+} from '../../arr/delete.ts';
+import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
 import {
   confirmedAttemptedDownloadJobAbsences,
   executeDownloadedFileCleanup,
@@ -26,23 +26,23 @@ import {
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
   selectVerifiedDownloadCleanups,
-} from '../mediaDeletion/cleanup.ts';
+} from '../../mediaDeletion/cleanup.ts';
 import {
   completedOrphanFileAttempt,
   normalizeRemoteAbsolute,
   orphanRootIdentity,
-} from '../mediaDeletion/hardlinks.ts';
+} from '../../mediaDeletion/hardlinks.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
   resolveDownloadCleanupBatch,
-} from '../mediaDeletion/planning.ts';
-import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+} from '../../mediaDeletion/planning.ts';
+import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
 import {
   buildVersionDeletionPlan,
   selectVersionDownloadCleanup,
-} from '../mediaDeletion/versionPlanning.ts';
+} from '../../mediaDeletion/versionPlanning.ts';
 import {
   assertAcceptedArrMappingsUnchanged,
   assertVersionIsNotPlaying,
@@ -54,23 +54,23 @@ import {
   persistedRetainedMediaId,
   reconcileArrReassignmentFinalState,
   waitForArrManagedPath,
-} from './arrReassignment.ts';
-import { advancePhase, confirmReassignedRemoval } from './deletionState.ts';
+} from '../arr/arrReassignment.ts';
+import { advancePhase, confirmReassignedRemoval } from '../core/deletionState.ts';
 import { reconcilePlexTarget } from './plexReconciliation.ts';
 import {
   coordinateRadarrReassignment,
   tryRecoverRadarrWithoutSelectedProjection,
-} from './radarrReassignmentWorkflow.ts';
+} from '../arr/radarrReassignmentWorkflow.ts';
 import {
   assertRadarrRemovalPlexVersions,
   coordinateRadarrRemovalFallback,
-} from './radarrRemovalWorkflow.ts';
+} from '../arr/radarrRemovalWorkflow.ts';
 import {
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
-} from './types.ts';
-import { type DurableTargetSnapshot, validateDeletionTarget } from './validation.ts';
+} from '../core/types.ts';
+import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
 
 function persistRadarrRemovalDownloadCleanup(
   target: DeletionWorkTarget,

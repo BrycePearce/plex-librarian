@@ -1,13 +1,13 @@
-import { withTransaction } from '../../db/index.ts';
-import { getArrDeleteTargets } from '../arr/delete.ts';
-import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import { withTransaction } from '../../../db/index.ts';
+import { getArrDeleteTargets } from '../../arr/delete.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { assertVersionIsNotPlaying } from './arrReassignment.ts';
-import { DeletionConvergenceError, type DeletionWorkTarget } from './types.ts';
+import { DeletionConvergenceError, type DeletionWorkTarget } from '../core/types.ts';
 import {
   type DurableTargetSnapshot,
   validateDeletionTarget,
   validateLiveDeletionIdentity,
-} from './validation.ts';
+} from '../core/validation.ts';
 
 function samePath(left: string | null, right: string): boolean {
   return (

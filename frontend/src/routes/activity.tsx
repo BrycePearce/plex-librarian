@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle, Copy, History, Trash2, UserX } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle, Copy, History, RotateCcw, Trash2, UserX } from "lucide-react";
 import { api } from "../lib/api.ts";
 import type { ActivityEvent, EventType } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
@@ -19,6 +19,7 @@ export const Route = createFileRoute("/activity")({
 const PAGE_SIZE = 30;
 
 function ActivityPage() {
+  const queryClient = useQueryClient();
   const {
     data,
     isLoading,
@@ -43,6 +44,19 @@ function ActivityPage() {
     queryKey: queryKeys.libraries.all,
     queryFn: () => api.libraries.list(),
   });
+  const attentionParams = { attention: true, limit: 100, offset: 0 };
+  const attention = useQuery({
+    queryKey: queryKeys.deletionOperations.list(attentionParams),
+    queryFn: () => api.deletionOperations.list(attentionParams),
+  });
+  const retry = useMutation({
+    mutationFn: ({ id, outcome }: { id: string; outcome: "needs_attention" | "warning" }) =>
+      api.deletionOperations.retry(id, outcome),
+    onSuccess: (_operation, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.lists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.deletionOperations.detail(id) });
+    },
+  });
   const libraryTitleByKey = new Map(
     (librariesData?.libraries ?? []).map((lib) => [lib.key, lib.title]),
   );
@@ -57,6 +71,69 @@ function ActivityPage() {
         description="A chronological record of syncs, deletions, and access changes."
         icon={History}
       />
+
+      {(attention.isLoading || attention.isError || (attention.data?.total ?? 0) > 0) && (
+        <section className="space-y-3" aria-labelledby="needs-attention-title">
+          <div>
+            <h2 id="needs-attention-title" className="text-lg font-semibold">Needs attention</h2>
+            <p className="text-sm text-base-content/55">
+              Current deletion workflows that still own recovery state.
+            </p>
+          </div>
+          {attention.isLoading && <span className="loading loading-spinner loading-sm" />}
+          {attention.isError && (
+            <div className="alert alert-error">
+              <AlertCircle className="size-4" />
+              <span>Failed to load deletion operations</span>
+            </div>
+          )}
+          {attention.data && attention.data.operations.length > 0 && (
+            <DataSurface className="divide-y divide-base-300">
+              {attention.data.operations.map((operation) => (
+                <div key={operation.id} className="px-4 py-4 space-y-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium">
+                        {operation.titles.join(", ") ||
+                          `${operation.targetCount} deletion target(s)`}
+                      </p>
+                      <p className="text-sm text-error mt-1">
+                        {operation.failureReasons.join(" · ") || "Deletion needs attention"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Link
+                        to="/deletion-operations/$id"
+                        params={{ id: operation.id }}
+                        className="btn btn-ghost btn-sm"
+                      >
+                        Open
+                      </Link>
+                      {operation.retryable && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={retry.isPending && retry.variables?.id === operation.id}
+                          onClick={() =>
+                            retry.mutate({
+                              id: operation.id,
+                              outcome: operation.status === "completed_with_warning"
+                                ? "warning"
+                                : "needs_attention",
+                            })}
+                        >
+                          <RotateCcw className="size-4" />
+                          Retry
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </DataSurface>
+          )}
+        </section>
+      )}
 
       {isLoading && <ActivityListSkeleton />}
 

@@ -17,7 +17,7 @@ import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import {
   assertRelocationWorkflowClear,
   RelocationConflictError,
-} from '../deletionOperations/relocation.ts';
+} from '../deletionOperations/relocation/relocation.ts';
 import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import smartCleanupRoute from './smartCleanupRoute.ts';

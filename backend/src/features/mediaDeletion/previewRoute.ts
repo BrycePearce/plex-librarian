@@ -18,7 +18,7 @@ import { getDownloadClientTargets } from './targets.ts';
 import {
   assertRelocationWorkflowClear,
   RelocationConflictError,
-} from '../deletionOperations/relocation.ts';
+} from '../deletionOperations/relocation/relocation.ts';
 
 type PreviewApp = { Variables: ActiveServerVariables };
 

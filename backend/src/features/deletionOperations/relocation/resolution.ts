@@ -1,10 +1,10 @@
-import { withTransaction } from '../../db/index.ts';
-import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
-import { radarrBytesMatchProjectedKilobytes } from '../mediaDeletion/radarrSize.ts';
-import { revalidateArrReassignment } from './arrReassignment.ts';
-import { refreshDeletionOperation } from './state.ts';
-import type { DeletionWorkTarget } from './types.ts';
-import { validateDeletionTarget } from './validation.ts';
+import { withTransaction } from '../../../db/index.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
+import { radarrBytesMatchProjectedKilobytes } from '../../mediaDeletion/radarrSize.ts';
+import { revalidateArrReassignment } from '../arr/arrReassignment.ts';
+import { refreshDeletionOperation } from '../core/state.ts';
+import type { DeletionWorkTarget } from '../core/types.ts';
+import { validateDeletionTarget } from '../core/validation.ts';
 
 export class ManagementHoldConflictError extends Error {
   constructor(message: string, readonly status: 404 | 409 = 409) {

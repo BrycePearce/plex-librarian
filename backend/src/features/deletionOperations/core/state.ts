@@ -1,5 +1,5 @@
-import type { SqliteClient } from '../../db/index.ts';
-import { relocationSupersededPredicateSql } from './relocationModel.ts';
+import type { SqliteClient } from '../../../db/index.ts';
+import { relocationSupersededPredicateSql } from '../relocation/relocationModel.ts';
 
 type DeletionKind = 'whole_item' | 'movie_version' | 'episode_version';
 type DeletionOperationStatus =

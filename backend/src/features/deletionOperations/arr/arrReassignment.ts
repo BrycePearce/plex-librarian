@@ -1,30 +1,30 @@
 import { bestMediaVersionCandidate } from '@plex-librarian/shared/mediaVersionRanking.ts';
-import { withTransaction } from '../../db/index.ts';
-import { ArrApiError } from '../../integrations/arr/client.ts';
-import type { ArrDeleteTarget } from '../arr/delete.ts';
-import { getArrDeleteTargets } from '../arr/delete.ts';
-import { mediaRatingKeyIsPlaying } from '../mediaDeletion/activePlayback.ts';
+import { withTransaction } from '../../../db/index.ts';
+import { ArrApiError } from '../../../integrations/arr/client.ts';
+import type { ArrDeleteTarget } from '../../arr/delete.ts';
+import { getArrDeleteTargets } from '../../arr/delete.ts';
+import { mediaRatingKeyIsPlaying } from '../../mediaDeletion/activePlayback.ts';
 import {
   type PersistedArrOwnership,
   type PersistedArrReassignment,
-} from '../mediaDeletion/arrReassignmentPlanning/types.ts';
+} from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
 import {
   buildVersionDeletionPlan,
   type VersionDeletionPlan,
-} from '../mediaDeletion/versionPlanning.ts';
-import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
-import { radarrBytesMatchProjectedKilobytes } from '../mediaDeletion/radarrSize.ts';
+} from '../../mediaDeletion/versionPlanning.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
+import { radarrBytesMatchProjectedKilobytes } from '../../mediaDeletion/radarrSize.ts';
 import {
   ArrMonitoringReconciliationError,
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
-} from './types.ts';
+} from '../core/types.ts';
 import {
   type DurableTargetSnapshot,
   validateDeletionTarget,
   validateLiveDeletionIdentity,
-} from './validation.ts';
+} from '../core/validation.ts';
 
 const ARR_CONVERGENCE_MAX_ATTEMPTS = 15;
 const ARR_CONVERGENCE_POLL_INTERVAL_MS = 1_000;

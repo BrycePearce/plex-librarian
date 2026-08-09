@@ -113,6 +113,8 @@ export const queryKeys = {
   },
   deletionOperations: {
     all: [roots.deletionOperations] as const,
+    lists: [roots.deletionOperations, "list"] as const,
+    list: <TParams>(params: TParams) => [roots.deletionOperations, "list", params] as const,
     detail: (id: string) => [roots.deletionOperations, id] as const,
   },
 } as const;

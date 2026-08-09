@@ -2,7 +2,7 @@ import { Database } from '@db/sqlite';
 import { assertEquals } from '@std/assert';
 import { resolve } from '@std/path';
 import { runMigrations } from './migrate.ts';
-import { recoverInterruptedDeletionWork } from '../features/deletionOperations/recovery.ts';
+import { recoverInterruptedDeletionWork } from '../features/deletionOperations/core/recovery.ts';
 
 const migrationsDir = resolve(import.meta.dirname!, '../../drizzle');
 

@@ -6,6 +6,7 @@ import type {
   StaleQuickCleanupSort,
 } from '@plex-librarian/shared/types.ts';
 import { STALE_QUICK_CLEANUP_LIMIT } from './quickCleanupRules.ts';
+import { workflowOwnedItemSql } from '../deletionOperations/core/ownership.ts';
 export {
   parseStaleQuickCleanupDays,
   STALE_QUICK_CLEANUP_DEFAULT_DAYS,
@@ -146,15 +147,17 @@ export function analyzeStaleQuickCleanup(
 
     const cutoff = now - thresholdDays * DAY_SECONDS;
     const duplicate = duplicateSql(library.type);
+    const workflowOwned = workflowOwnedItemSql(library.type);
     const baseParams = [serverId, libraryKey, cutoff, cutoff] as const;
     const excludedSql = excludedRatingKeys.length === 0
       ? ''
       : ` AND i.rating_key NOT IN (${excludedRatingKeys.map(() => '?').join(', ')})`;
     const includedSql = excludedRatingKeys.length === 0
-      ? '1'
-      : `i.rating_key NOT IN (${excludedRatingKeys.map(() => '?').join(', ')})`;
+      ? `NOT (${workflowOwned})`
+      : `i.rating_key NOT IN (${excludedRatingKeys.map(() => '?').join(', ')})
+        AND NOT (${workflowOwned})`;
     const eligibleSql =
-      `${inactiveSql} AND NOT (${duplicate}) AND NOT (${recentRequestSql})${excludedSql}`;
+      `${inactiveSql} AND NOT (${workflowOwned}) AND NOT (${duplicate}) AND NOT (${recentRequestSql})${excludedSql}`;
     const eligibleParams = [...baseParams, cutoff, ...excludedRatingKeys] as const;
     const direction = order === 'asc' ? 'ASC' : 'DESC';
     const candidateOrder = sort === 'inactiveSince'
@@ -180,8 +183,8 @@ export function analyzeStaleQuickCleanup(
          ), 0) AS TEXT),
          SUM(CASE WHEN NOT duplicate_protected AND NOT recent_request AND included
                    AND file_size IS NULL THEN 1 ELSE 0 END),
-         SUM(CASE WHEN duplicate_protected THEN 1 ELSE 0 END),
-         SUM(CASE WHEN NOT duplicate_protected AND recent_request THEN 1 ELSE 0 END)
+         SUM(CASE WHEN duplicate_protected AND included THEN 1 ELSE 0 END),
+         SUM(CASE WHEN NOT duplicate_protected AND recent_request AND included THEN 1 ELSE 0 END)
        FROM classified`,
     ).value<[number | null, string, number | null, number | null, number | null]>(
       cutoff,
@@ -238,6 +241,7 @@ export function validateStaleQuickCleanupSelection(
       return null;
     }
     const cutoff = now - thresholdDays * DAY_SECONDS;
+    const workflowOwned = workflowOwnedItemSql(library.type);
     const placeholders = ratingKeys.map(() => '?').join(', ');
     const rows = client.prepare(
       `SELECT i.rating_key, i.library_key, i.title, i.type, i.thumb, i.added_at,
@@ -246,6 +250,7 @@ export function validateStaleQuickCleanupSelection(
        WHERE i.server_id = ? AND i.library_key = ?
          AND i.rating_key IN (${placeholders})
          AND ${inactiveSql}
+         AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})
          AND NOT (${recentRequestSql})`,
     ).values<CandidateRow>(
@@ -283,10 +288,12 @@ export function isStaleQuickCleanupCandidate(
       return false;
     }
     const cutoff = now - thresholdDays * DAY_SECONDS;
+    const workflowOwned = workflowOwnedItemSql(library.type);
     return client.prepare(
       `SELECT 1 FROM items i
        WHERE i.server_id = ? AND i.library_key = ? AND i.rating_key = ?
          AND ${inactiveSql}
+         AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})
          AND NOT (${recentRequestSql})
        LIMIT 1`,
@@ -317,6 +324,7 @@ export function staleQuickCleanupActiveProtection(
       return empty;
     }
     const cutoff = now - thresholdDays * DAY_SECONDS;
+    const workflowOwned = workflowOwnedItemSql(library.type);
     const keys = [...activeRatingKeys];
     const placeholders = keys.map(() => '?').join(', ');
     const rows = client.prepare(
@@ -325,6 +333,7 @@ export function staleQuickCleanupActiveProtection(
        WHERE i.server_id = ? AND i.library_key = ?
          AND i.rating_key IN (${placeholders})
          AND ${inactiveSql}
+         AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})
          AND NOT (${recentRequestSql})`,
     ).values<[string, number | null]>(

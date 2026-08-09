@@ -6,6 +6,7 @@ import type {
   CancelPendingInvitationResponse,
   DeletionOperation,
   DeletionOperationCreated,
+  DeletionOperationsResponse,
   DownloadCleanupPreviewResponse,
   DuplicatesResponse,
   FinishRelocationResponse,
@@ -64,6 +65,8 @@ export type {
   DeleteItemsResponse,
   DeletionOperation,
   DeletionOperationCreated,
+  DeletionOperationListItem,
+  DeletionOperationsResponse,
   DownloadCleanupJob,
   DownloadCleanupPreviewItem,
   DownloadCleanupPreviewResponse,
@@ -409,6 +412,27 @@ export const api = {
       ),
   },
   deletionOperations: {
+    list: (
+      params: {
+        status?:
+          | "queued"
+          | "running"
+          | "waiting_retry"
+          | "completed"
+          | "completed_with_warning"
+          | "needs_attention"
+          | "cancelled";
+        attention?: boolean;
+        limit?: number;
+        offset?: number;
+      } = {},
+    ) => {
+      const q = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined) q.set(key, String(value));
+      }
+      return apiFetch<DeletionOperationsResponse>(`/deletion-operations?${q}`);
+    },
     get: (id: string) =>
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}`),
     cancel: (id: string) =>

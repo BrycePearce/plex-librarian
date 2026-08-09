@@ -19,7 +19,7 @@ import {
   type NewDeletionTarget,
   repeatedDeletionOperationBatch,
 } from '../deletionOperations/service.ts';
-import { hasAnyIncompleteRelocationBarrier } from '../deletionOperations/relocation.ts';
+import { hasAnyIncompleteRelocationBarrier } from '../deletionOperations/relocation/relocation.ts';
 import { mediaRatingKeyIsPlaying } from '../mediaDeletion/activePlayback.ts';
 import {
   buildSmartDuplicateAnalysis,

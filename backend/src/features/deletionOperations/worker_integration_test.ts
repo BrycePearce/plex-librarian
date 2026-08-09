@@ -25,21 +25,23 @@ const {
   runDeletionWorkerOnceForTest,
   setAutomaticDeletionWorkerForTest,
 } = await import('./service.ts');
-const { recoverInterruptedDeletionWork } = await import('./recovery.ts');
-const { ensureDeletionTarget } = await import('./workflow.ts');
+const { recoverInterruptedDeletionWork } = await import('./core/recovery.ts');
+const { ensureDeletionTarget } = await import('./workflow/targetWorkflow.ts');
 const {
   assertRelocationWorkflowClear,
   canonicalJson,
   completeRelocationBarriers,
   finishRelocation,
-} = await import('./relocation.ts');
-const { createRelocationGuidance, relocationManualReason } = await import('./relocationModel.ts');
-const { refreshDeletionOperation } = await import('./state.ts');
+} = await import('./relocation/relocation.ts');
+const { createRelocationGuidance, relocationManualReason } = await import(
+  './relocation/relocationModel.ts'
+);
+const { refreshDeletionOperation } = await import('./core/state.ts');
 const {
   deletionRecoveryLibraryKeys,
   deletionRecoveryNeedsProjection,
   deletionRecoveryProjectionRoots,
-} = await import('./coordination.ts');
+} = await import('./core/coordination.ts');
 const { orphanRootIdentity } = await import('../mediaDeletion/hardlinks.ts');
 const { runLibrarySync, runSync } = await import('../sync/service.ts');
 const { finalizeSyncLog } = await import('../sync/syncLog.ts');
@@ -1856,12 +1858,52 @@ Deno.test('whole-item replay finalizes when Plex already confirms absence', asyn
   live.delete('whole-absent');
   const operationId = await enqueueWhole('whole-absent');
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  const operation = getDeletionOperation(operationId, 1)!;
+  assertEquals(operation.status, 'completed_with_warning');
+  assertStringIncludes(
+    String((operation.targets as Array<{ warning?: string }>)[0]?.warning),
+    'removed outside Plex Librarian',
+  );
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM items WHERE rating_key = ?').value<[number]>(
         'whole-absent',
       )?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('externally removed version finalizes only after safe state is proven', async () => {
+  reset();
+  addMovie('version-absent', [11, 12]);
+  const operationId = await enqueueVersion('version-absent', 11);
+  live.get('version-absent')!.Media = live.get('version-absent')!.Media!.filter((media) =>
+    media.id === 12
+  );
+
+  await settle();
+  await settle();
+
+  const operation = getDeletionOperation(operationId, 1)!;
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
+  assertEquals(target.plexAttemptCount, 0);
+  assertEquals(target.removalConfirmedAt !== null, true);
+  assertStringIncludes(String(target.warning), 'removed outside Plex Librarian');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    0,
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM item_media_versions WHERE item_rating_key = ? AND media_id = 11',
+      ).value<[number]>('version-absent')?.[0]
     ),
     0,
   );
@@ -2014,7 +2056,7 @@ Deno.test('warning retry needs current Arr absence but not a pruned legacy attem
 
   assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
@@ -2368,7 +2410,7 @@ Deno.test('quick cleanup replays an accepted batch after its targets complete', 
   assertEquals(changedResponse.status, 409);
 });
 
-Deno.test('quick analysis counts reserved candidates as protected', async () => {
+Deno.test('quick analysis excludes workflow-owned candidates before analysis', async () => {
   reset();
   addSmartCleanupMovie('smart-reserved');
   await enqueueVersion('smart-reserved', 11);
@@ -2380,8 +2422,8 @@ Deno.test('quick analysis counts reserved candidates as protected', async () => 
   });
   assertEquals(response.status, 200);
   const analysis = await response.json();
-  assertEquals(analysis.analyzedGroups, 1);
-  assertEquals(analysis.protectedGroups, 1);
+  assertEquals(analysis.analyzedGroups, 0);
+  assertEquals(analysis.protectedGroups, 0);
   assertEquals(analysis.candidates, []);
 });
 
@@ -3861,7 +3903,7 @@ Deno.test('legacy Radarr external repair finalizes without mutation or lifetime 
 
   const operation = getDeletionOperation(operationId, 1)!;
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
-  assertEquals(operation.status, 'completed', JSON.stringify(operation));
+  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
   assertEquals(target.plexAttemptCount, 0);
   assertEquals(arrMonitored, true);
   assertEquals(arrMonitorMutationCount, 2);
@@ -5161,7 +5203,7 @@ Deno.test('sync preserves a needs-attention whole-item projection until manual r
 
   assertEquals(retryDeletionOperation(operationId, 1), true);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
 });
 
 Deno.test('manual retry cannot create two active operations for one library', async () => {

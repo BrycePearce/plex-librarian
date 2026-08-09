@@ -1,9 +1,9 @@
-import type { SqliteClient } from '../../db/index.ts';
+import type { SqliteClient } from '../../../db/index.ts';
 import {
   blockingGuidanceLibraryKeys,
   hasBlockingRelocationGuidance,
   incompleteBarrierLibraryKeys,
-} from './relocation.ts';
+} from '../relocation/relocation.ts';
 
 interface CoordinationStatement {
   value<T extends unknown[]>(...params: unknown[]): T | undefined;

@@ -3,16 +3,64 @@ import { type ActiveServerVariables, withActiveServerId } from '../../middleware
 import {
   cancelDeletionOperation,
   getDeletionOperation,
+  listDeletionOperations,
   retryDeletionOperation,
   wakeDeletionWorker,
 } from './service.ts';
-import { finishRelocation, RelocationConflictError } from './relocation.ts';
+import { finishRelocation, RelocationConflictError } from './relocation/relocation.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { triggerLibrarySync } from '../sync/manager.ts';
-import { ManagementHoldConflictError, resolveRadarrManagementHold } from './resolution.ts';
+import {
+  ManagementHoldConflictError,
+  resolveRadarrManagementHold,
+} from './relocation/resolution.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
+
+const OPERATION_STATUSES = new Set(
+  [
+    'queued',
+    'running',
+    'waiting_retry',
+    'completed',
+    'completed_with_warning',
+    'needs_attention',
+    'cancelled',
+  ] as const,
+);
+
+router.get('/', (c) => {
+  const serverId = c.get('activeServerId');
+  const rawStatus = c.req.query('status');
+  const attention = c.req.query('attention') === 'true';
+  if (rawStatus && !OPERATION_STATUSES.has(rawStatus as never)) {
+    return c.json({ error: 'invalid deletion operation status' }, 400);
+  }
+  const rawLimit = Number(c.req.query('limit') ?? 20);
+  const rawOffset = Number(c.req.query('offset') ?? 0);
+  const limit = Number.isSafeInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
+  const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+  if (serverId === null) {
+    return c.json({
+      status: rawStatus ?? null,
+      attention,
+      limit,
+      offset,
+      total: 0,
+      operations: [],
+    });
+  }
+  const result = listDeletionOperations(serverId, {
+    ...(rawStatus
+      ? { status: rawStatus as Parameters<typeof listDeletionOperations>[1]['status'] }
+      : {}),
+    attention,
+    limit,
+    offset,
+  });
+  return c.json({ status: rawStatus ?? null, attention, limit, offset, ...result });
+});
 
 router.get('/:id', (c) => {
   const serverId = c.get('activeServerId');

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, not, or, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
 import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
@@ -16,6 +16,10 @@ import {
   type DuplicateComparisonFilter,
 } from '@plex-librarian/shared/mediaComparison.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
+import {
+  episodeRootIsWorkflowOwned,
+  movieRootIsWorkflowOwned,
+} from '../deletionOperations/core/ownership.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -113,7 +117,15 @@ router.get('/', async (c) => {
         totalGroups: sql<number>`count(*) over ()`,
       })
         .from(itemMediaVersions)
-        .where(and(eq(itemMediaVersions.serverId, serverId), movieSearchCond))
+        .where(and(
+          eq(itemMediaVersions.serverId, serverId),
+          not(movieRootIsWorkflowOwned(
+            serverId,
+            sql`${itemMediaVersions.libraryKey}`,
+            sql`${itemMediaVersions.itemRatingKey}`,
+          )),
+          movieSearchCond,
+        ))
         .groupBy(itemMediaVersions.itemRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${itemMediaVersions.fileSize})`))
@@ -126,7 +138,16 @@ router.get('/', async (c) => {
         totalGroups: sql<number>`count(*) over ()`,
       })
         .from(episodeMediaVersions)
-        .where(and(eq(episodeMediaVersions.serverId, serverId), episodeSearchCond))
+        .where(and(
+          eq(episodeMediaVersions.serverId, serverId),
+          not(episodeRootIsWorkflowOwned(
+            serverId,
+            sql`${episodeMediaVersions.libraryKey}`,
+            sql`${episodeMediaVersions.episodeRatingKey}`,
+            sql`${episodeMediaVersions.showRatingKey}`,
+          )),
+          episodeSearchCond,
+        ))
         .groupBy(episodeMediaVersions.episodeRatingKey)
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${episodeMediaVersions.fileSize})`))

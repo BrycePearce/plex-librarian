@@ -1,4 +1,4 @@
-import { withTransaction } from '../../db/index.ts';
+import { withTransaction } from '../../../db/index.ts';
 import { refreshDeletionOperation } from './state.ts';
 import { DeletionConvergenceError, type DeletionPhase, type DeletionWorkTarget } from './types.ts';
 

@@ -13,7 +13,7 @@ import {
   resolveActiveServer,
 } from '../../integrations/plex/index.ts';
 import { triggerFullSync } from '../sync/manager.ts';
-import { setActiveServerIfDeletionIdle } from '../deletionOperations/coordination.ts';
+import { setActiveServerIfDeletionIdle } from '../deletionOperations/core/coordination.ts';
 import { PlexConnectionError, selectReachablePlexUrl } from './serverConnection.ts';
 
 const router = new Hono();

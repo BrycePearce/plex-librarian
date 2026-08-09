@@ -14,6 +14,28 @@ export interface DeletionOperationCreated {
   status: DeletionOperationStatus;
 }
 
+export interface DeletionOperationListItem {
+  id: string;
+  libraryKey: string;
+  kind: 'whole_item' | 'movie_version' | 'episode_version';
+  status: DeletionOperationStatus;
+  targetCount: number;
+  createdAt: number;
+  updatedAt: number;
+  titles: string[];
+  failureReasons: string[];
+  retryable: boolean;
+}
+
+export interface DeletionOperationsResponse {
+  status: DeletionOperationStatus | null;
+  attention: boolean;
+  limit: number;
+  offset: number;
+  total: number;
+  operations: DeletionOperationListItem[];
+}
+
 export interface DeletionOperation {
   id: string;
   clientRequestId: string;

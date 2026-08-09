@@ -1,19 +1,19 @@
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
 import { ArrApiError } from '../../integrations/arr/client.ts';
-import { activeServerMatches } from './coordination.ts';
-import { isRetryableDeletionFailure } from './policy.ts';
-import { recoverInterruptedDeletionWork } from './recovery.ts';
-import { refreshDeletionOperation } from './state.ts';
+import { activeServerMatches } from './core/coordination.ts';
+import { isRetryableDeletionFailure } from './core/policy.ts';
+import { recoverInterruptedDeletionWork } from './core/recovery.ts';
+import { refreshDeletionOperation } from './core/state.ts';
 import {
   ArrMonitoringReconciliationError,
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
-} from './types.ts';
-import { DeletionValidationError } from './validation.ts';
-import { ensureDeletionTarget } from './workflow.ts';
-import { isRelocationSupersededTarget } from './relocationModel.ts';
+} from './core/types.ts';
+import { DeletionValidationError } from './core/validation.ts';
+import { ensureDeletionTarget } from './workflow/targetWorkflow.ts';
+import { isRelocationSupersededTarget } from './relocation/relocationModel.ts';
 import {
   classifyRelocationLifecycle,
   hasBlockingRelocationGuidance,
@@ -21,7 +21,7 @@ import {
   loadRelocationLifecycleEvidence,
   type RelocationLifecycleRow,
   relocationSupersededPredicateSql,
-} from './relocation.ts';
+} from './relocation/relocation.ts';
 
 export type DeletionKind = 'whole_item' | 'movie_version' | 'episode_version';
 export type DeletionOperationStatus =
@@ -58,6 +58,107 @@ export interface NewDeletionOperation {
   kind: DeletionKind;
   payload: Record<string, unknown>;
   targets: NewDeletionTarget[];
+}
+
+export function listDeletionOperations(
+  serverId: number,
+  options: {
+    status?: DeletionOperationStatus;
+    attention?: boolean;
+    limit: number;
+    offset: number;
+  },
+): {
+  total: number;
+  operations: Array<{
+    id: string;
+    libraryKey: string;
+    kind: DeletionKind;
+    status: DeletionOperationStatus;
+    targetCount: number;
+    createdAt: number;
+    updatedAt: number;
+    titles: string[];
+    failureReasons: string[];
+    retryable: boolean;
+  }>;
+} {
+  return withTransaction((client) => {
+    const attentionSql = options.attention
+      ? ` AND (
+          o.status = 'needs_attention'
+          OR (
+            o.status = 'completed_with_warning'
+            AND EXISTS (
+              SELECT 1 FROM deletion_targets attention_target
+              WHERE attention_target.operation_id = o.id
+                AND attention_target.status = 'completed_with_warning'
+                AND attention_target.phase <> 'finalizing'
+            )
+          )
+        )`
+      : '';
+    const statusSql = !options.attention && options.status ? ' AND o.status = ?' : '';
+    const filterParams = !options.attention && options.status
+      ? [serverId, options.status]
+      : [serverId];
+    const total = client.prepare(
+      `SELECT COUNT(*) FROM deletion_operations o
+       WHERE o.server_id = ?${statusSql}${attentionSql}`,
+    ).value<[number]>(...filterParams)?.[0] ?? 0;
+    const rows = client.prepare(
+      `SELECT id, library_key, kind, status, target_count, created_at, updated_at
+       FROM deletion_operations o
+       WHERE o.server_id = ?${statusSql}${attentionSql}
+       ORDER BY updated_at DESC, created_at DESC, id
+       LIMIT ? OFFSET ?`,
+    ).values<[
+      string,
+      string,
+      DeletionKind,
+      DeletionOperationStatus,
+      number,
+      number,
+      number,
+    ]>(...filterParams, options.limit, options.offset);
+    return {
+      total,
+      operations: rows.map((row) => {
+        const targets = client.prepare(
+          `SELECT title, error, status, phase,
+                  json_type(snapshot, '$.relocationGuidance'),
+                  json_type(snapshot, '$.relocationSyncBarrier'),
+                  json_type(snapshot, '$.resolutionState')
+           FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal`,
+        ).values<[
+          string,
+          string | null,
+          string,
+          string,
+          string | null,
+          string | null,
+          string | null,
+        ]>(row[0]);
+        return {
+          id: row[0],
+          libraryKey: row[1],
+          kind: row[2],
+          status: row[3],
+          targetCount: row[4],
+          createdAt: row[5],
+          updatedAt: row[6],
+          titles: [...new Set(targets.map((target) => target[0]))],
+          failureReasons: [...new Set(targets.flatMap((target) => target[1] ? [target[1]] : []))],
+          retryable: targets.some((target) =>
+            (target[2] === 'needs_attention' ||
+              (target[2] === 'completed_with_warning' && target[3] !== 'finalizing' &&
+                row[3] === 'completed_with_warning')) &&
+            target[4] === null && target[5] === null && target[6] === null
+          ),
+        };
+      }),
+    };
+  });
 }
 
 export class DeletionConflictError extends Error {
