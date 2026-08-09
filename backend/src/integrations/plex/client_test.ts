@@ -475,42 +475,153 @@ Deno.test('movie sync keeps only file-backed Media and sizes existing Parts', as
   assertEquals(page.value?.items[0]?.fileSize, 6);
 });
 
+Deno.test('movie sync reconciles bulk duplicate candidates with exact metadata', async () => {
+  const requests: string[] = [];
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    requests.push(url.pathname);
+    if (url.pathname === '/library/metadata/10') {
+      return Promise.resolve(Response.json({
+        MediaContainer: {
+          Metadata: [{
+            ratingKey: '10',
+            title: 'Example',
+            type: 'movie',
+            librarySectionID: 7,
+            Media: [{ id: 11, Part: [{ file: '/movies/live.mkv', size: 1_000 }] }],
+          }],
+        },
+      }));
+    }
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [
+            { id: 11, Part: [{ file: '/movies/live.mkv', size: 1_000 }] },
+            { id: 12, Part: [{ file: '/movies/deleted.mkv', size: 2_000 }] },
+          ],
+        }],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryItems('7', 1).next();
+
+  assertEquals(
+    page.value?.mediaVersions.map((version: { mediaId: number }) => version.mediaId),
+    [11],
+  );
+  assertEquals(page.value?.items[0]?.fileSize, 1);
+  assertEquals(requests, ['/library/sections/7/all', '/library/metadata/10']);
+});
+
+Deno.test('movie sync retries exact metadata and retains a confirmed duplicate', async () => {
+  let exactRequests = 0;
+  const duplicate = {
+    ratingKey: '10',
+    title: 'Example',
+    type: 'movie',
+    librarySectionID: 7,
+    Media: [
+      { id: 11, Part: [{ file: '/movies/live.mkv', size: 1_000 }] },
+      { id: 12, Part: [{ file: '/movies/live-4k.mkv', size: 2_000 }] },
+    ],
+  };
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/library/metadata/10') {
+      exactRequests++;
+      if (exactRequests === 1) return Promise.resolve(new Response(null, { status: 503 }));
+      return Promise.resolve(Response.json({ MediaContainer: { Metadata: [duplicate] } }));
+    }
+    return Promise.resolve(Response.json({
+      MediaContainer: { totalSize: 1, Metadata: [duplicate] },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryItems('7', 1).next();
+
+  assertEquals(exactRequests, 2);
+  assertEquals(
+    page.value?.mediaVersions.map((version: { mediaId: number }) => version.mediaId),
+    [11, 12],
+  );
+});
+
+Deno.test('movie sync does not request exact metadata for a single-version item', async () => {
+  const requests: string[] = [];
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    requests.push(url.pathname);
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [{ id: 11, Part: [{ file: '/movies/live.mkv', size: 1_000 }] }],
+        }],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryItems('7', 1).next();
+
+  assertEquals(page.value?.mediaVersions.map((version) => version.mediaId), [11]);
+  assertEquals(requests, ['/library/sections/7/all']);
+});
+
 Deno.test('episode duplicate qualification ignores pathless and missing Media', async () => {
-  const mockFetch = (() =>
-    Promise.resolve(Response.json({
+  const metadata = [
+    {
+      ratingKey: 'episode-1',
+      title: 'One real copy',
+      type: 'episode',
+      parentRatingKey: 'season-1',
+      grandparentRatingKey: 'show-1',
+      parentIndex: 1,
+      index: 1,
+      Media: [
+        { id: 21, Part: [{ file: '/tv/show/e01.mkv', size: 1_000 }] },
+        { id: 22, Part: [{ size: 2_000 }] },
+      ],
+    },
+    {
+      ratingKey: 'episode-2',
+      title: 'Two real copies',
+      type: 'episode',
+      librarySectionID: 7,
+      parentRatingKey: 'season-1',
+      grandparentRatingKey: 'show-1',
+      parentIndex: 1,
+      index: 2,
+      Media: [
+        { id: 31, Part: [{ file: '/tv/show/e02.mkv', size: 3_000 }] },
+        { id: 32, Part: [{ file: '/tv/show/e02-4k.mkv', size: 4_000 }] },
+        { id: 33, Part: [{ file: '/tv/show/gone.mkv', size: 5_000, exists: 0 }] },
+      ],
+    },
+  ];
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const responseMetadata = url.pathname === '/library/metadata/episode-2'
+      ? [metadata[1]]
+      : metadata;
+    return Promise.resolve(Response.json({
       MediaContainer: {
         totalSize: 2,
-        Metadata: [
-          {
-            ratingKey: 'episode-1',
-            title: 'One real copy',
-            type: 'episode',
-            parentRatingKey: 'season-1',
-            grandparentRatingKey: 'show-1',
-            parentIndex: 1,
-            index: 1,
-            Media: [
-              { id: 21, Part: [{ file: '/tv/show/e01.mkv', size: 1_000 }] },
-              { id: 22, Part: [{ size: 2_000 }] },
-            ],
-          },
-          {
-            ratingKey: 'episode-2',
-            title: 'Two real copies',
-            type: 'episode',
-            parentRatingKey: 'season-1',
-            grandparentRatingKey: 'show-1',
-            parentIndex: 1,
-            index: 2,
-            Media: [
-              { id: 31, Part: [{ file: '/tv/show/e02.mkv', size: 3_000 }] },
-              { id: 32, Part: [{ file: '/tv/show/e02-4k.mkv', size: 4_000 }] },
-              { id: 33, Part: [{ file: '/tv/show/gone.mkv', size: 5_000, exists: 0 }] },
-            ],
-          },
-        ],
+        Metadata: responseMetadata,
       },
-    }))) as typeof fetch;
+    }));
+  }) as typeof fetch;
   const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
 
   const page = await client.libraryEpisodes('7').next();
@@ -522,6 +633,42 @@ Deno.test('episode duplicate qualification ignores pathless and missing Media', 
     page.value?.episodes.map((episode: { fileSize: number | null }) => episode.fileSize),
     [1, 7],
   );
+});
+
+Deno.test('episode sync removes a duplicate retained only by bulk metadata', async () => {
+  const bulkEpisode = {
+    ratingKey: 'episode-1',
+    title: 'Pilot',
+    type: 'episode',
+    librarySectionID: 7,
+    parentRatingKey: 'season-1',
+    grandparentRatingKey: 'show-1',
+    parentIndex: 1,
+    index: 1,
+    Media: [
+      { id: 21, Part: [{ file: '/tv/show/e01.mkv', size: 1_000 }] },
+      { id: 22, Part: [{ file: '/tv/show/e01-deleted.mkv', size: 2_000 }] },
+    ],
+  };
+  const exactEpisode = {
+    ...bulkEpisode,
+    Media: [bulkEpisode.Media[0]],
+  };
+  const mockFetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    return Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [url.pathname === '/library/metadata/episode-1' ? exactEpisode : bulkEpisode],
+      },
+    }));
+  }) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryEpisodes('7').next();
+
+  assertEquals(page.value?.episodeMediaVersions, []);
+  assertEquals(page.value?.episodes[0]?.fileSize, 1);
 });
 
 Deno.test('metadata identity captures immutable item, ancestry, and media fields', async () => {

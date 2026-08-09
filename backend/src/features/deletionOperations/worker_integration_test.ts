@@ -47,6 +47,8 @@ const { createApp } = await import('../../app.ts');
 const app = createApp();
 
 const live = new Map<string, PlexRawMetadata>();
+const bulkMetadataOverrides = new Map<string, PlexRawMetadata>();
+let exactMetadataFailureStatus: number | null = null;
 let loseDeleteResponse = false;
 let failDeleteBeforeMutation = false;
 let plexMediaDeleteCount = 0;
@@ -140,7 +142,9 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }));
   }
   if (url.pathname === '/library/sections/movies/all') {
-    const metadata = [...live.values()].filter((item) => item.type === 'movie');
+    const metadata = [...live.values()].filter((item) => item.type === 'movie').map((item) =>
+      bulkMetadataOverrides.get(item.ratingKey) ?? item
+    );
     return Promise.resolve(Response.json({
       MediaContainer: { Metadata: metadata, totalSize: metadata.length },
     }));
@@ -538,6 +542,9 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       live.delete(ratingKey);
       return Promise.resolve(new Response(null, { status: 200 }));
     }
+    if (exactMetadataFailureStatus !== null) {
+      return Promise.resolve(new Response(null, { status: exactMetadataFailureStatus }));
+    }
     return Promise.resolve(
       item
         ? Response.json({ MediaContainer: { Metadata: [item] } })
@@ -618,6 +625,8 @@ function reset(): void {
   wholeDeleteOrder.length = 0;
   versionDeleteOrder.length = 0;
   live.clear();
+  bulkMetadataOverrides.clear();
+  exactMetadataFailureStatus = null;
   withTransaction((client) => {
     for (
       const table of [
@@ -4951,6 +4960,60 @@ Deno.test('completed sync prunes a previously stored pathless movie version', as
       ).value<[number]>()?.[0]
     ),
     50,
+  );
+});
+
+Deno.test('completed sync prunes a version retained only by Plex bulk metadata', async () => {
+  reset();
+  addMovie('sync-bulk-ghost');
+  bulkMetadataOverrides.set('sync-bulk-ghost', structuredClone(live.get('sync-bulk-ghost')!));
+  live.get('sync-bulk-ghost')!.Media = [live.get('sync-bulk-ghost')!.Media![0]!];
+
+  const active = await resolveActiveServer();
+  const result = await runLibrarySync(active.client, active.serverId, 'movies');
+
+  assertEquals(result.pruneCompleted, true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT media_id FROM item_media_versions WHERE server_id = 1 AND item_rating_key = 'sync-bulk-ghost' ORDER BY media_id",
+      ).values<[number]>().map(([mediaId]) => mediaId)
+    ),
+    [11],
+  );
+});
+
+Deno.test('exact-metadata failure aborts sync without pruning stored versions', async () => {
+  reset();
+  addMovie('sync-exact-failure');
+  const active = await resolveActiveServer();
+  await runLibrarySync(active.client, active.serverId, 'movies');
+
+  live.get('sync-exact-failure')!.Media = [live.get('sync-exact-failure')!.Media![0]!];
+  bulkMetadataOverrides.set('sync-exact-failure', {
+    ...structuredClone(live.get('sync-exact-failure')!),
+    Media: [
+      live.get('sync-exact-failure')!.Media![0]!,
+      {
+        id: 12,
+        Part: [{ file: '/movies/sync-exact-failure-12.mkv', size: 50_000 }],
+      },
+    ],
+  });
+  exactMetadataFailureStatus = 400;
+
+  await assertRejects(
+    () => runLibrarySync(active.client, active.serverId, 'movies'),
+    Error,
+    'Plex 400 reading metadata sync-exact-failure',
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT media_id FROM item_media_versions WHERE server_id = 1 AND item_rating_key = 'sync-exact-failure' ORDER BY media_id",
+      ).values<[number]>().map(([mediaId]) => mediaId)
+    ),
+    [11, 12],
   );
 });
 

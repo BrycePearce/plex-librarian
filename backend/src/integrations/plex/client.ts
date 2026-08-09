@@ -468,6 +468,89 @@ export class PlexClient {
     }
   }
 
+  private async exactMetadata(ratingKey: string): Promise<PlexRawMetadata | null> {
+    const path = `/library/metadata/${encodeURIComponent(ratingKey)}?includeGuids=1`;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        const base = 1000 * 2 ** (attempt - 1);
+        await abortableDelay(base + Math.random() * base * 0.5);
+      }
+
+      let response: Response;
+      try {
+        response = await this.fetchImpl(`${this.url}${path}`, {
+          headers: buildPlexHeaders(this.clientId, this.token),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'TimeoutError') throw error;
+        lastError = error;
+        continue;
+      }
+      if (response.status === 404) {
+        response.body?.cancel();
+        return null;
+      }
+      if (response.ok) {
+        const data = await response.json() as {
+          MediaContainer: { Metadata?: PlexRawMetadata[] };
+        };
+        return data.MediaContainer.Metadata?.[0] ?? null;
+      }
+      response.body?.cancel();
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`Plex ${response.status} reading metadata ${ratingKey}`);
+        continue;
+      }
+      throw new Error(`Plex ${response.status} reading metadata ${ratingKey}`);
+    }
+    throw lastError;
+  }
+
+  // Plex can retain a deleted Media entry in the bulk library endpoint after the
+  // exact metadata endpoint has stopped reporting it. Reconcile only items that look
+  // like duplicate candidates in bulk: this keeps exact metadata authoritative for
+  // the feature without turning a full scan into one request per library item.
+  private async reconcileDuplicateCandidates(
+    page: PlexRawMetadata[],
+    libraryKey: string,
+    expectedType: 'movie' | 'episode',
+  ): Promise<PlexRawMetadata[]> {
+    const reconciled: Array<PlexRawMetadata | null> = [...page];
+    const candidates = page.flatMap((item, index) =>
+      item.type === expectedType && (item.Media ?? []).filter(isFileBackedMedia).length >= 2
+        ? [{ index, item }]
+        : []
+    );
+
+    for (let start = 0; start < candidates.length; start += FETCH_CONCURRENCY) {
+      const batch = candidates.slice(start, start + FETCH_CONCURRENCY);
+      const exactItems = await Promise.all(
+        batch.map(({ item }) => this.exactMetadata(item.ratingKey)),
+      );
+      for (let offset = 0; offset < batch.length; offset++) {
+        const { index, item: bulkItem } = batch[offset]!;
+        const exactItem = exactItems[offset];
+        if (exactItem === null) {
+          reconciled[index] = null;
+          continue;
+        }
+        if (
+          exactItem.ratingKey !== bulkItem.ratingKey || exactItem.type !== expectedType ||
+          (exactItem.librarySectionID != null && String(exactItem.librarySectionID) !== libraryKey)
+        ) {
+          throw new Error(
+            `Plex returned conflicting exact metadata for ${expectedType} ${bulkItem.ratingKey}`,
+          );
+        }
+        reconciled[index] = exactItem;
+      }
+    }
+
+    return reconciled.filter((item): item is PlexRawMetadata => item !== null);
+  }
+
   async libraries(): Promise<PlexLibrary[]> {
     const data = await this.get<{ MediaContainer: { Directory?: PlexLibrary[] } }>(
       '/library/sections',
@@ -570,21 +653,7 @@ export class PlexClient {
   }
 
   async metadataIdentity(ratingKey: string): Promise<PlexMetadataIdentity | null> {
-    const url = `${this.url}/library/metadata/${encodeURIComponent(ratingKey)}?includeGuids=1`;
-    const res = await this.fetchImpl(url, {
-      headers: buildPlexHeaders(this.clientId, this.token),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (res.status === 404) {
-      res.body?.cancel();
-      return null;
-    }
-    if (!res.ok) {
-      res.body?.cancel();
-      throw new Error(`Plex ${res.status} reading metadata ${ratingKey}`);
-    }
-    const data = await res.json() as { MediaContainer: { Metadata?: PlexRawMetadata[] } };
-    const item = data.MediaContainer.Metadata?.[0];
+    const item = await this.exactMetadata(ratingKey);
     if (!item) return null;
     const externalIds = extractExternalIds(item);
     return {
@@ -939,7 +1008,8 @@ export class PlexClient {
     // only for item/show syncs: episode and track streams can contain millions of rows
     // and do not need TMDB/TVDB IDs.
     for await (const page of this.paginatedMetadata(libraryKey, typeFilter, true)) {
-      yield { items: mapItems(page), mediaVersions: mapMediaVersions(page) };
+      const reconciled = await this.reconcileDuplicateCandidates(page, libraryKey, 'movie');
+      yield { items: mapItems(reconciled), mediaVersions: mapMediaVersions(reconciled) };
     }
   }
 
@@ -947,7 +1017,11 @@ export class PlexClient {
     libraryKey: string,
   ): AsyncGenerator<{ episodes: PlexEpisode[]; episodeMediaVersions: PlexEpisodeMediaVersion[] }> {
     for await (const page of this.paginatedMetadata(libraryKey, PLEX_TYPE.EPISODE)) {
-      yield { episodes: mapEpisodes(page), episodeMediaVersions: mapEpisodeMediaVersions(page) };
+      const reconciled = await this.reconcileDuplicateCandidates(page, libraryKey, 'episode');
+      yield {
+        episodes: mapEpisodes(reconciled),
+        episodeMediaVersions: mapEpisodeMediaVersions(reconciled),
+      };
     }
   }
 
