@@ -11,7 +11,7 @@ import { DeleteResultAlert } from "../components/DeleteResultAlert.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { RemoveUserConfirmDialog } from "./-users/RemoveUserConfirmDialog.tsx";
 import { SharingRiskDetailsDialog } from "./-users/SharingRiskDetailsDialog.tsx";
-import { RequestFollowThroughDialog } from "./-users/RequestFollowThroughDialog.tsx";
+import { RequestFollowThroughDialog } from "./-users/request-follow-through/RequestFollowThroughDialog.tsx";
 import { PendingInvitationsPanel } from "./-users/PendingInvitationsPanel.tsx";
 import { UsersFilters } from "./-users/UsersFilters.tsx";
 import { UsersTable } from "./-users/UsersTable.tsx";

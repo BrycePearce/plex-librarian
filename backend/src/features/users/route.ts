@@ -22,6 +22,7 @@ import type {
   PendingInvitationsResponse,
   PlexUser,
   RemoveUserResponse,
+  RequestFollowThroughDetailsResponse,
   UsersActivityFilter,
   UsersResponse,
   UsersRiskFilter,
@@ -34,7 +35,10 @@ import {
   userHistoryIsComplete,
 } from './activityStatus.ts';
 import { assessRequestFollowThrough, requestFollowThroughWindow } from './requestFollowThrough.ts';
-import { queryRequestFollowThrough } from './requestFollowThroughQuery.ts';
+import {
+  queryRequestFollowThrough,
+  queryRequestFollowThroughDetails,
+} from './requestFollowThroughQuery.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -391,19 +395,41 @@ router.get('/', async (c) => {
   );
 });
 
-// Revokes a user's access to THIS server (not "unfriend everywhere" — see
-// removeUserAccess's comment in plexUsers.ts for why that distinction matters).
-// Genuinely destructive and effectively irreversible from within this app — the only
-// way back is re-inviting the person through Plex directly.
-//
-// Unlike the media-version delete routes in duplicates.ts, there's no local
-// "reservation" step before calling Plex: a user row isn't a shared/contended counter
-// the way item_media_versions rows are (no analogous last-version race), so the
-// simpler and safer order is Plex-call-first — the local row is only removed once Plex
-// confirms the access is actually gone (or already gone; a 404 is tolerated as success,
-// same precedent as duplicates.ts's deletePlexMediaTolerating404). A failed Plex call
-// this way leaves local state matching reality instead of needing a compensating
-// rollback.
+// Loaded only when the detail dialog opens so the users roster never carries a large
+// request list for every account.
+router.get('/:accountId/request-follow-through', async (c) => {
+  const accountId = Number(c.req.param('accountId'));
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+    return c.json({ error: 'accountId must be a positive integer' }, 400);
+  }
+  const parsedLimit = Number(c.req.query('limit') ?? 200);
+  const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
+    ? Math.min(parsedLimit, 500)
+    : 200;
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'user not found' }, 404);
+
+  const [target, settingsRow] = await Promise.all([
+    db.select({ accountId: users.accountId }).from(users)
+      .where(userByAccountId(serverId, accountId)).limit(1),
+    db.select({ graceDays: settings.requestFollowThroughGraceDays }).from(settings)
+      .where(eq(settings.id, 1)).limit(1),
+  ]);
+  if (!target[0]) return c.json({ error: 'user not found' }, 404);
+
+  const now = Math.floor(Date.now() / 1000);
+  const graceDays = settingsRow[0]?.graceDays ?? DEFAULT_REQUEST_GRACE_DAYS;
+  const window = requestFollowThroughWindow(now, graceDays);
+  const details = await queryRequestFollowThroughDetails({
+    serverId,
+    accountId,
+    windowStart: window.start,
+    graceCutoff: window.cutoff,
+    limit,
+  }, db);
+  return c.json(details satisfies RequestFollowThroughDetailsResponse);
+});
+
 // Pending invitations are live Plex data rather than roster rows: they have not become
 // users yet, and accepting one should appear without waiting for a library sync. Plex
 // identifies the target server by name only, so the integration verifies uniqueness
@@ -556,6 +582,19 @@ router.delete('/invitations/:inviteId', async (c) => {
   }
 });
 
+// Revokes a user's access to THIS server (not "unfriend everywhere" — see
+// removeUserAccess's comment in plexUsers.ts for why that distinction matters).
+// Genuinely destructive and effectively irreversible from within this app — the only
+// way back is re-inviting the person through Plex directly.
+//
+// Unlike the media-version delete routes in duplicates.ts, there's no local
+// "reservation" step before calling Plex: a user row isn't a shared/contended counter
+// the way item_media_versions rows are (no analogous last-version race), so the
+// simpler and safer order is Plex-call-first — the local row is only removed once Plex
+// confirms the access is actually gone (or already gone; a 404 is tolerated as success,
+// same precedent as duplicates.ts's deletePlexMediaTolerating404). A failed Plex call
+// this way leaves local state matching reality instead of needing a compensating
+// rollback.
 router.delete('/:accountId', async (c) => {
   const accountId = parseInt(c.req.param('accountId'), 10);
   if (Number.isNaN(accountId)) return c.json({ error: 'accountId must be an integer' }, 400);

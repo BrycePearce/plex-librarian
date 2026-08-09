@@ -73,6 +73,8 @@ export const queryKeys = {
     list: <TParams>(params: TParams) => [roots.users, params] as const,
     invitations: [roots.users, "invitations"] as const,
     invitationList: <TParams>(params: TParams) => [roots.users, "invitations", params] as const,
+    requestFollowThrough: (accountId: number | null) =>
+      [roots.users, "request-follow-through", accountId] as const,
   },
   events: { all: [roots.events] as const },
   settings: {

@@ -2,7 +2,7 @@ import { ChevronRight, User, UserX } from "lucide-react";
 import type { PlexUser } from "../../lib/api.ts";
 import { avatarUrl } from "../../lib/avatar.ts";
 import { formatDate } from "../../lib/format.ts";
-import { getRequestFollowThroughPresentation } from "./requestFollowThroughPresentation.ts";
+import { getRequestFollowThroughPresentation } from "./request-follow-through/presentation.ts";
 
 export type MonitorStatus = "starting" | "connected" | "polling" | "disconnected";
 

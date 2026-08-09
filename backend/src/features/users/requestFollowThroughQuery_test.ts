@@ -2,7 +2,10 @@ import { type BindValue, Database } from '@db/sqlite';
 import { assertEquals } from '@std/assert';
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
 import * as schema from '../../db/schema.ts';
-import { queryRequestFollowThrough } from './requestFollowThroughQuery.ts';
+import {
+  queryRequestFollowThrough,
+  queryRequestFollowThroughDetails,
+} from './requestFollowThroughQuery.ts';
 
 function createFixture() {
   const sqlite = new Database(':memory:');
@@ -22,12 +25,20 @@ function createFixture() {
       media_type TEXT,
       request_status INTEGER NOT NULL,
       available_at INTEGER,
-      availability_estimated INTEGER NOT NULL DEFAULT 0
+      availability_estimated INTEGER NOT NULL DEFAULT 0,
+      requested_at INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE seerr_request_seasons (
       seerr_instance_id INTEGER NOT NULL,
       request_id INTEGER NOT NULL,
       season_number INTEGER NOT NULL
+    );
+    CREATE TABLE items (
+      server_id INTEGER NOT NULL,
+      rating_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      year INTEGER,
+      thumb TEXT
     );
     CREATE TABLE user_item_activity (
       server_id INTEGER NOT NULL,
@@ -73,7 +84,10 @@ Deno.test('request follow-through query keeps eligibility, scope, and watch boun
         (2, 1, NULL, 'refresh failed'),
         (3, 2, 1000, NULL);
 
-      INSERT INTO seerr_requests VALUES
+      INSERT INTO seerr_requests
+        (server_id, seerr_instance_id, request_id, account_id, rating_key, media_type,
+         request_status, available_at, availability_estimated)
+      VALUES
         (1, 1, 1, 10, 'movie-at-start', 'movie', 2, 100, 0),
         (1, 1, 2, 10, 'estimated-unwatched', 'movie', 5, 200, 1),
         (1, 1, 3, 10, 'multi-season-show', 'tv', 2, 300, 0),
@@ -102,6 +116,16 @@ Deno.test('request follow-through query keeps eligibility, scope, and watch boun
       INSERT INTO user_season_activity VALUES
         (1, 10, 'multi-season-show', 0, 300),
         (1, 10, 'multi-season-show', 1, 999);
+
+      INSERT INTO items VALUES
+        (1, 'movie-at-start', 'Movie at Start', 2020, '/movie-at-start'),
+        (1, 'estimated-unwatched', 'Estimated Movie', 2021, NULL),
+        (1, 'multi-season-show', 'Multi-season Show', 2022, '/multi-season-show'),
+        (1, 'unknown-show-scope', 'Unknown Show', 2023, NULL),
+        (1, 'inside-grace', 'Inside Grace', 2024, NULL),
+        (1, 'at-cutoff', 'At Cutoff', 2025, NULL),
+        (1, 'missing-type', 'Missing Type', 2026, NULL),
+        (1, 'estimated-watched', 'Estimated Watched', 2020, NULL);
     `);
 
     const result = await queryRequestFollowThrough({
@@ -134,6 +158,29 @@ Deno.test('request follow-through query keeps eligibility, scope, and watch boun
       successfulSyncCount: 1,
       failedSyncCount: 1,
     });
+
+    const details = await queryRequestFollowThroughDetails({
+      serverId: 1,
+      accountId: 10,
+      windowStart: 100,
+      graceCutoff: 900,
+      limit: 10,
+    }, database);
+    assertEquals(details.total, 4);
+    assertEquals(
+      details.items.map((item) => ({
+        key: item.key,
+        title: item.title,
+        watchedAt: item.watchedAt,
+        requestedSeasons: item.requestedSeasons,
+      })),
+      [
+        { key: '1:7', title: 'At Cutoff', watchedAt: null, requestedSeasons: [] },
+        { key: '1:3', title: 'Multi-season Show', watchedAt: 300, requestedSeasons: [0, 2] },
+        { key: '1:2', title: 'Estimated Movie', watchedAt: null, requestedSeasons: [] },
+        { key: '1:1', title: 'Movie at Start', watchedAt: 100, requestedSeasons: [] },
+      ],
+    );
   } finally {
     sqlite.close();
   }
@@ -144,7 +191,10 @@ Deno.test('request follow-through query skips account aggregation for an empty r
   try {
     sqlite.exec(`
       INSERT INTO seerr_instances VALUES (1, 1, 1000, NULL);
-      INSERT INTO seerr_requests VALUES
+      INSERT INTO seerr_requests
+        (server_id, seerr_instance_id, request_id, account_id, rating_key, media_type,
+         request_status, available_at, availability_estimated)
+      VALUES
         (1, 1, 1, NULL, NULL, 'movie', 2, 100, 0);
     `);
 

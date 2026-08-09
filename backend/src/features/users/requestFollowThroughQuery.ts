@@ -1,7 +1,11 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
+import type {
+  RequestFollowThroughDetailItem,
+  RequestFollowThroughDetailsResponse,
+} from '@plex-librarian/shared/types.ts';
 import * as schema from '../../db/schema.ts';
-import { seerrInstances, seerrRequests, userItemActivity } from '../../db/schema.ts';
+import { items, seerrInstances, seerrRequests, userItemActivity } from '../../db/schema.ts';
 import {
   SEERR_REQUEST_STATUS_APPROVED,
   SEERR_REQUEST_STATUS_COMPLETED,
@@ -39,12 +43,14 @@ function hasKnownScope() {
   ), 0)`;
 }
 
-function hasWatchAtOrAfterAvailability() {
-  return sql`coalesce((
-    (${seerrRequests.mediaType} = 'movie'
-      AND ${userItemActivity.lastViewedAt} >= ${seerrRequests.availableAt})
-    OR (${seerrRequests.mediaType} = 'tv' AND EXISTS (
-      SELECT 1 FROM seerr_request_seasons request_scope
+function watchAtOrAfterAvailability() {
+  return sql<number | null>`CASE
+    WHEN ${seerrRequests.mediaType} = 'movie'
+      AND ${userItemActivity.lastViewedAt} >= ${seerrRequests.availableAt}
+      THEN ${userItemActivity.lastViewedAt}
+    WHEN ${seerrRequests.mediaType} = 'tv' THEN (
+      SELECT max(season_activity.last_viewed_at)
+      FROM seerr_request_seasons request_scope
       INNER JOIN user_season_activity season_activity
         ON season_activity.server_id = seerr_requests.server_id
         AND season_activity.account_id = seerr_requests.account_id
@@ -53,8 +59,13 @@ function hasWatchAtOrAfterAvailability() {
         AND season_activity.last_viewed_at >= seerr_requests.available_at
       WHERE request_scope.seerr_instance_id = seerr_requests.seerr_instance_id
         AND request_scope.request_id = seerr_requests.request_id
-    ))
-  ), 0)`;
+    )
+    ELSE NULL
+  END`;
+}
+
+function hasWatchAtOrAfterAvailability() {
+  return sql`coalesce((${watchAtOrAfterAvailability()} IS NOT NULL), 0)`;
 }
 
 /**
@@ -142,5 +153,84 @@ export async function queryRequestFollowThrough(
       successfulSyncCount: connections.filter((row) => row.requestsSyncedAt !== null).length,
       failedSyncCount: connections.filter((row) => row.requestsSyncError !== null).length,
     },
+  };
+}
+
+export async function queryRequestFollowThroughDetails(
+  options: {
+    serverId: number;
+    accountId: number;
+    windowStart: number;
+    graceCutoff: number;
+    limit: number;
+  },
+  database: SqliteRemoteDatabase<typeof schema>,
+): Promise<RequestFollowThroughDetailsResponse> {
+  const { serverId, accountId, windowStart, graceCutoff, limit } = options;
+  const knownScope = hasKnownScope();
+  const watchedAt = watchAtOrAfterAvailability();
+  const eligible = and(
+    eq(seerrRequests.serverId, serverId),
+    eq(seerrRequests.accountId, accountId),
+    inArray(seerrRequests.requestStatus, acceptedRequestStatuses),
+    sql`${seerrRequests.ratingKey} IS NOT NULL`,
+    sql`${seerrRequests.availableAt} BETWEEN ${windowStart} AND ${graceCutoff}`,
+    knownScope,
+  );
+  const itemJoin = and(
+    eq(items.serverId, seerrRequests.serverId),
+    eq(items.ratingKey, seerrRequests.ratingKey),
+  );
+
+  const [rows, [count]] = await Promise.all([
+    database.select({
+      seerrInstanceId: seerrRequests.seerrInstanceId,
+      requestId: seerrRequests.requestId,
+      title: items.title,
+      year: items.year,
+      thumb: items.thumb,
+      mediaType: seerrRequests.mediaType,
+      requestedAt: seerrRequests.requestedAt,
+      availableAt: seerrRequests.availableAt,
+      watchedAt,
+      requestedSeasons: sql<string | null>`(
+        SELECT group_concat(ordered_scope.season_number, ',')
+        FROM (
+          SELECT request_scope.season_number
+          FROM seerr_request_seasons request_scope
+          WHERE request_scope.seerr_instance_id = seerr_requests.seerr_instance_id
+            AND request_scope.request_id = seerr_requests.request_id
+          ORDER BY request_scope.season_number
+        ) ordered_scope
+      )`,
+    }).from(seerrRequests).leftJoin(items, itemJoin).leftJoin(
+      userItemActivity,
+      and(
+        eq(userItemActivity.serverId, seerrRequests.serverId),
+        eq(userItemActivity.accountId, seerrRequests.accountId),
+        eq(userItemActivity.ratingKey, seerrRequests.ratingKey),
+      ),
+    ).where(eligible).orderBy(
+      desc(seerrRequests.availableAt),
+      desc(seerrRequests.requestedAt),
+      desc(seerrRequests.requestId),
+    ).limit(limit),
+    database.select({ total: sql<number>`count(*)` }).from(seerrRequests).where(eligible),
+  ]);
+
+  return {
+    total: Number(count?.total ?? 0),
+    limit,
+    items: rows.map((row): RequestFollowThroughDetailItem => ({
+      key: `${row.seerrInstanceId}:${row.requestId}`,
+      title: row.title ?? 'Title unavailable',
+      year: row.year,
+      thumb: row.thumb,
+      mediaType: row.mediaType as 'movie' | 'tv',
+      requestedAt: row.requestedAt,
+      availableAt: row.availableAt as number,
+      watchedAt: row.watchedAt === null ? null : Number(row.watchedAt),
+      requestedSeasons: row.requestedSeasons ? row.requestedSeasons.split(',').map(Number) : [],
+    })),
   };
 }

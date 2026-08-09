@@ -21,6 +21,7 @@ import type {
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
   RemoveUserResponse,
+  RequestFollowThroughDetailsResponse,
   SaveArrInstanceRequest,
   SavePlexPathMappingRequest,
   SaveQbittorrentInstanceRequest,
@@ -89,6 +90,8 @@ export type {
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
   RemoveUserResponse,
+  RequestFollowThroughDetailItem,
+  RequestFollowThroughDetailsResponse,
   Season,
   SeerrInstance,
   SeerrIntegrationSettings,
@@ -562,6 +565,10 @@ export const api = {
       const qs = q.toString();
       return apiFetch<UsersResponse>(`/users${qs ? `?${qs}` : ""}`);
     },
+    requestFollowThrough: (accountId: number, limit = 200) =>
+      apiFetch<RequestFollowThroughDetailsResponse>(
+        `/users/${accountId}/request-follow-through?limit=${limit}`,
+      ),
     remove: (accountId: number) =>
       apiFetch<RemoveUserResponse>(`/users/${accountId}`, { method: "DELETE" }),
   },

@@ -52,6 +52,24 @@ export interface RequestFollowThroughAssessment {
   reasons: RequestFollowThroughReason[];
 }
 
+export interface RequestFollowThroughDetailItem {
+  key: string;
+  title: string;
+  year: number | null;
+  thumb: string | null;
+  mediaType: 'movie' | 'tv';
+  requestedAt: number;
+  availableAt: number;
+  watchedAt: number | null;
+  requestedSeasons: number[];
+}
+
+export interface RequestFollowThroughDetailsResponse {
+  total: number;
+  limit: number;
+  items: RequestFollowThroughDetailItem[];
+}
+
 export type UserActivityStatus =
   | 'watched'
   | 'never'

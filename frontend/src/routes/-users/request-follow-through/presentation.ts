@@ -1,4 +1,4 @@
-import type { PlexUser } from "../../lib/api.ts";
+import type { PlexUser } from "../../../lib/api.ts";
 
 type Assessment = PlexUser["requestFollowThrough"];
 
