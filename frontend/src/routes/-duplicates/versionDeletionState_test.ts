@@ -314,7 +314,7 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
   assertEquals(selected.arrTargets, []);
 });
 
-Deno.test("Radarr removal destination copy does not describe reassignment", () => {
+Deno.test("Radarr destination label stays stable during removal fallback", () => {
   const removal = preview({
     arrConfigured: true,
     radarrPathAdoption: {
@@ -323,9 +323,21 @@ Deno.test("Radarr removal destination copy does not describe reassignment", () =
     } as VersionDeletionPreviewResponse["radarrPathAdoption"],
   });
   assertEquals(versionArrDestinationCopy(removal, "Radarr", true), {
-    label: "Remove from Radarr",
+    label: "Radarr",
     info:
       "Required to complete this deletion safely: Radarr will stop managing the movie without being asked to delete any files.",
+  });
+});
+
+Deno.test("Arr destination labels stay service-based across deletion strategies", () => {
+  assertEquals(versionArrDestinationCopy(preview({}), "Radarr", false), {
+    label: "Radarr",
+    info: "Removes only the Radarr record whose managed paths match the selected Plex versions.",
+  });
+  assertEquals(versionArrDestinationCopy(preview({}), "Sonarr", true), {
+    label: "Sonarr",
+    info:
+      "Required to keep the Sonarr record: Sonarr will adopt an unselected Plex version before removing its currently managed file.",
   });
 });
 

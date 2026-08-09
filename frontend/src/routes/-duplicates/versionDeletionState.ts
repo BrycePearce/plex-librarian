@@ -119,14 +119,14 @@ export function versionArrDestinationCopy(
 ): { label: string; info: string } {
   if (preview?.radarrPathAdoption.mode === "remove_from_radarr") {
     return {
-      label: `Remove from ${arrLabel}`,
+      label: arrLabel,
       info:
         `Required to complete this deletion safely: ${arrLabel} will stop managing the movie without being asked to delete any files.`,
     };
   }
   return arrReassignAvailable
     ? {
-      label: `${arrLabel} reassignment`,
+      label: arrLabel,
       info:
         `Required to keep the ${arrLabel} record: ${arrLabel} will adopt an unselected Plex version before removing its currently managed file.`,
     }
