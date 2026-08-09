@@ -5,7 +5,6 @@ const healthy = {
   connectionCount: 1,
   successfulSyncCount: 1,
   failedSyncCount: 0,
-  unmatchedUserRequestCount: 0,
 };
 
 function stats(overrides: Record<string, number> = {}) {
@@ -139,36 +138,47 @@ Deno.test('rolling window remains valid when grace exceeds one year', () => {
   assertEquals(window.cutoff, now - 400 * 86400);
 });
 
-Deno.test('unknown request type or TV season scope pauses assessment', () => {
+Deno.test('unknown request type or TV season scope is excluded from assessment', () => {
   const result = assessRequestFollowThrough(
-    stats({ unknownRequestScopeCount: 2 }),
+    stats({
+      eligibleRequestCount: 10,
+      watchedRequestCount: 8,
+      unknownRequestScopeCount: 2,
+    }),
     healthy,
     true,
     30,
     5,
   );
-  assertEquals(result.status, 'unavailable');
+  assertEquals(result.status, 'healthy');
+  assertEquals(result.watchedRequestCount, 8);
+  assertEquals(result.unwatchedRequestCount, 2);
   assertEquals(result.unknownRequestScopeCount, 2);
   assertEquals(result.reasons.some((reason) => reason.type === 'request_scope_unknown'), true);
 });
 
-Deno.test('unmatched media or requester evidence suppresses classification', () => {
+Deno.test('unmatched media and unknown scope are excluded without suppressing known outcomes', () => {
   const mediaResult = assessRequestFollowThrough(
-    stats({ eligibleRequestCount: 5, watchedRequestCount: 3, unmatchedMediaRequestCount: 1 }),
+    stats({
+      eligibleRequestCount: 10,
+      watchedRequestCount: 3,
+      unmatchedMediaRequestCount: 1,
+      unknownRequestScopeCount: 2,
+    }),
     healthy,
     true,
     30,
     5,
   );
-  const requesterResult = assessRequestFollowThrough(
-    stats({ eligibleRequestCount: 20, watchedRequestCount: 4 }),
-    { ...healthy, unmatchedUserRequestCount: 1 },
+  assertEquals(mediaResult.status, 'review');
+  assertEquals(mediaResult.watchedRequestCount, 3);
+  assertEquals(mediaResult.unwatchedRequestCount, 7);
+  assertEquals(mediaResult.nonWatchPercent, 70);
+  assertEquals(mediaResult.reasons.some((reason) => reason.type === 'media_not_matched'), true);
+  assertEquals(
+    mediaResult.reasons.some((reason) => reason.type === 'request_scope_unknown'),
     true,
-    30,
-    5,
   );
-  assertEquals(mediaResult.status, 'unavailable');
-  assertEquals(requesterResult.status, 'unavailable');
 });
 
 Deno.test('estimated dates without a later watch pause negative classification', () => {

@@ -86,6 +86,8 @@ Deno.test('request follow-through query keeps eligibility, scope, and watch boun
         (1, 1, 10, 11, 'estimated-watched', 'movie', 2, 250, 1),
         (1, 1, 11, NULL, NULL, 'movie', 2, 500, 0),
         (1, 1, 12, NULL, NULL, 'movie', 2, 99, 0),
+        (1, 1, 13, 10, NULL, 'movie', 2, 950, 0),
+        (1, 1, 14, 10, 'unknown-inside-grace', NULL, 2, 950, 0),
         (2, 3, 1, NULL, NULL, 'movie', 2, 500, 0);
 
       INSERT INTO seerr_request_seasons VALUES
@@ -131,7 +133,6 @@ Deno.test('request follow-through query keeps eligibility, scope, and watch boun
       connectionCount: 2,
       successfulSyncCount: 1,
       failedSyncCount: 1,
-      unmatchedUserRequestCount: 1,
     });
   } finally {
     sqlite.close();
@@ -159,7 +160,6 @@ Deno.test('request follow-through query skips account aggregation for an empty r
       connectionCount: 1,
       successfulSyncCount: 1,
       failedSyncCount: 0,
-      unmatchedUserRequestCount: 1,
     });
   } finally {
     sqlite.close();

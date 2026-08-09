@@ -30,7 +30,6 @@ export interface RequestFollowThroughHealth {
   connectionCount: number;
   successfulSyncCount: number;
   failedSyncCount: number;
-  unmatchedUserRequestCount: number;
 }
 
 export function assessRequestFollowThrough(
@@ -75,16 +74,6 @@ export function assessRequestFollowThrough(
         'Plex cross-user watch history is not fully synced, so watch results may be incomplete.',
     });
   }
-  if (health.unmatchedUserRequestCount > 0) {
-    reasons.push({
-      type: 'requester_not_matched',
-      summary: `${health.unmatchedUserRequestCount} available request${
-        health.unmatchedUserRequestCount === 1 ? '' : 's'
-      } could not be matched to a unique Plex user and ${
-        health.unmatchedUserRequestCount === 1 ? 'is' : 'are'
-      } preventing assessment until requester coverage is complete.`,
-    });
-  }
   if (stats.recentRequestCount > 0) {
     reasons.push({
       type: 'grace_period_exclusions',
@@ -116,7 +105,7 @@ export function assessRequestFollowThrough(
         stats.unmatchedMediaRequestCount === 1 ? ' could' : 's could'
       } not be matched to a synced Plex title and ${
         stats.unmatchedMediaRequestCount === 1 ? 'was' : 'were'
-      } left unresolved. Assessment is unavailable rather than assuming an outcome.`,
+      } excluded from this assessment.`,
     });
   }
   if (stats.unknownRequestScopeCount > 0) {
@@ -126,15 +115,13 @@ export function assessRequestFollowThrough(
         stats.unknownRequestScopeCount === 1 ? '' : 's'
       } did not include a usable media type or requested-season scope and ${
         stats.unknownRequestScopeCount === 1 ? 'was' : 'were'
-      } left unresolved. Assessment is unavailable rather than matching unrelated show activity.`,
+      } excluded from this assessment rather than matching unrelated show activity.`,
     });
   }
 
   const unavailable = health.connectionCount === 0 ||
     health.successfulSyncCount < health.connectionCount || health.failedSyncCount > 0 ||
-    !historyComplete || health.unmatchedUserRequestCount > 0 ||
-    stats.uncertainAvailabilityOutcomeCount > 0 ||
-    stats.unmatchedMediaRequestCount > 0 || stats.unknownRequestScopeCount > 0;
+    !historyComplete || stats.uncertainAvailabilityOutcomeCount > 0;
   if (unavailable) {
     return {
       status: 'unavailable',

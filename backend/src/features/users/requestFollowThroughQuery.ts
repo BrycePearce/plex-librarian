@@ -70,7 +70,7 @@ export async function queryRequestFollowThrough(
   const knownScope = hasKnownScope();
   const watched = hasWatchAtOrAfterAvailability();
 
-  const [aggregates, connections, [coverage]] = await Promise.all([
+  const [aggregates, connections] = await Promise.all([
     accountIds.length
       ? database.select({
         accountId: seerrRequests.accountId,
@@ -96,10 +96,11 @@ export async function queryRequestFollowThrough(
           AND NOT ${watched} THEN 1 ELSE 0 END)`,
         unmatchedMediaRequestCount: sql<number>`sum(CASE
           WHEN ${seerrRequests.ratingKey} IS NULL
-          AND ${seerrRequests.availableAt} >= ${windowStart} THEN 1 ELSE 0 END)`,
+          AND ${seerrRequests.availableAt} BETWEEN ${windowStart} AND ${graceCutoff}
+          THEN 1 ELSE 0 END)`,
         unknownRequestScopeCount: sql<number>`sum(CASE
           WHEN ${seerrRequests.ratingKey} IS NOT NULL
-          AND ${seerrRequests.availableAt} >= ${windowStart}
+          AND ${seerrRequests.availableAt} BETWEEN ${windowStart} AND ${graceCutoff}
           AND NOT ${knownScope} THEN 1 ELSE 0 END)`,
       }).from(seerrRequests).leftJoin(
         userItemActivity,
@@ -119,14 +120,6 @@ export async function queryRequestFollowThrough(
       requestsSyncedAt: seerrInstances.requestsSyncedAt,
       requestsSyncError: seerrInstances.requestsSyncError,
     }).from(seerrInstances).where(eq(seerrInstances.serverId, serverId)),
-    database.select({
-      unmatchedUserRequestCount: sql<number>`count(*)`,
-    }).from(seerrRequests).where(and(
-      eq(seerrRequests.serverId, serverId),
-      inArray(seerrRequests.requestStatus, acceptedRequestStatuses),
-      sql`${seerrRequests.availableAt} >= ${windowStart}`,
-      sql`${seerrRequests.accountId} IS NULL`,
-    )),
   ]);
 
   return {
@@ -148,7 +141,6 @@ export async function queryRequestFollowThrough(
       connectionCount: connections.length,
       successfulSyncCount: connections.filter((row) => row.requestsSyncedAt !== null).length,
       failedSyncCount: connections.filter((row) => row.requestsSyncError !== null).length,
-      unmatchedUserRequestCount: Number(coverage?.unmatchedUserRequestCount ?? 0),
     },
   };
 }

@@ -22,7 +22,6 @@ export type RequestFollowThroughReasonType =
   | 'seerr_not_synced'
   | 'seerr_sync_error'
   | 'plex_history_incomplete'
-  | 'requester_not_matched'
   | 'minimum_not_met'
   | 'grace_period_exclusions'
   | 'availability_estimated'
