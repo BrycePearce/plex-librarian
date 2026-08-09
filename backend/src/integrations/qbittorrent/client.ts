@@ -108,13 +108,15 @@ export class QbittorrentClient {
           }`,
         );
       }
-      const text = await response.text();
-      if (!response.ok || text.trim() !== 'Ok.') {
+      if (!response.ok) {
         throw new QbittorrentApiError(
           `qBittorrent login failed${response.status ? ` (${response.status})` : ''}`,
           response.status,
         );
       }
+      // Success has changed from `200 Ok.` to `204 No Content` across qBittorrent
+      // versions. Accept any 2xx response, but require the session cookie that
+      // proves authentication succeeded instead of trusting status or body alone.
       const setCookie = response.headers.get('set-cookie') ?? '';
       const sid = setCookie.split(';', 1)[0]?.trim();
       if (!sid) throw new QbittorrentApiError('qBittorrent did not return a session cookie');

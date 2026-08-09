@@ -297,114 +297,6 @@ export function ArrIntegrationDialog() {
                 </div>
               </div>
             )}
-            <div className="space-y-3 rounded-xl border border-base-300 bg-base-200/25 p-4">
-              <div>
-                <h3 className="font-medium">Plex file namespace mappings</h3>
-                <p className="mt-1 text-xs leading-relaxed text-base-content/55">
-                  Map a Plex-visible prefix to the same files mounted inside Plex Librarian. A live
-                  Plex Part and exact local file size validate each server- and library-specific
-                  mapping. Equal-looking paths are never inferred.
-                </p>
-              </div>
-              {plexPathMappings?.map((mapping) => (
-                <div
-                  key={mapping.id}
-                  className="flex items-center gap-2 rounded-lg border border-base-300 p-2 text-xs"
-                >
-                  <span className="badge badge-ghost badge-sm">
-                    {libraryData?.libraries.find((library) => library.key === mapping.libraryKey)
-                      ?.title ?? mapping.libraryKey}
-                  </span>
-                  <span className="min-w-0 flex-1 break-all">
-                    {mapping.plexPath} → {mapping.localPath}
-                  </span>
-                  <span className="opacity-50">rev {mapping.revision}</span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs text-error"
-                    aria-label={`Remove mapping ${mapping.plexPath}`}
-                    disabled={removeNamespaceMapping.isPending}
-                    onClick={() => removeNamespaceMapping.mutate(mapping.id)}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-              <div className="grid gap-2 sm:grid-cols-2">
-                <select
-                  className="select select-sm w-full"
-                  value={namespaceLibraryKey}
-                  onChange={(event) => setNamespaceLibraryKey(event.currentTarget.value)}
-                  aria-label="Plex library"
-                >
-                  <option value="">Choose Plex library</option>
-                  {libraryData?.libraries.map((library) => (
-                    <option key={library.key} value={library.key}>{library.title}</option>
-                  ))}
-                </select>
-                <input
-                  className="input input-sm w-full"
-                  value={plexPath}
-                  onChange={(event) => setPlexPath(event.currentTarget.value)}
-                  placeholder="Plex prefix, e.g. /movies"
-                  aria-label="Plex path prefix"
-                />
-                <input
-                  className="input input-sm w-full"
-                  value={localPath}
-                  onChange={(event) => setLocalPath(event.currentTarget.value)}
-                  placeholder="Local mount, e.g. /media/movies"
-                  aria-label="Plex Librarian local path prefix"
-                />
-                <input
-                  className="input input-sm w-full"
-                  value={sampleRatingKey}
-                  onChange={(event) => setSampleRatingKey(event.currentTarget.value)}
-                  placeholder="Live sample rating key"
-                  aria-label="Live sample Plex rating key"
-                />
-                <input
-                  className="input input-sm w-full"
-                  inputMode="numeric"
-                  value={sampleMediaId}
-                  onChange={(event) => setSampleMediaId(event.currentTarget.value)}
-                  placeholder="Live sample media ID"
-                  aria-label="Live sample Plex media ID"
-                />
-                <label className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-sm"
-                    checked={caseSensitive}
-                    onChange={(event) => setCaseSensitive(event.currentTarget.checked)}
-                  />
-                  Plex path matching is case-sensitive
-                </label>
-              </div>
-              {createNamespaceMapping.isError && (
-                <p className="text-xs text-error">{createNamespaceMapping.error.message}</p>
-              )}
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                disabled={createNamespaceMapping.isPending || !namespaceLibraryKey || !plexPath ||
-                  !localPath || !sampleRatingKey || !/^\d+$/.test(sampleMediaId)}
-                onClick={() =>
-                  createNamespaceMapping.mutate({
-                    libraryKey: namespaceLibraryKey,
-                    plexPath,
-                    localPath,
-                    caseSensitive,
-                    sampleRatingKey,
-                    sampleMediaId: Number(sampleMediaId),
-                  })}
-              >
-                {createNamespaceMapping.isPending
-                  ? <span className="loading loading-spinner loading-xs" />
-                  : <Plus className="size-4" />}
-                Validate and add mapping
-              </button>
-            </div>
             <QbittorrentConnections
               onConfigure={openQbittorrentWizard}
               onRemove={(instance) => {
@@ -421,6 +313,138 @@ export function ArrIntegrationDialog() {
                 setView("remove-seerr");
               }}
             />
+            <details className="group rounded-xl border border-base-300 bg-base-200/25">
+              <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-medium">Advanced</h3>
+                  <p className="mt-0.5 text-xs text-base-content/50">
+                    Configure filesystem namespaces for uncommon Plex and Radarr layouts.
+                  </p>
+                </div>
+                {(plexPathMappings?.length ?? 0) > 0 && (
+                  <span className="badge badge-ghost badge-sm">
+                    {plexPathMappings?.length} configured
+                  </span>
+                )}
+              </summary>
+              <div className="space-y-3 border-t border-base-300 p-4">
+                <div>
+                  <h3 className="font-medium">Plex file namespace mappings</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-base-content/55">
+                    Map a Plex-visible prefix to the same files mounted inside Plex Librarian. A
+                    live Plex Part and exact local file size validate each server- and
+                    library-specific mapping. Equal-looking paths are never inferred.
+                  </p>
+                </div>
+                {plexPathMappings?.map((mapping) => (
+                  <div
+                    key={mapping.id}
+                    className="flex items-center gap-2 rounded-lg border border-base-300 p-2 text-xs"
+                  >
+                    <span className="badge badge-ghost badge-sm">
+                      {libraryData?.libraries.find(
+                        (library) => library.key === mapping.libraryKey,
+                      )?.title ?? mapping.libraryKey}
+                    </span>
+                    <span className="min-w-0 flex-1 break-all">
+                      {mapping.plexPath} → {mapping.localPath}
+                    </span>
+                    <span className="opacity-50">rev {mapping.revision}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs text-error"
+                      aria-label={`Remove mapping ${mapping.plexPath}`}
+                      disabled={removeNamespaceMapping.isPending}
+                      onClick={() => removeNamespaceMapping.mutate(mapping.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <select
+                    className="select select-sm w-full"
+                    value={namespaceLibraryKey}
+                    onChange={(event) => setNamespaceLibraryKey(event.currentTarget.value)}
+                    aria-label="Plex library"
+                  >
+                    <option value="">Choose Plex library</option>
+                    {libraryData?.libraries.map((library) => (
+                      <option key={library.key} value={library.key}>
+                        {library.title}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="input input-sm w-full"
+                    value={plexPath}
+                    onChange={(event) => setPlexPath(event.currentTarget.value)}
+                    placeholder="Plex prefix, e.g. /movies"
+                    aria-label="Plex path prefix"
+                  />
+                  <input
+                    className="input input-sm w-full"
+                    value={localPath}
+                    onChange={(event) => setLocalPath(event.currentTarget.value)}
+                    placeholder="Local mount, e.g. /media/movies"
+                    aria-label="Plex Librarian local path prefix"
+                  />
+                  <input
+                    className="input input-sm w-full"
+                    value={sampleRatingKey}
+                    onChange={(event) => setSampleRatingKey(event.currentTarget.value)}
+                    placeholder="Live sample rating key"
+                    aria-label="Live sample Plex rating key"
+                  />
+                  <input
+                    className="input input-sm w-full"
+                    inputMode="numeric"
+                    value={sampleMediaId}
+                    onChange={(event) => setSampleMediaId(event.currentTarget.value)}
+                    placeholder="Live sample media ID"
+                    aria-label="Live sample Plex media ID"
+                  />
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={caseSensitive}
+                      onChange={(event) => setCaseSensitive(event.currentTarget.checked)}
+                    />
+                    Plex path matching is case-sensitive
+                  </label>
+                </div>
+                {createNamespaceMapping.isError && (
+                  <p className="text-xs text-error">
+                    {createNamespaceMapping.error.message}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={createNamespaceMapping.isPending ||
+                    !namespaceLibraryKey ||
+                    !plexPath ||
+                    !localPath ||
+                    !sampleRatingKey ||
+                    !/^\d+$/.test(sampleMediaId)}
+                  onClick={() =>
+                    createNamespaceMapping.mutate({
+                      libraryKey: namespaceLibraryKey,
+                      plexPath,
+                      localPath,
+                      caseSensitive,
+                      sampleRatingKey,
+                      sampleMediaId: Number(sampleMediaId),
+                    })}
+                >
+                  {createNamespaceMapping.isPending
+                    ? <span className="loading loading-spinner loading-xs" />
+                    : <Plus className="size-4" />}
+                  Validate and add mapping
+                </button>
+              </div>
+            </details>
           </div>
         </div>
       )}

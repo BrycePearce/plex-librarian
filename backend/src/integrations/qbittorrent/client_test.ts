@@ -71,6 +71,54 @@ Deno.test('client supports qBittorrent authentication bypass without credentials
   ]);
 });
 
+Deno.test('client supports qBittorrent 5.2 login responses with no content', async () => {
+  const calls: string[] = [];
+  const client = new QbittorrentClient('http://qbit:8080', 'user', 'pass', (input, init) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith('/app/version') && !new Headers(init?.headers).has('Cookie')) {
+      return Promise.resolve(new Response('Forbidden', { status: 403 }));
+    }
+    if (url.endsWith('/auth/login')) {
+      return Promise.resolve(
+        new Response(null, {
+          status: 204,
+          headers: { 'Set-Cookie': 'SID_8080=abc; path=/' },
+        }),
+      );
+    }
+    assertEquals(new Headers(init?.headers).get('Cookie'), 'SID_8080=abc');
+    return Promise.resolve(new Response('v5.2.0'));
+  });
+
+  assertEquals(await client.testConnection(), { version: 'v5.2.0' });
+  assertEquals(calls, [
+    'http://qbit:8080/api/v2/app/version',
+    'http://qbit:8080/api/v2/auth/login',
+    'http://qbit:8080/api/v2/app/version',
+  ]);
+});
+
+Deno.test('client accepts any successful login status when a session cookie is issued', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', 'user', 'pass', (input, init) => {
+    const url = String(input);
+    if (url.endsWith('/app/version') && !new Headers(init?.headers).has('Cookie')) {
+      return Promise.resolve(new Response('Forbidden', { status: 403 }));
+    }
+    if (url.endsWith('/auth/login')) {
+      return Promise.resolve(
+        new Response(null, {
+          status: 202,
+          headers: { 'Set-Cookie': 'SID=abc; path=/' },
+        }),
+      );
+    }
+    return Promise.resolve(new Response('vFuture'));
+  });
+
+  assertEquals(await client.testConnection(), { version: 'vFuture' });
+});
+
 Deno.test('client rejects failed authentication', async () => {
   const client = new QbittorrentClient(
     'http://qbit:8080',
