@@ -34,6 +34,9 @@ export interface VersionDeletionPreviewResponse {
   arrReassignStatus: 'resolved' | 'unavailable' | 'error';
   arrReassignReason?: string;
   radarrPathAdoption: RadarrPathAdoptionPreview;
+  // Explicit break-glass alternative to the ordinary removal fallback. It is
+  // present only when the retained folder passed every executable safety check.
+  radarrPathOverride?: RadarrPathAdoptionPreview;
   cleanupConfigured: boolean;
   cleanupStatus: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;
@@ -45,6 +48,7 @@ export interface VersionDeletionPreviewResponse {
 export type RadarrReassignmentMode =
   | 'existing_path'
   | 'adopt_safe_path'
+  | 'adopt_path_with_consent'
   | 'remove_from_radarr'
   | 'unavailable';
 

@@ -135,12 +135,14 @@ function DuplicatesPage() {
       mediaIds,
       cleanupMediaIds,
       planFingerprint,
+      allowRadarrRetainedPathManagement,
       allowRadarrMovieRemoval,
     }: {
       group: DuplicateGroup;
       mediaIds: number[];
       cleanupMediaIds: number[];
       planFingerprint?: string;
+      allowRadarrRetainedPathManagement?: boolean;
       allowRadarrMovieRemoval?: boolean;
     }) => {
       if (group.mediaType === "movie") {
@@ -150,6 +152,9 @@ function DuplicatesPage() {
           cleanupMediaIds,
           {
             ...(planFingerprint ? { planFingerprint } : {}),
+            ...(allowRadarrRetainedPathManagement
+              ? { allowRadarrRetainedPathManagement: true }
+              : {}),
             ...(allowRadarrMovieRemoval ? { allowRadarrMovieRemoval: true } : {}),
           },
         );
@@ -179,6 +184,7 @@ function DuplicatesPage() {
       cleanupDownloads: boolean;
       cleanupMediaIds: number[];
       planFingerprint?: string;
+      allowRadarrRetainedPathManagement?: boolean;
       allowRadarrMovieRemoval?: boolean;
     },
   ) {
@@ -209,6 +215,7 @@ function DuplicatesPage() {
       mediaIds: plan.mediaIds,
       cleanupMediaIds: plan.cleanupMediaIds,
       planFingerprint: plan.planFingerprint,
+      allowRadarrRetainedPathManagement: plan.allowRadarrRetainedPathManagement,
       allowRadarrMovieRemoval: plan.allowRadarrMovieRemoval,
     });
   }

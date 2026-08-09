@@ -1,6 +1,7 @@
 import type {
   ArrCleanupTarget,
   MediaVersionPathPreview,
+  RadarrPathAdoptionPreview,
   VersionDeletionPreviewResponse,
 } from '@plex-librarian/shared/types.ts';
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
@@ -49,6 +50,7 @@ export interface VersionDeletionPlan {
   arrReassignCandidateMediaIds: number[];
   cleanup: ResolvedCleanupItem | null;
   radarrRemovalFallback?: Omit<PersistedRadarrRemovalFallback, 'userAuthorizedRadarrRemoval'>;
+  radarrPathOverride?: RadarrPathAdoptionPreview;
 }
 
 async function stableFingerprint(value: unknown): Promise<string> {
@@ -349,13 +351,22 @@ export async function buildVersionDeletionPlan({
     plexClient,
     versionRanks,
   });
-  let effectiveRadarrDecision = radarrPathAdoption;
+  const radarrPathOverride = radarrPathAdoption.mode === 'adopt_path_with_consent'
+    ? radarrPathAdoption
+    : undefined;
+  let effectiveRadarrDecision = radarrPathOverride
+    ? {
+      mode: 'unavailable' as const,
+      requiresConsent: false,
+      reason: arrReassignReason,
+    }
+    : radarrPathAdoption;
   let radarrRemovalFallback: VersionDeletionPlan['radarrRemovalFallback'];
   if (
     mediaType === 'movie' &&
     item.tmdbId !== null &&
     selectedMediaIds.size === 1 &&
-    radarrPathAdoption.mode === 'unavailable' &&
+    (radarrPathAdoption.mode === 'unavailable' || radarrPathOverride !== undefined) &&
     eligibleArrTargets.length === 1 &&
     !eligibleArrTargets[0]!.alreadyAbsent &&
     serverId !== undefined &&
@@ -431,7 +442,8 @@ export async function buildVersionDeletionPlan({
         createImportExclusion: true as const,
         deleteFiles: false as const,
         addImportExclusion: true as const,
-        reasonSafeAdoptionUnavailable: radarrPathAdoption.reason ??
+        reasonSafeAdoptionUnavailable: radarrPathOverride?.reason ?? radarrPathAdoption.reason ??
+          arrReassignReason ??
           'Radarr cannot safely adopt the retained Plex path',
       };
       const planFingerprint = await stableFingerprint(decision);
@@ -545,6 +557,7 @@ export async function buildVersionDeletionPlan({
         : {}),
     };
   });
+  const offeredRadarrPathOverride = radarrRemovalFallback ? radarrPathOverride : undefined;
 
   return {
     eligibleArrTargets,
@@ -557,6 +570,7 @@ export async function buildVersionDeletionPlan({
     arrReassignCandidateMediaIds,
     cleanup,
     ...(radarrRemovalFallback ? { radarrRemovalFallback } : {}),
+    ...(offeredRadarrPathOverride ? { radarrPathOverride: offeredRadarrPathOverride } : {}),
     preview: {
       mediaType,
       arrService: mediaType === 'episode' ? 'sonarr' : 'radarr',
@@ -573,6 +587,7 @@ export async function buildVersionDeletionPlan({
       arrReassignStatus,
       arrReassignReason,
       radarrPathAdoption: effectiveRadarrDecision,
+      ...(offeredRadarrPathOverride ? { radarrPathOverride: offeredRadarrPathOverride } : {}),
       cleanupConfigured,
       cleanupStatus,
       cleanupReason,

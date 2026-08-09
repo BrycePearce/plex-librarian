@@ -24,7 +24,6 @@ export interface EligibleArrReassignment {
 }
 
 export interface PersistedRadarrPathPlan {
-  // The consent mode is accepted only for legacy persisted operations. New planning never emits it.
   mode: 'existing_path' | 'adopt_safe_path' | 'adopt_path_with_consent';
   arrInstanceId: number;
   movieId: number;

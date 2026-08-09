@@ -1,6 +1,29 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
+import { classifyRadarrRetainedPath } from './arrReassignmentPlanning.ts';
 import { buildVersionDeletionPlan, selectVersionDownloadCleanup } from './versionPlanning.ts';
+
+Deno.test('Radarr retained paths require consent only outside ordinary library ownership', () => {
+  assertEquals(classifyRadarrRetainedPath(1, 'library'), {
+    requiresConsent: false,
+    mode: 'adopt_safe_path',
+    pathOwnership: 'ordinary_radarr_library',
+    userAuthorizedPathManagement: true,
+  });
+  for (
+    const candidate of [
+      classifyRadarrRetainedPath(0, 'library'),
+      classifyRadarrRetainedPath(1, 'download'),
+    ]
+  ) {
+    assertEquals(candidate, {
+      requiresConsent: true,
+      mode: 'adopt_path_with_consent',
+      pathOwnership: 'explicit_user_managed_location',
+      userAuthorizedPathManagement: false,
+    });
+  }
+});
 Deno.test('version cleanup excludes download mutations associated with the retained path', () => {
   const selectedJob = {
     instanceKey: 'qb:1',

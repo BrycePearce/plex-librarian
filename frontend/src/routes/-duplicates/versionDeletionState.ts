@@ -63,7 +63,10 @@ export function versionDestinationState(preview: VersionDeletionPreviewResponse 
     arrReassignAvailable,
     arrSelectedByDefault: arrVisible,
     cleanupAvailable,
-    cleanupVisible: arrDeleteAvailable && preview?.cleanupConfigured === true,
+    // A configured client is not itself a deletion destination. Only offer the
+    // qBittorrent option after the preview has tied a live job to the selected paths.
+    cleanupVisible: arrAvailable && preview?.cleanupStatus === "resolved" &&
+      (preview.downloadJobs.length ?? 0) > 0,
   };
 }
 
@@ -96,12 +99,17 @@ export function versionPlexFallbackWarning(
   );
 }
 
-export function radarrRemovalConsentState(
+export function versionRadarrPathOverride(
   preview: VersionDeletionPreviewResponse | undefined,
-  authorized: boolean,
-): { visible: boolean; blocked: boolean } {
-  const visible = preview?.radarrPathAdoption.mode === "remove_from_radarr";
-  return { visible, blocked: visible && !authorized };
+): VersionDeletionPreviewResponse["radarrPathAdoption"] | null {
+  const candidate = preview?.radarrPathOverride;
+  return candidate?.mode === "adopt_path_with_consent" &&
+      candidate.requiresConsent &&
+      Boolean(candidate.planFingerprint) &&
+      Boolean(candidate.proposedMoviePath) &&
+      Boolean(candidate.retainedPath)
+    ? candidate
+    : null;
 }
 
 export function versionArrDestinationCopy(
@@ -113,7 +121,7 @@ export function versionArrDestinationCopy(
     return {
       label: `Remove from ${arrLabel}`,
       info:
-        `Required to complete this deletion safely: ${arrLabel} will stop managing the movie without deleting either file.`,
+        `Required to complete this deletion safely: ${arrLabel} will stop managing the movie without being asked to delete any files.`,
     };
   }
   return arrReassignAvailable

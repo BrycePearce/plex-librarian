@@ -367,6 +367,7 @@ export const api = {
       cleanupMediaIds: number[],
       radarrDecision?: {
         planFingerprint?: string;
+        allowRadarrRetainedPathManagement?: boolean;
         allowRadarrMovieRemoval?: boolean;
       },
     ) =>

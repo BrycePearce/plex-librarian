@@ -2,7 +2,6 @@ import { assertEquals } from "@std/assert";
 import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
 import {
   defaultVersionSelection,
-  radarrRemovalConsentState,
   versionArrDeletionActive,
   versionArrDestinationCopy,
   versionDeletionExecutionTarget,
@@ -11,6 +10,7 @@ import {
   versionDestinationState,
   versionPathPreviewsByMediaId,
   versionPlexFallbackWarning,
+  versionRadarrPathOverride,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 
@@ -173,7 +173,7 @@ Deno.test("safe reassignment exposes Arr even when whole-record deletion is unsa
   });
 });
 
-Deno.test("reassignment keeps known destination controls visible", () => {
+Deno.test("configured cleanup stays hidden without a verified qBittorrent job", () => {
   assertEquals(
     versionDestinationOptionVisibility(
       preview({
@@ -182,9 +182,10 @@ Deno.test("reassignment keeps known destination controls visible", () => {
         arrReassignStatus: "resolved",
         cleanupConfigured: true,
         cleanupStatus: "resolved",
+        downloadJobs: [],
       }),
     ),
-    { arr: true, cleanup: true },
+    { arr: true, cleanup: false },
   );
 });
 
@@ -246,14 +247,14 @@ Deno.test("advanced keeps Plex paths alongside selected deletion services", () =
   assertEquals(selected.showPlexPaths, true);
 });
 
-Deno.test("cleanup cannot appear unless its destination is configured", () => {
+Deno.test("cleanup cannot appear without a verified qBittorrent job", () => {
   assertEquals(
     versionDestinationState(preview({ cleanupStatus: "resolved" })).cleanupVisible,
     false,
   );
 });
 
-Deno.test("verified cleanup makes the qBittorrent destination visible", () => {
+Deno.test("verified qBittorrent cleanup makes its destination visible", () => {
   assertEquals(
     versionDestinationState(
       preview({
@@ -261,6 +262,28 @@ Deno.test("verified cleanup makes the qBittorrent destination visible", () => {
         arrStatus: "resolved",
         cleanupConfigured: true,
         cleanupStatus: "resolved",
+        downloadJobs: [
+          {
+            provider: "qbittorrent",
+            instanceKey: "qbit-1",
+            instanceName: "qBittorrent",
+            jobId: "job-1",
+            name: "Movie",
+            state: "uploading",
+            uploaded: 0,
+            ratio: 0,
+            seedingTime: 0,
+            completedAt: null,
+            contentPath: "/downloads/Movie",
+            savePath: "/downloads",
+            trackerHost: null,
+            fileCount: 1,
+            files: [],
+            filesTruncated: false,
+            sourcePath: "/downloads/Movie",
+            size: 1_000,
+          },
+        ],
       }),
     ).cleanupVisible,
     true,
@@ -291,38 +314,6 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
   assertEquals(selected.arrTargets, []);
 });
 
-Deno.test("Radarr removal consent blocks only the exact removal preview", () => {
-  const consentPreview = preview({
-    arrConfigured: true,
-    arrReassignStatus: "unavailable",
-    radarrPathAdoption: {
-      mode: "remove_from_radarr",
-      requiresConsent: true,
-      planFingerprint: "exact-plan",
-    },
-  });
-  assertEquals(radarrRemovalConsentState(consentPreview, false), {
-    visible: true,
-    blocked: true,
-  });
-  assertEquals(radarrRemovalConsentState(consentPreview, true), {
-    visible: true,
-    blocked: false,
-  });
-  assertEquals(
-    radarrRemovalConsentState(
-      preview({
-        radarrPathAdoption: {
-          mode: "adopt_safe_path",
-          requiresConsent: false,
-        },
-      }),
-      false,
-    ),
-    { visible: false, blocked: false },
-  );
-});
-
 Deno.test("Radarr removal destination copy does not describe reassignment", () => {
   const removal = preview({
     arrConfigured: true,
@@ -334,6 +325,28 @@ Deno.test("Radarr removal destination copy does not describe reassignment", () =
   assertEquals(versionArrDestinationCopy(removal, "Radarr", true), {
     label: "Remove from Radarr",
     info:
-      "Required to complete this deletion safely: Radarr will stop managing the movie without deleting either file.",
+      "Required to complete this deletion safely: Radarr will stop managing the movie without being asked to delete any files.",
   });
+});
+
+Deno.test("break-glass Radarr path control appears only for a complete consent plan", () => {
+  assertEquals(
+    versionRadarrPathOverride(
+      preview({
+        radarrPathOverride: {
+          mode: "adopt_path_with_consent",
+          requiresConsent: true,
+        },
+      }),
+    ),
+    null,
+  );
+  const candidate = {
+    mode: "adopt_path_with_consent" as const,
+    requiresConsent: true,
+    planFingerprint: "exact-plan",
+    proposedMoviePath: "/downloads/Movie",
+    retainedPath: "/downloads/Movie/movie.mkv",
+  };
+  assertEquals(versionRadarrPathOverride(preview({ radarrPathOverride: candidate })), candidate);
 });

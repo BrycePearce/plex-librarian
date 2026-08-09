@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleHelp, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api, deletionOperationIdFromError } from "../../lib/api.ts";
 import type { DuplicateGroup, MediaVersionPathPreview } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
@@ -29,11 +29,11 @@ import {
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
 import {
   defaultVersionSelection,
-  radarrRemovalConsentState,
   versionArrDestinationCopy,
   versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
+  versionRadarrPathOverride,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
 import "../../components/dataSurfaces.css";
@@ -57,6 +57,7 @@ export function VersionPickerDialog({
     cleanupDownloads: boolean;
     cleanupMediaIds: number[];
     planFingerprint?: string;
+    allowRadarrRetainedPathManagement?: boolean;
     allowRadarrMovieRemoval?: boolean;
   }) => void;
   onCancel: () => void;
@@ -83,7 +84,7 @@ export function VersionPickerDialog({
   const previewMode = previewModeState.itemKey === itemKey ? previewModeState.mode : "basic";
   const [deleteFromArr, setDeleteFromArr] = useState(false);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
-  const [allowRadarrMovieRemoval, setAllowRadarrMovieRemoval] = useState(false);
+  const [useRadarrPathOverride, setUseRadarrPathOverride] = useState(false);
   const queryClient = useQueryClient();
 
   useLayoutEffect(() => {
@@ -93,7 +94,6 @@ export function VersionPickerDialog({
   useEffect(() => {
     setSelectionState({ itemKey, checked: defaultChecked });
     setPreviewModeState({ itemKey, mode: "basic" });
-    setAllowRadarrMovieRemoval(false);
   }, [defaultChecked, itemKey]);
 
   const mediaIds = useMemo(() => [...checked].sort((a, b) => a - b), [checked]);
@@ -126,10 +126,10 @@ export function VersionPickerDialog({
       item?.mediaType,
       ratingKey,
       mediaIds,
-      cleanupDownloads,
+      true,
     ),
     queryFn: () =>
-      api.duplicates.versionDeletionPreview(item!.mediaType, ratingKey, mediaIds, cleanupDownloads),
+      api.duplicates.versionDeletionPreview(item!.mediaType, ratingKey, mediaIds, true),
     enabled: item !== null && mediaIds.length > 0,
     retry: false,
     staleTime: 15_000,
@@ -156,12 +156,14 @@ export function VersionPickerDialog({
     const destination = versionDestinationState(preview.data);
     setDeleteFromArr(destination.arrSelectedByDefault);
     setCleanupDownloads(false);
+    setUseRadarrPathOverride(false);
   }, [
     item,
     mediaIds.join("|"),
     preview.data?.arrConfigured,
     preview.data?.arrStatus,
     preview.data?.arrReassignStatus,
+    preview.data?.radarrPathOverride?.planFingerprint,
   ]);
 
   if (!item) {
@@ -184,13 +186,11 @@ export function VersionPickerDialog({
   const arrService = item.mediaType === "movie" ? ("radarr" as const) : ("sonarr" as const);
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
-  const arrDeleteAvailable = destinations.arrDeleteAvailable;
   const arrReassignAvailable = destinations.arrReassignAvailable;
   const cleanupAvailable = destinations.cleanupAvailable;
-  const cleanupUsesQbittorrent = (preview.data?.downloadJobs.length ?? 0) > 0;
   const pathAdoption = preview.data?.radarrPathAdoption;
-  const pathConsent = radarrRemovalConsentState(preview.data, allowRadarrMovieRemoval);
-  const pathConsentRequired = pathConsent.visible;
+  const pathOverride = versionRadarrPathOverride(preview.data) ?? undefined;
+  const pathConsentRequired = pathAdoption?.mode === "remove_from_radarr";
   const destinationOptionVisibility = versionDestinationOptionVisibility(preview.data);
   const destinationOptionsVisible = destinationOptionVisibility.arr ||
     destinationOptionVisibility.cleanup;
@@ -211,12 +211,13 @@ export function VersionPickerDialog({
   // state effect catches up.
   const effectiveDeleteFromArr = arrReassignAvailable || deleteFromArr;
   const reassignActive = preview.data?.arrReassignStatus === "resolved";
+  const pathReassignmentActive = reassignActive || useRadarrPathOverride;
   const arrDestinationCopy = versionArrDestinationCopy(
     preview.data,
     arrLabel,
     arrReassignAvailable,
   );
-  const cleanupMediaIds = cleanupDownloads && arrDeleteAvailable && !reassignActive
+  const cleanupMediaIds = cleanupDownloads && cleanupAvailable && !pathReassignmentActive
     ? (preview.data?.versions
       .filter(
         (version) =>
@@ -232,7 +233,6 @@ export function VersionPickerDialog({
     preview: preview.isError ? "error" : preview.isLoading || !preview.data ? "loading" : "ready",
     semanticBlock: selection.blocked,
   }) ||
-    pathConsent.blocked ||
     (cleanupDownloads && !cleanupAvailable);
   const blockingOperationId = deletionOperationIdFromError(preview.error) ??
     deletionOperationIdFromError(error);
@@ -353,12 +353,36 @@ export function VersionPickerDialog({
                   service: arrService,
                   label: arrDestinationCopy.label,
                   info: arrDestinationCopy.info,
-                  checked: effectiveDeleteFromArr,
-                  disabled: pending || arrReassignAvailable,
+                  checked: effectiveDeleteFromArr && !useRadarrPathOverride,
+                  disabled: pending || (arrReassignAvailable && !useRadarrPathOverride),
                   warning: false,
                   onChange: (checked: boolean) => {
+                    if (checked && useRadarrPathOverride) {
+                      setUseRadarrPathOverride(false);
+                      return;
+                    }
                     setDeleteFromArr(checked);
                     if (!checked) setCleanupDownloads(false);
+                  },
+                },
+              ]
+              : []),
+            ...(pathOverride
+              ? [
+                {
+                  id: "arr-path-override" as const,
+                  service: "radarr" as const,
+                  label: "Use remaining folder in Radarr",
+                  info: "Break-glass option: this location is not a verified ordinary Radarr " +
+                    `library folder. Radarr will manage ${pathOverride.proposedMoviePath} and may ` +
+                    "later rename, upgrade, move, or delete files there.",
+                  checked: useRadarrPathOverride,
+                  disabled: pending || useRadarrPathOverride,
+                  warning: false,
+                  onChange: (checked: boolean) => {
+                    if (!checked) return;
+                    setUseRadarrPathOverride(true);
+                    setCleanupDownloads(false);
                   },
                 },
               ]
@@ -367,17 +391,15 @@ export function VersionPickerDialog({
               ? [
                 {
                   id: "cleanup" as const,
-                  service: cleanupUsesQbittorrent ? ("qbittorrent" as const) : undefined,
-                  label: cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files",
-                  info: reassignActive
+                  service: "qbittorrent" as const,
+                  label: "qBittorrent",
+                  info: pathReassignmentActive
                     ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
-                    : !cleanupDownloads
-                    ? "Select to inspect configured download clients for an independently authorized cleanup."
-                    : (preview.data.cleanupReason ??
-                      "Deletes only a qBittorrent payload tied exclusively to the selected version paths."),
+                    : "Deletes the verified qBittorrent job and its downloaded files along with " +
+                      "the selected Plex version.",
                   checked: cleanupDownloads,
-                  disabled: pending || !deleteFromArr || reassignActive,
-                  warning: (cleanupDownloads && !cleanupAvailable) || reassignActive,
+                  disabled: pending || !deleteFromArr || pathReassignmentActive,
+                  warning: (cleanupDownloads && !cleanupAvailable) || pathReassignmentActive,
                   onChange: setCleanupDownloads,
                 },
               ]
@@ -400,46 +422,6 @@ export function VersionPickerDialog({
               to rescan. Radarr may later rename, upgrade, or delete files it manages in that
               folder.
             </p>
-          </div>
-        </div>
-      )}
-
-      {pathAdoption?.mode === "remove_from_radarr" && (
-        <div className="alert alert-warning mt-2 items-start text-sm">
-          <div className="min-w-0 flex-1">
-            <div className="font-semibold">Radarr will stop managing this movie</div>
-            <p className="mt-1 text-xs">
-              Radarr cannot safely adopt the retained Plex copy. Plex Librarian will add an import
-              exclusion, remove the Radarr record without deleting files, then delete only the
-              selected Plex version.
-            </p>
-            <div className="mt-1 break-all text-xs">
-              <div>Selected Plex file: {pathAdoption.selectedPlexPath}</div>
-              <div>Retained Plex file: {pathAdoption.retainedPlexPath}</div>
-            </div>
-            <label className="mt-2 flex cursor-pointer items-start gap-2">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm mt-0.5"
-                checked={allowRadarrMovieRemoval}
-                disabled={pending}
-                onChange={(event) => setAllowRadarrMovieRemoval(event.currentTarget.checked)}
-              />
-              <span className="font-medium">
-                Remove this movie from Radarr without deleting its files
-              </span>
-              <span
-                title="The retained copy stays in Plex but will no longer receive Radarr upgrades."
-                aria-label="About Radarr movie removal"
-              >
-                <CircleHelp className="mt-0.5 size-4 shrink-0" />
-              </span>
-            </label>
-            {!allowRadarrMovieRemoval && (
-              <p className="mt-2 text-xs">
-                To keep Radarr unchanged, delete the other Plex version instead.
-              </p>
-            )}
           </div>
         </div>
       )}
@@ -502,10 +484,17 @@ export function VersionPickerDialog({
             deleteFromArr: effectiveDeleteFromArr && arrAvailable,
             cleanupDownloads: effectiveDeleteFromArr && arrAvailable && cleanupDownloads,
             cleanupMediaIds,
-            ...(pathAdoption?.planFingerprint
-              ? { planFingerprint: pathAdoption.planFingerprint }
+            ...((useRadarrPathOverride ? pathOverride : pathAdoption)?.planFingerprint
+              ? {
+                planFingerprint: (useRadarrPathOverride ? pathOverride : pathAdoption)!
+                  .planFingerprint,
+              }
               : {}),
-            ...(pathConsentRequired ? { allowRadarrMovieRemoval } : {}),
+            ...(useRadarrPathOverride
+              ? { allowRadarrRetainedPathManagement: true }
+              : pathConsentRequired
+              ? { allowRadarrMovieRemoval: true }
+              : {}),
           })}
       />
     </DeletionModalShell>

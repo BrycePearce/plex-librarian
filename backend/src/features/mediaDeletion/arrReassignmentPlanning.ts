@@ -326,6 +326,21 @@ async function revalidatePersistedRadarrPathBoundary({
   if (collision) throw new Error(`another Radarr movie now overlaps ${collision.path}`);
 }
 
+export function classifyRadarrRetainedPath(
+  containingRootCount: number,
+  mappingKind: 'library' | 'download',
+): Pick<PersistedRadarrPathPlan, 'mode' | 'pathOwnership' | 'userAuthorizedPathManagement'> & {
+  requiresConsent: boolean;
+} {
+  const requiresConsent = containingRootCount === 0 || mappingKind === 'download';
+  return {
+    requiresConsent,
+    mode: requiresConsent ? 'adopt_path_with_consent' : 'adopt_safe_path',
+    pathOwnership: requiresConsent ? 'explicit_user_managed_location' : 'ordinary_radarr_library',
+    userAuthorizedPathManagement: !requiresConsent,
+  };
+}
+
 export async function buildArrReassignmentPlan({
   mediaType,
   item,
@@ -923,12 +938,15 @@ export async function buildArrReassignmentPlan({
                   `another Radarr movie overlaps the proposed path: ${collision.path}`,
                 );
               }
-              if (containingRoots.length === 0 || retainedNamespace.arrMappingKind === 'download') {
-                throw new Error('the retained path is outside an ordinary Radarr library boundary');
-              }
-              const requiresConsent = false;
-              const mode = 'adopt_safe_path' as const;
-              const pathOwnership = 'ordinary_radarr_library' as const;
+              const {
+                requiresConsent,
+                mode,
+                pathOwnership,
+                userAuthorizedPathManagement,
+              } = classifyRadarrRetainedPath(
+                containingRoots.length,
+                retainedNamespace.arrMappingKind,
+              );
               const decision = {
                 serverId,
                 machineIdentifier,
@@ -982,7 +1000,7 @@ export async function buildArrReassignmentPlan({
                   size: managedFile.size,
                 },
                 pathOwnership,
-                userAuthorizedPathManagement: true,
+                userAuthorizedPathManagement,
                 planFingerprint,
                 radarrBehaviorFingerprint: capabilities.behaviorFingerprint,
                 radarrVersion: capabilities.version!,
@@ -1201,7 +1219,7 @@ export async function buildArrReassignmentPlan({
         entry.radarrPathPlan = pathPlan;
         commonReassignCandidates = new Set([pathPlan.retainedMediaId]);
         radarrPathAdoption = {
-          mode: pathPlan.mode === 'adopt_path_with_consent' ? 'unavailable' : pathPlan.mode,
+          mode: pathPlan.mode,
           arrInstanceId: pathPlan.arrInstanceId,
           movieId: pathPlan.movieId,
           retainedMediaId: pathPlan.retainedMediaId,
@@ -1209,7 +1227,7 @@ export async function buildArrReassignmentPlan({
           retainedPath: pathPlan.retainedPath,
           proposedMoviePath: pathPlan.targetMoviePath,
           pathOwnership: pathPlan.pathOwnership,
-          requiresConsent: false,
+          requiresConsent: pathPlan.mode === 'adopt_path_with_consent',
           planFingerprint: pathPlan.planFingerprint,
           radarrVersion: pathPlan.radarrVersion,
           minimumRadarrVersion: '6.3.0.10514',
@@ -1237,7 +1255,8 @@ export async function buildArrReassignmentPlan({
       };
     }
   }
-  const arrReassignStatus = arrReassignErrors.length === 0 &&
+  const consentPathOnly = radarrPathAdoption.mode === 'adopt_path_with_consent';
+  const arrReassignStatus = !consentPathOnly && arrReassignErrors.length === 0 &&
       arrReassignUnsafeReasons.length === 0 &&
       eligibleArrReassignments.length > 0 &&
       commonReassignCandidates.size > 0
@@ -1245,7 +1264,9 @@ export async function buildArrReassignmentPlan({
     : arrReassignErrors.length > 0
     ? ('error' as const)
     : ('unavailable' as const);
-  const arrReassignReason = arrReassignStatus === 'error'
+  const arrReassignReason = consentPathOnly
+    ? 'The retained folder requires explicit user authorization before Radarr can manage it'
+    : arrReassignStatus === 'error'
     ? arrReassignErrors.join('; ')
     : arrReassignStatus === 'unavailable'
     ? (arrReassignUnsafeReasons[0] ??
@@ -1267,7 +1288,7 @@ export async function buildArrReassignmentPlan({
     arrReassignCandidateMediaIds: [...commonReassignCandidates].sort((a, b) => a - b),
     arrReassignStatus,
     ...(arrReassignReason ? { arrReassignReason } : {}),
-    radarrPathAdoption: arrReassignStatus === 'resolved' ? radarrPathAdoption : {
+    radarrPathAdoption: arrReassignStatus === 'resolved' || consentPathOnly ? radarrPathAdoption : {
       ...radarrPathAdoption,
       mode: 'unavailable',
       reason: arrReassignReason,
