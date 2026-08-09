@@ -44,6 +44,35 @@ export function deletionRecoveryNeedsProjection(
     hasBlockingRelocationGuidance(client, serverId, libraryKey);
 }
 
+// Recovery is scoped to the item/show roots named by its durable targets. A scan may
+// prune unrelated stale projections in the same library while retaining these roots.
+// If recovery is required but this returns no roots, callers must still fail closed
+// and suppress the whole prune: that indicates malformed or incomplete evidence.
+export function deletionRecoveryProjectionRoots(
+  client: SqliteClient,
+  serverId: number,
+  libraryKey: string,
+): string[] {
+  return client.prepare(
+    `SELECT DISTINCT COALESCE(
+       json_extract(t.snapshot, '$.showRatingKey'),
+       json_extract(t.snapshot, '$.ratingKey')
+     )
+     FROM deletion_targets t JOIN deletion_operations o ON o.id=t.operation_id
+     WHERE o.server_id=? AND o.library_key=?
+       AND (
+         t.status='needs_attention'
+         OR (
+           json_type(t.snapshot, '$.relocationGuidance') IS NOT NULL
+           AND json_type(t.snapshot, '$.relocationSyncBarrier') IS NULL
+         )
+       )`,
+  ).values<[string | null]>(serverId, libraryKey)
+    .flatMap(([ratingKey]) =>
+      typeof ratingKey === 'string' && ratingKey.length > 0 ? [ratingKey] : []
+    );
+}
+
 export function deletionRecoveryLibraryKeys(
   client: SqliteClient,
   serverId: number,

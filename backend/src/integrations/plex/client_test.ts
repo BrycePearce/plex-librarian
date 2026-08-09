@@ -575,7 +575,10 @@ Deno.test('movie sync does not request exact metadata for a single-version item'
 
   const page = await client.libraryItems('7', 1).next();
 
-  assertEquals(page.value?.mediaVersions.map((version) => version.mediaId), [11]);
+  assertEquals(
+    page.value?.mediaVersions.map((version: { mediaId: number }) => version.mediaId),
+    [11],
+  );
   assertEquals(requests, ['/library/sections/7/all']);
 });
 

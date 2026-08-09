@@ -38,6 +38,7 @@ const { refreshDeletionOperation } = await import('./state.ts');
 const {
   deletionRecoveryLibraryKeys,
   deletionRecoveryNeedsProjection,
+  deletionRecoveryProjectionRoots,
 } = await import('./coordination.ts');
 const { orphanRootIdentity } = await import('../mediaDeletion/hardlinks.ts');
 const { runLibrarySync, runSync } = await import('../sync/service.ts');
@@ -5036,9 +5037,17 @@ Deno.test('sync preserves a needs-attention version projection until manual retr
     ).run(operationId);
   });
   failDeleteBeforeMutation = false;
+  bulkMetadataOverrides.set('sync-survivor', structuredClone(live.get('sync-survivor')!));
+  live.get('sync-survivor')!.Media = [live.get('sync-survivor')!.Media![0]!];
+
+  assertEquals(
+    withTransaction((client) => deletionRecoveryProjectionRoots(client, 1, 'movies')),
+    ['sync-recovery'],
+  );
 
   const active = await resolveActiveServer();
-  await runLibrarySync(active.client, active.serverId, 'movies');
+  const result = await runLibrarySync(active.client, active.serverId, 'movies');
+  assertEquals(result.pruneCompleted, false);
   assertEquals(
     withTransaction((client) =>
       client.prepare(
@@ -5046,6 +5055,14 @@ Deno.test('sync preserves a needs-attention version projection until manual retr
       ).value<[number]>()?.[0]
     ),
     1,
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT media_id FROM item_media_versions WHERE server_id = 1 AND item_rating_key = 'sync-survivor' ORDER BY media_id",
+      ).values<[number]>().map(([mediaId]) => mediaId)
+    ),
+    [31],
   );
 
   assertEquals(retryDeletionOperation(operationId, 1), true);

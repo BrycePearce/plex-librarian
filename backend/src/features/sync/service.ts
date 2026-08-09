@@ -6,6 +6,7 @@ import { itemsByLibrary, libraryByKey, mediaVersionsByLibrary } from '../../db/s
 import {
   deletionRecoveryLibraryKeys,
   deletionRecoveryNeedsProjection,
+  deletionRecoveryProjectionRoots,
 } from '../deletionOperations/coordination.ts';
 import { PLEX_TYPE } from '../../integrations/plex/index.ts';
 import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
@@ -258,11 +259,19 @@ async function syncLibrary(
   }
 
   // A needs-attention deletion is terminal for worker scheduling but still owns its
-  // local projection until manual replay finalizes it. Continue refreshing the library,
-  // but suppress every prune for this pass so sync cannot split that finalization.
-  const preserveDeletionProjections = withTransaction((client) =>
-    deletionRecoveryNeedsProjection(client, serverId, lib.key)
-  );
+  // local projection until manual replay finalizes it. Keep those specific item/show
+  // roots while allowing unrelated stale projections in the library to converge.
+  const recoveryProjection = withTransaction((client) => {
+    const required = deletionRecoveryNeedsProjection(client, serverId, lib.key);
+    return {
+      required,
+      roots: required ? deletionRecoveryProjectionRoots(client, serverId, lib.key) : [],
+    };
+  });
+  // Missing root evidence is unsafe to narrow, so preserve the original fail-closed
+  // behavior. Otherwise only the named items/shows are excluded from pruning.
+  const suppressAllProjectionPruning = recoveryProjection.required &&
+    recoveryProjection.roots.length === 0;
 
   // Both size-rollup functions run before the prune, for different reasons.
   // syncShowSizes: the seasons table has FK(server_id, show_rating_key) → items(server_id,
@@ -280,23 +289,35 @@ async function syncLibrary(
       lib,
       now,
       serverId,
-      preserveDeletionProjections,
+      recoveryProjection.required,
+      recoveryProjection.roots,
+      suppressAllProjectionPruning,
     )).pruneCompleted;
   } else if (lib.type === 'artist') {
     callbacks?.onPhase('tracks');
     await syncArtistSizes(plex, lib, serverId);
   }
 
-  const itemProjectionPruneCompleted = itemCount > 0 && !preserveDeletionProjections;
-  if (itemProjectionPruneCompleted) {
-    await db.delete(items).where(and(itemsByLibrary(serverId, lib.key), lt(items.updatedAt, now)));
+  const itemPruneCanRun = itemCount > 0 && !suppressAllProjectionPruning;
+  if (itemPruneCanRun) {
+    const protectedRoots = recoveryProjection.roots;
+    await db.delete(items).where(and(
+      itemsByLibrary(serverId, lib.key),
+      lt(items.updatedAt, now),
+      ...(protectedRoots.length > 0 ? [notInArray(items.ratingKey, protectedRoots)] : []),
+    ));
     // Cascade-deletes media-version rows for any item pruned above. This explicit prune
     // additionally catches the case where the parent item still exists but one specific
     // version disappeared from Plex between syncs (e.g. deleted directly in Plex).
-    await db.delete(itemMediaVersions).where(
-      and(mediaVersionsByLibrary(serverId, lib.key), lt(itemMediaVersions.updatedAt, now)),
-    );
+    await db.delete(itemMediaVersions).where(and(
+      mediaVersionsByLibrary(serverId, lib.key),
+      lt(itemMediaVersions.updatedAt, now),
+      ...(protectedRoots.length > 0
+        ? [notInArray(itemMediaVersions.itemRatingKey, protectedRoots)]
+        : []),
+    ));
   }
+  const itemProjectionPruneCompleted = itemPruneCanRun && !recoveryProjection.required;
   const pruneCompleted = completeProjectionPrune(
     lib.type,
     itemProjectionPruneCompleted,

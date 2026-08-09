@@ -1,4 +1,4 @@
-import { and, lt, sql } from 'drizzle-orm';
+import { and, lt, notInArray, sql } from 'drizzle-orm';
 import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db, withTransaction } from '../../db/index.ts';
 import { episodeMediaVersions, seasons } from '../../db/schema.ts';
@@ -20,6 +20,9 @@ export async function syncShowSizes(
   now: number,
   serverId: number,
   preserveDeletionProjections = false,
+  protectedShowRatingKeys: readonly string[] = [],
+  suppressAllProjectionPruning = preserveDeletionProjections &&
+    protectedShowRatingKeys.length === 0,
 ): Promise<{ pruneCompleted: boolean }> {
   type SeasonAgg = {
     showRatingKey: string;
@@ -195,13 +198,19 @@ export async function syncShowSizes(
       });
   }
 
-  // Needs-attention deletion recovery owns its existing show/episode projection until
-  // manual replay finalizes it. Skipping both prunes together also prevents the season
+  // Needs-attention deletion recovery owns its affected show/episode roots until manual
+  // replay finalizes them. Excluding the same roots from both prunes prevents the season
   // FK cascade from deleting a protected episode-version row indirectly.
-  if (!preserveDeletionProjections) {
+  if (!suppressAllProjectionPruning) {
     await db
       .delete(seasons)
-      .where(and(seasonsByLibrary(serverId, lib.key), lt(seasons.updatedAt, now)));
+      .where(and(
+        seasonsByLibrary(serverId, lib.key),
+        lt(seasons.updatedAt, now),
+        ...(protectedShowRatingKeys.length > 0
+          ? [notInArray(seasons.showRatingKey, [...protectedShowRatingKeys])]
+          : []),
+      ));
 
     // Runs after the seasons prune (not before) purely to avoid redundant work: any
     // episode-version row belonging to a show/season pruned above is already
@@ -209,9 +218,13 @@ export async function syncShowSizes(
     // seasonRatingKey->seasons cascade). This explicit prune only catches the remaining
     // case — the show/season still exists, but a specific episode version disappeared
     // from Plex between syncs.
-    await db.delete(episodeMediaVersions).where(
-      and(episodeVersionsByLibrary(serverId, lib.key), lt(episodeMediaVersions.updatedAt, now)),
-    );
+    await db.delete(episodeMediaVersions).where(and(
+      episodeVersionsByLibrary(serverId, lib.key),
+      lt(episodeMediaVersions.updatedAt, now),
+      ...(protectedShowRatingKeys.length > 0
+        ? [notInArray(episodeMediaVersions.showRatingKey, [...protectedShowRatingKeys])]
+        : []),
+    ));
   }
 
   // Roll season sizes up to the show row so the stale list can display total size.
