@@ -1,4 +1,19 @@
-import type { MediaVersion, VersionDeletionPreviewResponse } from "../../lib/api.ts";
+import type {
+  MediaVersion,
+  MediaVersionPathPreview,
+  VersionDeletionPreviewResponse,
+} from "../../lib/api.ts";
+
+export function versionPathPreviewsByMediaId(
+  availableVersions: readonly MediaVersionPathPreview[],
+  selectedVersions: readonly MediaVersionPathPreview[] = [],
+): Map<number, MediaVersionPathPreview> {
+  // Selected previews carry the precise unavailable reason when a persisted version is
+  // absent from Plex's live-version list, so they intentionally win on duplicate IDs.
+  return new Map(
+    [...availableVersions, ...selectedVersions].map((version) => [version.mediaId, version]),
+  );
+}
 
 export function largestVersionId(versions: readonly MediaVersion[]): number | null {
   if (versions.length === 0) return null;

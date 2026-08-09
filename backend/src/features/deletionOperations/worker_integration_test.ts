@@ -663,7 +663,10 @@ function addMovie(ratingKey: string, mediaIds = [11, 12], tmdbId: number | null 
     type: 'movie',
     librarySectionID: 'movies',
     Guid: tmdbId === null ? [] : [{ id: `tmdb://${tmdbId}` }],
-    Media: mediaIds.map((id) => ({ id, Part: [{ size: 50_000 }] })),
+    Media: mediaIds.map((id) => ({
+      id,
+      Part: [{ file: `/movies/${ratingKey}-${id}.mkv`, size: 50_000 }],
+    })),
   });
 }
 
@@ -693,7 +696,10 @@ function addQuickCleanupShow(ratingKey: string): void {
     parentRatingKey: `${ratingKey}-season`,
     parentIndex: 1,
     index: 1,
-    Media: [{ id: 9501, Part: [{ size: 50_000 }] }],
+    Media: [{
+      id: 9501,
+      Part: [{ file: `/tv/${ratingKey}-9501.mkv`, size: 50_000 }],
+    }],
   });
 }
 
@@ -761,6 +767,7 @@ function addSmartCleanupMovie(ratingKey: string, persistDetails = true): void {
       audioChannels: 2,
       audioProfile: 'lc',
       Part: [{
+        file: `/movies/${ratingKey}-11.mkv`,
         size: 50_000,
         Stream: [
           { streamType: 1, bitDepth: 8, scanType: 'progressive' },
@@ -791,6 +798,7 @@ function addSmartCleanupMovie(ratingKey: string, persistDetails = true): void {
       audioChannels: 2,
       audioProfile: 'lc',
       Part: [{
+        file: `/movies/${ratingKey}-12.mkv`,
         size: 50_000,
         Stream: [
           { streamType: 1, bitDepth: 8, scanType: 'progressive' },
@@ -865,7 +873,10 @@ function addEpisode(): void {
     parentRatingKey: 'season-1',
     parentIndex: 1,
     index: 1,
-    Media: [21, 22].map((id) => ({ id, Part: [{ size: 40_000 }] })),
+    Media: [21, 22].map((id) => ({
+      id,
+      Part: [{ file: `/tv/show-1-${id}.mkv`, size: 40_000 }],
+    })),
   });
 }
 
@@ -1389,7 +1400,7 @@ Deno.test('stale quick cleanup rejects a live movie that gained another version'
   });
   live.get('stale-live-duplicate')!.Media!.push({
     id: 9302,
-    Part: [{ size: 50_000 }],
+    Part: [{ file: '/movies/stale-live-duplicate-9302.mkv', size: 50_000 }],
   });
 
   const response = await app.request('/api/libraries/movies/items', {
@@ -1424,7 +1435,7 @@ Deno.test('stale quick cleanup rejects a show that gained a duplicate episode', 
   });
   live.get('stale-show-live-duplicate-episode')!.Media!.push({
     id: 9502,
-    Part: [{ size: 50_000 }],
+    Part: [{ file: '/tv/stale-show-live-duplicate-episode-9502.mkv', size: 50_000 }],
   });
 
   const response = await app.request('/api/libraries/shows/items', {
@@ -1663,7 +1674,7 @@ Deno.test(
 
     live.get('stale-show-durable-episode')!.Media!.push({
       id: 9502,
-      Part: [{ size: 50_000 }],
+      Part: [{ file: '/tv/stale-show-durable-episode-9502.mkv', size: 50_000 }],
     });
     await settle();
 
@@ -1711,7 +1722,7 @@ Deno.test(
 
     live.get('stale-live-durable')!.Media!.push({
       id: 9402,
-      Part: [{ size: 50_000 }],
+      Part: [{ file: '/movies/stale-live-durable-9402.mkv', size: 50_000 }],
     });
     await settle();
 
@@ -4910,6 +4921,37 @@ Deno.test('Plex-phase recovery revalidates durable identity before deleting', as
   assertEquals(target.phase, 'plex_reconciliation');
   assertEquals(target.plexAttemptCount, 0);
   assertEquals(live.get('plex-phase-drift')?.Media?.map((media) => media.id), [11, 12]);
+});
+
+Deno.test('completed sync prunes a previously stored pathless movie version', async () => {
+  reset();
+  addMovie('sync-pathless');
+  live.get('sync-pathless')!.Media![0]!.Part = [{
+    file: '/movies/sync-pathless-11.mkv',
+    size: 50_000,
+  }];
+  live.get('sync-pathless')!.Media![1]!.Part = [{ size: 50_000 }];
+
+  const active = await resolveActiveServer();
+  const result = await runLibrarySync(active.client, active.serverId, 'movies');
+
+  assertEquals(result.pruneCompleted, true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT media_id FROM item_media_versions WHERE server_id = 1 AND item_rating_key = 'sync-pathless' ORDER BY media_id",
+      ).values<[number]>().map(([mediaId]) => mediaId)
+    ),
+    [11],
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT file_size FROM items WHERE server_id = 1 AND rating_key = 'sync-pathless'",
+      ).value<[number]>()?.[0]
+    ),
+    50,
+  );
 });
 
 Deno.test('sync preserves a needs-attention version projection until manual retry finalizes it', async () => {

@@ -128,20 +128,37 @@ export function mapActiveSessions(raw: PlexRawSession[]): PlexActiveSession[] {
 // Result is stored in kilobytes to keep values well within 32-bit range for @db/sqlite.
 const normalizeSize = (s: number) => s < 0 ? s + 2 ** 32 : s;
 
+type RawMedia = NonNullable<PlexRawMetadata['Media']>[number];
+type RawPart = NonNullable<RawMedia['Part']>[number];
+
+// A Plex Media shell is not a usable library version unless it still owns at least
+// one file-backed Part. `exists` is absent on some PMS responses, so only an explicit
+// false/0 excludes a Part. `accessible` is deliberately not considered: an offline
+// mount may be temporarily inaccessible without the file having been removed from Plex.
+function isExistingFilePart(part: RawPart): part is RawPart & { file: string } {
+  return typeof part.file === 'string' && part.file.length > 0 &&
+    part.exists !== false && part.exists !== 0;
+}
+
+function existingFileParts(media: RawMedia): Array<RawPart & { file: string }> {
+  return (media.Part ?? []).filter(isExistingFilePart);
+}
+
+function isFileBackedMedia(media: RawMedia): media is RawMedia & { id: number } {
+  return Number.isSafeInteger(media.id) && existingFileParts(media).length > 0;
+}
+
 // Sums a single Media entry's own Part sizes — the per-version counterpart to
 // extractFileSize's sum across every Media entry on the item.
-function sumPartSizes(parts: Array<{ size?: number }> | undefined): number | null {
-  const sized = (parts ?? []).filter((p) => p.size != null);
+function sumPartSizes(parts: RawPart[]): number | null {
+  const sized = parts.filter((p) => p.size != null);
   if (sized.length === 0) return null;
   const bytes = sized.reduce((acc, p) => acc + normalizeSize(p.size!), 0);
   return Math.round(bytes / 1000);
 }
 
 function extractFileSize(item: PlexRawMetadata): number | null {
-  const parts = item.Media?.flatMap((m) => m.Part ?? []).filter((p) => p.size != null) ?? [];
-  if (parts.length === 0) return null;
-  const bytes = parts.reduce((acc, p) => acc + normalizeSize(p.size!), 0);
-  return Math.round(bytes / 1000);
+  return sumPartSizes((item.Media ?? []).flatMap(existingFileParts));
 }
 
 function appendMediaPaths(
@@ -152,12 +169,10 @@ function appendMediaPaths(
 ): boolean {
   for (const item of metadata) {
     for (const media of item.Media ?? []) {
-      for (const part of media.Part ?? []) {
+      for (const part of existingFileParts(media)) {
         // Keep Plex's path byte-for-byte. Normalizing separators or case would corrupt
         // valid Windows/UNC paths and can also merge distinct Linux paths.
-        if (typeof part.file !== 'string' || part.file.length === 0 || seen.has(part.file)) {
-          continue;
-        }
+        if (seen.has(part.file)) continue;
         if (paths.length >= limit) return true;
         seen.add(part.file);
         paths.push(part.file);
@@ -208,7 +223,6 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
   });
 }
 
-type RawMedia = NonNullable<PlexRawMetadata['Media']>[number];
 type RawStream = NonNullable<NonNullable<RawMedia['Part']>[number]['Stream']>[number];
 
 function asFlag(value: boolean | number | undefined): boolean {
@@ -238,7 +252,7 @@ function uniqueStreams(streams: PlexMediaStreamSummary[]): PlexMediaStreamSummar
 }
 
 function technicalDetails(media: RawMedia): PlexMediaTechnicalDetails {
-  const parts = media.Part ?? [];
+  const parts = existingFileParts(media);
   const streams = parts.flatMap((part) => part.Stream ?? []);
   const videoStream = streams.find((stream) => stream.streamType === 1);
   const dynamicRange = media.videoDynamicRange ?? (
@@ -277,7 +291,7 @@ function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
     .filter((item) => item.type === 'movie')
     .flatMap((item) =>
       (item.Media ?? [])
-        .filter((m): m is typeof m & { id: number } => m.id != null)
+        .filter(isFileBackedMedia)
         .map((m) => ({
           mediaId: m.id,
           itemRatingKey: item.ratingKey,
@@ -286,7 +300,7 @@ function mapMediaVersions(raw: PlexRawMetadata[]): PlexMediaVersion[] {
           bitrate: m.bitrate ?? null,
           videoCodec: m.videoCodec ?? null,
           container: m.container ?? null,
-          fileSize: sumPartSizes(m.Part),
+          fileSize: sumPartSizes(existingFileParts(m)),
         }))
     );
 }
@@ -316,10 +330,10 @@ function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
     }));
 }
 
-// Write-time duplicate filter: only episodes whose valid (id != null) Media count is
+// Write-time duplicate filter: only episodes whose file-backed Media count is
 // already >= 2 ever produce rows here — see episodeMediaVersions in db/schema.ts for
-// why. Filtering on the *valid* count (not raw Media.length) matters: an episode with
-// one addressable version and one malformed entry (no id) must not end up with a
+// why. Filtering on the valid count (not raw Media.length) matters: an episode with
+// one file-backed version and one malformed or pathless entry must not end up with a
 // single-row "duplicate" that the delete route's last-version guard can never resolve.
 // Same parent/grandparent/parentIndex requirement as mapEpisodes, deliberately — an
 // episode that syncs normally there must not silently fail to surface here too.
@@ -333,7 +347,7 @@ function mapEpisodeMediaVersions(raw: PlexRawMetadata[]): PlexEpisodeMediaVersio
     .filter((item) => item.parentRatingKey && item.grandparentRatingKey && item.parentIndex != null)
     .flatMap((item) => {
       const validMedia = (item.Media ?? [])
-        .filter((m): m is typeof m & { id: number } => m.id != null);
+        .filter(isFileBackedMedia);
       if (validMedia.length < 2) return [];
       return validMedia.map((m) => ({
         mediaId: m.id,
@@ -348,7 +362,7 @@ function mapEpisodeMediaVersions(raw: PlexRawMetadata[]): PlexEpisodeMediaVersio
         bitrate: m.bitrate ?? null,
         videoCodec: m.videoCodec ?? null,
         container: m.container ?? null,
-        fileSize: sumPartSizes(m.Part),
+        fileSize: sumPartSizes(existingFileParts(m)),
       }));
     });
 }
@@ -585,14 +599,14 @@ export class PlexClient {
       seasonIndex: item.parentIndex ?? null,
       index: item.index ?? null,
       media: (item.Media ?? []).flatMap((media) =>
-        media.id == null ? [] : [{
+        !isFileBackedMedia(media) ? [] : [{
           mediaId: media.id,
           videoResolution: media.videoResolution ?? null,
           height: media.height ?? null,
           bitrate: media.bitrate ?? null,
           videoCodec: media.videoCodec ?? null,
           container: media.container ?? null,
-          fileSize: extractFileSize({ ...item, Media: [media] }),
+          fileSize: sumPartSizes(existingFileParts(media)),
         }]
       ),
     };
@@ -600,7 +614,7 @@ export class PlexClient {
 
   // Shows do not expose episode Media entries on their own metadata response, and this
   // app deliberately does not persist every episode. Walk allLeaves page-by-page and
-  // stop as soon as one episode has multiple addressable Plex versions.
+  // stop as soon as one episode has multiple file-backed Plex versions.
   async showHasMultiVersionEpisodes(
     ratingKey: string,
     signal?: AbortSignal,
@@ -616,9 +630,7 @@ export class PlexClient {
       }, signal);
       const metadata = data.MediaContainer.Metadata ?? [];
       if (
-        metadata.some((episode) =>
-          (episode.Media ?? []).filter((media) => media.id != null).length >= 2
-        )
+        metadata.some((episode) => (episode.Media ?? []).filter(isFileBackedMedia).length >= 2)
       ) {
         return true;
       }
@@ -709,8 +721,8 @@ export class PlexClient {
         const paths: string[] = [];
         const seen = new Set<string>();
         let truncated = false;
-        for (const part of media.Part ?? []) {
-          if (typeof part.file !== 'string' || part.file.length === 0 || seen.has(part.file)) {
+        for (const part of existingFileParts(media)) {
+          if (seen.has(part.file)) {
             continue;
           }
           if (paths.length >= limitPerVersion) {
@@ -721,7 +733,7 @@ export class PlexClient {
           paths.push(part.file);
         }
         const matchingParts = paths.length === 1
-          ? (media.Part ?? []).filter((part) => part.file === paths[0])
+          ? existingFileParts(media).filter((part) => part.file === paths[0])
           : [];
         const rawFileSize = matchingParts.length === 1 ? matchingParts[0]!.size : undefined;
         const fileSize = typeof rawFileSize === 'number' && Number.isSafeInteger(rawFileSize) &&
@@ -759,9 +771,9 @@ export class PlexClient {
     }
     const matches = (item.Media ?? []).filter((media) => media.id === mediaId);
     if (matches.length !== 1) throw new Error('Plex did not return one exact validation Media');
-    const parts = matches[0]!.Part ?? [];
-    if (parts.length !== 1 || typeof parts[0]!.file !== 'string') {
-      throw new Error('The validation Media does not have one exact Plex Part path');
+    const parts = existingFileParts(matches[0]!);
+    if (parts.length !== 1) {
+      throw new Error('The validation Media does not have one exact existing Plex Part path');
     }
     const size = Number(parts[0]!.size);
     if (!Number.isSafeInteger(size) || size <= 0) {

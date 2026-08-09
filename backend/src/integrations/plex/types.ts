@@ -82,6 +82,8 @@ export interface PlexRawMetadata {
     Part?: Array<{
       size?: number;
       file?: string;
+      exists?: boolean | number;
+      accessible?: boolean | number;
       Stream?: Array<{
         streamType?: number;
         codec?: string;

@@ -362,6 +362,7 @@ Deno.test('movie sync captures technical and stream metadata for version compari
             audioChannels: 8,
             container: 'mkv',
             Part: [{
+              file: '/movies/Example.mkv',
               size: 123_000,
               Stream: [
                 {
@@ -431,6 +432,98 @@ Deno.test('movie sync captures technical and stream metadata for version compari
   });
 });
 
+Deno.test('movie sync keeps only file-backed Media and sizes existing Parts', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          Media: [
+            {
+              id: 11,
+              Part: [
+                { file: '/movies/live.mkv', size: 1_000 },
+                { file: '/movies/missing-part.mkv', size: 2_000, exists: false },
+              ],
+            },
+            { id: 12, Part: [{ size: 3_000 }] },
+            { id: 13, Part: [{ file: '/movies/missing.mkv', size: 4_000, exists: false }] },
+            {
+              id: 14,
+              Part: [{ file: '/movies/offline.mkv', size: 5_000, accessible: false }],
+            },
+          ],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryItems('7', 1).next();
+  assertEquals(
+    page.value?.mediaVersions.map((version: { mediaId: number; fileSize: number | null }) => ({
+      mediaId: version.mediaId,
+      fileSize: version.fileSize,
+    })),
+    [
+      { mediaId: 11, fileSize: 1 },
+      { mediaId: 14, fileSize: 5 },
+    ],
+  );
+  assertEquals(page.value?.items[0]?.fileSize, 6);
+});
+
+Deno.test('episode duplicate qualification ignores pathless and missing Media', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 2,
+        Metadata: [
+          {
+            ratingKey: 'episode-1',
+            title: 'One real copy',
+            type: 'episode',
+            parentRatingKey: 'season-1',
+            grandparentRatingKey: 'show-1',
+            parentIndex: 1,
+            index: 1,
+            Media: [
+              { id: 21, Part: [{ file: '/tv/show/e01.mkv', size: 1_000 }] },
+              { id: 22, Part: [{ size: 2_000 }] },
+            ],
+          },
+          {
+            ratingKey: 'episode-2',
+            title: 'Two real copies',
+            type: 'episode',
+            parentRatingKey: 'season-1',
+            grandparentRatingKey: 'show-1',
+            parentIndex: 1,
+            index: 2,
+            Media: [
+              { id: 31, Part: [{ file: '/tv/show/e02.mkv', size: 3_000 }] },
+              { id: 32, Part: [{ file: '/tv/show/e02-4k.mkv', size: 4_000 }] },
+              { id: 33, Part: [{ file: '/tv/show/gone.mkv', size: 5_000, exists: 0 }] },
+            ],
+          },
+        ],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const page = await client.libraryEpisodes('7').next();
+  assertEquals(
+    page.value?.episodeMediaVersions.map((version: { mediaId: number }) => version.mediaId),
+    [31, 32],
+  );
+  assertEquals(
+    page.value?.episodes.map((episode: { fileSize: number | null }) => episode.fileSize),
+    [1, 7],
+  );
+});
+
 Deno.test('metadata identity captures immutable item, ancestry, and media fields', async () => {
   const mockFetch = (() =>
     Promise.resolve(Response.json({
@@ -445,14 +538,18 @@ Deno.test('metadata identity captures immutable item, ancestry, and media fields
           parentIndex: 1,
           index: 2,
           Guid: [{ id: 'tvdb://1234' }],
-          Media: [{
-            id: 44,
-            videoResolution: '1080',
-            height: 1080,
-            bitrate: 8000,
-            videoCodec: 'h264',
-            container: 'mkv',
-          }],
+          Media: [
+            {
+              id: 44,
+              videoResolution: '1080',
+              height: 1080,
+              bitrate: 8000,
+              videoCodec: 'h264',
+              container: 'mkv',
+              Part: [{ file: '/tv/Show/Season 01/Pilot.mkv' }],
+            },
+            { id: 45, Part: [{ size: 10_000 }] },
+          ],
         }],
       },
     }))) as typeof fetch;
@@ -534,6 +631,10 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
                 { file: '/movies/Example-4k.mkv' },
               ],
             },
+            {
+              id: 13,
+              Part: [{ file: '/movies/Example-gone.mkv', size: 200_000, exists: false }],
+            },
           ],
         }],
       },
@@ -555,7 +656,39 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
       fileSize: null,
       projectedFileSize: null,
     },
+    {
+      mediaId: 13,
+      paths: [],
+      truncated: false,
+      fileSize: null,
+      projectedFileSize: null,
+    },
   ]);
+});
+
+Deno.test('exact media path validation rejects a Part Plex marks missing', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        Metadata: [{
+          ratingKey: '10',
+          title: 'Example',
+          type: 'movie',
+          librarySectionID: '7',
+          Media: [{
+            id: 11,
+            Part: [{ file: '/movies/Example-gone.mkv', size: 100_000, exists: false }],
+          }],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.exactLibraryMediaPath('7', '10', 11),
+    Error,
+    'does not have one exact existing Plex Part path',
+  );
 });
 
 Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Media id', async () => {
@@ -574,6 +707,7 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
               audioCodec: 'aac',
               audioChannels: 2,
               Part: [{
+                file: '/movies/Example-aac.mkv',
                 Stream: [{
                   streamType: 2,
                   codec: 'aac',
@@ -654,7 +788,16 @@ Deno.test(
             ratingKey: duplicate ? 'episode-2' : 'episode-1',
             title: 'Episode',
             type: 'episode',
-            Media: duplicate ? [{ id: 21 }, { id: 22 }, {}] : [{ id: 11 }],
+            Media: duplicate
+              ? [
+                { id: 21, Part: [{ file: '/tv/show/e02-1080p.mkv' }] },
+                { id: 22, Part: [{ file: '/tv/show/e02-4k.mkv' }] },
+                {},
+              ]
+              : [
+                { id: 11, Part: [{ file: '/tv/show/e01.mkv' }] },
+                { id: 12, Part: [{ size: 100 }] },
+              ],
           }],
         },
       }));

@@ -9,9 +9,35 @@ import {
   versionDeletionPresentation,
   versionDestinationOptionVisibility,
   versionDestinationState,
+  versionPathPreviewsByMediaId,
   versionPlexFallbackWarning,
   versionSelectionSemantics,
 } from "./versionDeletionState.ts";
+
+Deno.test("selected unavailable version preserves its precise Plex reason", () => {
+  const previews = versionPathPreviewsByMediaId(
+    [{
+      mediaId: 2,
+      plexPaths: ["/movies/live.mkv"],
+      arrPaths: [],
+      cleanupPaths: [],
+      status: "resolved",
+      truncated: false,
+    }],
+    [{
+      mediaId: 1,
+      plexPaths: [],
+      arrPaths: [],
+      cleanupPaths: [],
+      status: "unavailable",
+      reason: "This Media version is no longer reported by Plex",
+      truncated: false,
+    }],
+  );
+
+  assertEquals(previews.get(1)?.reason, "This Media version is no longer reported by Plex");
+  assertEquals(previews.get(2)?.plexPaths, ["/movies/live.mkv"]);
+});
 
 const versions: MediaVersion[] = [
   {

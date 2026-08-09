@@ -656,7 +656,7 @@ export const seasons = sqliteTable(
   }),
 );
 
-// One row per Plex `Media` entry on a movie item — captures the individual file
+// One row per file-backed Plex `Media` entry on a movie item — captures the individual file
 // versions Plex groups under one ratingKey (e.g. a 1080p rip and a 4K remux of the
 // same movie) so they can be surfaced as a "duplicate" group and deleted individually.
 // Keyed by Plex's own per-Media `id`, which — like ratingKey — is already unique per
@@ -707,9 +707,9 @@ export const itemMediaVersions = sqliteTable(
   }),
 );
 
-// One row per Plex `Media` entry on an episode — but ONLY for episodes that already
-// have 2+ valid (id != null) Media entries. Deliberately asymmetric with
-// itemMediaVersions, which stores one row per movie unconditionally: movies already
+// One row per file-backed Plex `Media` entry on an episode — but ONLY for episodes that
+// already have 2+ such entries. Deliberately asymmetric with itemMediaVersions, which
+// stores every file-backed movie version unconditionally: movies already
 // get exactly 1 row per movie in `items` regardless of duplicate status, so 1 row per
 // movie there is proportional to what's already stored. Episodes have no such
 // baseline — they are never stored as individual rows anywhere (see CLAUDE.md's Scale

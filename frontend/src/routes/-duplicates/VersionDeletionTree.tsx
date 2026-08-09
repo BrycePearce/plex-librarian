@@ -10,7 +10,11 @@ import {
   downloadJobRoot,
   PathTreeRoot,
 } from "../../features/mediaDeletion/DeletionTree.tsx";
-import { versionArrDeletionActive, versionDeletionPresentation } from "./versionDeletionState.ts";
+import {
+  versionArrDeletionActive,
+  versionDeletionPresentation,
+  versionPathPreviewsByMediaId,
+} from "./versionDeletionState.ts";
 
 interface VersionTreeEntry {
   mediaId: number;
@@ -119,13 +123,9 @@ export function AdvancedVersionDeletionTree({
   loading: boolean;
   onToggleVersion: (mediaId: number) => void;
 }) {
-  const previewByMediaId = new Map(
-    availableVersions.map((version) =>
-      [
-        version.mediaId,
-        version,
-      ] as const
-    ),
+  const previewByMediaId = versionPathPreviewsByMediaId(
+    availableVersions,
+    preview?.versions,
   );
   const presentation = versionDeletionPresentation(
     preview,
