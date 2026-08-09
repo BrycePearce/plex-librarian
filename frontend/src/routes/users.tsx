@@ -22,7 +22,7 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { CollectionToolbar, PageHeader } from "../components/Workspace.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
-import { useSyncHistory } from "../lib/useLibrarySync.tsx";
+import { useAnySyncStatus } from "../lib/useLibrarySync.tsx";
 import { SyncDataNotice } from "../components/SyncDataNotice.tsx";
 
 const PAGE_SIZE = 100;
@@ -101,8 +101,7 @@ function UsersPage() {
   };
   const navigate = Route.useNavigate();
   const qc = useQueryClient();
-  const { data: syncHistory, isLoading: isSyncStatusLoading } = useSyncHistory();
-  const isSyncing = syncHistory?.some((sync) => sync.status === "pending") ?? false;
+  const { isSyncing, isSyncStatusLoading } = useAnySyncStatus();
 
   const [offset, setOffset] = useState(0);
 
@@ -128,12 +127,11 @@ function UsersPage() {
   // invalidations otherwise expose progressively recomputed risk and follow-through
   // assessments before the whole run has finished. A first visit during a sync may
   // fetch once so the access directory is still useful; volatile cells are masked below.
-  const hasCachedSnapshot = qc.getQueryData(usersQueryKey) !== undefined;
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: usersQueryKey,
     queryFn: () => api.users.list({ ...search, limit: PAGE_SIZE, offset }),
     placeholderData: (prev) => prev,
-    enabled: !isSyncing || !hasCachedSnapshot,
+    enabled: (query) => !isSyncing || query.state.data === undefined,
     refetchInterval: isSyncing ? false : 30_000,
   });
 
@@ -235,8 +233,8 @@ function UsersPage() {
 
       {isSyncing && (
         <SyncDataNotice>
-          Sharing risk and request follow-through are hidden until the sync finishes. The
-          directory will refresh with the complete results automatically.
+          Sharing risk and request follow-through are hidden until the sync finishes. The directory
+          will refresh with the complete results automatically.
         </SyncDataNotice>
       )}
 

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
-import "./HistorySyncWarning.css";
+import "./SyncStatusNotice.css";
 
 export function SyncDataNotice({
   children,

@@ -79,7 +79,6 @@ export function UsersTable({
               sort={sort}
               order={order}
               onSort={onSort}
-              disabled={insightsUpdating}
             />
             <UserSortTh
               label="Sharing risk"
@@ -87,6 +86,7 @@ export function UsersTable({
               sort={sort}
               order={order}
               onSort={onSort}
+              disabled={insightsUpdating}
             />
             {requestFollowThroughAvailable && (
               <th className="normal-case">Request follow-through</th>

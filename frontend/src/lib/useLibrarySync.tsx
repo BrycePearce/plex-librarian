@@ -51,6 +51,17 @@ export function useSyncHistory() {
   });
 }
 
+// Page-wide derived views (Users, Duplicates) care about any active sync, regardless
+// of whether it was started globally or for one library. Keep that interpretation of
+// shared sync history in one place so their safety gates cannot drift apart.
+export function useAnySyncStatus() {
+  const { data: history, isLoading } = useSyncHistory();
+  return {
+    isSyncing: history?.some((sync) => sync.status === "pending") ?? false,
+    isSyncStatusLoading: isLoading,
+  };
+}
+
 type SyncActions = {
   increment: () => void;
   decrement: () => void;

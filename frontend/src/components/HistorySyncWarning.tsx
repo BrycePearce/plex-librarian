@@ -1,7 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 import { SyncDataNotice } from "./SyncDataNotice.tsx";
-import "./HistorySyncWarning.css";
+import "./SyncStatusNotice.css";
 
 // Callers that track a live per-library sync signal (`isSyncing`) use the same shared
 // in-progress notice as Users and Duplicates, only falling through to the warning variant

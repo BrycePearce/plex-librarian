@@ -1,4 +1,4 @@
-/* Animated beam ring for the shared watch-history confidence banner. */
+/* Animated beam ring shared by active-sync notices and history-confidence warnings. */
 @property --beam-angle {
   syntax: "<angle>";
   initial-value: 0deg;

@@ -1,5 +1,5 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
 import { api } from "../lib/api.ts";
@@ -24,7 +24,7 @@ import { formatKilobytes } from "../lib/format.ts";
 import { duplicatePageSummary } from "./-duplicates/duplicatePresentation.ts";
 import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
 import "./duplicates.css";
-import { useSyncHistory } from "../lib/useLibrarySync.tsx";
+import { useAnySyncStatus } from "../lib/useLibrarySync.tsx";
 import { SyncDataNotice } from "../components/SyncDataNotice.tsx";
 
 const PAGE_SIZE = 50;
@@ -61,9 +61,7 @@ function DuplicatesPage() {
   const { type, comparison, search = "" } = Route.useSearch();
   const navigate = Route.useNavigate();
   const { trackDeletionOperation } = useDeletionOperationTracker();
-  const queryClient = useQueryClient();
-  const { data: syncHistory } = useSyncHistory();
-  const isSyncing = syncHistory?.some((sync) => sync.status === "pending") ?? false;
+  const { isSyncing } = useAnySyncStatus();
 
   const [offset, setOffset] = useState(0);
 
@@ -95,7 +93,6 @@ function DuplicatesPage() {
   // Keep an already-rendered, settled snapshot from being replaced by intermediate
   // version rows as individual libraries complete. A first visit may still fetch the
   // directory, but review and deletion remain gated for the entire active sync.
-  const hasCachedSnapshot = queryClient.getQueryData(duplicatesQueryKey) !== undefined;
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: duplicatesQueryKey,
     queryFn: () =>
@@ -105,9 +102,9 @@ function DuplicatesPage() {
         search,
         limit: PAGE_SIZE,
         offset,
-    }),
+      }),
     placeholderData: (prev) => prev,
-    enabled: !isSyncing || !hasCachedSnapshot,
+    enabled: (query) => !isSyncing || query.state.data === undefined,
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
