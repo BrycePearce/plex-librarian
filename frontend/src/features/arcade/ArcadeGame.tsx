@@ -47,10 +47,20 @@ import type {
   WeaponKind,
 } from "./types.ts";
 import backlogBossMusicUrl from "./assets/backlog-boss.mp3?url";
+import backfillMinibossMusicUrl from "./assets/backfill-miniboss.ogg?url";
 import duplicateBossMusicUrl from "./assets/duplicate-boss.ogg?url";
 import duplicateMusicUrl from "./assets/duplicate-vault.mp3?url";
 import rogueMusicUrl from "./assets/rogue-access.mp3?url";
 import rogueBossMusicUrl from "./assets/rogue-boss.mp3?url";
+import bossDefeatSfxUrl from "./assets/sfx/boss-defeat.wav?url";
+import bossPhaseSfxUrl from "./assets/sfx/boss-phase.wav?url";
+import gameOverSfxUrl from "./assets/sfx/game-over.wav?url";
+import shieldBlockSfxUrl from "./assets/sfx/shield-block.wav?url";
+import talk1SfxUrl from "./assets/sfx/talk-1.wav?url";
+import talk2SfxUrl from "./assets/sfx/talk-2.wav?url";
+import talk3SfxUrl from "./assets/sfx/talk-3.wav?url";
+import talk4SfxUrl from "./assets/sfx/talk-4.wav?url";
+import victoryStingSfxUrl from "./assets/sfx/victory-sting.ogg?url";
 import "./arcade.css";
 
 interface GameSummary {
@@ -105,8 +115,16 @@ const INITIAL_SUMMARY: GameSummary = {
   mode: "normal",
   noDamage: true,
 };
-const ACTIVE_PHASES = new Set<GamePhase>(["encounter", "reward", "boss", "endless"]);
-const SLIDER_INPUT_TYPE = ["ra", "nge"].join("") as React.HTMLInputTypeAttribute;
+const ACTIVE_PHASES = new Set<GamePhase>([
+  "encounter",
+  "reward",
+  "miniboss",
+  "boss",
+  "endless",
+]);
+const SLIDER_INPUT_TYPE = ["ra", "nge"].join(
+  "",
+) as React.HTMLInputTypeAttribute;
 
 export function ArcadeGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -123,6 +141,12 @@ export function ArcadeGame() {
     phase: "title" as GamePhase,
     health: 3,
     score: 0,
+    kills: 0,
+    enemyHits: 0,
+    shieldBlocks: 0,
+    bossPhaseChanges: 0,
+    minibossDefeatFor: 0,
+    dialogueText: "",
     projectileId: 1,
     dashCooldown: 0,
     warningCount: 0,
@@ -174,57 +198,74 @@ export function ArcadeGame() {
   const beginOpeningAudio = useCallback(() => {
     const state = stateRef.current;
     if (!state || state.phase === "title") return;
-    audioRef.current?.startOpeningFor(state.actIndex, state.phase, state.endlessRound);
+    audioRef.current?.startOpeningFor(
+      state.actIndex,
+      state.phase,
+      state.endlessRound,
+    );
   }, []);
 
   const handleBlur = useCallback(() => {
     const state = stateRef.current;
-    if (state && ACTIVE_PHASES.has(state.phase) && !pausedRef.current) setPauseState(true);
+    if (state && ACTIVE_PHASES.has(state.phase) && !pausedRef.current) {
+      setPauseState(true);
+    }
   }, [setPauseState]);
 
-  const handleTransition = useCallback((state: GameState, previous: GamePhase) => {
-    if (state.phase === previous) return;
-    if (ACTIVE_PHASES.has(state.phase) && !pausedRef.current) {
-      audioRef.current?.startFor(state.actIndex, state.phase, state.endlessRound);
-    }
-    if (state.phase === "reward") audioRef.current?.playSfx("reward");
-    if (state.phase === "boss") audioRef.current?.playSfx("boss");
+  const handleTransition = useCallback(
+    (state: GameState, previous: GamePhase) => {
+      if (state.phase === previous) return;
+      if (ACTIVE_PHASES.has(state.phase) && !pausedRef.current) {
+        audioRef.current?.startFor(
+          state.actIndex,
+          state.phase,
+          state.endlessRound,
+        );
+      }
+      if (state.phase === "reward") audioRef.current?.playSfx("reward");
+      if (state.phase === "boss" || state.phase === "miniboss") {
+        audioRef.current?.playSfx("boss");
+      }
 
-    if (state.phase === "actComplete") {
-      commitSave((draft) => {
-        recordScore(draft, state.mode, state.score);
-        if (state.actIndex === 0) {
-          draft.unlocks.rail = true;
-          if (!draft.achievements.includes("Backlog cleared")) {
-            draft.achievements.push("Backlog cleared");
+      if (state.phase === "actComplete") {
+        if (previous === "boss") audioRef.current?.playSfx("boss-clear");
+        commitSave((draft) => {
+          recordScore(draft, state.mode, state.score);
+          if (state.actIndex === 0) {
+            draft.unlocks.rail = true;
+            if (!draft.achievements.includes("Backlog cleared")) {
+              draft.achievements.push("Backlog cleared");
+            }
           }
-        }
-        if (state.actIndex < ACTS.length - 1) {
-          draft.checkpoint = {
-            ...checkpointFromState(state),
-            actIndex: state.actIndex + 1,
-            health: Math.min(state.player.maxHealth, state.player.health + 1),
-          };
-        }
-      });
-    } else if (state.phase === "gameOver") {
-      commitSave((draft) => recordScore(draft, state.mode, state.score));
-      audioRef.current?.pause();
-    } else if (state.phase === "victory") {
-      commitSave((draft) => {
-        recordScore(draft, state.mode, state.score);
-        draft.victories[state.mode] += 1;
-        draft.unlocks.array = true;
-        draft.unlocks.endless = true;
-        if (state.mode === "normal") draft.unlocks.hard = true;
-        draft.checkpoint = null;
-        if (!draft.achievements.includes("Library secured")) {
-          draft.achievements.push("Library secured");
-        }
-      });
-      audioRef.current?.playSfx("reward");
-    }
-  }, [commitSave]);
+          if (state.actIndex < ACTS.length - 1) {
+            draft.checkpoint = {
+              ...checkpointFromState(state),
+              actIndex: state.actIndex + 1,
+              health: Math.min(state.player.maxHealth, state.player.health + 1),
+            };
+          }
+        });
+      } else if (state.phase === "gameOver") {
+        commitSave((draft) => recordScore(draft, state.mode, state.score));
+        audioRef.current?.pause();
+        audioRef.current?.playSfx("game-over");
+      } else if (state.phase === "victory") {
+        commitSave((draft) => {
+          recordScore(draft, state.mode, state.score);
+          draft.victories[state.mode] += 1;
+          draft.unlocks.array = true;
+          draft.unlocks.endless = true;
+          if (state.mode === "normal") draft.unlocks.hard = true;
+          draft.checkpoint = null;
+          if (!draft.achievements.includes("Library secured")) {
+            draft.achievements.push("Library secured");
+          }
+        });
+        audioRef.current?.playSfx("victory");
+      }
+    },
+    [commitSave],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -239,6 +280,7 @@ export function ArcadeGame() {
       [launchMusic ?? musicElementA, musicElementB],
       {
         stale: ARCADE_OPENING_TRACK_URL,
+        "backfill-miniboss": backfillMinibossMusicUrl,
         "backlog-boss": backlogBossMusicUrl,
         duplicate: duplicateMusicUrl,
         "duplicate-boss": duplicateBossMusicUrl,
@@ -247,6 +289,14 @@ export function ArcadeGame() {
       },
       settingsRef.current,
       launchMusic ? "stale" : null,
+      {
+        shield: shieldBlockSfxUrl,
+        "boss-phase": bossPhaseSfxUrl,
+        "boss-defeat": bossDefeatSfxUrl,
+        talk: [talk1SfxUrl, talk2SfxUrl, talk3SfxUrl, talk4SfxUrl],
+        "game-over": gameOverSfxUrl,
+        victory: victoryStingSfxUrl,
+      },
     );
     audioRef.current = audio;
     let cssWidth = 1;
@@ -269,7 +319,11 @@ export function ArcadeGame() {
       if (!stateRef.current) {
         const currentSave = saveRef.current ?? createDefaultSave();
         if (currentSave.victories.normal === 0 && currentSave.checkpoint) {
-          stateRef.current = createStateFromCheckpoint(cssWidth, cssHeight, currentSave.checkpoint);
+          stateRef.current = createStateFromCheckpoint(
+            cssWidth,
+            cssHeight,
+            currentSave.checkpoint,
+          );
         } else {
           stateRef.current = createGameState(cssWidth, cssHeight);
           if (currentSave.victories.normal === 0) {
@@ -339,33 +393,87 @@ export function ArcadeGame() {
 
       const previousSignals = previousSignalsRef.current;
       handleTransition(state, previousSignals.phase);
-      if (state.phase === "endless" && state.endlessRound !== previousSignals.endlessRound) {
+      if (
+        state.phase === "endless" &&
+        state.endlessRound !== previousSignals.endlessRound
+      ) {
         audio.startFor(state.actIndex, state.phase, state.endlessRound);
       }
       if (state.player.health < previousSignals.health) audio.playSfx("damage");
-      if (state.score > previousSignals.score) audio.playSfx("hit");
-      if (state.nextProjectileId > previousSignals.projectileId) audio.playSfx("fire");
-      if (state.player.dashCooldown > previousSignals.dashCooldown + 0.5) audio.playSfx("dash");
-      if (state.player.secondaryCooldown > previousSignals.secondaryCooldown + 4) {
+      if (state.shieldBlocks > previousSignals.shieldBlocks) {
+        audio.playSfx("shield");
+      }
+      const defeatedEnemy = state.kills > previousSignals.kills;
+      if (state.enemyHits > previousSignals.enemyHits && !defeatedEnemy) {
+        audio.playSfx("hit");
+      }
+      if (
+        defeatedEnemy &&
+        previousSignals.phase !== "boss" &&
+        previousSignals.phase !== "miniboss"
+      ) {
+        audio.playSfx("enemy-defeat");
+      }
+      if (state.nextProjectileId > previousSignals.projectileId) {
+        audio.playSfx(
+          state.temporaryWeapon?.kind === "machine-gun"
+            ? "machine-fire"
+            : state.temporaryWeapon?.kind === "super-shot"
+            ? "super-fire"
+            : "fire",
+        );
+      }
+      if (state.player.dashCooldown > previousSignals.dashCooldown + 0.5) {
+        audio.playSfx("dash");
+      }
+      if (
+        state.player.secondaryCooldown >
+          previousSignals.secondaryCooldown + 4
+      ) {
         audio.playSfx("beam");
       }
-      if (state.player.reloadFor > previousSignals.reloadFor + 0.4) audio.playSfx("reload");
+      if (state.player.reloadFor > previousSignals.reloadFor + 0.4) {
+        audio.playSfx("reload");
+      }
       const powerupCount = Number(state.activePowerups.reflect > 0) +
         Number(state.activePowerups.prism > 0) +
         Number(state.activePowerups.shieldFor > 0) +
+        Number(state.activePowerups.freezeFor > 0) +
+        Number(state.singularity !== null) +
         Number(state.temporaryWeapon !== null);
-      if (state.powerupsCollected > previousSignals.powerupsCollected) audio.playSfx("powerup");
+      if (state.powerupsCollected > previousSignals.powerupsCollected) {
+        audio.playSfx("powerup");
+      }
       if (
-        previousSignals.upgradeTargetCount > 0 && state.upgradeTargets.length === 0 &&
+        previousSignals.upgradeTargetCount > 0 &&
+        state.upgradeTargets.length === 0 &&
         state.phase === "reward"
-      ) audio.playSfx("select");
+      ) {
+        audio.playSfx("select");
+      }
       const warningCount = state.enemies.filter((enemy) => enemy.warningFor > 0).length +
         state.hazards.filter((hazard) => hazard.armFor > 0).length;
       if (warningCount > previousSignals.warningCount) audio.playSfx("warning");
+      if (state.bossPhaseChanges > previousSignals.bossPhaseChanges) {
+        audio.playSfx("boss-phase");
+      }
+      if (state.minibossDefeatFor > previousSignals.minibossDefeatFor) {
+        audio.playSfx("boss-defeat");
+      }
+      const dialogueText = state.bossDialogue?.text ?? "";
+      if (dialogueText && dialogueText !== previousSignals.dialogueText) {
+        audio.playSfx("talk");
+      }
       previousSignalsRef.current = {
         phase: state.phase,
         health: state.player.health,
         score: state.score,
+        kills: state.kills,
+        enemyHits: state.enemyHits,
+        shieldBlocks: state.shieldBlocks,
+        bossPhaseChanges: state.bossPhaseChanges,
+        minibossDefeatFor: state.minibossDefeatFor,
+        dialogueText,
         projectileId: state.nextProjectileId,
         dashCooldown: state.player.dashCooldown,
         warningCount,
@@ -399,7 +507,14 @@ export function ArcadeGame() {
       inputRef.current = null;
       audioRef.current = null;
     };
-  }, [beginAudio, commitSave, handleBlur, handleTransition, runId, togglePause]);
+  }, [
+    beginAudio,
+    commitSave,
+    handleBlur,
+    handleTransition,
+    runId,
+    togglePause,
+  ]);
 
   useEffect(() => {
     audioRef.current?.applySettings(save.settings);
@@ -413,6 +528,12 @@ export function ArcadeGame() {
       phase: state.phase,
       health: state.player.health,
       score: state.score,
+      kills: state.kills,
+      enemyHits: state.enemyHits,
+      shieldBlocks: state.shieldBlocks,
+      bossPhaseChanges: state.bossPhaseChanges,
+      minibossDefeatFor: state.minibossDefeatFor,
+      dialogueText: state.bossDialogue?.text ?? "",
       projectileId: state.nextProjectileId,
       dashCooldown: 0,
       warningCount: 0,
@@ -444,6 +565,12 @@ export function ArcadeGame() {
       phase: stateRef.current.phase,
       health: stateRef.current.player.health,
       score: stateRef.current.score,
+      kills: stateRef.current.kills,
+      enemyHits: stateRef.current.enemyHits,
+      shieldBlocks: stateRef.current.shieldBlocks,
+      bossPhaseChanges: stateRef.current.bossPhaseChanges,
+      minibossDefeatFor: stateRef.current.minibossDefeatFor,
+      dialogueText: stateRef.current.bossDialogue?.text ?? "",
       projectileId: stateRef.current.nextProjectileId,
       dashCooldown: 0,
       warningCount: 0,
@@ -517,7 +644,9 @@ export function ArcadeGame() {
 
   const bestScore = Math.max(save.bestScores[summary.mode], summary.score);
   const act = ACTS[summary.actIndex] ?? ACTS[0];
-  const encounter = getCurrentEncounter(stateRef.current ?? createGameState(1, 1));
+  const encounter = getCurrentEncounter(
+    stateRef.current ?? createGameState(1, 1),
+  );
   const active = ACTIVE_PHASES.has(summary.phase);
   const weapon = WEAPONS.find((candidate) => candidate.id === summary.weapon) ?? WEAPONS[0];
   const overlay = (() => {
@@ -597,7 +726,10 @@ export function ArcadeGame() {
   })();
 
   return (
-    <section className="arcade-page flex flex-1 flex-col gap-3" aria-labelledby="arcade-title">
+    <section
+      className="arcade-page flex flex-1 flex-col gap-3"
+      aria-labelledby="arcade-title"
+    >
       <audio ref={musicElementARef} loop preload="none" />
       <audio ref={musicElementBRef} loop preload="none" />
       <header className="arcade-heading">
@@ -626,7 +758,9 @@ export function ArcadeGame() {
             summary.comboMultiplier > 1 ? "is-active" : ""
           }`}
         >
-          <small>{summary.comboCount > 1 ? `${summary.comboCount} deletion chain` : "Combo"}</small>
+          <small>
+            {summary.comboCount > 1 ? `${summary.comboCount} deletion chain` : "Combo"}
+          </small>
           <strong>×{summary.comboMultiplier}</strong>
         </div>
         <div className="arcade-hud-stat arcade-objective">
@@ -634,22 +768,31 @@ export function ArcadeGame() {
             {summary.phase === "endless"
               ? "Endless"
               : `Act ${summary.actIndex + 1} · ${
-                summary.phase === "boss" ? "Boss" : `Job ${summary.encounterIndex + 1}`
+                summary.phase === "boss"
+                  ? "Boss"
+                  : summary.phase === "miniboss"
+                  ? "Miniboss"
+                  : `Job ${summary.encounterIndex + 1}`
               }`}
           </small>
-          <strong>{summary.objective || summary.banner || "Awaiting assignment"}</strong>
+          <strong>
+            {summary.objective || summary.banner || "Awaiting assignment"}
+          </strong>
           <span>
             <i style={{ width: `${summary.actProgress * 100}%` }} />
           </span>
         </div>
         <div className="arcade-vitals">
-          <span className="arcade-health" aria-label={`${summary.health} integrity remaining`}>
-            {Array.from(
-              { length: summary.maxHealth },
-              (_, index) => (
-                <Heart key={index} className={index < summary.health ? "is-full" : ""} />
-              ),
-            )}
+          <span
+            className="arcade-health"
+            aria-label={`${summary.health} integrity remaining`}
+          >
+            {Array.from({ length: summary.maxHealth }, (_, index) => (
+              <Heart
+                key={index}
+                className={index < summary.health ? "is-full" : ""}
+              />
+            ))}
           </span>
           {summary.shield > 0 && (
             <span className="arcade-shield" title="Snapshot shield">
@@ -683,6 +826,8 @@ export function ArcadeGame() {
                   ? "Select maintenance patch"
                   : summary.phase === "boss"
                   ? act.boss.name
+                  : summary.phase === "miniboss"
+                  ? act.miniboss?.name
                   : encounter?.name}
               </span>
               <small>
@@ -690,6 +835,8 @@ export function ArcadeGame() {
                   ? "Shoot one patch to install it and continue."
                   : summary.phase === "boss"
                   ? act.boss.briefing
+                  : summary.phase === "miniboss"
+                  ? act.miniboss?.briefing
                   : encounter?.briefing}
               </small>
             </div>
@@ -700,7 +847,9 @@ export function ArcadeGame() {
                 }`}
               >
                 <span>
-                  <small>{summary.reloadFor > 0 ? "Reloading" : summary.magazineLabel}</small>
+                  <small>
+                    {summary.reloadFor > 0 ? "Reloading" : summary.magazineLabel}
+                  </small>
                   <strong>
                     {summary.reloadFor > 0
                       ? `${summary.reloadFor.toFixed(1)}s`
@@ -893,10 +1042,18 @@ function TitleScreen({
 
       {showSettings && <SettingsPanel settings={save.settings} onChange={onChangeSettings} />}
       <div className="arcade-card-actions">
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onSettings}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onSettings}
+        >
           {showSettings ? "Hide settings" : "Audio & effects"}
         </button>
-        <button type="button" className="btn btn-primary gap-2" onClick={onStart}>
+        <button
+          type="button"
+          className="btn btn-primary gap-2"
+          onClick={onStart}
+        >
           <Play className="size-4" /> Start cleanup
         </button>
       </div>
@@ -935,11 +1092,19 @@ function ResultScreen({
       </div>
       <div className="arcade-card-actions">
         {onSecondary && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onSecondary}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onSecondary}
+          >
             Main menu
           </button>
         )}
-        <button type="button" className="btn btn-primary btn-sm gap-2" onClick={onPrimary}>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm gap-2"
+          onClick={onPrimary}
+        >
           {primary} <ChevronRight className="size-4" />
         </button>
       </div>
@@ -970,14 +1135,26 @@ function PauseScreen({
       <SettingsPanel settings={settings} onChange={onChangeSettings} />
       <div className="arcade-card-actions">
         {onTitle && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onTitle}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onTitle}
+          >
             Main menu
           </button>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onRestart}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onRestart}
+        >
           Restart act
         </button>
-        <button type="button" className="btn btn-primary btn-sm gap-2" onClick={onResume}>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm gap-2"
+          onClick={onResume}
+        >
           <Play className="size-4" /> Resume
         </button>
       </div>
@@ -1066,7 +1243,7 @@ function summarize(state: GameState): GameSummary {
     magazineSize: state.temporaryWeapon?.kind === "machine-gun"
       ? 48
       : state.temporaryWeapon?.kind === "super-shot"
-      ? 6
+      ? 8
       : state.player.magazineSize,
     magazineLabel: state.temporaryWeapon?.kind === "machine-gun"
       ? "Machine Gun"
@@ -1084,7 +1261,13 @@ function summarize(state: GameState): GameSummary {
           remaining: -1,
         }
         : null,
-    ].filter((powerup): powerup is { label: string; remaining: number } => powerup !== null),
+      state.activePowerups.freezeFor > 0
+        ? { label: "Paused", remaining: state.activePowerups.freezeFor }
+        : null,
+      state.singularity ? { label: "Vacuum", remaining: state.singularity.life } : null,
+    ].filter(
+      (powerup): powerup is { label: string; remaining: number } => powerup !== null,
+    ),
     objective: getObjectiveLabel(state),
     actProgress: getActProgress(state),
     banner: state.banner,

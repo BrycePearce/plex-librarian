@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertGreater, assertNotEquals } from "@std/assert";
+import {
+  assert,
+  assertAlmostEquals,
+  assertEquals,
+  assertGreater,
+  assertNotEquals,
+} from "@std/assert";
 import {
   createGameState,
   createStateFromCheckpoint,
@@ -253,6 +259,31 @@ Deno.test("the duplicate boss caps its late-phase 2x summon burst", () => {
   assertEquals(state.enemies.filter((candidate) => candidate.kind === "duplicate").length, 2);
 });
 
+Deno.test("the Backlog Behemoth attacks less often and summons one red file", () => {
+  for (const [phase, minimumCooldown] of [[1, 1.6], [2, 1.3], [3, 1.05]] as const) {
+    const state = activeState();
+    state.phase = "boss";
+    state.player.invulnerableFor = 100;
+    state.enemies = [enemy({
+      kind: "boss",
+      bossKind: "backlog",
+      health: phase === 2 ? 50 : 30,
+      maxHealth: 100,
+      radius: 34,
+      behaviorCooldown: 0,
+      phase,
+    })];
+
+    stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+    assertGreater(state.enemies[0].behaviorCooldown, minimumCooldown);
+    assertEquals(
+      state.enemies.filter((candidate) => candidate.kind === "file").length,
+      phase === 1 ? 0 : 1,
+    );
+  }
+});
+
 Deno.test("hard mode applies stronger spawn tuning", () => {
   const normal = activeState(9, "normal");
   const hard = activeState(9, "hard");
@@ -344,11 +375,45 @@ Deno.test("Deep Scan pierces regular enemies but has bounded boss damage", () =>
   stepGame(state, { ...idleInput, aim: { x: 500, y: 150 }, secondary: true }, 1 / 60);
 
   assertEquals(state.enemies.find((candidate) => candidate.id === 1)?.health, undefined);
-  assertEquals(state.enemies.find((candidate) => candidate.id === 2)?.health, 98);
+  assertEquals(state.enemies.find((candidate) => candidate.id === 2)?.health, 96);
+  assertEquals(state.enemies.find((candidate) => candidate.id === 2)?.x, 448);
   assertGreater(state.player.secondaryCooldown, 7);
 });
 
-Deno.test("relay caches move after collection and expiry costs integrity", () => {
+Deno.test("Deep Scan uses the wider hit area and forked side-beam damage", () => {
+  const state = activeState();
+  state.upgrades["forked-scan"] = 1;
+  state.enemies = [
+    enemy({ id: 1, x: 390, y: 176, health: 6, maxHealth: 6 }),
+  ];
+  state.player.x = 250;
+  state.player.y = 150;
+
+  stepGame(state, { ...idleInput, aim: { x: 500, y: 150 }, secondary: true }, 1 / 60);
+
+  assertEquals(state.enemies[0].health, 3);
+});
+
+Deno.test("Deep Scan applies the bounded four-damage hit to a miniboss", () => {
+  const state = activeState();
+  state.phase = "miniboss";
+  state.enemies = [enemy({
+    kind: "boss",
+    bossKind: "backfill-daemon",
+    x: 400,
+    health: 50,
+    maxHealth: 50,
+    radius: 27,
+  })];
+  state.player.x = 250;
+  state.player.y = 150;
+
+  stepGame(state, { ...idleInput, aim: { x: 500, y: 150 }, secondary: true }, 1 / 60);
+
+  assertEquals(state.enemies[0].health, 46);
+});
+
+Deno.test("relay caches move after collection and expiry resets the streak without damage", () => {
   const state = activeState();
   state.objectiveProgress = state.objectiveTarget;
   stepGame(state, idleInput, 1 / 60);
@@ -366,16 +431,21 @@ Deno.test("relay caches move after collection and expiry costs integrity", () =>
   assertEquals(state.objectiveProgress, 1);
   assert(state.relayCache);
   state.player.invulnerableFor = 0;
+  state.relayStreak = 3;
   state.relayCache.timeRemaining = 0.001;
   const health = state.player.health;
   stepGame(state, idleInput, 1 / 60);
-  assertEquals(state.player.health, health - 1);
+  assertEquals(state.player.health, health);
   assertEquals(state.objectiveProgress, 1);
+  assertEquals(state.relayStreak, 0);
   assertEquals(state.relayMisses, 1);
+  assert(state.relayCache);
 });
 
 Deno.test("shooting one physical patch installs only that upgrade", () => {
   const state = activeState();
+  state.player.x = 70;
+  state.player.y = 245;
   state.objectiveProgress = state.objectiveTarget;
   stepGame(state, idleInput, 1 / 60);
   assertEquals(state.upgradeTargets.length, 0);
@@ -385,6 +455,16 @@ Deno.test("shooting one physical patch installs only that upgrade", () => {
     stepGame(state, heldFire, 1 / 60);
   }
   assertEquals(state.upgradeTargets.length, 3);
+  assertAlmostEquals(
+    state.upgradeTargets.reduce((sum, target) => sum + target.x, 0) / 3,
+    state.width / 2,
+    0.001,
+  );
+  assertAlmostEquals(
+    state.upgradeTargets.reduce((sum, target) => sum + target.y, 0) / 3,
+    state.height / 2,
+    0.001,
+  );
   assertEquals(Object.keys(state.upgrades).length, 0);
 
   stepGame(state, idleInput, 1 / 60);
@@ -505,6 +585,22 @@ Deno.test("reflected projectiles bounce from arena walls", () => {
   assertEquals(state.projectiles[0].bouncesRemaining, 0);
 });
 
+Deno.test("Reflect grants fired rounds extended life and eight wall bounces", () => {
+  const state = activeState();
+  state.enemies = [];
+  state.spawnCooldown = 100;
+  state.activePowerups.reflect = 1;
+
+  stepGame(state, { ...idleInput, firing: true }, 1 / 60, () => 0.5);
+
+  assertEquals(state.projectiles[0].reflected, true);
+  assertEquals(state.projectiles[0].bouncesRemaining, 8);
+  assertAlmostEquals(state.projectiles[0].life, 1.18 * 3.5 - 1 / 60, 0.001);
+
+  for (let frame = 0; frame < 90; frame++) stepGame(state, idleInput, 1 / 20, () => 0.5);
+  assertEquals(state.projectiles.length, 0);
+});
+
 Deno.test("elite drops use the seeded pure RNG roll", () => {
   const state = activeState();
   state.spawnCooldown = 100;
@@ -551,7 +647,7 @@ Deno.test("machine gun pickup reloads its magazine and preserves the selected we
   assertEquals(state.player.ammo, baseAmmo);
 });
 
-Deno.test("super shots reload after six rounds instead of expiring", () => {
+Deno.test("buffed super shots reload after eight heavy rounds instead of expiring", () => {
   const state = activeState();
   state.enemies = [];
   state.spawnCooldown = 100;
@@ -565,21 +661,182 @@ Deno.test("super shots reload after six rounds instead of expiring", () => {
   }];
   stepGame(state, idleInput, 1 / 60, () => 0.5);
   const baseAmmo = state.player.ammo;
-  for (let shot = 0; shot < 6; shot++) {
+  for (let shot = 0; shot < 8; shot++) {
     state.player.fireCooldown = 0;
     stepGame(state, { ...idleInput, firing: true }, 1 / 60, () => 0.5);
   }
 
   assertEquals(state.temporaryWeapon, { kind: "super-shot", ammo: 0 });
   assertEquals(state.player.ammo, baseAmmo);
-  assertGreater(state.projectiles[0].damage, 5);
-  assertGreater(state.player.reloadFor, 2);
+  assertEquals(state.projectiles[0].damage, 8);
+  assertEquals(state.projectiles[0].pierce, 6);
+  assertEquals(state.projectiles[0].radius, 9);
+  assertGreater(state.player.reloadFor, 1.6);
 
   state.player.invulnerableFor = 100;
-  for (let frame = 0; frame < 46; frame++) stepGame(state, idleInput, 1 / 20, () => 0.5);
-  assertEquals(state.temporaryWeapon, { kind: "super-shot", ammo: 6 });
+  for (let frame = 0; frame < 36; frame++) stepGame(state, idleInput, 1 / 20, () => 0.5);
+  assertEquals(state.temporaryWeapon, { kind: "super-shot", ammo: 8 });
   assertEquals(state.player.reloadFor, 0);
   assertEquals(state.player.ammo, baseAmmo);
+});
+
+Deno.test("Pause All Streams freezes threats and opens a bonus-damage shatter window", () => {
+  const state = activeState();
+  state.spawnCooldown = 100;
+  state.enemies = [enemy({ x: 120, health: 10, maxHealth: 10, behaviorCooldown: 2 })];
+  state.projectiles = [projectile({
+    id: 1,
+    x: 90,
+    previousX: 90,
+    vx: 120,
+    friendly: false,
+  })];
+  state.powerupDrops = [{
+    id: 1,
+    kind: "freeze",
+    x: state.player.x,
+    y: state.player.y,
+    radius: 13,
+    life: 10,
+  }];
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assertGreater(state.activePowerups.freezeFor, 3.9);
+  const frozenEnemyX = state.enemies[0].x;
+  const frozenProjectileX = state.projectiles[0].x;
+  const frozenCooldown = state.enemies[0].behaviorCooldown;
+  state.projectiles.push(projectile({
+    id: 2,
+    x: frozenEnemyX,
+    previousX: frozenEnemyX - 5,
+    damage: 2,
+  }));
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+  assertEquals(state.enemies[0].x, frozenEnemyX);
+  assertEquals(state.enemies[0].behaviorCooldown, frozenCooldown);
+  assertEquals(state.projectiles[0].x, frozenProjectileX);
+  assertAlmostEquals(state.enemies[0].health, 6.5, 0.001);
+});
+
+Deno.test("Database Vacuum pulls enemies, consumes hostile shots, and collapses", () => {
+  const state = activeState();
+  state.spawnCooldown = 100;
+  state.enemies = [enemy({ x: 100, health: 10, maxHealth: 10 })];
+  state.powerupDrops = [{
+    id: 1,
+    kind: "singularity",
+    x: state.player.x,
+    y: state.player.y,
+    radius: 13,
+    life: 10,
+  }];
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assert(state.singularity);
+  const enemyX = state.enemies[0].x;
+  state.projectiles = [projectile({
+    x: state.singularity.x,
+    y: state.singularity.y,
+    previousX: state.singularity.x,
+    previousY: state.singularity.y,
+    friendly: false,
+  })];
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+  assertGreater(state.enemies[0].x, enemyX);
+  assertEquals(state.projectiles[0].life, -1);
+  assert(state.singularity);
+  state.enemies[0].x = state.singularity.x - 50;
+  state.enemies[0].y = state.singularity.y;
+  state.singularity.life = 0.001;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assertEquals(state.singularity, null);
+  assert(state.enemies[0].health < 3);
+});
+
+Deno.test("Act 1 Job 2 ends with the talking Backfill Daemon", () => {
+  const state = activeState();
+  state.encounterIndex = 1;
+  state.objectiveProgress = state.objectiveTarget;
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+  assertEquals(state.phase, "miniboss");
+  assertEquals(state.enemies.length, 1);
+  assertEquals(state.enemies[0].bossKind, "backfill-daemon");
+  assertEquals(state.enemies[0].maxHealth, 110);
+  assert(state.bossDialogue?.text.includes("47 identical remuxes"));
+});
+
+Deno.test("Backfill Daemon quotes its phases once while combat continues", () => {
+  const state = activeState();
+  state.encounterIndex = 1;
+  state.objectiveProgress = state.objectiveTarget;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  const miniboss = state.enemies[0];
+  state.player.invulnerableFor = 100;
+  miniboss.behaviorCooldown = 100;
+
+  miniboss.health = miniboss.maxHealth * 0.65;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assertEquals(state.bossDialogue?.text, "Free space is just storage I haven't filled yet.");
+
+  miniboss.health = miniboss.maxHealth * 0.32;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assertEquals(state.bossDialogue?.text, "Delete nothing! You might watch it someday!");
+
+  const remaining = state.bossDialogue?.life;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  assert((state.bossDialogue?.life ?? 0) < (remaining ?? 0));
+});
+
+Deno.test("Backfill Daemon defeat grants one heart, fully heals, and preserves Job 2 reward", () => {
+  const state = activeState();
+  state.encounterIndex = 1;
+  state.objectiveProgress = state.objectiveTarget;
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+  const miniboss = state.enemies[0];
+  const previousMaxHealth = state.player.maxHealth;
+  state.player.health = 1;
+  state.player.invulnerableFor = 100;
+  miniboss.health = 1;
+  miniboss.behaviorCooldown = 100;
+  state.projectiles = [projectile({
+    x: miniboss.x,
+    y: miniboss.y,
+    previousX: miniboss.x,
+    previousY: miniboss.y,
+  })];
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+  assertEquals(state.phase, "miniboss");
+  assertEquals(state.player.maxHealth, previousMaxHealth + 1);
+  assertEquals(state.player.health, state.player.maxHealth);
+  assertEquals(state.bossDialogue?.text, "Fine... but keep the director's cut?");
+  assertGreater(state.score, 0);
+
+  for (let frame = 0; frame < 55; frame++) stepGame(state, idleInput, 1 / 20, () => 0.5);
+  assertEquals(state.phase, "reward");
+  assertEquals(state.offeredUpgrades.length, 3);
+  dispatchGameAction(state, { type: "chooseUpgrade", upgradeId: state.offeredUpgrades[0] });
+  assertEquals(state.phase, "encounter");
+  assertEquals(state.encounterIndex, 2);
+  assertEquals(state.player.maxHealth, previousMaxHealth + 1);
+});
+
+Deno.test("hard mode scales Backfill Daemon health", () => {
+  const state = activeState(7, "hard");
+  state.encounterIndex = 1;
+  state.objectiveProgress = state.objectiveTarget;
+
+  stepGame(state, idleInput, 1 / 60, () => 0.5);
+
+  assertEquals(state.phase, "miniboss");
+  assertEquals(state.enemies[0].maxHealth, 130);
 });
 
 Deno.test("retained powerups persist until a shielded hit clears the streak", () => {

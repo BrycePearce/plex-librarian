@@ -3,12 +3,22 @@ import { ARCADE_MUSIC_GAIN } from "../../lib/arcadeLaunch.ts";
 
 export type ArcadeSfx =
   | "fire"
+  | "machine-fire"
+  | "super-fire"
   | "hit"
+  | "enemy-defeat"
   | "damage"
+  | "shield"
   | "dash"
   | "warning"
   | "reward"
   | "boss"
+  | "boss-phase"
+  | "boss-clear"
+  | "boss-defeat"
+  | "talk"
+  | "game-over"
+  | "victory"
   | "select"
   | "beam"
   | "powerup"
@@ -16,6 +26,7 @@ export type ArcadeSfx =
 
 export type MusicCue =
   | "stale"
+  | "backfill-miniboss"
   | "backlog-boss"
   | "duplicate"
   | "duplicate-boss"
@@ -23,6 +34,9 @@ export type MusicCue =
   | "rogue-boss";
 
 export type MusicTrackUrls = Record<MusicCue, string>;
+export type ArcadeSampleUrls = Partial<
+  Record<ArcadeSfx, string | readonly string[]>
+>;
 
 const ENDLESS_CUES: MusicCue[] = [
   "backlog-boss",
@@ -33,6 +47,16 @@ const ENDLESS_CUES: MusicCue[] = [
 ];
 const CROSSFADE_MS = 700;
 const CROSSFADE_TICK_MS = 50;
+const SAMPLE_GAIN = 0.38;
+const PROCEDURAL_GAIN = 0.62;
+const SFX_COOLDOWNS: Partial<Record<ArcadeSfx, number>> = {
+  fire: 35,
+  "machine-fire": 55,
+  hit: 45,
+  "enemy-defeat": 70,
+  warning: 140,
+  talk: 80,
+};
 
 export function resolveMusicCue(
   actIndex: number,
@@ -42,6 +66,7 @@ export function resolveMusicCue(
   if (phase === "endless") {
     return ENDLESS_CUES[Math.max(0, endlessRound - 1) % ENDLESS_CUES.length];
   }
+  if (phase === "miniboss") return "backfill-miniboss";
   if (phase === "boss") {
     return actIndex === 0 ? "backlog-boss" : actIndex === 1 ? "duplicate-boss" : "rogue-boss";
   }
@@ -51,6 +76,7 @@ export function resolveMusicCue(
 export class ArcadeAudio {
   private readonly musicElements: [HTMLAudioElement, HTMLAudioElement];
   private readonly trackUrls: MusicTrackUrls;
+  private readonly sampleUrls: ArcadeSampleUrls;
   private settings: ArcadeSettings;
   private context: AudioContext | null = null;
   private sfxGain: GainNode | null = null;
@@ -61,16 +87,21 @@ export class ArcadeAudio {
   private cue: MusicCue | null = null;
   private openingStateKey: string | null = null;
   private paused = false;
+  private readonly sampleVoices = new Set<HTMLAudioElement>();
+  private readonly lastSfxAt = new Map<ArcadeSfx, number>();
+  private sampleIndex = 0;
 
   constructor(
     musicElements: [HTMLAudioElement, HTMLAudioElement],
     trackUrls: MusicTrackUrls,
     settings: ArcadeSettings,
     initialCue: MusicCue | null = null,
+    sampleUrls: ArcadeSampleUrls = {},
   ) {
     this.musicElements = musicElements;
     this.trackUrls = trackUrls;
     this.settings = settings;
+    this.sampleUrls = sampleUrls;
     this.cue = initialCue;
     for (const element of musicElements) {
       element.loop = true;
@@ -81,10 +112,18 @@ export class ArcadeAudio {
 
   applySettings(settings: ArcadeSettings) {
     this.settings = settings;
-    for (const element of this.musicElements) element.muted = !settings.musicEnabled;
+    for (const element of this.musicElements) {
+      element.muted = !settings.musicEnabled;
+    }
     this.updateMusicVolumes();
     if (this.sfxGain) {
-      this.sfxGain.gain.value = settings.sfxEnabled ? settings.sfxVolume / 100 * 0.28 : 0;
+      this.sfxGain.gain.value = settings.sfxEnabled
+        ? (settings.sfxVolume / 100) * PROCEDURAL_GAIN
+        : 0;
+    }
+    for (const voice of this.sampleVoices) {
+      voice.muted = !settings.sfxEnabled;
+      voice.volume = (settings.sfxVolume / 100) * SAMPLE_GAIN;
     }
     if (!settings.musicEnabled) {
       for (const element of this.musicElements) element.pause();
@@ -117,7 +156,9 @@ export class ArcadeAudio {
       this.cue = nextCue;
       this.fadeProgress = 1;
       this.updateMusicVolumes();
-      if (this.settings.musicEnabled) void element.play().catch(() => undefined);
+      if (this.settings.musicEnabled) {
+        void element.play().catch(() => undefined);
+      }
       return;
     }
 
@@ -158,6 +199,11 @@ export class ArcadeAudio {
   pause() {
     this.paused = true;
     for (const element of this.musicElements) element.pause();
+    for (const voice of this.sampleVoices) {
+      voice.pause();
+      voice.currentTime = 0;
+    }
+    this.sampleVoices.clear();
     if (this.context?.state === "running") void this.context.suspend();
   }
 
@@ -170,30 +216,75 @@ export class ArcadeAudio {
 
   playSfx(kind: ArcadeSfx) {
     if (!this.settings.sfxEnabled) return;
+    const nowMs = globalThis.performance?.now() ?? Date.now();
+    const cooldown = SFX_COOLDOWNS[kind] ?? 0;
+    if (nowMs - (this.lastSfxAt.get(kind) ?? -Infinity) < cooldown) return;
+    this.lastSfxAt.set(kind, nowMs);
+
+    const sample = this.sampleUrls[kind];
+    if (sample) {
+      const urls = typeof sample === "string" ? [sample] : sample;
+      this.playSample(urls[this.sampleIndex++ % urls.length]);
+      return;
+    }
+
     const context = this.ensureContext();
     const gain = this.sfxGain;
     if (!context || !gain) return;
     const now = context.currentTime;
-    const notes: Record<ArcadeSfx, [number, number, OscillatorType, number]> = {
-      fire: [420, 0.045, "square", 0.035],
-      hit: [180, 0.07, "triangle", 0.07],
+    const notes: Partial<
+      Record<ArcadeSfx, [number, number, OscillatorType, number]>
+    > = {
+      fire: [560, 0.055, "square", 0.075],
+      "machine-fire": [700, 0.038, "square", 0.06],
+      "super-fire": [145, 0.16, "sine", 0.11],
+      hit: [210, 0.055, "triangle", 0.035],
+      "enemy-defeat": [270, 0.095, "triangle", 0.055],
       damage: [92, 0.22, "sawtooth", 0.15],
+      shield: [780, 0.16, "sine", 0.12],
       dash: [260, 0.12, "sine", 0.09],
       warning: [330, 0.18, "square", 0.055],
       reward: [660, 0.24, "triangle", 0.12],
       boss: [74, 0.55, "sawtooth", 0.18],
+      "boss-phase": [320, 0.32, "sawtooth", 0.14],
+      "boss-clear": [392, 0.62, "triangle", 0.09],
+      "boss-defeat": [58, 0.7, "sawtooth", 0.2],
+      talk: [610, 0.08, "square", 0.04],
+      "game-over": [105, 0.6, "sawtooth", 0.16],
+      victory: [880, 0.5, "triangle", 0.14],
       select: [520, 0.09, "sine", 0.08],
       beam: [980, 0.18, "sawtooth", 0.1],
       powerup: [740, 0.28, "triangle", 0.12],
       reload: [240, 0.12, "square", 0.05],
     };
-    const [frequency, duration, wave, volume] = notes[kind];
+    const note = notes[kind];
+    if (!note) return;
+    const [frequency, duration, wave, volume] = note;
     const oscillator = context.createOscillator();
     const envelope = context.createGain();
     oscillator.type = wave;
     oscillator.frequency.setValueAtTime(frequency, now);
-    if (kind === "dash") oscillator.frequency.exponentialRampToValueAtTime(620, now + duration);
-    if (kind === "damage") oscillator.frequency.exponentialRampToValueAtTime(48, now + duration);
+    if (kind === "fire") {
+      oscillator.frequency.exponentialRampToValueAtTime(280, now + duration);
+    }
+    if (kind === "machine-fire") {
+      oscillator.frequency.exponentialRampToValueAtTime(410, now + duration);
+    }
+    if (kind === "super-fire") {
+      oscillator.frequency.exponentialRampToValueAtTime(360, now + duration);
+    }
+    if (kind === "enemy-defeat") {
+      oscillator.frequency.exponentialRampToValueAtTime(135, now + duration);
+    }
+    if (kind === "dash") {
+      oscillator.frequency.exponentialRampToValueAtTime(620, now + duration);
+    }
+    if (kind === "boss-clear") {
+      oscillator.frequency.exponentialRampToValueAtTime(587, now + duration);
+    }
+    if (kind === "damage") {
+      oscillator.frequency.exponentialRampToValueAtTime(48, now + duration);
+    }
     envelope.gain.setValueAtTime(volume, now);
     envelope.gain.exponentialRampToValueAtTime(0.001, now + duration);
     oscillator.connect(envelope);
@@ -211,16 +302,33 @@ export class ArcadeAudio {
       element.currentTime = 0;
       element.volume = 0;
     }
+    for (const voice of this.sampleVoices) voice.pause();
+    this.sampleVoices.clear();
     if (this.context) void this.context.close();
     this.context = null;
     this.sfxGain = null;
   }
 
+  private playSample(url: string) {
+    const voice = new Audio(url);
+    voice.preload = "auto";
+    voice.volume = (this.settings.sfxVolume / 100) * SAMPLE_GAIN;
+    voice.muted = !this.settings.sfxEnabled;
+    const cleanup = () => this.sampleVoices.delete(voice);
+    voice.addEventListener("ended", cleanup, { once: true });
+    voice.addEventListener("error", cleanup, { once: true });
+    this.sampleVoices.add(voice);
+    void voice.play().catch(cleanup);
+  }
+
   private ensureContext() {
     if (this.context) return this.context;
     const AudioContextClass = globalThis.AudioContext ??
-      (globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
+      (
+        globalThis as typeof globalThis & {
+          webkitAudioContext?: typeof AudioContext;
+        }
+      ).webkitAudioContext;
     if (!AudioContextClass) return null;
     this.context = new AudioContextClass();
     this.sfxGain = this.context.createGain();
@@ -233,13 +341,15 @@ export class ArcadeAudio {
     const active = this.musicElements[this.activeElementIndex];
     void active.play().catch(() => undefined);
     if (this.outgoingElementIndex !== null && this.fadeProgress < 1) {
-      void this.musicElements[this.outgoingElementIndex].play().catch(() => undefined);
+      void this.musicElements[this.outgoingElementIndex]
+        .play()
+        .catch(() => undefined);
     }
   }
 
   private updateMusicVolumes() {
     const volume = this.settings.musicEnabled
-      ? this.settings.musicVolume / 100 * ARCADE_MUSIC_GAIN
+      ? (this.settings.musicVolume / 100) * ARCADE_MUSIC_GAIN
       : 0;
     this.musicElements[this.activeElementIndex].volume = volume * this.fadeProgress;
     if (this.outgoingElementIndex !== null) {

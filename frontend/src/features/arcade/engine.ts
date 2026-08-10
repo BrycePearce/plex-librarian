@@ -31,6 +31,10 @@ const MAX_PARTICLES = 280;
 const RELAY_RADIUS = 18;
 const UPGRADE_TARGET_RADIUS = 28;
 const BASE_SECONDARY_COOLDOWN = 7.5;
+const DEEP_SCAN_BASE_WIDTH = 10;
+const DEEP_SCAN_BACKLOG_KNOCKBACK = 48;
+const REFLECT_LIFE_MULTIPLIER = 3.5;
+const REFLECT_BOUNCES = 8;
 const REWARD_REVEAL_DELAY = 1;
 const DOCUMENT_BURST_RADIUS = 46;
 const DOCUMENT_BURST_WARNING = 0.45;
@@ -39,9 +43,14 @@ const ELITE_DROP_CHANCE = 0.35;
 const DROP_PITY_KILLS = 12;
 const DROP_COOLDOWN = 6;
 const MACHINE_GUN_AMMO = 48;
-const SUPER_SHOT_AMMO = 6;
+const SUPER_SHOT_AMMO = 8;
 const MACHINE_GUN_RELOAD = 1.35;
-const SUPER_SHOT_RELOAD = 2.2;
+const SUPER_SHOT_RELOAD = 1.7;
+const FREEZE_DURATION = 4;
+const FROZEN_DAMAGE_MULTIPLIER = 1.75;
+const SINGULARITY_DURATION = 3;
+const SINGULARITY_RADIUS = 24;
+const SINGULARITY_PLACEMENT_DISTANCE = 170;
 const DUPLICATE_EXPLOSIVE_CHANCE = 0.62;
 const DUPLICATE_ENEMY_CHANCE = 0.22;
 const DUPLICATE_POWERUP_CHANCE = 0.05;
@@ -51,6 +60,8 @@ const POWERUP_WEIGHTS: Record<TemporaryPowerupKind, number> = {
   shield: 1.4,
   reflect: 1,
   prism: 1,
+  freeze: 0.35,
+  singularity: 0.35,
   repair: 1.2,
 };
 
@@ -114,6 +125,9 @@ export function createGameState(
     objectiveProgress: 0,
     objectiveTarget: 0,
     kills: 0,
+    enemyHits: 0,
+    shieldBlocks: 0,
+    bossPhaseChanges: 0,
     noDamage: true,
     spawnCooldown: 0.6,
     spawnBeatIndex: 0,
@@ -138,7 +152,9 @@ export function createGameState(
       prism: 0,
       shieldFor: 0,
       shieldHits: 0,
+      freezeFor: 0,
     },
+    singularity: null,
     temporaryWeapon: null,
     nextPowerupId: 1,
     dropCooldown: 0,
@@ -150,6 +166,8 @@ export function createGameState(
     patternWarningFor: 0,
     patternSourceId: null,
     patternKind: null,
+    bossDialogue: null,
+    minibossDefeatFor: 0,
     banner: checkpoint ? ACTS[checkpoint.actIndex].encounters[0].name : "",
   };
   if (checkpoint || state.phase === "encounter") beginEncounter(state);
@@ -167,15 +185,27 @@ export function createStateFromCheckpoint(
   return createGameState(width, height, { checkpoint });
 }
 
-export function resizeGameState(state: GameState, width: number, height: number) {
+export function resizeGameState(
+  state: GameState,
+  width: number,
+  height: number,
+) {
   const previousWidth = Math.max(1, state.width);
   const previousHeight = Math.max(1, state.height);
   const scaleX = width / previousWidth;
   const scaleY = height / previousHeight;
   state.width = width;
   state.height = height;
-  state.player.x = clamp(state.player.x * scaleX, PLAYER_RADIUS, width - PLAYER_RADIUS);
-  state.player.y = clamp(state.player.y * scaleY, PLAYER_RADIUS, height - PLAYER_RADIUS);
+  state.player.x = clamp(
+    state.player.x * scaleX,
+    PLAYER_RADIUS,
+    width - PLAYER_RADIUS,
+  );
+  state.player.y = clamp(
+    state.player.y * scaleY,
+    PLAYER_RADIUS,
+    height - PLAYER_RADIUS,
+  );
   for (const enemy of state.enemies) {
     enemy.x = clamp(enemy.x * scaleX, -enemy.radius, width + enemy.radius);
     enemy.y = clamp(enemy.y * scaleY, -enemy.radius, height + enemy.radius);
@@ -191,11 +221,21 @@ export const resizeArcadeState = resizeGameState;
 export function dispatchGameAction(state: GameState, action: GameAction) {
   switch (action.type) {
     case "start":
-      resetForRun(state, action.mode, action.weapon, action.seed ?? createSeed());
+      resetForRun(
+        state,
+        action.mode,
+        action.weapon,
+        action.seed ?? createSeed(),
+      );
       beginEncounter(state);
       break;
     case "chooseUpgrade":
-      if (state.phase !== "reward" || !state.offeredUpgrades.includes(action.upgradeId)) return;
+      if (
+        state.phase !== "reward" ||
+        !state.offeredUpgrades.includes(action.upgradeId)
+      ) {
+        return;
+      }
       applyUpgrade(state, action.upgradeId);
       finishRewardSelection(state);
       break;
@@ -226,7 +266,10 @@ export function dispatchGameAction(state: GameState, action: GameAction) {
         health: state.player.maxHealth,
         shield: upgradeLevel(state, "snapshot") > 0 ? 1 : 0,
       };
-      Object.assign(state, createStateFromCheckpoint(state.width, state.height, checkpoint));
+      Object.assign(
+        state,
+        createStateFromCheckpoint(state.width, state.height, checkpoint),
+      );
       break;
     }
     case "startEndless":
@@ -254,9 +297,14 @@ export function stepGame(
   randomOverride?: () => number,
 ) {
   if (
-    state.phase !== "encounter" && state.phase !== "reward" &&
-    state.phase !== "boss" && state.phase !== "endless"
-  ) return;
+    state.phase !== "encounter" &&
+    state.phase !== "reward" &&
+    state.phase !== "miniboss" &&
+    state.phase !== "boss" &&
+    state.phase !== "endless"
+  ) {
+    return;
+  }
 
   const dt = Math.min(delta, 1 / 20);
   const random = randomOverride ?? (() => nextRandom(state));
@@ -296,9 +344,11 @@ export function stepGame(
     return;
   }
   updateSpawns(state, dt, random);
-  updatePatternDirector(state, dt);
-  updateProjectiles(state, dt);
-  updateEnemies(state, dt, random);
+  const frozen = state.activePowerups.freezeFor > 0;
+  if (!frozen) updatePatternDirector(state, dt);
+  updateProjectiles(state, dt, frozen);
+  if (!frozen) updateEnemies(state, dt, random);
+  updateSingularity(state, dt, random);
   updateHazards(state, dt);
   resolveProjectileCollisions(state, random);
   resolvePlayerCollisions(state);
@@ -310,19 +360,29 @@ export function stepGame(
 
 export const stepArcade = stepGame;
 
-export function getCurrentEncounter(state: GameState): EncounterDefinition | null {
+export function getCurrentEncounter(
+  state: GameState,
+): EncounterDefinition | null {
   if (state.phase === "endless") return null;
   return ACTS[state.actIndex]?.encounters[state.encounterIndex] ?? null;
 }
 
 export function getObjectiveLabel(state: GameState) {
   if (
-    state.phase !== "encounter" && state.phase !== "boss" &&
+    state.phase !== "encounter" &&
+    state.phase !== "miniboss" &&
+    state.phase !== "boss" &&
     state.phase !== "endless"
-  ) return "";
-  if (state.phase === "boss") {
+  ) {
+    return "";
+  }
+  if (state.phase === "boss" || state.phase === "miniboss") {
+    if (state.phase === "miniboss" && state.minibossDefeatFor > 0) {
+      return "Process terminated";
+    }
     const boss = state.enemies.find((enemy) => enemy.kind === "boss");
-    return boss ? `Boss integrity ${Math.max(0, Math.ceil(boss.health))}` : "Boss incoming";
+    const label = state.phase === "miniboss" ? "Miniboss" : "Boss";
+    return boss ? `${label} integrity ${Math.max(0, Math.ceil(boss.health))}` : `${label} incoming`;
   }
   if (state.phase === "endless") return `Round ${state.endlessRound}`;
   const encounter = getCurrentEncounter(state);
@@ -339,9 +399,12 @@ export function getObjectiveLabel(state: GameState) {
 
 export function getActProgress(state: GameState) {
   if (state.phase === "boss") return 1;
+  if (state.phase === "miniboss") return 0.5;
   if (state.phase === "actComplete" || state.phase === "victory") return 1;
   return clamp(
-    (state.encounterIndex + state.objectiveProgress / Math.max(1, state.objectiveTarget)) / 4,
+    (state.encounterIndex +
+      state.objectiveProgress / Math.max(1, state.objectiveTarget)) /
+      4,
     0,
     1,
   );
@@ -411,6 +474,24 @@ function beginBoss(state: GameState) {
   state.enemies.push(createBoss(state));
 }
 
+function beginMiniboss(state: GameState) {
+  const miniboss = ACTS[state.actIndex].miniboss;
+  if (!miniboss) return;
+  state.phase = "miniboss";
+  state.phaseElapsed = 0;
+  state.objectiveProgress = 0;
+  state.spawnBudgetRemaining = 0;
+  state.banner = miniboss.name;
+  state.minibossDefeatFor = 0;
+  resetDropDirector(state);
+  preparePlayerForPhase(state);
+  clearArena(state);
+  const enemy = createMiniboss(state);
+  state.objectiveTarget = enemy.maxHealth;
+  state.enemies.push(enemy);
+  showBossDialogue(state, miniboss.quotes.intro, enemy.x, enemy.y, 4.2);
+}
+
 function preparePlayerForPhase(state: GameState) {
   state.player.x = state.width / 2;
   state.player.y = state.height / 2;
@@ -418,7 +499,9 @@ function preparePlayerForPhase(state: GameState) {
   state.player.dashFor = 0;
   configureWeaponState(state, true);
   state.player.secondaryCooldown = 0;
-  if (upgradeLevel(state, "snapshot") > 0) state.player.shield = Math.max(1, state.player.shield);
+  if (upgradeLevel(state, "snapshot") > 0) {
+    state.player.shield = Math.max(1, state.player.shield);
+  }
 }
 
 function clearArena(state: GameState) {
@@ -428,6 +511,9 @@ function clearArena(state: GameState) {
   state.particles = [];
   state.powerupDrops = [];
   state.relayCache = null;
+  state.bossDialogue = null;
+  state.singularity = null;
+  state.activePowerups.freezeFor = 0;
 }
 
 function updateTimers(state: GameState, dt: number) {
@@ -449,10 +535,15 @@ function updateTimers(state: GameState, dt: number) {
     0,
     state.player.secondaryCooldown - dt,
   );
+  state.activePowerups.freezeFor = Math.max(0, state.activePowerups.freezeFor - dt);
   state.player.beamFlashFor = Math.max(0, state.player.beamFlashFor - dt);
   state.player.dashCooldown = Math.max(0, state.player.dashCooldown - dt);
   state.player.dashFor = Math.max(0, state.player.dashFor - dt);
   state.dropCooldown = Math.max(0, state.dropCooldown - dt);
+  if (state.bossDialogue) {
+    state.bossDialogue.life = Math.max(0, state.bossDialogue.life - dt);
+    if (state.bossDialogue.life === 0) state.bossDialogue = null;
+  }
   for (const target of state.upgradeTargets) {
     target.entranceFor = Math.max(0, target.entranceFor - dt);
   }
@@ -478,7 +569,13 @@ function updatePlayer(state: GameState, input: ArcadeInput, dt: number) {
       state.player.invulnerableFor,
       state.player.dashFor + 0.06,
     );
-    burstParticles(state, state.player.x, state.player.y, ACTS[state.actIndex].palette.primary, 9);
+    burstParticles(
+      state,
+      state.player.x,
+      state.player.y,
+      ACTS[state.actIndex].palette.primary,
+      9,
+    );
   }
 
   const speed = state.player.dashFor > 0
@@ -499,10 +596,14 @@ function updatePlayer(state: GameState, input: ArcadeInput, dt: number) {
 
   const aimX = input.aim.x - state.player.x;
   const aimY = input.aim.y - state.player.y;
-  if (Math.hypot(aimX, aimY) > 0.001) state.player.angle = Math.atan2(aimY, aimX);
+  if (Math.hypot(aimX, aimY) > 0.001) {
+    state.player.angle = Math.atan2(aimY, aimX);
+  }
 
   if (input.reload) startReload(state);
-  if (input.secondary && state.player.secondaryCooldown === 0) fireDeepScan(state);
+  if (input.secondary && state.player.secondaryCooldown === 0) {
+    fireDeepScan(state);
+  }
   if (input.firing && state.player.fireCooldown === 0) {
     if (state.player.reloadFor > 0) return;
     const ammo = state.temporaryWeapon?.ammo ?? state.player.ammo;
@@ -559,14 +660,16 @@ function createFriendlyProjectile(
   const damage = temporaryKind === "machine-gun"
     ? 1 + Math.floor(packetSize / 2)
     : temporaryKind === "super-shot"
-    ? 6 + packetSize
+    ? 8 + packetSize
     : (rail ? 2 : 1) + packetSize;
-  const radius = temporaryKind === "super-shot" ? 7 : temporaryKind ? 3 : rail ? 4 : 3;
+  const radius = temporaryKind === "super-shot" ? 9 : temporaryKind ? 3 : rail ? 4 : 3;
   const speed = temporaryKind === "machine-gun"
     ? 690
     : temporaryKind === "super-shot"
     ? 720
     : BASE_PROJECTILE_SPEED * (rail ? 1.28 : 1);
+  const baseLife = temporaryKind === "super-shot" ? 1.25 : temporaryKind ? 1.18 : rail ? 0.9 : 1.18;
+  const reflected = state.activePowerups.reflect > 0;
   state.projectiles.push({
     id: state.nextProjectileId++,
     x: state.player.x + Math.cos(angle) * 21,
@@ -577,14 +680,14 @@ function createFriendlyProjectile(
     vy: Math.sin(angle) * speed,
     radius,
     damage,
-    pierce: (temporaryKind === "super-shot" ? 4 : temporaryKind ? 0 : rail ? 2 : 0) +
+    pierce: (temporaryKind === "super-shot" ? 6 : temporaryKind ? 0 : rail ? 2 : 0) +
       upgradeLevel(state, "dedupe-pass") +
       (state.activePowerups.prism > 0 ? 1 : 0),
-    life: temporaryKind === "super-shot" ? 1.25 : temporaryKind ? 1.18 : rail ? 0.9 : 1.18,
+    life: baseLife * (reflected ? REFLECT_LIFE_MULTIPLIER : 1),
     friendly: true,
     hitIds: [],
-    bouncesRemaining: state.activePowerups.reflect > 0 ? 2 : 0,
-    reflected: state.activePowerups.reflect > 0,
+    bouncesRemaining: reflected ? REFLECT_BOUNCES : 0,
+    reflected,
   });
 }
 
@@ -609,7 +712,9 @@ function configureWeaponState(state: GameState, refill: boolean) {
 function startReload(state: GameState) {
   if (state.player.reloadFor > 0) return;
   if (state.temporaryWeapon) {
-    const magazineSize = temporaryWeaponMagazineSize(state.temporaryWeapon.kind);
+    const magazineSize = temporaryWeaponMagazineSize(
+      state.temporaryWeapon.kind,
+    );
     if (state.temporaryWeapon.ammo >= magazineSize) return;
     const baseDuration = state.temporaryWeapon.kind === "machine-gun"
       ? MACHINE_GUN_RELOAD
@@ -631,7 +736,8 @@ function temporaryWeaponMagazineSize(kind: TemporaryWeaponKind) {
 function fireDeepScan(state: GameState) {
   const cooldown = Math.max(
     4.6,
-    BASE_SECONDARY_COOLDOWN * Math.pow(0.88, upgradeLevel(state, "index-accelerator")),
+    BASE_SECONDARY_COOLDOWN *
+      Math.pow(0.88, upgradeLevel(state, "index-accelerator")),
   );
   state.player.secondaryCooldown = cooldown;
   state.player.beamFlashFor = 0.16;
@@ -639,12 +745,13 @@ function fireDeepScan(state: GameState) {
   const angles = forked
     ? [state.player.angle - 0.18, state.player.angle, state.player.angle + 0.18]
     : [state.player.angle];
-  const width = 7 * Math.pow(1.3, upgradeLevel(state, "wide-query"));
+  const width = DEEP_SCAN_BASE_WIDTH * Math.pow(1.3, upgradeLevel(state, "wide-query"));
   let bossHit = false;
+  let hitSomething = false;
   for (let angleIndex = 0; angleIndex < angles.length; angleIndex++) {
     const angle = angles[angleIndex];
     const direction = { x: Math.cos(angle), y: Math.sin(angle) };
-    const beamDamage = angleIndex === Math.floor(angles.length / 2) ? 3 : 2;
+    const beamDamage = angleIndex === Math.floor(angles.length / 2) ? 5 : 3;
     for (const enemy of state.enemies) {
       if (enemy.health <= 0) continue;
       const dx = enemy.x - state.player.x;
@@ -655,13 +762,29 @@ function fireDeepScan(state: GameState) {
       if (enemy.kind === "boss") {
         if (bossHit) continue;
         bossHit = true;
-        enemy.health -= 2;
+        enemy.health -= 4;
+        if (enemy.bossKind === "backlog") {
+          enemy.x = clamp(
+            enemy.x + direction.x * DEEP_SCAN_BACKLOG_KNOCKBACK,
+            enemy.radius,
+            state.width - enemy.radius,
+          );
+          enemy.y = clamp(
+            enemy.y + direction.y * DEEP_SCAN_BACKLOG_KNOCKBACK,
+            enemy.radius,
+            state.height - enemy.radius,
+          );
+        }
       } else {
         enemy.health -= beamDamage;
       }
-      if (enemy.health <= 0) destroyEnemy(state, enemy, () => nextRandom(state));
+      hitSomething = true;
+      if (enemy.health <= 0) {
+        destroyEnemy(state, enemy, () => nextRandom(state));
+      }
     }
   }
+  if (hitSomething) state.enemyHits += 1;
   burstParticles(
     state,
     state.player.x + Math.cos(state.player.angle) * 38,
@@ -673,7 +796,7 @@ function fireDeepScan(state: GameState) {
 }
 
 function updateSpawns(state: GameState, dt: number, random: () => number) {
-  if (state.phase === "boss") return;
+  if (state.phase === "boss" || state.phase === "miniboss") return;
   if (state.phase === "endless") {
     updateEndlessSpawns(state, dt, random);
     return;
@@ -696,22 +819,27 @@ function updateSpawns(state: GameState, dt: number, random: () => number) {
     state.spawnBudgetRemaining = Math.max(1, threatCap - threat);
   }
   if (
-    state.spawnCooldown > 0 || state.spawnBudgetRemaining <= 0 ||
+    state.spawnCooldown > 0 ||
+    state.spawnBudgetRemaining <= 0 ||
     threat >= threatCap
-  ) return;
+  ) {
+    return;
+  }
   const beat = encounter.beats[state.spawnBeatIndex];
   const kind = chooseWeightedKind(beat.weights, random);
   const cost = enemyCost(kind);
-  if (state.spawnBudgetRemaining >= cost && state.enemies.length < MAX_ENEMIES) {
+  if (
+    state.spawnBudgetRemaining >= cost &&
+    state.enemies.length < MAX_ENEMIES
+  ) {
     state.enemies.push(spawnEnemy(state, kind, random));
     state.spawnBudgetRemaining -= cost;
   } else {
     state.spawnBudgetRemaining = 0;
   }
-  state.spawnCooldown = (
-    encounter.replenishMin +
-    random() * (encounter.replenishMax - encounter.replenishMin)
-  ) / (state.mode === "hard" ? 1.12 : 1);
+  state.spawnCooldown = (encounter.replenishMin +
+    random() * (encounter.replenishMax - encounter.replenishMin)) /
+    (state.mode === "hard" ? 1.12 : 1);
 }
 
 function currentThreat(state: GameState) {
@@ -726,12 +854,25 @@ function updatePatternDirector(state: GameState, dt: number) {
   if (state.patternWarningFor > 0) {
     state.patternWarningFor = Math.max(0, state.patternWarningFor - dt);
     if (state.patternWarningFor === 0) {
-      const source = state.enemies.find((enemy) => enemy.id === state.patternSourceId);
+      const source = state.enemies.find(
+        (enemy) => enemy.id === state.patternSourceId,
+      );
       if (source && source.health > 0) {
         if (state.patternKind === "aimed") {
-          aimedSpread(state, source, 3 + state.actIndex, 0.18, 205 + state.actIndex * 20);
+          aimedSpread(
+            state,
+            source,
+            3 + state.actIndex,
+            0.18,
+            205 + state.actIndex * 20,
+          );
         } else {
-          radialBurst(state, source, 6 + state.actIndex * 2, 175 + state.actIndex * 20);
+          radialBurst(
+            state,
+            source,
+            6 + state.actIndex * 2,
+            175 + state.actIndex * 20,
+          );
         }
       }
       state.patternSourceId = null;
@@ -745,8 +886,8 @@ function updatePatternDirector(state: GameState, dt: number) {
   if (state.patternCooldown > 0) return;
   const encounter = getCurrentEncounter(state);
   if (!encounter) return;
-  const shooters = state.enemies.filter((enemy) =>
-    enemy.health > 0 && enemy.kind !== "boss" && enemy.kind !== "file"
+  const shooters = state.enemies.filter(
+    (enemy) => enemy.health > 0 && enemy.kind !== "boss" && enemy.kind !== "file",
   );
   if (shooters.length > 0) {
     const source = shooters[Math.floor(nextRandom(state) * shooters.length)];
@@ -763,20 +904,29 @@ function updatePatternDirector(state: GameState, dt: number) {
     (state.mode === "hard" ? 0.78 : 1);
 }
 
-function updateEndlessSpawns(state: GameState, dt: number, random: () => number) {
+function updateEndlessSpawns(
+  state: GameState,
+  dt: number,
+  random: () => number,
+) {
   const roundDuration = 75;
   const expectedRound = 1 + Math.floor(state.phaseElapsed / roundDuration);
   if (expectedRound > state.endlessRound) {
     state.endlessRound = expectedRound;
     state.spawnBudgetRemaining += 28 + expectedRound * 7;
-    state.player.health = Math.min(state.player.maxHealth, state.player.health + 1);
+    state.player.health = Math.min(
+      state.player.maxHealth,
+      state.player.health + 1,
+    );
     state.banner = `Maintenance cycle ${expectedRound}`;
     state.killsSincePowerupDrop = 0;
     state.powerupsDroppedThisPhase = 0;
   }
   state.spawnCooldown -= dt;
   if (state.spawnCooldown > 0) return;
-  if (state.spawnBudgetRemaining <= 0) state.spawnBudgetRemaining = 18 + state.endlessRound * 4;
+  if (state.spawnBudgetRemaining <= 0) {
+    state.spawnBudgetRemaining = 18 + state.endlessRound * 4;
+  }
   const actWeights = state.endlessRound % 3 === 1
     ? ACTS[0].encounters[2].beats[2].weights
     : state.endlessRound % 3 === 2
@@ -785,28 +935,44 @@ function updateEndlessSpawns(state: GameState, dt: number, random: () => number)
   const kind = chooseWeightedKind(actWeights, random);
   const cost = enemyCost(kind);
   if (state.enemies.length < MAX_ENEMIES) {
-    state.enemies.push(spawnEnemy(state, kind, random, 1 + state.endlessRound * 0.045));
+    state.enemies.push(
+      spawnEnemy(state, kind, random, 1 + state.endlessRound * 0.045),
+    );
     state.spawnBudgetRemaining -= cost;
   }
-  state.spawnCooldown = Math.max(0.24, 0.72 - state.endlessRound * 0.025) *
-    (0.7 + random() * 0.5);
+  state.spawnCooldown = Math.max(0.24, 0.72 - state.endlessRound * 0.025) * (0.7 + random() * 0.5);
 }
 
-function updateProjectiles(state: GameState, dt: number) {
+function updateProjectiles(state: GameState, dt: number, freezeHostile = false) {
   for (const projectile of state.projectiles) {
     projectile.previousX = projectile.x;
     projectile.previousY = projectile.y;
+    if (freezeHostile && !projectile.friendly) continue;
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
     if (projectile.friendly && projectile.bouncesRemaining > 0) {
       let bounced = false;
-      if (projectile.x <= projectile.radius || projectile.x >= state.width - projectile.radius) {
-        projectile.x = clamp(projectile.x, projectile.radius, state.width - projectile.radius);
+      if (
+        projectile.x <= projectile.radius ||
+        projectile.x >= state.width - projectile.radius
+      ) {
+        projectile.x = clamp(
+          projectile.x,
+          projectile.radius,
+          state.width - projectile.radius,
+        );
         projectile.vx *= -1;
         bounced = true;
       }
-      if (projectile.y <= projectile.radius || projectile.y >= state.height - projectile.radius) {
-        projectile.y = clamp(projectile.y, projectile.radius, state.height - projectile.radius);
+      if (
+        projectile.y <= projectile.radius ||
+        projectile.y >= state.height - projectile.radius
+      ) {
+        projectile.y = clamp(
+          projectile.y,
+          projectile.radius,
+          state.height - projectile.radius,
+        );
         projectile.vy *= -1;
         bounced = true;
       }
@@ -836,9 +1002,11 @@ function updateEnemies(state: GameState, dt: number, random: () => number) {
     const towardX = dx / distance;
     const towardY = dy / distance;
     enemy.aimAngle = Math.atan2(dy, dx);
-    const supportBoost = state.enemies.some((candidate) =>
-        candidate.kind === "support" && candidate.id !== enemy.id &&
-        Math.hypot(candidate.x - enemy.x, candidate.y - enemy.y) < 145
+    const supportBoost = state.enemies.some(
+        (candidate) =>
+          candidate.kind === "support" &&
+          candidate.id !== enemy.id &&
+          Math.hypot(candidate.x - enemy.x, candidate.y - enemy.y) < 145,
       )
       ? 1.2
       : 1;
@@ -879,9 +1047,74 @@ function updateEnemies(state: GameState, dt: number, random: () => number) {
       moveEnemy(enemy, towardX, towardY, dt, supportBoost);
     }
 
-    enemy.x = clamp(enemy.x, -enemy.radius * 1.5, state.width + enemy.radius * 1.5);
-    enemy.y = clamp(enemy.y, -enemy.radius * 1.5, state.height + enemy.radius * 1.5);
+    enemy.x = clamp(
+      enemy.x,
+      -enemy.radius * 1.5,
+      state.width + enemy.radius * 1.5,
+    );
+    enemy.y = clamp(
+      enemy.y,
+      -enemy.radius * 1.5,
+      state.height + enemy.radius * 1.5,
+    );
   }
+}
+
+function updateSingularity(state: GameState, dt: number, random: () => number) {
+  const singularity = state.singularity;
+  if (!singularity) return;
+
+  singularity.life -= dt;
+  for (const enemy of state.enemies) {
+    if (enemy.health <= 0) continue;
+    const dx = singularity.x - enemy.x;
+    const dy = singularity.y - enemy.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const resistance = enemy.kind === "boss" ? 0.16 : enemy.elite ? 0.55 : 1;
+    const pull = 310 * resistance * Math.min(1, 190 / distance);
+    enemy.x += (dx / distance) * pull * dt;
+    enemy.y += (dy / distance) * pull * dt;
+    enemy.health -= (enemy.kind === "boss" ? 0.6 : 1.8) * dt;
+    if (enemy.health <= 0) destroyEnemy(state, enemy, random);
+  }
+
+  for (const projectile of state.projectiles) {
+    if (projectile.friendly || projectile.life <= 0) continue;
+    const dx = singularity.x - projectile.x;
+    const dy = singularity.y - projectile.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    if (distance <= singularity.radius) {
+      projectile.life = -1;
+      continue;
+    }
+    const acceleration = 680 * Math.min(1, 220 / distance);
+    projectile.vx += (dx / distance) * acceleration * dt;
+    projectile.vy += (dy / distance) * acceleration * dt;
+  }
+
+  if (singularity.life > 0) return;
+  const collapseRadius = 115;
+  for (const enemy of state.enemies) {
+    if (
+      enemy.health <= 0 ||
+      Math.hypot(enemy.x - singularity.x, enemy.y - singularity.y) > collapseRadius
+    ) {
+      continue;
+    }
+    enemy.health -= enemy.kind === "boss" ? 3 : 7;
+    if (enemy.health <= 0) destroyEnemy(state, enemy, random);
+  }
+  for (const projectile of state.projectiles) {
+    if (
+      !projectile.friendly &&
+      Math.hypot(projectile.x - singularity.x, projectile.y - singularity.y) <= collapseRadius
+    ) {
+      projectile.life = -1;
+    }
+  }
+  burstParticles(state, singularity.x, singularity.y, "#b687ff", 42);
+  state.screenShake = Math.max(state.screenShake, 0.55);
+  state.singularity = null;
 }
 
 function updateBoss(
@@ -893,12 +1126,22 @@ function updateBoss(
   const previousPhase = enemy.phase;
   const ratio = enemy.health / enemy.maxHealth;
   enemy.phase = ratio > 0.66 ? 1 : ratio > 0.33 ? 2 : 3;
+  if (state.bossDialogue && enemy.bossKind === "backfill-daemon") {
+    state.bossDialogue.x = enemy.x;
+    state.bossDialogue.y = enemy.y;
+  }
   if (enemy.phase !== previousPhase) {
+    state.bossPhaseChanges += 1;
     state.banner = `Phase ${enemy.phase}`;
     state.screenShake = 0.7;
     enemy.behaviorCooldown = 1.1;
     enemy.warningFor = 0.8;
     radialBurst(state, enemy, 6 + enemy.phase * 2, 160 + enemy.phase * 22);
+    if (enemy.bossKind === "backfill-daemon") {
+      const quotes = ACTS[state.actIndex].miniboss?.quotes;
+      const quote = enemy.phase === 2 ? quotes?.phaseTwo : quotes?.phaseThree;
+      if (quote) showBossDialogue(state, quote, enemy.x, enemy.y, 3.4);
+    }
   }
 
   const dx = state.player.x - enemy.x;
@@ -908,13 +1151,22 @@ function updateBoss(
   const ty = dy / distance;
   enemy.aimAngle = Math.atan2(dy, dx);
 
-  if (enemy.bossKind === "backlog") {
+  if (enemy.bossKind === "backfill-daemon") {
+    orbitPlayer(enemy, tx, ty, distance, dt, 0.82);
+    if (enemy.behaviorCooldown <= 0) {
+      enemy.warningFor = 0.5 * DIFFICULTIES[state.mode].warningMultiplier;
+      radialBurst(state, enemy, 4 + enemy.phase * 2, 150 + enemy.phase * 24);
+      if (enemy.phase >= 2) summonMinions(state, "file", 1, random);
+      if (enemy.phase === 3) aimedSpread(state, enemy, 3, 0.18, 215);
+      enemy.behaviorCooldown = enemy.phase === 1 ? 1.35 : enemy.phase === 2 ? 1.15 : 0.95;
+    }
+  } else if (enemy.bossKind === "backlog") {
     moveEnemy(enemy, tx, ty, dt, 0.7 + enemy.phase * 0.12);
     if (enemy.behaviorCooldown <= 0) {
       enemy.warningFor = 0.5 * DIFFICULTIES[state.mode].warningMultiplier;
       radialBurst(state, enemy, 5 + enemy.phase * 2, 175 + enemy.phase * 20);
-      if (enemy.phase >= 2) summonMinions(state, "file", enemy.phase + 1, random);
-      enemy.behaviorCooldown = enemy.phase === 1 ? 1.1 : enemy.phase === 2 ? 0.9 : 0.72;
+      if (enemy.phase >= 2) summonMinions(state, "file", 1, random);
+      enemy.behaviorCooldown = enemy.phase === 1 ? 1.65 : enemy.phase === 2 ? 1.35 : 1.1;
     }
   } else if (enemy.bossKind === "hydra") {
     orbitPlayer(enemy, tx, ty, distance, dt, 0.75);
@@ -933,8 +1185,16 @@ function updateBoss(
         state.hazards.push(
           createMine(
             state,
-            clamp(state.player.x + (random() - 0.5) * 150, 50, state.width - 50),
-            clamp(state.player.y + (random() - 0.5) * 150, 50, state.height - 50),
+            clamp(
+              state.player.x + (random() - 0.5) * 150,
+              50,
+              state.width - 50,
+            ),
+            clamp(
+              state.player.y + (random() - 0.5) * 150,
+              50,
+              state.height - 50,
+            ),
           ),
         );
       }
@@ -948,7 +1208,10 @@ function updateBoss(
 
 function updateShooter(state: GameState, enemy: Enemy, random: () => number) {
   if (enemy.behaviorCooldown > 0) {
-    if (enemy.behaviorCooldown < 0.46 * DIFFICULTIES[state.mode].warningMultiplier) {
+    if (
+      enemy.behaviorCooldown <
+        0.46 * DIFFICULTIES[state.mode].warningMultiplier
+    ) {
       enemy.warningFor = Math.max(enemy.warningFor, enemy.behaviorCooldown);
     }
     return;
@@ -961,7 +1224,9 @@ function updateHazards(state: GameState, dt: number) {
   for (const hazard of state.hazards) {
     hazard.life -= dt;
     hazard.armFor = Math.max(0, hazard.armFor - dt);
-    if (hazard.kind === "corruption") hazard.radius = Math.min(74, hazard.radius + dt * 12);
+    if (hazard.kind === "corruption") {
+      hazard.radius = Math.min(74, hazard.radius + dt * 12);
+    }
   }
 }
 
@@ -970,12 +1235,25 @@ function resolveProjectileCollisions(state: GameState, random: () => number) {
     if (projectile.life <= 0 || !projectile.friendly) continue;
     for (const enemy of state.enemies) {
       if (
-        enemy.health <= 0 || projectile.hitIds.includes(enemy.id) ||
+        enemy.health <= 0 ||
+        projectile.hitIds.includes(enemy.id) ||
         !segmentHitsCircle(projectile, enemy, enemy.radius + projectile.radius)
-      ) continue;
+      ) {
+        continue;
+      }
       projectile.hitIds.push(enemy.id);
-      enemy.health -= projectile.damage;
-      burstParticles(state, projectile.x, projectile.y, enemyColor(enemy), 3);
+      const damage = state.activePowerups.freezeFor > 0
+        ? projectile.damage * FROZEN_DAMAGE_MULTIPLIER
+        : projectile.damage;
+      enemy.health -= damage;
+      state.enemyHits += 1;
+      burstParticles(
+        state,
+        projectile.x,
+        projectile.y,
+        state.activePowerups.freezeFor > 0 ? "#b9f4ff" : enemyColor(enemy),
+        state.activePowerups.freezeFor > 0 ? 7 : 3,
+      );
       if (enemy.health <= 0) destroyEnemy(state, enemy, random);
       if (projectile.pierce <= 0) {
         projectile.life = -1;
@@ -986,9 +1264,15 @@ function resolveProjectileCollisions(state: GameState, random: () => number) {
   }
 
   if (state.player.invulnerableFor > 0) return;
-  const hostile = state.projectiles.find((projectile) =>
-    projectile.life > 0 && !projectile.friendly &&
-    segmentHitsCircle(projectile, state.player, PLAYER_RADIUS + projectile.radius)
+  const hostile = state.projectiles.find(
+    (projectile) =>
+      projectile.life > 0 &&
+      !projectile.friendly &&
+      segmentHitsCircle(
+        projectile,
+        state.player,
+        PLAYER_RADIUS + projectile.radius,
+      ),
   );
   if (hostile) {
     hostile.life = -1;
@@ -998,10 +1282,11 @@ function resolveProjectileCollisions(state: GameState, random: () => number) {
 
 function resolvePlayerCollisions(state: GameState) {
   if (state.player.invulnerableFor > 0) return;
-  const enemy = state.enemies.find((candidate) =>
-    candidate.health > 0 &&
-    Math.hypot(candidate.x - state.player.x, candidate.y - state.player.y) <=
-      candidate.radius + PLAYER_RADIUS
+  const enemy = state.enemies.find(
+    (candidate) =>
+      candidate.health > 0 &&
+      Math.hypot(candidate.x - state.player.x, candidate.y - state.player.y) <=
+        candidate.radius + PLAYER_RADIUS,
   );
   if (enemy) {
     if (enemy.kind !== "boss") enemy.health = 0;
@@ -1009,14 +1294,20 @@ function resolvePlayerCollisions(state: GameState) {
     return;
   }
 
-  const hazard = state.hazards.find((candidate) =>
-    candidate.life > 0 && candidate.armFor === 0 &&
-    Math.hypot(candidate.x - state.player.x, candidate.y - state.player.y) <=
-      candidate.radius + PLAYER_RADIUS
+  const hazard = state.hazards.find(
+    (candidate) =>
+      candidate.life > 0 &&
+      candidate.armFor === 0 &&
+      Math.hypot(candidate.x - state.player.x, candidate.y - state.player.y) <=
+        candidate.radius + PLAYER_RADIUS,
   );
   if (hazard) {
     hazard.life = -1;
-    damagePlayer(state, hazard.damage, "Corrupt sectors overwhelmed the scanner.");
+    damagePlayer(
+      state,
+      hazard.damage,
+      "Corrupt sectors overwhelmed the scanner.",
+    );
   }
 }
 
@@ -1031,8 +1322,23 @@ function updateParticles(state: GameState, dt: number) {
 }
 
 function updateObjective(state: GameState, dt: number) {
+  if (state.phase === "miniboss") {
+    if (state.minibossDefeatFor > 0) {
+      state.minibossDefeatFor = Math.max(0, state.minibossDefeatFor - dt);
+      if (state.minibossDefeatFor === 0) completeEncounter(state);
+      return;
+    }
+    const miniboss = state.enemies.find(
+      (enemy) => enemy.kind === "boss" && enemy.health > 0,
+    );
+    if (!miniboss) completeMiniboss(state);
+    else state.objectiveProgress = miniboss.maxHealth - miniboss.health;
+    return;
+  }
   if (state.phase === "boss") {
-    const boss = state.enemies.find((enemy) => enemy.kind === "boss" && enemy.health > 0);
+    const boss = state.enemies.find(
+      (enemy) => enemy.kind === "boss" && enemy.health > 0,
+    );
     if (!boss) completeBoss(state);
     else state.objectiveProgress = boss.maxHealth - boss.health;
     return;
@@ -1050,7 +1356,9 @@ function updateObjective(state: GameState, dt: number) {
     state.objectiveProgress += dt;
   }
 
-  if (state.objectiveProgress >= state.objectiveTarget) completeEncounter(state);
+  if (state.objectiveProgress >= state.objectiveTarget) {
+    completeEncounter(state);
+  }
 }
 
 function updateRelayObjective(
@@ -1071,15 +1379,18 @@ function updateRelayObjective(
     state.objectiveProgress += 1;
     state.relayStreak += 1;
     state.score += 35 * state.relayStreak * (state.actIndex + 1);
-    burstParticles(state, cache.x, cache.y, ACTS[state.actIndex].palette.primary, 18);
+    burstParticles(
+      state,
+      cache.x,
+      cache.y,
+      ACTS[state.actIndex].palette.primary,
+      18,
+    );
     state.relayCache = null;
     if (state.objectiveProgress < state.objectiveTarget) spawnRelayCache(state);
   } else if (cache.timeRemaining <= 0) {
     state.relayStreak = 0;
     state.relayMisses += 1;
-    if (state.player.invulnerableFor <= 0) {
-      damagePlayer(state, 1, "A volatile cache expired before recovery.");
-    }
     if (state.phase === "encounter") {
       state.relayCache = null;
       spawnRelayCache(state);
@@ -1088,7 +1399,6 @@ function updateRelayObjective(
 
   if (state.objectiveProgress >= state.objectiveTarget) {
     if (state.relayMisses === 0) state.score += 400 * (state.actIndex + 1);
-    completeEncounter(state);
   }
   void encounter;
 }
@@ -1122,18 +1432,38 @@ function spawnRelayCache(state: GameState) {
 }
 
 function compactState(state: GameState) {
-  state.projectiles = state.projectiles.filter((projectile) =>
-    projectile.life > 0 && projectile.x > -80 && projectile.x < state.width + 80 &&
-    projectile.y > -80 && projectile.y < state.height + 80
-  ).slice(-MAX_PROJECTILES);
-  state.enemies = state.enemies.filter((enemy) => enemy.health > 0).slice(-MAX_ENEMIES);
-  state.hazards = state.hazards.filter((hazard) => hazard.life > 0).slice(-MAX_HAZARDS);
-  state.particles = state.particles.filter((particle) => particle.life > 0).slice(-MAX_PARTICLES);
-  state.powerupDrops = state.powerupDrops.filter((drop) => drop.life > 0).slice(-24);
+  state.projectiles = state.projectiles
+    .filter(
+      (projectile) =>
+        projectile.life > 0 &&
+        projectile.x > -80 &&
+        projectile.x < state.width + 80 &&
+        projectile.y > -80 &&
+        projectile.y < state.height + 80,
+    )
+    .slice(-MAX_PROJECTILES);
+  state.enemies = state.enemies
+    .filter((enemy) => enemy.health > 0)
+    .slice(-MAX_ENEMIES);
+  state.hazards = state.hazards
+    .filter((hazard) => hazard.life > 0)
+    .slice(-MAX_HAZARDS);
+  state.particles = state.particles
+    .filter((particle) => particle.life > 0)
+    .slice(-MAX_PARTICLES);
+  state.powerupDrops = state.powerupDrops
+    .filter((drop) => drop.life > 0)
+    .slice(-24);
 }
 
 function completeEncounter(state: GameState) {
-  if (state.phase !== "encounter") return;
+  if (state.phase === "encounter") {
+    const miniboss = ACTS[state.actIndex].miniboss;
+    if (miniboss?.afterEncounterIndex === state.encounterIndex) {
+      beginMiniboss(state);
+      return;
+    }
+  } else if (state.phase !== "miniboss") return;
   const baseBonus = 300 * (state.actIndex + 1);
   const noDamageBonus = state.noDamage ? 250 * (state.actIndex + 1) : 0;
   state.score += baseBonus + noDamageBonus;
@@ -1153,14 +1483,40 @@ function completeEncounter(state: GameState) {
   state.player.ammo = state.player.magazineSize;
 }
 
+function completeMiniboss(state: GameState) {
+  if (state.phase !== "miniboss" || state.minibossDefeatFor > 0) return;
+  const definition = ACTS[state.actIndex].miniboss;
+  if (!definition) return;
+  const defeated = state.enemies.find(
+    (enemy) => enemy.kind === "boss" && enemy.bossKind === definition.kind,
+  );
+  const x = defeated?.x ?? state.width / 2;
+  const y = defeated?.y ?? state.height / 2;
+  state.player.maxHealth += 1;
+  state.player.health = state.player.maxHealth;
+  state.minibossDefeatFor = 2.6;
+  state.banner = "Unexpected process terminated";
+  state.enemies = [];
+  state.projectiles = [];
+  state.hazards = [];
+  state.powerupDrops = [];
+  showBossDialogue(state, definition.quotes.defeat, x, y, 2.6);
+}
+
 function createUpgradeTargets(state: GameState) {
   const radius = Math.min(state.width, state.height) * 0.24;
+  const centerX = state.width / 2;
+  const centerY = state.height / 2;
   return state.offeredUpgrades.map((id, index) => {
-    const angle = -Math.PI / 2 + (index - 1) * 1.35;
+    const angle = -Math.PI / 2 + index * (Math.PI * 2 / 3);
     return {
       id,
-      x: clamp(state.player.x + Math.cos(angle) * radius, 64, state.width - 64),
-      y: clamp(state.player.y + Math.sin(angle) * radius, 72, state.height - 72),
+      x: clamp(centerX + Math.cos(angle) * radius, 64, state.width - 64),
+      y: clamp(
+        centerY + Math.sin(angle) * radius,
+        72,
+        state.height - 72,
+      ),
       radius: UPGRADE_TARGET_RADIUS,
       entranceFor: 0.5,
     };
@@ -1171,9 +1527,14 @@ function resolveUpgradeTargetCollisions(state: GameState) {
   if (state.rewardTransitionFor > 0) return;
   for (const projectile of state.projectiles) {
     if (!projectile.friendly || projectile.life <= 0) continue;
-    const target = state.upgradeTargets.find((candidate) =>
-      candidate.entranceFor === 0 &&
-      segmentHitsCircle(projectile, candidate, candidate.radius + projectile.radius)
+    const target = state.upgradeTargets.find(
+      (candidate) =>
+        candidate.entranceFor === 0 &&
+        segmentHitsCircle(
+          projectile,
+          candidate,
+          candidate.radius + projectile.radius,
+        ),
     );
     if (!target) continue;
     applyUpgrade(state, target.id);
@@ -1203,7 +1564,10 @@ function completeBoss(state: GameState) {
   state.score += state.noDamage ? 600 * (state.actIndex + 1) : 0;
   state.phase = "actComplete";
   state.banner = `${ACTS[state.actIndex].name} secured`;
-  state.player.health = Math.min(state.player.maxHealth, state.player.health + 1);
+  state.player.health = Math.min(
+    state.player.maxHealth,
+    state.player.health + 1,
+  );
   clearArena(state);
 }
 
@@ -1214,14 +1578,29 @@ function destroyEnemy(state: GameState, enemy: Enemy, random: () => number) {
   state.comboTimer = 2.35 * (1 + upgradeLevel(state, "combo-cache") * 0.35);
   const scoreBoost = 1 + upgradeLevel(state, "compression") * 0.15;
   state.score += Math.round(enemy.points * state.comboMultiplier * scoreBoost);
-  if (state.phase === "encounter" && getCurrentEncounter(state)?.objective === "purge") {
+  if (
+    state.phase === "encounter" &&
+    getCurrentEncounter(state)?.objective === "purge"
+  ) {
     state.objectiveProgress += enemy.kind === "boss" ? 10 : 1;
   }
   if (upgradeLevel(state, "garbage-collector") > 0 && state.kills % 10 === 0) {
-    state.player.health = Math.min(state.player.maxHealth, state.player.health + 1);
+    state.player.health = Math.min(
+      state.player.maxHealth,
+      state.player.health + 1,
+    );
   }
-  burstParticles(state, enemy.x, enemy.y, enemyColor(enemy), enemy.kind === "boss" ? 32 : 8);
-  state.screenShake = Math.max(state.screenShake, enemy.kind === "boss" ? 1 : 0.18);
+  burstParticles(
+    state,
+    enemy.x,
+    enemy.y,
+    enemyColor(enemy),
+    enemy.kind === "boss" ? 32 : 8,
+  );
+  state.screenShake = Math.max(
+    state.screenShake,
+    enemy.kind === "boss" ? 1 : 0.18,
+  );
   if (enemy.kind === "file" && state.hazards.length < MAX_HAZARDS) {
     state.hazards.push({
       id: state.nextHazardId++,
@@ -1241,7 +1620,11 @@ function destroyEnemy(state: GameState, enemy: Enemy, random: () => number) {
   }
 }
 
-function resolveDuplicateDrop(state: GameState, enemy: Enemy, random: () => number) {
+function resolveDuplicateDrop(
+  state: GameState,
+  enemy: Enemy,
+  random: () => number,
+) {
   const roll = random();
   if (roll < DUPLICATE_EXPLOSIVE_CHANCE) {
     spawnDuplicateChildren(state, enemy, ["file", "file"], random);
@@ -1255,7 +1638,9 @@ function resolveDuplicateDrop(state: GameState, enemy: Enemy, random: () => numb
   }
 
   const wantsPowerup = roll <
-    DUPLICATE_EXPLOSIVE_CHANCE + DUPLICATE_ENEMY_CHANCE + DUPLICATE_POWERUP_CHANCE;
+    DUPLICATE_EXPLOSIVE_CHANCE +
+      DUPLICATE_ENEMY_CHANCE +
+      DUPLICATE_POWERUP_CHANCE;
   const kind = wantsPowerup || state.player.health >= state.player.maxHealth
     ? choosePowerupKind(state, random)
     : "repair";
@@ -1265,8 +1650,12 @@ function resolveDuplicateDrop(state: GameState, enemy: Enemy, random: () => numb
 }
 
 function duplicateEnemyPool(actIndex: number): EnemyKind[] {
-  if (actIndex === 0) return ["file", "media", "library", "malicious", "buffering"];
-  if (actIndex === 1) return ["file", "media", "malicious", "corruptor", "buffering"];
+  if (actIndex === 0) {
+    return ["file", "media", "library", "malicious", "buffering"];
+  }
+  if (actIndex === 1) {
+    return ["file", "media", "malicious", "corruptor", "buffering"];
+  }
   return ["media", "malicious", "corruptor", "buffering", "support"];
 }
 
@@ -1286,11 +1675,18 @@ function spawnDuplicateChildren(
 }
 
 function damagePlayer(state: GameState, amount: number, reason: string) {
-  if (state.activePowerups.shieldFor > 0 && state.activePowerups.shieldHits > 0) {
+  if (
+    state.activePowerups.shieldFor > 0 &&
+    state.activePowerups.shieldHits > 0
+  ) {
+    state.shieldBlocks += 1;
     state.activePowerups.shieldHits -= 1;
-    if (state.activePowerups.shieldHits === 0) state.activePowerups.shieldFor = 0;
+    if (state.activePowerups.shieldHits === 0) {
+      state.activePowerups.shieldFor = 0;
+    }
     burstParticles(state, state.player.x, state.player.y, "#65d6e8", 24);
   } else if (state.player.shield > 0) {
+    state.shieldBlocks += 1;
     state.player.shield -= 1;
   } else {
     state.player.health -= amount;
@@ -1327,9 +1723,14 @@ function applyUpgrade(state: GameState, upgradeId: UpgradeId) {
   state.upgrades[upgradeId] = nextLevel;
   if (upgradeId === "parity") {
     state.player.maxHealth += 1;
-    state.player.health = Math.min(state.player.maxHealth, state.player.health + 1);
+    state.player.health = Math.min(
+      state.player.maxHealth,
+      state.player.health + 1,
+    );
   }
-  if (upgradeId === "snapshot") state.player.shield = Math.max(1, state.player.shield);
+  if (upgradeId === "snapshot") {
+    state.player.shield = Math.max(1, state.player.shield);
+  }
   if (upgradeId === "magazine-extension" || upgradeId === "hot-swap") {
     configureWeaponState(state, upgradeId === "magazine-extension");
   }
@@ -1361,13 +1762,38 @@ function collectPowerup(state: GameState, kind: TemporaryPowerupKind) {
     state.player.reloadFor = 0;
   }
   if (kind === "prism") state.activePowerups.prism = 1;
+  if (kind === "freeze") {
+    state.activePowerups.freezeFor = FREEZE_DURATION;
+    state.banner = "All streams paused — shatter window open";
+  }
+  if (kind === "singularity") {
+    state.singularity = {
+      x: clamp(
+        state.player.x + Math.cos(state.player.angle) * SINGULARITY_PLACEMENT_DISTANCE,
+        38,
+        state.width - 38,
+      ),
+      y: clamp(
+        state.player.y + Math.sin(state.player.angle) * SINGULARITY_PLACEMENT_DISTANCE,
+        38,
+        state.height - 38,
+      ),
+      life: SINGULARITY_DURATION,
+      duration: SINGULARITY_DURATION,
+      radius: SINGULARITY_RADIUS,
+    };
+    state.banner = "Database Vacuum deployed";
+  }
   if (kind === "shield") {
     clearNearbyHostileProjectiles(state);
     state.activePowerups.shieldFor = 1;
     state.activePowerups.shieldHits = 1;
   }
   if (kind === "repair") {
-    state.player.health = Math.min(state.player.maxHealth, state.player.health + 1);
+    state.player.health = Math.min(
+      state.player.maxHealth,
+      state.player.health + 1,
+    );
   }
   state.powerupsCollected += 1;
 }
@@ -1377,13 +1803,20 @@ function powerupColor(kind: TemporaryPowerupKind) {
   if (kind === "machine-gun") return "#ff7d8f";
   if (kind === "super-shot") return "#ffca69";
   if (kind === "shield") return "#65d6e8";
+  if (kind === "freeze") return "#b9f4ff";
+  if (kind === "singularity") return "#b687ff";
   if (kind === "repair") return "#76e0c1";
   return "#b687ff";
 }
 
 function trySpawnPowerup(state: GameState, enemy: Enemy, random: () => number) {
   state.killsSincePowerupDrop += 1;
-  if (state.powerupsDroppedThisPhase >= powerupDropCap(state) || state.dropCooldown > 0) return;
+  if (
+    state.powerupsDroppedThisPhase >= powerupDropCap(state) ||
+    state.dropCooldown > 0
+  ) {
+    return;
+  }
   const guaranteed = state.killsSincePowerupDrop >= DROP_PITY_KILLS;
   const chance = enemy.elite ? ELITE_DROP_CHANCE : NORMAL_DROP_CHANCE;
   if (!guaranteed && random() >= chance) return;
@@ -1419,13 +1852,18 @@ function powerupDropCap(state: GameState) {
 }
 
 function choosePowerupKind(state: GameState, random: () => number) {
-  let candidates = (Object.keys(POWERUP_WEIGHTS) as TemporaryPowerupKind[]).filter((kind) =>
-    kind !== "repair" || state.player.health < state.player.maxHealth
+  let candidates = (
+    Object.keys(POWERUP_WEIGHTS) as TemporaryPowerupKind[]
+  ).filter(
+    (kind) => kind !== "repair" || state.player.health < state.player.maxHealth,
   );
   if (candidates.length > 1 && state.lastPowerupKind) {
     candidates = candidates.filter((kind) => kind !== state.lastPowerupKind);
   }
-  const total = candidates.reduce((sum, kind) => sum + POWERUP_WEIGHTS[kind], 0);
+  const total = candidates.reduce(
+    (sum, kind) => sum + POWERUP_WEIGHTS[kind],
+    0,
+  );
   let roll = random() * total;
   for (const kind of candidates) {
     roll -= POWERUP_WEIGHTS[kind];
@@ -1438,8 +1876,13 @@ function clearNearbyHostileProjectiles(state: GameState) {
   for (const projectile of state.projectiles) {
     if (
       !projectile.friendly &&
-      Math.hypot(projectile.x - state.player.x, projectile.y - state.player.y) <= 230
-    ) projectile.life = -1;
+      Math.hypot(
+          projectile.x - state.player.x,
+          projectile.y - state.player.y,
+        ) <= 230
+    ) {
+      projectile.life = -1;
+    }
   }
 }
 
@@ -1450,8 +1893,8 @@ function resetDropDirector(state: GameState) {
 }
 
 function offerUpgrades(state: GameState) {
-  const candidates = UPGRADES.filter((upgrade) =>
-    upgradeLevel(state, upgrade.id) < upgrade.maxLevel
+  const candidates = UPGRADES.filter(
+    (upgrade) => upgradeLevel(state, upgrade.id) < upgrade.maxLevel,
   ).map((upgrade) => upgrade.id);
   const offered: UpgradeId[] = [];
   while (candidates.length > 0 && offered.length < 3) {
@@ -1482,13 +1925,18 @@ function spawnEnemy(
   if (edge === 3) x = -stats.radius;
   const difficulty = DIFFICULTIES[state.mode];
   const encounter = getCurrentEncounter(state);
-  const eligibleElite = allowElite && state.phase === "encounter" && state.phaseElapsed >= 8 &&
-    kind !== "file" && enemyCost(kind) >= 2;
+  const eligibleElite = allowElite &&
+    state.phase === "encounter" &&
+    state.phaseElapsed >= 8 &&
+    kind !== "file" &&
+    enemyCost(kind) >= 2;
   const elite = eligibleElite && random() < (encounter?.eliteChance ?? 0);
   const eliteScale = elite ? 1.6 : 1;
   const health = Math.max(
     1,
-    Math.round(stats.health * difficulty.enemyHealthMultiplier * scale * eliteScale),
+    Math.round(
+      stats.health * difficulty.enemyHealthMultiplier * scale * eliteScale,
+    ),
   );
   return {
     id: state.nextEnemyId++,
@@ -1496,7 +1944,10 @@ function spawnEnemy(
     x,
     y,
     radius: stats.radius,
-    speed: stats.speed * difficulty.enemySpeedMultiplier * Math.sqrt(scale) * (elite ? 1.1 : 1),
+    speed: stats.speed *
+      difficulty.enemySpeedMultiplier *
+      Math.sqrt(scale) *
+      (elite ? 1.1 : 1),
     health,
     maxHealth: health,
     points: Math.round(stats.points * (elite ? 1.8 : 1)),
@@ -1543,6 +1994,46 @@ function createBoss(state: GameState): Enemy {
   };
 }
 
+function createMiniboss(state: GameState): Enemy {
+  const miniboss = ACTS[state.actIndex].miniboss;
+  if (!miniboss) throw new Error("Miniboss content is missing");
+  const difficulty = DIFFICULTIES[state.mode];
+  const health = Math.round(miniboss.health * difficulty.enemyHealthMultiplier);
+  return {
+    id: state.nextEnemyId++,
+    kind: "boss",
+    bossKind: miniboss.kind,
+    x: state.width / 2,
+    y: 48,
+    radius: 27,
+    speed: miniboss.speed * difficulty.enemySpeedMultiplier,
+    health,
+    maxHealth: health,
+    points: miniboss.points,
+    damage: 1,
+    aimAngle: Math.PI / 2,
+    behaviorCooldown: 1.1,
+    warningFor: 0.8,
+    phase: 1,
+    orbitDirection: -1,
+    splitGeneration: 0,
+    dashFor: 0,
+    dashX: 0,
+    dashY: 0,
+    elite: false,
+  };
+}
+
+function showBossDialogue(
+  state: GameState,
+  text: string,
+  x: number,
+  y: number,
+  duration: number,
+) {
+  state.bossDialogue = { text, x, y, life: duration, maxLife: duration };
+}
+
 function createMine(state: GameState, x: number, y: number): Hazard {
   return {
     id: state.nextHazardId++,
@@ -1562,12 +2053,21 @@ function summonMinions(
   count: number,
   random: () => number,
 ) {
-  for (let index = 0; index < count && state.enemies.length < MAX_ENEMIES; index++) {
+  for (
+    let index = 0;
+    index < count && state.enemies.length < MAX_ENEMIES;
+    index++
+  ) {
     state.enemies.push(spawnEnemy(state, kind, random, 0.9));
   }
 }
 
-function radialBurst(state: GameState, enemy: Enemy, count: number, speed: number) {
+function radialBurst(
+  state: GameState,
+  enemy: Enemy,
+  count: number,
+  speed: number,
+) {
   for (let index = 0; index < count; index++) {
     createHostileProjectile(state, enemy, (Math.PI * 2 * index) / count, speed);
   }
@@ -1649,10 +2149,9 @@ function chooseWeightedKind(
   weights: Partial<Record<EnemyKind, number>>,
   random: () => number,
 ) {
-  const entries = Object.entries(weights).filter((entry) => (entry[1] ?? 0) > 0) as [
-    EnemyKind,
-    number,
-  ][];
+  const entries = Object.entries(weights).filter(
+    (entry) => (entry[1] ?? 0) > 0,
+  ) as [EnemyKind, number][];
   const total = entries.reduce((sum, entry) => sum + entry[1], 0);
   let roll = random() * total;
   for (const [kind, weight] of entries) {
@@ -1663,8 +2162,12 @@ function chooseWeightedKind(
 }
 
 function enemyStats(kind: EnemyKind) {
-  if (kind === "media") return { radius: 15, speed: 61, health: 3, points: 28, damage: 1 };
-  if (kind === "library") return { radius: 20, speed: 44, health: 6, points: 74, damage: 1 };
+  if (kind === "media") {
+    return { radius: 15, speed: 61, health: 3, points: 28, damage: 1 };
+  }
+  if (kind === "library") {
+    return { radius: 20, speed: 44, health: 6, points: 74, damage: 1 };
+  }
   if (kind === "malicious") {
     return { radius: 13, speed: 60, health: 3, points: 58, damage: 1 };
   }
@@ -1685,7 +2188,9 @@ function enemyStats(kind: EnemyKind) {
 
 function enemyCost(kind: EnemyKind) {
   if (kind === "library" || kind === "support") return 4;
-  if (kind === "corruptor" || kind === "malicious" || kind === "duplicate") return 3;
+  if (kind === "corruptor" || kind === "malicious" || kind === "duplicate") {
+    return 3;
+  }
   if (kind === "media" || kind === "buffering") return 2;
   return 1;
 }
@@ -1694,12 +2199,17 @@ function adjustedBudget(state: GameState, budget: number) {
   return Math.round(budget * DIFFICULTIES[state.mode].spawnBudgetMultiplier);
 }
 
-function segmentHitsCircle(projectile: Projectile, circle: Point, radius: number) {
+function segmentHitsCircle(
+  projectile: Projectile,
+  circle: Point,
+  radius: number,
+) {
   const vx = projectile.x - projectile.previousX;
   const vy = projectile.y - projectile.previousY;
   const lengthSquared = vx * vx + vy * vy;
   const projection = lengthSquared === 0 ? 0 : clamp(
-    ((circle.x - projectile.previousX) * vx + (circle.y - projectile.previousY) * vy) /
+    ((circle.x - projectile.previousX) * vx +
+      (circle.y - projectile.previousY) * vy) /
       lengthSquared,
     0,
     1,
@@ -1737,7 +2247,9 @@ function burstParticles(
 
 function enemyColor(enemy: Enemy) {
   if (enemy.kind === "boss") return "#ffd36e";
-  if (enemy.kind === "malicious" || enemy.kind === "corruptor") return "#ff6684";
+  if (enemy.kind === "malicious" || enemy.kind === "corruptor") {
+    return "#ff6684";
+  }
   if (enemy.kind === "duplicate") return "#b687ff";
   if (enemy.kind === "support") return "#65d6e8";
   if (enemy.kind === "buffering") return "#ffca69";

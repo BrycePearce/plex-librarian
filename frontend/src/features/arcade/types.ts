@@ -10,6 +10,7 @@ export type GamePhase =
   | "title"
   | "encounter"
   | "reward"
+  | "miniboss"
   | "boss"
   | "actComplete"
   | "gameOver"
@@ -25,7 +26,7 @@ export type EnemyKind =
   | "buffering"
   | "support"
   | "boss";
-export type BossKind = "backlog" | "hydra" | "admin";
+export type BossKind = "backlog" | "hydra" | "admin" | "backfill-daemon";
 export type UpgradeId =
   | "rapid-index"
   | "packet-size"
@@ -51,6 +52,8 @@ export type TemporaryPowerupKind =
   | "shield"
   | "reflect"
   | "prism"
+  | "freeze"
+  | "singularity"
   | "repair";
 export type TemporaryWeaponKind = "machine-gun" | "super-shot";
 
@@ -150,6 +153,13 @@ export interface ActivePowerups {
   prism: number;
   shieldFor: number;
   shieldHits: number;
+  freezeFor: number;
+}
+
+export interface Singularity extends Point {
+  life: number;
+  duration: number;
+  radius: number;
 }
 
 export interface Hazard extends Point {
@@ -208,6 +218,22 @@ export interface BossDefinition {
   points: number;
 }
 
+export interface MinibossDefinition extends BossDefinition {
+  afterEncounterIndex: number;
+  quotes: {
+    intro: string;
+    phaseTwo: string;
+    phaseThree: string;
+    defeat: string;
+  };
+}
+
+export interface BossDialogue extends Point {
+  text: string;
+  life: number;
+  maxLife: number;
+}
+
 export interface DifficultyConfig {
   id: DifficultyMode;
   label: string;
@@ -245,6 +271,7 @@ export interface ActDefinition {
     danger: string;
   };
   encounters: EncounterDefinition[];
+  miniboss?: MinibossDefinition;
   boss: BossDefinition;
 }
 
@@ -273,6 +300,9 @@ export interface GameState {
   objectiveProgress: number;
   objectiveTarget: number;
   kills: number;
+  enemyHits: number;
+  shieldBlocks: number;
+  bossPhaseChanges: number;
   noDamage: boolean;
   spawnCooldown: number;
   spawnBeatIndex: number;
@@ -293,6 +323,7 @@ export interface GameState {
   rewardTransitionFor: number;
   powerupDrops: PowerupDrop[];
   activePowerups: ActivePowerups;
+  singularity: Singularity | null;
   temporaryWeapon: TemporaryWeaponState | null;
   nextPowerupId: number;
   dropCooldown: number;
@@ -304,6 +335,8 @@ export interface GameState {
   patternWarningFor: number;
   patternSourceId: number | null;
   patternKind: "aimed" | "radial" | null;
+  bossDialogue: BossDialogue | null;
+  minibossDefeatFor: number;
   banner: string;
   gameOverReason?: string;
 }

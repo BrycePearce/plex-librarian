@@ -28,11 +28,15 @@ export function renderArcade(
   }
   drawArena(context, state, width, height);
   drawObjective(context, state, width, height);
+  drawSingularity(context, state);
   drawPowerupDrops(context, state);
   drawUpgradeTargets(context, state);
   for (const hazard of state.hazards) drawHazard(context, hazard, palette.danger);
   for (const projectile of state.projectiles) drawProjectile(context, projectile);
-  for (const enemy of state.enemies) drawEnemy(context, enemy, state.elapsed);
+  for (const enemy of state.enemies) {
+    drawEnemy(context, enemy, state.elapsed, state.activePowerups.freezeFor > 0);
+  }
+  drawBossDialogue(context, state, width, height);
   drawPlayer(context, state);
   drawDeepScan(context, state, width, height);
   if (!options.settings.reducedEffects) drawParticles(context, state);
@@ -117,6 +121,29 @@ function drawObjective(
   context.beginPath();
   context.arc(0, 0, 27, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
   context.stroke();
+
+  // Give relay objectives a familiar destination silhouette in addition to the
+  // cache icon and timer. The flag remains legible while enemies and effects
+  // overlap the target.
+  context.strokeStyle = palette.secondary;
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(0, 7);
+  context.lineTo(0, -36);
+  context.stroke();
+  context.fillStyle = palette.secondary;
+  context.beginPath();
+  context.moveTo(1, -35);
+  context.lineTo(21, -29);
+  context.lineTo(1, -23);
+  context.closePath();
+  context.fill();
+
+  context.font = "800 8px ui-monospace, monospace";
+  context.textAlign = "center";
+  context.textBaseline = "bottom";
+  context.fillStyle = palette.secondary;
+  context.fillText("RECOVER", 0, -42);
   context.restore();
 
   const dx = cache.x - state.player.x;
@@ -218,7 +245,12 @@ function drawPlayer(context: CanvasRenderingContext2D, state: GameState) {
   context.restore();
 }
 
-function drawEnemy(context: CanvasRenderingContext2D, enemy: Enemy, elapsed: number) {
+function drawEnemy(
+  context: CanvasRenderingContext2D,
+  enemy: Enemy,
+  elapsed: number,
+  frozen: boolean,
+) {
   context.save();
   context.translate(enemy.x, enemy.y);
   context.lineWidth = 2;
@@ -251,6 +283,16 @@ function drawEnemy(context: CanvasRenderingContext2D, enemy: Enemy, elapsed: num
   else if (enemy.kind === "buffering") drawBuffering(context, enemy.radius, enemy.aimAngle);
   else if (enemy.kind === "support") drawSupport(context, enemy.radius, elapsed);
   else drawFile(context, enemy.radius);
+
+  if (frozen) {
+    context.fillStyle = "rgba(185, 244, 255, 0.18)";
+    context.strokeStyle = "#b9f4ff";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(0, 0, enemy.radius + 4, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+  }
 
   if (enemy.maxHealth > 1 && enemy.health < enemy.maxHealth) drawHealthBar(context, enemy);
   context.restore();
@@ -417,12 +459,20 @@ function drawBoss(context: CanvasRenderingContext2D, enemy: Enemy, elapsed: numb
     ? "#f3a65a"
     : enemy.bossKind === "hydra"
     ? "#b687ff"
+    : enemy.bossKind === "backfill-daemon"
+    ? "#70dff2"
     : "#ff6684";
   context.rotate(elapsed * 0.18 * enemy.orbitDirection);
   context.fillStyle = colorWithAlpha(color, 0.28);
   context.strokeStyle = color;
   context.lineWidth = 4;
-  const points = enemy.bossKind === "hydra" ? 12 : enemy.bossKind === "admin" ? 6 : 8;
+  const points = enemy.bossKind === "hydra"
+    ? 12
+    : enemy.bossKind === "admin"
+    ? 6
+    : enemy.bossKind === "backfill-daemon"
+    ? 10
+    : 8;
   context.beginPath();
   for (let index = 0; index < points; index++) {
     const angle = (index / points) * Math.PI * 2;
@@ -440,6 +490,61 @@ function drawBoss(context: CanvasRenderingContext2D, enemy: Enemy, elapsed: numb
   context.font = "800 17px ui-monospace, monospace";
   context.textAlign = "center";
   context.fillText(enemy.phase === 1 ? "I" : enemy.phase === 2 ? "II" : "III", 0, 6);
+}
+
+function drawBossDialogue(
+  context: CanvasRenderingContext2D,
+  state: GameState,
+  width: number,
+  height: number,
+) {
+  const dialogue = state.bossDialogue;
+  if (!dialogue || dialogue.life <= 0) return;
+  context.save();
+  context.font = "700 11px ui-monospace, monospace";
+  const lines = wrapText(context, dialogue.text, 260);
+  const bubbleWidth = Math.min(
+    280,
+    Math.max(170, ...lines.map((line) => context.measureText(line).width + 28)),
+  );
+  const bubbleHeight = 24 + lines.length * 16;
+  const x = clampRender(dialogue.x, bubbleWidth / 2 + 12, width - bubbleWidth / 2 - 12);
+  const preferAbove = dialogue.y - bubbleHeight - 46 >= 12;
+  const y = clampRender(
+    preferAbove ? dialogue.y - bubbleHeight - 38 : dialogue.y + 42,
+    12,
+    height - bubbleHeight - 12,
+  );
+  const fade = Math.min(1, dialogue.life / 0.3, (dialogue.maxLife - dialogue.life) / 0.18);
+
+  context.globalAlpha = Math.max(0, fade);
+  context.fillStyle = "rgba(4, 14, 23, 0.94)";
+  context.strokeStyle = "#70dff2";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.roundRect(x - bubbleWidth / 2, y, bubbleWidth, bubbleHeight, 8);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#e7ffff";
+  context.textAlign = "center";
+  context.textBaseline = "top";
+  lines.forEach((line, index) => context.fillText(line, x, y + 12 + index * 16));
+  context.restore();
+}
+
+function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && context.measureText(candidate).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else line = candidate;
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function drawHealthBar(context: CanvasRenderingContext2D, enemy: Enemy) {
@@ -542,6 +647,10 @@ function drawPowerupDrops(context: CanvasRenderingContext2D, state: GameState) {
       ? "#ffca69"
       : drop.kind === "shield"
       ? "#65d6e8"
+      : drop.kind === "freeze"
+      ? "#b9f4ff"
+      : drop.kind === "singularity"
+      ? "#b687ff"
       : drop.kind === "repair"
       ? "#76e0c1"
       : "#b687ff";
@@ -555,6 +664,10 @@ function drawPowerupDrops(context: CanvasRenderingContext2D, state: GameState) {
       ? "R"
       : drop.kind === "prism"
       ? "P"
+      : drop.kind === "freeze"
+      ? "F"
+      : drop.kind === "singularity"
+      ? "V"
       : "+";
     context.save();
     context.translate(drop.x, drop.y);
@@ -579,6 +692,48 @@ function drawPowerupDrops(context: CanvasRenderingContext2D, state: GameState) {
   }
 }
 
+function drawSingularity(context: CanvasRenderingContext2D, state: GameState) {
+  const singularity = state.singularity;
+  if (!singularity) return;
+  const ratio = Math.max(0, singularity.life / singularity.duration);
+  const pulse = 1 + Math.sin(state.elapsed * 12) * 0.08;
+  context.save();
+  context.translate(singularity.x, singularity.y);
+  context.scale(pulse, pulse);
+  context.fillStyle = "#020309";
+  context.shadowColor = "#b687ff";
+  context.shadowBlur = 24;
+  context.beginPath();
+  context.arc(0, 0, singularity.radius, 0, Math.PI * 2);
+  context.fill();
+  context.shadowBlur = 0;
+  context.strokeStyle = "rgba(182, 135, 255, 0.9)";
+  context.lineWidth = 3;
+  context.beginPath();
+  context.ellipse(
+    0,
+    0,
+    singularity.radius * 1.85,
+    singularity.radius * 0.62,
+    -0.35,
+    0,
+    Math.PI * 2,
+  );
+  context.stroke();
+  context.strokeStyle = "rgba(112, 223, 242, 0.58)";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.arc(
+    0,
+    0,
+    singularity.radius + 11,
+    -Math.PI / 2,
+    -Math.PI / 2 + Math.PI * 2 * ratio,
+  );
+  context.stroke();
+  context.restore();
+}
+
 function drawDeepScan(
   context: CanvasRenderingContext2D,
   state: GameState,
@@ -590,7 +745,7 @@ function drawDeepScan(
   const angles = forked
     ? [state.player.angle - 0.18, state.player.angle, state.player.angle + 0.18]
     : [state.player.angle];
-  const beamWidth = 7 * Math.pow(1.3, state.upgrades["wide-query"] ?? 0);
+  const beamWidth = 10 * Math.pow(1.3, state.upgrades["wide-query"] ?? 0);
   const length = Math.hypot(width, height) * 1.4;
   context.save();
   context.globalAlpha = Math.min(1, state.player.beamFlashFor / 0.08);
