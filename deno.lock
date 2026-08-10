@@ -26,6 +26,7 @@
     "npm:@types/react-dom@^19.2.4": "19.2.4_@types+react@19.2.18",
     "npm:@types/react@^19.2.18": "19.2.18",
     "npm:@vitejs/plugin-react@^6.0.5": "6.0.5_@rolldown+plugin-babel@0.2.3__@babel+core@7.29.7__vite@8.2.1_babel-plugin-react-compiler@1.0.0_vite@8.2.1",
+    "npm:archive-defender@0.1.0": "0.1.0_lucide-react@1.30.0__react@19.2.8_react@19.2.8_react-dom@19.2.8__react@19.2.8",
     "npm:babel-plugin-react-compiler@1": "1.0.0",
     "npm:daisyui@^5.7.16": "5.7.16",
     "npm:drizzle-kit@~0.31.10": "0.31.10",
@@ -1076,6 +1077,14 @@
     "ansis@4.3.1": {
       "integrity": "sha512-BJ8/l4R5LRE7hW9WdSuGYrLSHi2ynxeFpDFbH0K/CgNeY/tyhk+vO6TYxXC5r5CpUhNVX310xzPsN/H9lCdfOA=="
     },
+    "archive-defender@0.1.0_lucide-react@1.30.0__react@19.2.8_react@19.2.8_react-dom@19.2.8__react@19.2.8": {
+      "integrity": "sha512-wbuKEniwnodQxn6QKMwvU6IbgrMsi8mPELiiKqV3IZ2SPj9N2PfJbkl3GwfDa+ahDKZ0TGdkriXy0FzXx0Iedw==",
+      "dependencies": [
+        "lucide-react",
+        "react",
+        "react-dom"
+      ]
+    },
     "babel-dead-code-elimination@1.0.12": {
       "integrity": "sha512-GERT7L2TiYcYDtYk1IpD+ASAYXjKbLTDPhBtYj7X1NuRMDTMtAx9kyBenub1Ev41lo91OHCKdmP+egTDmfQ7Ig==",
       "dependencies": [
@@ -1752,6 +1761,7 @@
           "npm:@types/react-dom@^19.2.4",
           "npm:@types/react@^19.2.18",
           "npm:@vitejs/plugin-react@^6.0.5",
+          "npm:archive-defender@0.1.0",
           "npm:babel-plugin-react-compiler@1",
           "npm:daisyui@^5.7.16",
           "npm:lucide-react@^1.30.0",

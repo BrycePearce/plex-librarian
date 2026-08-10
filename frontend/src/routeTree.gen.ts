@@ -37,7 +37,7 @@ const ArcadeRoute = ArcadeRouteImport.update({
   id: '/arcade',
   path: '/arcade',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any).lazy(() => import('./routes/arcade.lazy.tsx').then((d) => d.Route))
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',

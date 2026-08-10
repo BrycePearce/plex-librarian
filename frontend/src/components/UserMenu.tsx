@@ -10,12 +10,6 @@ import type { AuthStatus } from "../lib/api.ts";
 import { avatarUrl } from "../lib/avatar.ts";
 import { useClickOutside } from "../lib/useClickOutside.ts";
 import { useDisconnectTransition } from "../features/auth/DisconnectTransition.tsx";
-import {
-  ARCADE_OPENING_TRACK_URL,
-  cancelArcadeLaunchMusic,
-  primeArcadeLaunchMusic,
-  readArcadeLaunchMusicSettings,
-} from "../lib/arcadeLaunch.ts";
 
 const DISCONNECT_LOADER_MIN_MS = 350;
 
@@ -69,13 +63,20 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
 
   const openArcade = () => {
     setOpen(false);
-    const music = readArcadeLaunchMusicSettings();
-    const launchMusic = music.enabled
-      ? primeArcadeLaunchMusic(ARCADE_OPENING_TRACK_URL, music.volume / 100)
-      : null;
     // Deliberately navigate from the click instead of rendering a Link. The router's
     // global intent preloading would otherwise fetch the game chunk on hover/focus.
-    void navigate({ to: "/arcade" }).catch(() => cancelArcadeLaunchMusic(launchMusic));
+    void import("archive-defender/launch").then((arcadeLaunch) => {
+      const music = arcadeLaunch.readArcadeLaunchMusicSettings();
+      const launchMusic = music.enabled
+        ? arcadeLaunch.primeArcadeLaunchMusic(
+          arcadeLaunch.ARCADE_OPENING_TRACK_URL,
+          music.volume / 100,
+        )
+        : null;
+      return navigate({ to: "/arcade" }).catch(() =>
+        arcadeLaunch.cancelArcadeLaunchMusic(launchMusic)
+      );
+    }).catch(() => navigate({ to: "/arcade" }));
   };
 
   // Same footprint as the real button below — this query resolves after first paint (it
