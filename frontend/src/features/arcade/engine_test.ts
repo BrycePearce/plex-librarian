@@ -747,7 +747,7 @@ Deno.test("Database Vacuum pulls enemies, consumes hostile shots, and collapses"
   stepGame(state, idleInput, 1 / 60, () => 0.5);
 
   assertGreater(state.enemies[0].x, enemyX);
-  assertEquals(state.projectiles[0].life, -1);
+  assertEquals(state.projectiles.length, 0);
   assert(state.singularity);
   state.enemies[0].x = state.singularity.x - 50;
   state.enemies[0].y = state.singularity.y;
