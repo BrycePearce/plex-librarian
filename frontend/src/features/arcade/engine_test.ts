@@ -267,7 +267,7 @@ Deno.test("the Backlog Behemoth attacks less often and summons one red file", ()
     state.enemies = [enemy({
       kind: "boss",
       bossKind: "backlog",
-      health: phase === 2 ? 50 : 30,
+      health: phase === 1 ? 100 : phase === 2 ? 50 : 30,
       maxHealth: 100,
       radius: 34,
       behaviorCooldown: 0,
