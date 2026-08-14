@@ -68,6 +68,10 @@ export interface SeasonDeletionPreviewResponse {
   blockers: string[];
   members: SeasonDeletionMemberPreview[];
   sonarrAvailable: boolean;
+  sonarrConfigured: boolean;
+  cleanupConfigured: boolean;
+  cleanupEligibleVersionCount: number;
+  cleanupReason: string | null;
   fingerprint: string;
   expiresAt: number;
 }

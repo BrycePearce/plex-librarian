@@ -118,6 +118,7 @@ router.post('/smart-cleanup', async (c) => {
     : '';
   const expiresAt = Number(body.expiresAt);
   const cleanupDownloads = body.cleanupDownloads === true;
+  const coordinateSonarr = manualSeasonReview && body.coordinateSonarr === true;
   if (!/^[A-Za-z0-9._:-]{1,124}$/.test(clientRequestId)) {
     return c.json(
       { error: 'clientRequestId must be a non-empty string of at most 124 characters' },
@@ -130,8 +131,8 @@ router.post('/smart-cleanup', async (c) => {
       400,
     );
   }
-  if (manualSeasonReview && cleanupDownloads) {
-    return c.json({ error: 'season cleanup does not support download cleanup' }, 400);
+  if (manualSeasonReview && cleanupDownloads && !coordinateSonarr) {
+    return c.json({ error: 'download cleanup requires Sonarr coordination' }, 400);
   }
   const parsed = selections.map((selection) => {
     if (!selection || typeof selection !== 'object') return null;
@@ -172,6 +173,7 @@ router.post('/smart-cleanup', async (c) => {
     includeNearIdentical,
     ...(manualSeasonReview ? { manualSeasonReview: true } : {}),
     ...(manualSeasonReview ? { analysisFingerprint, expiresAt } : {}),
+    ...(manualSeasonReview ? { coordinateSonarr, cleanupDownloads } : {}),
   };
   try {
     const repeated = await repeatedDeletionOperationBatch(
@@ -212,6 +214,8 @@ router.post('/smart-cleanup', async (c) => {
     return c.json({ error: 'the active Plex server changed during cleanup' }, 409);
   }
 
+  let authoritativeSeasonPlan: Awaited<ReturnType<typeof buildAuthoritativeSeasonPlan>> | null =
+    null;
   if (manualSeasonReview) {
     if (normalizedSelections.some((selection) => selection.mediaType !== 'episode')) {
       return c.json({ error: 'season cleanup accepts episode selections only' }, 400);
@@ -242,10 +246,18 @@ router.post('/smart-cleanup', async (c) => {
           episodeRatingKey: entry.ratingKey,
           mediaIds: entry.deleteMediaIds,
         })),
+        coordinateSonarr,
+        inspectDownloadCleanup: cleanupDownloads,
       });
       if (plan.preview.fingerprint !== analysisFingerprint) {
         return c.json({ error: 'the authoritative season deletion preview changed' }, 409);
       }
+      if (cleanupDownloads && plan.cleanupEligibleMedia.length === 0) {
+        return c.json({
+          error: plan.preview.cleanupReason ?? 'no verified downloads can be cleaned up',
+        }, 409);
+      }
+      authoritativeSeasonPlan = plan;
     } catch (error) {
       if (error instanceof DeletionConflictError) {
         return c.json({
@@ -412,6 +424,16 @@ router.post('/smart-cleanup', async (c) => {
       const episodeRow = candidate.mediaType === 'episode'
         ? row as typeof episodeMediaVersions.$inferSelect
         : null;
+      const acceptedSeasonEvidence = manualSeasonReview && coordinateSonarr
+        ? authoritativeSeasonPlan!.targetEvidence.find((entry) =>
+          entry.episodeRatingKey === candidate.ratingKey && entry.mediaId === row.mediaId
+        )
+        : undefined;
+      const acceptedDownloadCleanup = manualSeasonReview && cleanupDownloads
+        ? authoritativeSeasonPlan!.cleanupPlans.find((entry) =>
+          entry.episodeRatingKey === candidate.ratingKey && entry.mediaId === row.mediaId
+        )
+        : undefined;
       const parentItem = candidate.mediaType === 'movie'
         ? movieItemByKey.get(candidate.ratingKey)
         : showItemByKey.get(episodeRow!.showRatingKey);
@@ -441,8 +463,20 @@ router.post('/smart-cleanup', async (c) => {
           seasonRatingKey: episodeRow?.seasonRatingKey ?? null,
           seasonIndex: episodeRow?.seasonIndex ?? null,
           episodeIndex: episodeRow?.episodeIndex ?? null,
-          cleanupDownloads: false,
-          ...(manualSeasonReview ? { seasonCleanup: true } : {}),
+          cleanupDownloads: acceptedDownloadCleanup !== undefined,
+          ...(manualSeasonReview
+            ? { seasonCleanup: true, skipArrCoordination: !coordinateSonarr }
+            : {}),
+          ...(acceptedSeasonEvidence
+            ? {
+              seasonCoordinationOutcome: acceptedSeasonEvidence.outcome,
+              arrReassignmentMappings: acceptedSeasonEvidence.arrMappingIdentities,
+              arrOwnerships: acceptedSeasonEvidence.arrOwnerships,
+            }
+            : {}),
+          ...(acceptedDownloadCleanup
+            ? { seasonDownloadCleanup: acceptedDownloadCleanup.cleanup }
+            : {}),
           selectedMediaIds: [row.mediaId],
           operationMediaIds: candidate.deleteMediaIds,
           ...(sourceVersion.streamDetailsAvailable
@@ -477,6 +511,8 @@ router.post('/smart-cleanup', async (c) => {
     targets.sort((left, right) =>
       Number(left.snapshot.episodeIndex) - Number(right.snapshot.episodeIndex) ||
       String(left.snapshot.ratingKey).localeCompare(String(right.snapshot.ratingKey)) ||
+      Number(left.snapshot.seasonCoordinationOutcome === 'automatic_adoption') -
+        Number(right.snapshot.seasonCoordinationOutcome === 'automatic_adoption') ||
       Number(left.snapshot.mediaId) - Number(right.snapshot.mediaId)
     );
   }

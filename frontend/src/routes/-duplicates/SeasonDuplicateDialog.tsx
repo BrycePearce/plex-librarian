@@ -17,6 +17,7 @@ import { versionLabel } from "../../lib/mediaVersion.ts";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
@@ -241,6 +242,8 @@ export function SeasonDuplicateDialog({
     selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
     analysisFingerprint: string;
     expiresAt: number;
+    coordinateSonarr: boolean;
+    cleanupDownloads: boolean;
   }) => void;
   onClose: () => void;
 }) {
@@ -297,6 +300,13 @@ export function SeasonDuplicateDialog({
   const [mode, setMode] = useState<ReviewMode>("profiles");
   const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [coordinateSonarr, setCoordinateSonarr] = useState(false);
+  const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [destinationAvailability, setDestinationAvailability] = useState({
+    key: seasonKey,
+    sonarr: false,
+    qbittorrent: false,
+  });
   const [filter, setFilter] = useState<EpisodeFilter>("all");
   const allCheckboxRef = useRef<HTMLInputElement>(null);
   const initializedSeasonKeyRef = useRef<string | null>(null);
@@ -321,6 +331,9 @@ export function SeasonDuplicateDialog({
     setMode("profiles");
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
+    setCoordinateSonarr(false);
+    setCleanupDownloads(false);
+    setDestinationAvailability({ key: seasonKey, sonarr: false, qbittorrent: false });
     setFilter("all");
   }, [plans, seasonKey]);
 
@@ -418,6 +431,8 @@ export function SeasonDuplicateDialog({
       "season-deletion-preview",
       season?.seasonRatingKey ?? "none",
       selections,
+      coordinateSonarr,
+      cleanupDownloads,
     ],
     queryFn: () =>
       api.duplicates.seasonDeletionPreview(
@@ -426,12 +441,21 @@ export function SeasonDuplicateDialog({
           episodeRatingKey: selection.ratingKey,
           mediaIds: selection.deleteMediaIds,
         })),
+        { coordinateSonarr, cleanupDownloads },
       ),
     enabled: season !== null && selections.length > 0 && analysisComplete,
     staleTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
   });
+  useEffect(() => {
+    if (!deletionPreview.data) return;
+    setDestinationAvailability({
+      key: seasonKey,
+      sonarr: deletionPreview.data.sonarrConfigured,
+      qbittorrent: deletionPreview.data.cleanupConfigured,
+    });
+  }, [deletionPreview.data, seasonKey]);
   if (!season) return <dialog ref={dialogRef} className="modal" onClose={onClose} />;
 
   async function confirmWithFreshPreview() {
@@ -444,6 +468,8 @@ export function SeasonDuplicateDialog({
       selections,
       analysisFingerprint: preview.fingerprint,
       expiresAt: preview.expiresAt,
+      coordinateSonarr,
+      cleanupDownloads,
     });
   }
 
@@ -480,13 +506,51 @@ export function SeasonDuplicateDialog({
               : "Authoritative preview failed"}
           </span>
         )}
-        {deletionPreview.data && deletionPreview.data.automaticAdoptionCount > 0 && (
+        {coordinateSonarr && deletionPreview.data &&
+          deletionPreview.data.automaticAdoptionCount > 0 && (
           <span className="badge badge-info">
             Sonarr adopts {deletionPreview.data.automaticAdoptionCount}
           </span>
         )}
       </div>
     );
+
+  const destinationOptions = (
+    <DestinationOptions
+      options={[
+        ...(destinationAvailability.key === seasonKey && destinationAvailability.sonarr
+          ? [{
+            id: "arr" as const,
+            service: "sonarr" as const,
+            label: "Delete through Sonarr",
+            info:
+              "Let Sonarr coordinate managed files. If a selected version is not managed by Sonarr, deletion safely falls back to Plex.",
+            checked: coordinateSonarr,
+            disabled: pending || deletionPreview.isFetching,
+            warning: false,
+            onChange: (checked: boolean) => {
+              setCoordinateSonarr(checked);
+              if (!checked) setCleanupDownloads(false);
+            },
+          }]
+          : []),
+        ...(destinationAvailability.key === seasonKey && destinationAvailability.qbittorrent
+          ? [{
+            id: "cleanup" as const,
+            service: "qbittorrent" as const,
+            label: "Delete downloads",
+            info:
+              "Delete only qBittorrent jobs and files that can be matched exactly to selected versions.",
+            checked: cleanupDownloads,
+            disabled: pending || deletionPreview.isFetching || !coordinateSonarr,
+            warning: cleanupDownloads &&
+              (deletionPreview.data?.cleanupEligibleVersionCount ?? 0) === 0,
+            onChange: setCleanupDownloads,
+          }]
+          : []),
+      ]}
+    />
+  );
 
   return (
     <dialog
@@ -916,6 +980,15 @@ export function SeasonDuplicateDialog({
 
           {mode === "episodes" && destinationPreview}
 
+          {destinationOptions}
+
+          {cleanupDownloads && deletionPreview.data?.cleanupEligibleVersionCount === 0 && (
+            <div className="alert alert-warning text-sm" role="alert">
+              {deletionPreview.data.cleanupReason ??
+                "No selected version has an exactly verified qBittorrent download association."}
+            </div>
+          )}
+
           {error !== null && error !== undefined && (
             <ErrorAlert
               message={error instanceof Error
@@ -955,7 +1028,11 @@ export function SeasonDuplicateDialog({
               previewLoading: deletionPreview.isLoading,
               previewError: deletionPreview.isError,
               previewAvailable: deletionPreview.data !== undefined,
-              blockerCount: deletionPreview.data?.blockers.length ?? 0,
+              blockerCount: (deletionPreview.data?.blockers.length ?? 0) +
+                (cleanupDownloads &&
+                    (deletionPreview.data?.cleanupEligibleVersionCount ?? 0) === 0
+                  ? 1
+                  : 0),
             })}
             onClick={confirmWithFreshPreview}
           >

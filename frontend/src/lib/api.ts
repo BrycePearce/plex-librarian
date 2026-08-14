@@ -355,6 +355,8 @@ export const api = {
       preview: {
         analysisFingerprint: string;
         expiresAt: number;
+        coordinateSonarr: boolean;
+        cleanupDownloads: boolean;
       },
     ) =>
       apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
@@ -385,10 +387,11 @@ export const api = {
     seasonDeletionPreview: (
       seasonRatingKey: string,
       selections: Array<{ episodeRatingKey: string; mediaIds: number[] }>,
+      options: { coordinateSonarr: boolean; cleanupDownloads: boolean },
     ) =>
       apiFetch<SeasonDeletionPreviewResponse>(
         `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/deletion-preview`,
-        { method: "POST", body: JSON.stringify({ selections }) },
+        { method: "POST", body: JSON.stringify({ selections, ...options }) },
       ),
     deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
       apiFetch<DeletionOperationCreated>(

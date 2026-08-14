@@ -1339,6 +1339,21 @@ Deno.test('Sonarr activity blocks relevant commands without a proven series boun
   });
 });
 
+Deno.test('Sonarr activity ignores routine global scheduler commands', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/queue')) {
+      return Promise.resolve(Response.json({ records: [], totalRecords: 0 }));
+    }
+    return Promise.resolve(Response.json([
+      { id: 80, name: 'ProcessMonitoredDownloads' },
+      { id: 81, name: 'RefreshMonitoredDownloads' },
+      { id: 82, name: 'ImportListSync' },
+    ]));
+  });
+  assertEquals(await client.sonarrSeriesActivity(7), { quiet: true, blocking: [] });
+});
+
 Deno.test('Sonarr activity rejects truncated queue evidence', async () => {
   const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
     const path = new URL(String(input)).pathname;

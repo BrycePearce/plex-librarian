@@ -967,6 +967,14 @@ export class ArrClient {
     }
     const allowed = new Set(allowedCommandIds);
     const blockedNames = /(import|download|search|rescan|refresh|rename|move)/i;
+    // These are Sonarr's routine global scheduler shells. They commonly remain in
+    // the command list even when they found no work for this series; the scoped queue
+    // above is the authoritative evidence for an actual download/import conflict.
+    const routineGlobalCommands = new Set([
+      'processmonitoreddownloads',
+      'refreshmonitoreddownloads',
+      'importlistsync',
+    ]);
     for (const raw of commands) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         throw new ArrApiError('Sonarr returned malformed command activity evidence');
@@ -983,7 +991,10 @@ export class ArrClient {
       ].map(Number).filter(Number.isSafeInteger);
       const name = String(value.name ?? body.name ?? value.commandName ?? '');
       const id = Number(value.id);
-      if (!blockedNames.test(name) || (Number.isSafeInteger(id) && allowed.has(id))) continue;
+      if (
+        !blockedNames.test(name) || routineGlobalCommands.has(name.toLocaleLowerCase('en-US')) ||
+        (Number.isSafeInteger(id) && allowed.has(id))
+      ) continue;
       // A relevant command without an attributable series boundary may be global or
       // path-scoped. It is unsafe to assume it cannot mutate this series.
       if (ids.length > 0 && !ids.includes(seriesId)) continue;

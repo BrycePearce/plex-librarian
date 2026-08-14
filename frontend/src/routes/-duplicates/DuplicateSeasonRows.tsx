@@ -1,233 +1,195 @@
-import { useState } from "react";
-import { ChevronRight, CircleHelp, Layers3 } from "lucide-react";
-import type { DuplicateEpisodeGroup, DuplicateSeasonGroup } from "../../lib/api.ts";
+import type { DuplicateSeasonGroup } from "../../lib/api.ts";
+import { analyzeSeasonVersionProfiles } from "../../../../shared/seasonVersionProfiles.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { PosterThumb } from "../../components/PosterThumb.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import {
-  reclaimableKilobytes,
-  seasonDifferenceChips,
   seasonSummaryAccessibleText,
+  seasonVersionCountLabel,
+  versionQualityLabels,
 } from "./duplicatePresentation.ts";
-import { DuplicateGroupRow } from "./DuplicateGroupRow.tsx";
-
-function sumKnown(values: Array<number | null>): number | null {
-  return values.every((value) => value !== null)
-    ? values.reduce<number>((total, value) => total + (value ?? 0), 0)
-    : null;
-}
 
 export function DuplicateSeasonRows({
   season,
   disabled,
   onReviewSeason,
-  onReviewEpisode,
 }: {
   season: DuplicateSeasonGroup;
   disabled: boolean;
   onReviewSeason: (season: DuplicateSeasonGroup) => void;
-  onReviewEpisode: (episode: DuplicateEpisodeGroup) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const reclaimable = sumKnown(
-    season.episodes.map((episode) => reclaimableKilobytes(episode.versions)),
-  );
-  const reviewedFileSize = sumKnown(season.episodes.map((episode) => episode.combinedFileSize));
-  const reclaimablePercent = reclaimable !== null && reviewedFileSize
-    ? Math.min(100, Math.max(0, (reclaimable / reviewedFileSize) * 100))
-    : 0;
   const partialPass = season.episodes.length < season.duplicateGroupCount;
+  const reclaimablePercent = season.reclaimableFileSize !== null && season.combinedFileSize
+    ? Math.min(100, Math.max(0, (season.reclaimableFileSize / season.combinedFileSize) * 100))
+    : 0;
   const label = `${season.showTitle}, season ${season.seasonIndex}`;
   const summary = season.comparisonSummary;
-  const visibleDifferences = seasonDifferenceChips(summary);
-  const allDifferences = seasonDifferenceChips(summary, Number.POSITIVE_INFINITY).chips;
+  const versionCountLabel = seasonVersionCountLabel(season);
+  const maximumVersionCount = Math.max(
+    0,
+    ...season.episodes.map((episode) => episode.versions.length),
+  );
+  const quality = versionQualityLabels(
+    season.episodes.flatMap((episode) => episode.versions),
+  );
+  const versionProfiles = maximumVersionCount <= 11
+    ? analyzeSeasonVersionProfiles(season.episodes).profiles
+    : [];
+  const differenceLabels = summary.differences.map((difference) =>
+    difference.code.replaceAll("-", " ")
+  );
 
   return (
-    <>
-      <tr
-        className={`duplicates-season-row group polished-row focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary ${
-          disabled ? "duplicates-group-row-disabled" : "cursor-pointer"
-        }`}
-        tabIndex={disabled ? -1 : 0}
-        aria-disabled={disabled}
-        aria-label={disabled
-          ? `Duplicate episodes for ${label}; review unavailable during sync`
-          : `Review duplicate episodes for ${label}`}
-        onClick={() => {
-          if (!disabled) onReviewSeason(season);
-        }}
-        onKeyDown={(event) => {
-          if (disabled || event.target !== event.currentTarget) return;
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onReviewSeason(season);
-          }
-        }}
-      >
-        <td>
-          <div className="inline-flex min-w-0 items-center gap-3">
-            <PosterThumb
-              thumb={season.showThumb}
-              width={60}
-              height={90}
-              className="h-14 w-10"
-              hoverScope="row"
-            />
-            <div className="min-w-0">
-              <div className="max-w-xs truncate font-medium">{season.showTitle}</div>
-              <div className="max-w-xs truncate text-xs text-base-content/45">
-                Season {season.seasonIndex}
-              </div>
+    <tr
+      className={`duplicates-season-row group polished-row focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary ${
+        disabled ? "duplicates-group-row-disabled" : "cursor-pointer"
+      }`}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled}
+      aria-label={disabled
+        ? `Duplicate episodes for ${label}; review unavailable during sync`
+        : `Review duplicate episodes for ${label}`}
+      onClick={() => {
+        if (!disabled) onReviewSeason(season);
+      }}
+      onKeyDown={(event) => {
+        if (disabled || event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onReviewSeason(season);
+        }
+      }}
+    >
+      <td>
+        <div className="inline-flex min-w-0 items-center gap-3">
+          <PosterThumb
+            thumb={season.showThumb}
+            width={60}
+            height={90}
+            className="h-14 w-10"
+            hoverScope="row"
+          />
+          <div className="min-w-0">
+            <div className="max-w-xs truncate font-medium">{season.showTitle}</div>
+            <div className="max-w-xs truncate text-xs text-base-content/45">
+              Season {season.seasonIndex}
             </div>
           </div>
-        </td>
-        <td className="text-sm">
-          <div className="duplicates-season-summary-cell">
-            <HoverPopover
-              openOnClick
-              anchorClassName="duplicates-season-summary-anchor"
-              content={
-                <div className="duplicates-season-popover">
-                  <div className="font-semibold">
-                    Differences across this {summary.episodeCount}-episode pass of{" "}
-                    {season.duplicateGroupCount} duplicate{" "}
-                    {season.duplicateGroupCount === 1 ? "episode" : "episodes"}
-                  </div>
-                  <div className="duplicates-season-popover-list">
-                    {allDifferences.map((difference) => (
-                      <div key={difference.code}>
-                        <span>{difference.label}</span>
-                        <strong>{difference.episodeCount}</strong>
+        </div>
+      </td>
+      <td className="text-sm">
+        <HoverPopover
+          openOnClick
+          content={
+            <div className="duplicates-season-popover">
+              <div className="font-semibold">{versionCountLabel} across this season</div>
+              <p className="mt-0.5 text-base-content/60">
+                {season.duplicateGroupCount} duplicate{" "}
+                {season.duplicateGroupCount === 1 ? "episode" : "episodes"}
+                {partialPass ? ` · details sampled from the first ${season.episodes.length}` : ""}
+              </p>
+              {versionProfiles.length > 0
+                ? (
+                  <div className="duplicates-season-profile-list">
+                    {versionProfiles.map((profile, index) => (
+                      <div key={profile.id}>
+                        <span className="duplicates-season-profile-index">{index + 1}</span>
+                        <span>
+                          <strong>{profile.label}</strong>
+                          <small>
+                            {profile.coverageCount} of {season.episodes.length} sampled episodes
+                            {profile.technicalVariantCount > 1
+                              ? ` · ${profile.technicalVariantCount} technical variants`
+                              : ""}
+                          </small>
+                        </span>
                       </div>
                     ))}
-                    {summary.sameProfileEpisodeCount > 0 && (
-                      <div>
-                        <span>Matching technical profile</span>
-                        <strong>{summary.sameProfileEpisodeCount}</strong>
-                      </div>
-                    )}
-                    {summary.needsReviewEpisodeCount > 0 && (
-                      <div className="is-review">
-                        <span>Needs review</span>
-                        <strong>{summary.needsReviewEpisodeCount}</strong>
-                      </div>
-                    )}
                   </div>
-                  <p>Category counts overlap. Expand the season for episode-level details.</p>
-                </div>
-              }
-            >
-              <button
-                type="button"
-                className="duplicates-season-summary"
-                aria-label={`Technical summary for the first ${summary.episodeCount} of ${season.duplicateGroupCount} duplicate episodes in ${label}: ${
-                  seasonSummaryAccessibleText(summary)
-                }`}
-              >
-                <Layers3 className="size-4 shrink-0 text-primary/60" aria-hidden="true" />
-                <span className="duplicates-season-summary-copy">
-                  <span className="duplicates-season-count">
-                    {season.duplicateGroupCount} duplicate{" "}
-                    {season.duplicateGroupCount === 1 ? "episode" : "episodes"}
-                  </span>
-                  <span className="duplicates-season-chips" aria-hidden="true">
-                    {visibleDifferences.chips.map((difference) => (
-                      <span key={difference.code} className="duplicates-season-difference-chip">
-                        {difference.episodeCount} {difference.label}
+                )
+                : quality.labels.length > 0 && (
+                  <div className="duplicates-quality mt-2">
+                    {quality.labels.map((qualityLabel) => (
+                      <span key={qualityLabel} className="duplicates-quality-chip">
+                        {qualityLabel}
                       </span>
                     ))}
-                    {visibleDifferences.remaining > 0 && (
-                      <span className="duplicates-season-difference-chip">
-                        +{visibleDifferences.remaining}
-                      </span>
+                    {quality.remaining > 0 && (
+                      <span className="duplicates-quality-chip">+{quality.remaining}</span>
                     )}
-                    {summary.differences.length === 0 && summary.sameProfileEpisodeCount > 0 && (
-                      <span className="duplicates-season-difference-chip is-match">
-                        {summary.sameProfileEpisodeCount} matching
-                      </span>
-                    )}
-                  </span>
-                  <span className="duplicates-season-mobile-outcome" aria-hidden="true">
-                    {summary.differentEpisodeCount > 0 && (
-                      <span>{summary.differentEpisodeCount} differ</span>
-                    )}
-                    {summary.needsReviewEpisodeCount > 0 && (
-                      <span>{summary.needsReviewEpisodeCount} review</span>
-                    )}
-                  </span>
-                </span>
-                {summary.needsReviewEpisodeCount > 0 && (
-                  <span className="duplicates-season-review" aria-hidden="true">
-                    <CircleHelp className="size-3" />
-                    {summary.needsReviewEpisodeCount}
-                  </span>
+                  </div>
                 )}
-              </button>
-            </HoverPopover>
-            <button
-              type="button"
-              className="duplicates-season-expand"
-              aria-expanded={expanded}
-              aria-label={`${expanded ? "Hide" : "Show"} duplicate episodes for ${label}`}
-              title={`${expanded ? "Hide" : "Show"} duplicate episodes`}
-              disabled={disabled}
-              onClick={(event) => {
-                event.stopPropagation();
-                setExpanded((current) => !current);
-              }}
-            >
-              <ChevronRight
-                className={`size-4 transition-transform ${expanded ? "rotate-90" : ""}`}
-                aria-hidden="true"
-              />
-            </button>
-          </div>
-        </td>
-        <td className="text-sm font-mono duplicates-storage">
-          <div className="duplicates-storage-values">
-            <span>
-              {season.combinedFileSize !== null
-                ? formatKilobytes(season.combinedFileSize)
-                : "Unknown"}
-            </span>
-            <small
-              title={partialPass
-                ? `Potential savings if the largest version of each of the first ${season.episodes.length} episodes is kept`
-                : "Potential savings if the largest version of each episode is kept"}
-            >
-              {reclaimable !== null
-                ? `${formatKilobytes(reclaimable)} potential savings${
-                  partialPass ? ` · first ${season.episodes.length}` : ""
-                }`
-                : "Potential savings unknown"}
-            </small>
-          </div>
-          {reclaimable !== null && (
-            <div
-              className="duplicates-storage-track"
-              title={`${
-                Math.round(reclaimablePercent)
-              }% potentially reclaimable if the largest version of each ${
-                partialPass ? `of the first ${season.episodes.length} episodes` : "episode"
-              } is kept`}
-            >
-              <div
-                className="duplicates-storage-fill"
-                style={{ width: `${reclaimablePercent}%` }}
-              />
+              <div className="duplicates-season-popover-outcome">
+                <span>{summary.differentEpisodeCount} sampled episodes differ</span>
+                {summary.sameProfileEpisodeCount > 0 && (
+                  <span>{summary.sameProfileEpisodeCount} match technically</span>
+                )}
+                {summary.needsReviewEpisodeCount > 0 && (
+                  <span>{summary.needsReviewEpisodeCount} need review</span>
+                )}
+              </div>
+              {differenceLabels.length > 0 && (
+                <p>Differences include {differenceLabels.join(", ")}.</p>
+              )}
+              <p>Open the season to review the exact episode files in each version.</p>
             </div>
-          )}
-        </td>
-      </tr>
-      {expanded && season.episodes.map((episode) => (
-        <DuplicateGroupRow
-          key={episode.episodeRatingKey}
-          item={episode}
-          nested
-          disabled={disabled}
-          onReview={() => onReviewEpisode(episode)}
-        />
-      ))}
-    </>
+          }
+        >
+          <button
+            type="button"
+            className="duplicates-version-summary"
+            aria-label={`${versionCountLabel} in ${label}. ${seasonSummaryAccessibleText(summary)}`}
+          >
+            <span className="duplicates-version-stack" aria-hidden="true">
+              {Array.from({ length: Math.min(3, maximumVersionCount) }).map((_, index) => (
+                <span key={index} />
+              ))}
+            </span>
+            <div>
+              <div className="duplicates-version-count">{versionCountLabel}</div>
+              {quality.labels.length > 0 && (
+                <div className="duplicates-quality" aria-hidden="true">
+                  {quality.labels.map((qualityLabel) => (
+                    <span key={qualityLabel} className="duplicates-quality-chip">
+                      {qualityLabel}
+                    </span>
+                  ))}
+                  {quality.remaining > 0 && (
+                    <span className="duplicates-quality-chip">+{quality.remaining}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </button>
+        </HoverPopover>
+      </td>
+      <td className="text-sm font-mono duplicates-storage">
+        <div className="duplicates-storage-values">
+          <span>
+            {season.combinedFileSize !== null
+              ? formatKilobytes(season.combinedFileSize)
+              : "Unknown"}
+          </span>
+          <small title="Potential savings across all duplicate episodes if the largest version of each is kept">
+            {season.reclaimableFileSize !== null
+              ? `${formatKilobytes(season.reclaimableFileSize)} potential savings`
+              : "Potential savings unknown"}
+          </small>
+        </div>
+        {season.reclaimableFileSize !== null && (
+          <div
+            className="duplicates-storage-track"
+            title={`${
+              Math.round(reclaimablePercent)
+            }% potentially reclaimable across all duplicate episodes if the largest version of each is kept`}
+          >
+            <div
+              className="duplicates-storage-fill"
+              style={{ width: `${reclaimablePercent}%` }}
+            />
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }

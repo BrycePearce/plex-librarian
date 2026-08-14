@@ -188,6 +188,8 @@ function DuplicatesPage() {
       selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
       analysisFingerprint: string;
       expiresAt: number;
+      coordinateSonarr: boolean;
+      cleanupDownloads: boolean;
     }) => api.duplicates.seasonCleanup(seasonCleanupRequestId.current, request.selections, request),
     onSuccess: (result) => {
       const invalidations = [
@@ -435,7 +437,6 @@ function DuplicatesPage() {
                               season={item}
                               disabled={isSyncing}
                               onReviewSeason={openSeasonReview}
-                              onReviewEpisode={openReview}
                             />
                           )
                       )}

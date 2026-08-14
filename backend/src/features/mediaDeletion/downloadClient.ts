@@ -31,6 +31,8 @@ export interface DownloadClient {
 export interface DownloadClientTarget {
   provider: string;
   instanceKey: string;
+  /** Stable, non-secret identity for the exact configured endpoint accepted by preview. */
+  configurationIdentity: string;
   instanceId: number | null;
   instanceName: string;
   client: DownloadClient;

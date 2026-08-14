@@ -72,6 +72,7 @@ type SeasonStub = {
   seasonRatingKey: string;
   seasonIndex: number;
   combinedFileSize: number | null;
+  reclaimableFileSize: number | null;
   duplicateGroupCount: number;
   episodes: EpisodeStub[];
 };
@@ -150,6 +151,43 @@ router.get('/', async (c) => {
     );
   }
 
+  // Aggregate once per episode before rolling up to a season. The second grouping makes
+  // `sum(all versions) - sum(largest version per episode)` exact without loading every
+  // episode's version rows into application memory.
+  const eligibleEpisodeRows = db.select({
+    libraryKey: episodeMediaVersions.libraryKey,
+    showRatingKey: episodeMediaVersions.showRatingKey,
+    seasonRatingKey: episodeMediaVersions.seasonRatingKey,
+    seasonIndex: episodeMediaVersions.seasonIndex,
+    episodeRatingKey: episodeMediaVersions.episodeRatingKey,
+    versionCount: sql<number>`count(*)`.as('version_count'),
+    knownFileSizeCount: sql<number>`count(${episodeMediaVersions.fileSize})`.as(
+      'known_file_size_count',
+    ),
+    combinedFileSize: sql<number>`sum(${episodeMediaVersions.fileSize})`.as(
+      'combined_file_size',
+    ),
+    retainedFileSize: sql<number>`max(${episodeMediaVersions.fileSize})`.as(
+      'retained_file_size',
+    ),
+  }).from(episodeMediaVersions).where(and(
+    eq(episodeMediaVersions.serverId, serverId),
+    not(episodeRootIsWorkflowOwned(
+      serverId,
+      sql`${episodeMediaVersions.libraryKey}`,
+      sql`${episodeMediaVersions.episodeRatingKey}`,
+      sql`${episodeMediaVersions.showRatingKey}`,
+    )),
+    episodeSearchCond,
+    episodeStillHasDuplicates,
+  )).groupBy(
+    episodeMediaVersions.libraryKey,
+    episodeMediaVersions.showRatingKey,
+    episodeMediaVersions.seasonRatingKey,
+    episodeMediaVersions.seasonIndex,
+    episodeMediaVersions.episodeRatingKey,
+  ).having(HAS_DUPLICATE_VERSIONS).as('eligible_episode_rows');
+
   // TV entries are paginated by season, so rank and cap seasons in SQL. Applying the
   // cap to episodes first can cut a season in half and understate both its size and its
   // duplicate count.
@@ -178,39 +216,34 @@ router.get('/', async (c) => {
       : Promise.resolve([]),
     wantTv
       ? db.select({
-        libraryKey: episodeMediaVersions.libraryKey,
-        showRatingKey: episodeMediaVersions.showRatingKey,
-        seasonRatingKey: episodeMediaVersions.seasonRatingKey,
-        seasonIndex: episodeMediaVersions.seasonIndex,
+        libraryKey: eligibleEpisodeRows.libraryKey,
+        showRatingKey: eligibleEpisodeRows.showRatingKey,
+        seasonRatingKey: eligibleEpisodeRows.seasonRatingKey,
+        seasonIndex: eligibleEpisodeRows.seasonIndex,
         combinedFileSize: sql<string | null>`cast(
           case
-            when count(${episodeMediaVersions.fileSize}) = count(*)
-              then sum(${episodeMediaVersions.fileSize})
+            when sum(${eligibleEpisodeRows.knownFileSizeCount}) = sum(${eligibleEpisodeRows.versionCount})
+              then sum(${eligibleEpisodeRows.combinedFileSize})
             else null
           end as text
         )`,
-        duplicateGroupCount: sql<number>`count(distinct ${episodeMediaVersions.episodeRatingKey})`,
+        reclaimableFileSize: sql<string | null>`cast(
+          case
+            when sum(${eligibleEpisodeRows.knownFileSizeCount}) = sum(${eligibleEpisodeRows.versionCount})
+              then sum(${eligibleEpisodeRows.combinedFileSize} - ${eligibleEpisodeRows.retainedFileSize})
+            else null
+          end as text
+        )`,
+        duplicateGroupCount: sql<number>`count(*)`,
       })
-        .from(episodeMediaVersions)
-        .where(and(
-          eq(episodeMediaVersions.serverId, serverId),
-          not(episodeRootIsWorkflowOwned(
-            serverId,
-            sql`${episodeMediaVersions.libraryKey}`,
-            sql`${episodeMediaVersions.episodeRatingKey}`,
-            sql`${episodeMediaVersions.showRatingKey}`,
-          )),
-          episodeSearchCond,
-          episodeStillHasDuplicates,
-        ))
+        .from(eligibleEpisodeRows)
         .groupBy(
-          episodeMediaVersions.libraryKey,
-          episodeMediaVersions.showRatingKey,
-          episodeMediaVersions.seasonRatingKey,
-          episodeMediaVersions.seasonIndex,
+          eligibleEpisodeRows.libraryKey,
+          eligibleEpisodeRows.showRatingKey,
+          eligibleEpisodeRows.seasonRatingKey,
+          eligibleEpisodeRows.seasonIndex,
         )
-        .having(HAS_DUPLICATE_VERSIONS)
-        .orderBy(desc(sql`sum(${episodeMediaVersions.fileSize})`))
+        .orderBy(desc(sql`sum(${eligibleEpisodeRows.combinedFileSize})`))
         .limit(fetchLimit)
       : Promise.resolve([]),
   ]);
@@ -227,6 +260,7 @@ router.get('/', async (c) => {
     seasonRatingKey: s.seasonRatingKey,
     seasonIndex: s.seasonIndex,
     combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
+    reclaimableFileSize: s.reclaimableFileSize != null ? Number(s.reclaimableFileSize) : null,
     duplicateGroupCount: s.duplicateGroupCount,
     episodes: [],
   }));
@@ -322,6 +356,7 @@ router.get('/', async (c) => {
           let offset = 0;
           let duplicateGroupCount = 0;
           let combinedFileSize: number | null = 0;
+          let reclaimableFileSize: number | null = 0;
           while (true) {
             const episodeKeys = await loadEligibleSeasonEpisodeKeys(season, offset);
             if (episodeKeys.length === 0) break;
@@ -334,20 +369,30 @@ router.get('/', async (c) => {
               combinedFileSize = combinedFileSize === null || episode.combinedFileSize === null
                 ? null
                 : combinedFileSize + episode.combinedFileSize;
+              const sizes = versions.map((version) => version.fileSize);
+              reclaimableFileSize = reclaimableFileSize === null ||
+                  sizes.some((size) => size === null)
+                ? null
+                : reclaimableFileSize +
+                  sizes.reduce<number>((total, size) => total + (size ?? 0), 0) -
+                  Math.max(...sizes.map((size) => size ?? 0));
             }
             offset += episodeKeys.length;
             if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
           }
-          return { season, duplicateGroupCount, combinedFileSize };
+          return { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize };
         },
       );
-      for (const { season, duplicateGroupCount, combinedFileSize } of summaries) {
+      for (
+        const { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize } of summaries
+      ) {
         if (duplicateGroupCount === 0) continue;
         filteredSeasonStubs.push({
           ...season,
           episodes: [],
           duplicateGroupCount,
           combinedFileSize,
+          reclaimableFileSize,
         });
       }
     }
@@ -486,6 +531,7 @@ router.get('/', async (c) => {
         seasonIndex: stub.seasonIndex,
         duplicateGroupCount: stub.duplicateGroupCount,
         combinedFileSize: stub.combinedFileSize,
+        reclaimableFileSize: stub.reclaimableFileSize,
         comparisonSummary: summarizeDuplicateComparisons(
           episodes.map((episode) => compareDuplicateVersions(episode.versions)),
         ),

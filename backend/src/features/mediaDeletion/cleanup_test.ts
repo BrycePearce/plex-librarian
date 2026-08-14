@@ -13,6 +13,7 @@ import {
   DownloadedFileCleanupError,
   executeDownloadedFileCleanup,
   persistResolvedCleanup,
+  persistResolvedCleanupIdentity,
   reconcileSharedDownloadCleanups,
   rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
@@ -53,6 +54,7 @@ Deno.test('resolved cleanup survives Radarr-removal replay only with the exact c
   const target = {
     provider: 'qbittorrent',
     instanceKey: 'qbittorrent:7',
+    configurationIdentity: 'db:7:100:https://downloads.example',
     instanceId: 7,
     instanceName: 'Downloads',
     client: {
@@ -86,10 +88,32 @@ Deno.test('resolved cleanup survives Radarr-removal replay only with the exact c
       target,
     }],
     arrStatus: 'resolved',
-    arrTargets: [],
-    sources: [],
+    arrTargets: [{ instanceName: 'Radarr', type: 'radarr', title: 'Movie' }],
+    sources: [
+      {
+        instanceName: 'Radarr',
+        downloadId: hash,
+        path: '/downloads/movie/file.mkv',
+        importedPath: '/movies/movie.mkv',
+        verification: 'hardlink',
+      },
+      {
+        instanceName: 'Radarr duplicate',
+        downloadId: hash,
+        path: '/downloads/movie/file.mkv',
+        importedPath: '/movies/movie.mkv',
+        verification: 'hardlink',
+      },
+      {
+        instanceName: 'Radarr',
+        downloadId: 'b'.repeat(40),
+        path: '/downloads/other/file.mkv',
+        importedPath: '/movies/other.mkv',
+        verification: 'hardlink',
+      },
+    ],
     orphanFiles: [],
-    retainedPaths: [],
+    retainedPaths: [{ path: '/downloads/retained', reason: 'not selected' }],
   } as unknown as ResolvedCleanupItem;
 
   const persisted = persistResolvedCleanup(cleanup);
@@ -97,8 +121,26 @@ Deno.test('resolved cleanup survives Radarr-removal replay only with the exact c
   const replayed = rehydrateResolvedCleanup(persisted, [target]);
   assert(replayed.downloadJobs[0]!.target === target);
 
+  const identity = persistResolvedCleanupIdentity(cleanup);
+  assertEquals(identity.downloadJobs[0]!.manifestFiles, []);
+  assertEquals(identity.sources.length, 1);
+  assertEquals(identity.sources[0]!.downloadId, hash);
+  assertEquals(identity.sources[0]!.importedPath, '/movies/movie.mkv');
+  assertEquals(identity.arrTargets, []);
+  assertEquals(identity.retainedPaths, []);
+  assertEquals(rehydrateResolvedCleanup(identity, [target]).downloadJobs[0]!.jobId, hash);
+
   assertThrows(
     () => rehydrateResolvedCleanup(persisted, [{ ...target, instanceName: 'Replacement' }]),
+    Error,
+    'configured download client changed',
+  );
+  assertThrows(
+    () =>
+      rehydrateResolvedCleanup(persisted, [{
+        ...target,
+        configurationIdentity: 'db:7:101:https://replacement.example',
+      }]),
     Error,
     'configured download client changed',
   );
@@ -407,6 +449,7 @@ function qbitTarget(
   return {
     provider: 'qbittorrent',
     instanceKey: 'db:1',
+    configurationIdentity: 'db:1:100:https://downloads.example',
     instanceId: 1,
     instanceName: 'qBittorrent',
     client: new QbittorrentDownloadClient(client),

@@ -40,6 +40,8 @@ export interface DuplicateSeasonGroup {
   /** Total eligible duplicate episodes represented by this season row. */
   duplicateGroupCount: number;
   combinedFileSize: number | null;
+  /** Exact storage reclaimable if the largest version of every duplicate episode is kept. */
+  reclaimableFileSize: number | null;
   comparisonSummary: DuplicateSeasonComparisonSummary;
   episodes: DuplicateEpisodeGroup[];
 }

@@ -42,6 +42,7 @@ import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
 import {
   buildVersionDeletionPlan,
   selectVersionDownloadCleanup,
+  type VersionDeletionPlan,
 } from '../../mediaDeletion/versionPlanning.ts';
 import {
   assertAcceptedArrMappingsUnchanged,
@@ -101,6 +102,29 @@ function persistRadarrRemovalDownloadCleanup(
 
 function externalId(item: CoordinatedDeleteItem): number | null {
   return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
+}
+
+function assertAcceptedSeasonCoordination(
+  snapshot: DurableTargetSnapshot,
+  plan: VersionDeletionPlan,
+): void {
+  const expected = snapshot.seasonCoordinationOutcome;
+  if (expected === undefined) return;
+  if (!plan.arrOwnershipValid) {
+    throw new Error(plan.arrOwnershipReason ?? 'The accepted Sonarr ownership changed');
+  }
+  const managed = plan.arrManagedMediaIds.includes(snapshot.mediaId!);
+  if (expected === 'plex_only' && managed) {
+    throw new Error('Sonarr ownership changed after Plex-only fallback was accepted');
+  }
+  if (
+    expected === 'automatic_adoption' &&
+    (!managed || plan.preview.arrReassignStatus !== 'resolved')
+  ) {
+    throw new Error(
+      plan.preview.arrReassignReason ?? 'The accepted Sonarr retained-version adoption changed',
+    );
+  }
 }
 
 async function markArrAttempt(
@@ -391,6 +415,7 @@ async function ensureVersionDeleted(
           }
           : {}),
       });
+      assertAcceptedSeasonCoordination(snapshot, plan);
       if (!plan.arrOwnershipValid) {
         throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
       }
@@ -409,6 +434,11 @@ async function ensureVersionDeleted(
   }
   const hasRemainingVersion = [...liveIds].some((id) => !excludedReassignIds.has(id));
   if (!sourceVersionIsLive && retainedMediaId === null) {
+    if (snapshot.skipArrCoordination === true) {
+      advancePhase(target, 'plex_reconciliation');
+      await reconcilePlexTarget(target, snapshot);
+      return;
+    }
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
     if (arrTargets.length === 0 && snapshot.arrOwnerships === undefined) {
@@ -444,6 +474,7 @@ async function ensureVersionDeleted(
         }
         : {}),
     });
+    assertAcceptedSeasonCoordination(snapshot, plan);
     if (!plan.arrOwnershipValid) {
       throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
     }
@@ -455,6 +486,22 @@ async function ensureVersionDeleted(
     throw new Error('at least one unselected live Plex version must remain');
   }
   await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+
+  if (snapshot.skipArrCoordination === true) {
+    if (snapshot.cleanupDownloads) {
+      throw new Error('download cleanup requires Arr coordination');
+    }
+    if (!(await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds))) {
+      throw new PlexReconciliationError(
+        'at least one unselected live Plex version must remain',
+        true,
+        false,
+      );
+    }
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
+  }
 
   if (snapshot.radarrRemovalFallback) {
     let cleanup: ResolvedCleanupItem | null = null;
@@ -555,6 +602,7 @@ async function ensureVersionDeleted(
           }
           : {}),
       });
+      assertAcceptedSeasonCoordination(snapshot, plan);
       if (!plan.arrOwnershipValid) {
         throw new Error(plan.arrOwnershipReason ?? 'Arr ownership could not be verified');
       }
@@ -582,10 +630,10 @@ async function ensureVersionDeleted(
     if (snapshot.cleanupDownloads && target.phase === 'validating') {
       advancePhase(target, 'download_cleanup');
     }
-    if (retainedMediaId !== null && target.phase !== 'arr_coordination') {
-      advancePhase(target, 'arr_coordination');
-    }
     const item: CoordinatedDeleteItem = snapshot;
+    const cleanupItem: CoordinatedDeleteItem = target.targetKind === 'episode_version'
+      ? { ...snapshot, ratingKey: snapshot.showRatingKey!, type: 'show' }
+      : snapshot;
     const attemptRatingKey = target.targetKind === 'episode_version'
       ? snapshot.showRatingKey!
       : snapshot.ratingKey;
@@ -602,19 +650,30 @@ async function ensureVersionDeleted(
           ? loadAttemptedOrphanFilesByItem(target.serverId, [attemptRatingKey])
           : Promise.resolve(new Map()),
       ]);
-    const resolvedCleanup = inspectDownloadCleanup
-      ? await resolveDownloadCleanup(
-        snapshot.ratingKey,
-        item,
-        arrTargets,
-        downloadTargets,
-        attemptedJobs.get(attemptRatingKey),
-        attemptedOrphans.get(attemptRatingKey),
-      )
-      : null;
+    let resolvedCleanup: ResolvedCleanupItem | null = null;
+    if (inspectDownloadCleanup) {
+      if (snapshot.seasonDownloadCleanup) {
+        if (snapshot.seasonDownloadCleanup.ratingKey !== attemptRatingKey) {
+          throw new Error('The accepted season download cleanup belongs to another Plex show');
+        }
+        resolvedCleanup = rehydrateResolvedCleanup(
+          snapshot.seasonDownloadCleanup,
+          downloadTargets,
+        );
+      } else {
+        resolvedCleanup = await resolveDownloadCleanup(
+          attemptRatingKey,
+          cleanupItem,
+          arrTargets,
+          downloadTargets,
+          attemptedJobs.get(attemptRatingKey),
+          attemptedOrphans.get(attemptRatingKey),
+        );
+      }
+    }
     const attemptedArr = await loadAttemptedArrInstancesByItem(
       target.serverId,
-      [{ ...item, ratingKey: snapshot.ratingKey }],
+      [{ ...snapshot, ratingKey: snapshot.ratingKey }],
       arrTargets.map((entry) => entry.instanceId),
     );
     let plan = await buildVersionDeletionPlan({
@@ -625,6 +684,7 @@ async function ensureVersionDeleted(
       arrTargets,
       resolvedCleanup,
       cleanupConfigured: inspectDownloadCleanup && downloadTargets.length > 0,
+      allowEpisodeDownloadCleanup: snapshot.seasonCleanup === true,
       attemptedArrInstanceIds: attemptedArr.get(snapshot.ratingKey),
       excludedReassignMediaIds: excludedReassignIds,
       requiredMappingIdentities: snapshot.arrReassignmentMappings,
@@ -647,9 +707,11 @@ async function ensureVersionDeleted(
         }
         : {}),
     });
+    assertAcceptedSeasonCoordination(snapshot, plan);
     if (
       snapshot.cleanupDownloads &&
-      (target.phase === 'validating' || target.phase === 'download_cleanup')
+      (target.phase === 'validating' || target.phase === 'download_cleanup' ||
+        target.phase === 'arr_coordination')
     ) {
       if (!plan.cleanup) {
         throw new Error(plan.preview.cleanupReason ?? 'cleanup could not be verified');
@@ -660,6 +722,7 @@ async function ensureVersionDeleted(
         new Map([[snapshot.ratingKey, plan.cleanup]]),
         plan.cleanup,
         attemptRatingKey,
+        snapshot.seasonDownloadCleanup !== undefined,
       );
       if (retainedMediaId !== null) {
         const [freshVersions, freshArrTargets, freshIdentity] = await Promise.all([
@@ -696,9 +759,11 @@ async function ensureVersionDeleted(
             }
             : {}),
         });
+        assertAcceptedSeasonCoordination(snapshot, plan);
       }
     }
     if (retainedMediaId !== null) {
+      if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
       if (plan.preview.arrReassignStatus !== 'resolved') {
         throw new Error(plan.preview.arrReassignReason ?? 'Arr reassignment could not be verified');
       }
@@ -750,6 +815,11 @@ async function ensureVersionDeleted(
         requiredOwnerships: persistedArrOwnershipMap(snapshot),
       });
       if (!finalPlan.arrOwnershipValid) {
+        if (snapshot.seasonCoordinationOutcome !== undefined) {
+          throw new Error(
+            finalPlan.arrOwnershipReason ?? 'The accepted Sonarr ownership changed',
+          );
+        }
         const currentPlan = await buildVersionDeletionPlan(planInput);
         if (
           !currentPlan.arrOwnershipValid ||
@@ -762,6 +832,7 @@ async function ensureVersionDeleted(
         }
         finalPlan = currentPlan;
       }
+      assertAcceptedSeasonCoordination(snapshot, finalPlan);
       if (finalPlan.arrManagedMediaIds.includes(snapshot.mediaId!)) {
         if (finalPlan.preview.arrReassignStatus !== 'resolved') {
           throw new Error(

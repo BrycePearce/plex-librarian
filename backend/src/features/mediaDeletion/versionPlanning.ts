@@ -169,6 +169,7 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured,
   attemptedArrInstanceIds = new Set<number>(),
   allowPartialCoverage = false,
+  allowEpisodeDownloadCleanup = false,
   episodeIdentity,
   excludedReassignMediaIds = selectedMediaIds,
   requiredMappingIdentities,
@@ -188,6 +189,7 @@ export async function buildVersionDeletionPlan({
   cleanupConfigured: boolean;
   attemptedArrInstanceIds?: ReadonlySet<number>;
   allowPartialCoverage?: boolean;
+  allowEpisodeDownloadCleanup?: boolean;
   episodeIdentity?: { seasonNumber: number; episodeNumber: number };
   excludedReassignMediaIds?: ReadonlySet<number>;
   requiredMappingIdentities?: readonly PersistedArrMappingIdentity[];
@@ -474,7 +476,7 @@ export async function buildVersionDeletionPlan({
     }
   }
 
-  const cleanup = mediaType === 'movie' && pathsComplete
+  const cleanup = pathsComplete && (mediaType === 'movie' || allowEpisodeDownloadCleanup)
     ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths, allowPartialCoverage)
     : null;
   const publicCleanup = cleanup ? publicCleanupItem(cleanup) : null;
@@ -497,8 +499,8 @@ export async function buildVersionDeletionPlan({
   const cleanupReason = cleanupStatus === 'error'
     ? resolvedCleanup?.reason
     : cleanupStatus === 'unavailable'
-    ? mediaType === 'episode'
-      ? 'Version-level qBittorrent cleanup is unavailable for episodes and season packs'
+    ? mediaType === 'episode' && !allowEpisodeDownloadCleanup
+      ? 'Version-level qBittorrent cleanup is unavailable outside reviewed season cleanup'
       : (resolvedCleanup?.reason ??
         'No download payload could be tied exclusively to the selected Plex version paths')
     : undefined;

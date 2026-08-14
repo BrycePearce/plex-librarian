@@ -5,7 +5,12 @@ import {
   type DuplicateDifferenceCode,
   type DuplicateSeasonComparisonSummary,
 } from "@shared/mediaComparison";
-import type { DuplicateGroup, DuplicateListGroup, MediaVersion } from "../../lib/api.ts";
+import type {
+  DuplicateGroup,
+  DuplicateListGroup,
+  DuplicateSeasonGroup,
+  MediaVersion,
+} from "../../lib/api.ts";
 
 // One icon and tone per comparison kind, shared by the duplicates list row, the
 // comparison filter, and the version-picker modal so the same signal reads the same way
@@ -54,7 +59,9 @@ export function duplicatePageSummary(groups: readonly DuplicateListGroup[]) {
   // Season rows carry an exact aggregate for every eligible episode, while their nested
   // episode details are intentionally capped to one bounded review pass.
   const storageValues = groups.map((group) => group.combinedFileSize);
-  const reclaimableValues = atomicGroups.map((group) => reclaimableKilobytes(group.versions));
+  const reclaimableValues = groups.map((group) =>
+    group.mediaType === "season" ? group.reclaimableFileSize : reclaimableKilobytes(group.versions)
+  );
 
   return {
     versionCount: atomicGroups.reduce(
@@ -86,6 +93,13 @@ export function versionQualityLabels(
     labels: labels.slice(0, limit),
     remaining: Math.max(0, labels.length - limit),
   };
+}
+
+export function seasonVersionCountLabel(season: DuplicateSeasonGroup): string {
+  const counts = season.episodes.map((episode) => episode.versions.length);
+  if (counts.length === 0) return "Versions unavailable";
+  const maximum = Math.max(...counts);
+  return `${maximum} versions`;
 }
 
 const SEASON_DIFFERENCE_SHORT_LABELS: Record<DuplicateDifferenceCode, string> = {

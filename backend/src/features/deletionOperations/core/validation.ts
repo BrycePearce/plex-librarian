@@ -35,6 +35,10 @@ export interface DurableTargetSnapshot {
   tvdbId: number | null;
   mode?: 'coordinated' | 'plex-only';
   cleanupDownloads?: boolean;
+  skipArrCoordination?: boolean;
+  seasonCleanup?: boolean;
+  seasonCoordinationOutcome?: 'plex_only' | 'automatic_adoption';
+  seasonDownloadCleanup?: PersistedResolvedCleanupItem;
   selectedRatingKeys?: string[];
   selectedMediaIds?: number[];
   operationMediaIds?: number[];
@@ -90,6 +94,28 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (snapshot.seasonCoordinationOutcome !== undefined) {
+    if (
+      !['plex_only', 'automatic_adoption'].includes(snapshot.seasonCoordinationOutcome) ||
+      snapshot.seasonCleanup !== true || snapshot.skipArrCoordination === true ||
+      !Array.isArray(snapshot.arrReassignmentMappings) || !Array.isArray(snapshot.arrOwnerships)
+    ) {
+      throw new DeletionValidationError('durable season coordination evidence is malformed');
+    }
+  }
+  if (snapshot.seasonDownloadCleanup !== undefined) {
+    if (
+      !snapshot.seasonDownloadCleanup || typeof snapshot.seasonDownloadCleanup !== 'object' ||
+      snapshot.seasonCleanup !== true || snapshot.cleanupDownloads !== true ||
+      snapshot.skipArrCoordination === true ||
+      snapshot.seasonDownloadCleanup.status !== 'resolved' ||
+      snapshot.seasonDownloadCleanup.ratingKey !== snapshot.showRatingKey
+    ) {
+      throw new DeletionValidationError('durable season download cleanup evidence is malformed');
+    }
+  } else if (snapshot.seasonCleanup === true && snapshot.cleanupDownloads === true) {
+    throw new DeletionValidationError('durable season download cleanup evidence is missing');
+  }
   const removal = snapshot.radarrRemovalFallback;
   if (removal !== undefined) {
     if (

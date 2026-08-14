@@ -5,6 +5,7 @@ import {
   reclaimableKilobytes,
   seasonDifferenceChips,
   seasonSummaryAccessibleText,
+  seasonVersionCountLabel,
   versionQualityLabels,
 } from "./duplicatePresentation.ts";
 import { compareDuplicateVersions, summarizeDuplicateComparisons } from "@shared/mediaComparison";
@@ -90,6 +91,18 @@ Deno.test("versionQualityLabels deduplicates and limits resolutions", () => {
     ]),
     { labels: ["4K", "1080", "720"], remaining: 1 },
   );
+});
+
+Deno.test("season version count includes a partial additional copy", () => {
+  const season = {
+    episodes: [
+      { versions: [version(1, 1), version(2, 1)] },
+      { versions: [version(3, 1), version(4, 1), version(5, 1)] },
+    ],
+  } as DuplicateSeasonGroup;
+  assertEquals(seasonVersionCountLabel(season), "3 versions");
+  season.episodes[1]!.versions.pop();
+  assertEquals(seasonVersionCountLabel(season), "2 versions");
 });
 
 Deno.test("comparison identifies a matching technical profile without claiming exactness", () => {
@@ -221,6 +234,7 @@ Deno.test("duplicatePageSummary includes every episode nested under a season", (
     showThumb: null,
     seasonIndex: 1,
     combinedFileSize: 100,
+    reclaimableFileSize: 30,
     comparisonSummary: {
       episodeCount: 2,
       differentEpisodeCount: 0,

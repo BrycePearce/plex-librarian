@@ -20,6 +20,17 @@ import {
   seasonDeletionPreviewIsFresh,
 } from './seasonDeletionFingerprint.ts';
 import { SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
+import {
+  type PersistedResolvedCleanupItem,
+  persistResolvedCleanupIdentity,
+  resolveDownloadCleanup,
+} from '../mediaDeletion/cleanup.ts';
+import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import {
+  type PersistedArrMappingIdentity,
+  type PersistedArrOwnership,
+  selectVersionDownloadCleanup,
+} from '../mediaDeletion/versionPlanning.ts';
 
 const MAX_EPISODES = 500;
 const PLEX_VALIDATION_CONCURRENCY = 4;
@@ -79,6 +90,19 @@ export interface AuthoritativeSeasonPlan {
     episodeNumber: number;
   }>;
   managedGroups: PlannedManagedSeasonGroup[];
+  cleanupEligibleMedia: Array<{ episodeRatingKey: string; mediaId: number }>;
+  targetEvidence: Array<{
+    episodeRatingKey: string;
+    mediaId: number;
+    outcome: SeasonDeletionOutcome;
+    arrMappingIdentities: PersistedArrMappingIdentity[];
+    arrOwnerships: PersistedArrOwnership[];
+  }>;
+  cleanupPlans: Array<{
+    episodeRatingKey: string;
+    mediaId: number;
+    cleanup: PersistedResolvedCleanupItem;
+  }>;
   preview: SeasonDeletionPreviewResponse;
 }
 
@@ -95,6 +119,7 @@ type PreparedSeasonSelection =
     kind: 'plex_only';
     child: AuthoritativeSeasonPlan['plexOnlyChildren'][number];
     member: SeasonDeletionMemberPreview;
+    arrOwnerships: PersistedArrOwnership[];
   }
   | {
     kind: 'managed';
@@ -107,6 +132,7 @@ type PreparedSeasonSelection =
     retainedCandidate: PlannedMediaEvidence;
     seasonNumber: number;
     episodeNumber: number;
+    arrOwnerships: PersistedArrOwnership[];
   };
 
 function canonical(value: unknown): string {
@@ -157,6 +183,8 @@ export async function buildAuthoritativeSeasonPlan(input: {
   plexClient: PlexClient;
   seasonRatingKey: string;
   selections: readonly SeasonDeletionSelection[];
+  coordinateSonarr?: boolean;
+  inspectDownloadCleanup?: boolean;
 }): Promise<AuthoritativeSeasonPlan> {
   const eligibleEpisodes = await db.select({
     episodeRatingKey: episodeMediaVersions.episodeRatingKey,
@@ -240,7 +268,13 @@ export async function buildAuthoritativeSeasonPlan(input: {
       `active playback blocks season cleanup for ${[...activePlayback].sort().join(', ')}`,
     );
   }
-  const [show] = await db.select({ title: items.title, tvdbId: items.tvdbId }).from(items).where(
+  const [show] = await db.select({
+    ratingKey: items.ratingKey,
+    title: items.title,
+    type: items.type,
+    tmdbId: items.tmdbId,
+    tvdbId: items.tvdbId,
+  }).from(items).where(
     and(
       eq(items.serverId, input.serverId),
       eq(items.ratingKey, first.showRatingKey),
@@ -250,17 +284,41 @@ export async function buildAuthoritativeSeasonPlan(input: {
   const targets = (await getArrDeleteTargets(input.serverId, first.libraryKey)).filter((entry) =>
     entry.instanceType === 'sonarr'
   );
-  if (targets.length > 0 && (!Number.isSafeInteger(show.tvdbId) || show.tvdbId! <= 0)) {
+  if (
+    input.coordinateSonarr === true && targets.length > 0 &&
+    (!Number.isSafeInteger(show.tvdbId) || show.tvdbId! <= 0)
+  ) {
     throw new Error('the Plex show has no exact TVDB identity for Sonarr coordination');
   }
+  const coordinationTargets = input.coordinateSonarr === true ? targets : [];
+  const arrMappingIdentities = coordinationTargets.map((target) => ({
+    instanceId: target.instanceId,
+    instanceType: target.instanceType,
+    instanceUrl: target.instanceUrl,
+    configurationUpdatedAt: target.configurationUpdatedAt,
+    mappingIdentity: target.mappingIdentity,
+  } satisfies PersistedArrMappingIdentity)).sort((left, right) =>
+    left.instanceId - right.instanceId
+  );
+  const missingRecordOwnerships: PersistedArrOwnership[] = [];
   const targetPlans: PreparedTargetPlan[] = [];
-  for (const target of targets) {
+  for (const target of coordinationTargets) {
     const capabilities = await target.client.sonarrSeasonCoordinationCapabilities();
     if (!capabilities.available || !capabilities.version) {
       throw new Error(capabilities.reason ?? 'Sonarr v4 coordination is unavailable');
     }
     const series = await target.client.lookup(show.tvdbId!);
-    if (!series) continue;
+    if (!series) {
+      missingRecordOwnerships.push({
+        instanceId: target.instanceId,
+        recordId: null,
+        episodeId: null,
+        managedFileId: null,
+        managedPath: null,
+        managedMediaId: null,
+      });
+      continue;
+    }
     if (!series.path) throw new Error('Sonarr series path is unavailable');
     const [snapshot, activity] = await Promise.all([
       target.client.sonarrSeriesSnapshot(series.id),
@@ -319,11 +377,33 @@ export async function buildAuthoritativeSeasonPlan(input: {
         file: typeof targetPlans[number]['snapshot']['files'][number];
         mediaId: number;
       }> = [];
+      const arrOwnerships = [...missingRecordOwnerships];
       for (const plan of targetPlans) {
         const episode = plan.snapshot.episodes.find((entry) =>
           entry.seasonNumber === first.seasonIndex && entry.episodeNumber === local[0]!.episodeIndex
         );
-        if (!episode || episode.episodeFileId === 0) continue;
+        if (!episode) {
+          arrOwnerships.push({
+            instanceId: plan.target.instanceId,
+            recordId: plan.seriesId,
+            episodeId: null,
+            managedFileId: null,
+            managedPath: null,
+            managedMediaId: null,
+          });
+          continue;
+        }
+        if (episode.episodeFileId === 0) {
+          arrOwnerships.push({
+            instanceId: plan.target.instanceId,
+            recordId: plan.seriesId,
+            episodeId: episode.id,
+            managedFileId: null,
+            managedPath: null,
+            managedMediaId: null,
+          });
+          continue;
+        }
         const file = plan.snapshot.files.find((entry) => entry.id === episode.episodeFileId);
         if (!file) throw new Error('Sonarr episode references a missing EpisodeFile');
         const filePath = normalizeRemoteAbsolute(file.path)?.comparison;
@@ -347,6 +427,14 @@ export async function buildAuthoritativeSeasonPlan(input: {
               : 'Sonarr EpisodeFile path matches multiple Plex versions',
           );
         }
+        arrOwnerships.push({
+          instanceId: plan.target.instanceId,
+          recordId: plan.seriesId,
+          episodeId: episode.id,
+          managedFileId: file.id,
+          managedPath: file.path,
+          managedMediaId: matchingMediaIds[0]!,
+        });
         alignedOwners.push({ plan, episode, file, mediaId: matchingMediaIds[0]! });
       }
       if (alignedOwners.length > 1) {
@@ -390,6 +478,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
             sonarrInstanceId: null,
             reason: null,
           },
+          arrOwnerships,
         };
       }
       if (match.file.episodeIds.length !== 1 || match.file.episodeIds[0] !== match.episode.id) {
@@ -441,6 +530,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
         retainedCandidate: adoptable[0]!,
         seasonNumber: first.seasonIndex,
         episodeNumber: local[0]!.episodeIndex,
+        arrOwnerships,
       };
     },
   );
@@ -517,6 +607,65 @@ export async function buildAuthoritativeSeasonPlan(input: {
     }
     managedGroups.set(key, managedGroup);
   }
+  const downloadTargets = await getDownloadClientTargets(input.serverId);
+  const seriesCleanup = input.inspectDownloadCleanup === true && input.coordinateSonarr === true
+    ? await resolveDownloadCleanup(
+      first.showRatingKey,
+      { ...show, type: 'show' },
+      targets,
+      downloadTargets,
+    )
+    : null;
+  const cleanupEligibleMedia: AuthoritativeSeasonPlan['cleanupEligibleMedia'] = [];
+  const cleanupPlans: AuthoritativeSeasonPlan['cleanupPlans'] = [];
+  if (seriesCleanup) {
+    for (const prepared of preparedSelections) {
+      const episodeRatingKey = prepared.kind === 'plex_only'
+        ? prepared.child.episodeRatingKey
+        : prepared.selection.episodeRatingKey;
+      const selectedMedia = prepared.kind === 'plex_only'
+        ? prepared.child.selectedMedia
+        : prepared.selectedMedia;
+      for (const media of selectedMedia) {
+        const normalized = normalizeRemoteAbsolute(media.path)?.comparison;
+        const selectedCleanup = normalized
+          ? selectVersionDownloadCleanup(seriesCleanup, new Set([normalized]))
+          : null;
+        if (selectedCleanup) {
+          cleanupEligibleMedia.push({ episodeRatingKey, mediaId: media.mediaId });
+          cleanupPlans.push({
+            episodeRatingKey,
+            mediaId: media.mediaId,
+            cleanup: persistResolvedCleanupIdentity(selectedCleanup),
+          });
+        }
+      }
+    }
+  }
+  const targetEvidence: AuthoritativeSeasonPlan['targetEvidence'] = preparedSelections.flatMap(
+    (prepared) => {
+      const episodeRatingKey = prepared.kind === 'plex_only'
+        ? prepared.child.episodeRatingKey
+        : prepared.selection.episodeRatingKey;
+      const selectedMedia = prepared.kind === 'plex_only'
+        ? prepared.child.selectedMedia
+        : prepared.selectedMedia;
+      const managedMediaId = prepared.kind === 'managed'
+        ? prepared.arrOwnerships.find((entry) =>
+          entry.instanceId === prepared.plan.target.instanceId
+        )?.managedMediaId ?? null
+        : null;
+      return selectedMedia.map((media) => ({
+        episodeRatingKey,
+        mediaId: media.mediaId,
+        outcome: managedMediaId === media.mediaId ? 'automatic_adoption' : 'plex_only',
+        arrMappingIdentities,
+        arrOwnerships: [...prepared.arrOwnerships].sort((left, right) =>
+          left.instanceId - right.instanceId
+        ),
+      }));
+    },
+  );
   const evidence = {
     serverId: input.serverId,
     machineIdentifier: input.machineIdentifier,
@@ -527,6 +676,11 @@ export async function buildAuthoritativeSeasonPlan(input: {
     activePlaybackRatingKeys: [],
     completeEpisodeRatingKeys: [...byEpisode.keys()].sort(),
     selections: normalizedSelections,
+    coordinateSonarr: input.coordinateSonarr === true,
+    inspectDownloadCleanup: input.inspectDownloadCleanup === true,
+    cleanupEligibleMedia,
+    cleanupPlans,
+    targetEvidence,
     plexOnlyChildren,
     managedGroups: [...managedGroups.values()].map((entry) => ({
       ...entry,
@@ -551,6 +705,10 @@ export async function buildAuthoritativeSeasonPlan(input: {
     blockers: [],
     members,
     sonarrAvailable: managedGroups.size > 0,
+    sonarrConfigured: targets.length > 0,
+    cleanupConfigured: downloadTargets.length > 0,
+    cleanupEligibleVersionCount: cleanupEligibleMedia.length,
+    cleanupReason: seriesCleanup?.reason ?? null,
     fingerprint: planFingerprint,
     expiresAt: seasonDeletionPreviewExpiry(),
   };

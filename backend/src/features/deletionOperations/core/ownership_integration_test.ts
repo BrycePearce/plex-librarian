@@ -366,6 +366,7 @@ Deno.test('season duplicate payloads are capped to one server-side review pass',
     assertEquals(data.total, 1);
     assertEquals(data.duplicateGroupTotal, 501);
     assertEquals(data.groups[0].duplicateGroupCount, 501);
+    assertEquals(data.groups[0].reclaimableFileSize, 50_100);
     assertEquals(data.groups[0].episodes.length, 20);
     const analysis = await app.request(`/api/duplicates/seasons/${seasonKey}/analysis`, {
       method: 'POST',
@@ -494,6 +495,7 @@ Deno.test('season storage stays unknown when any included version size is unknow
     assertEquals(response.total, 1);
     assertEquals(response.duplicateGroupTotal, 1);
     assertEquals(response.groups[0].combinedFileSize, null);
+    assertEquals(response.groups[0].reclaimableFileSize, null);
     assertEquals(response.groups[0].episodes[0].combinedFileSize, null);
   }
 });

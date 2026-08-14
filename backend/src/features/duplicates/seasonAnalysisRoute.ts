@@ -174,6 +174,17 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
   if (selections.length !== (Array.isArray(body?.selections) ? body.selections.length : -1)) {
     return c.json({ error: 'exact episode/media selections are required' }, 400);
   }
+  if (
+    (body?.coordinateSonarr !== undefined && typeof body.coordinateSonarr !== 'boolean') ||
+    (body?.cleanupDownloads !== undefined && typeof body.cleanupDownloads !== 'boolean')
+  ) {
+    return c.json({ error: 'destination choices must be booleans' }, 400);
+  }
+  const coordinateSonarr = body?.coordinateSonarr === true;
+  const cleanupDownloads = body?.cleanupDownloads === true;
+  if (cleanupDownloads && !coordinateSonarr) {
+    return c.json({ error: 'download cleanup requires Sonarr coordination' }, 400);
+  }
   try {
     const client = await createPlexClient();
     const machineIdentifier = await client.identity();
@@ -183,6 +194,8 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
       plexClient: client,
       seasonRatingKey: c.req.param('seasonRatingKey'),
       selections,
+      coordinateSonarr,
+      inspectDownloadCleanup: cleanupDownloads,
     });
     return c.json(plan.preview);
   } catch (error) {

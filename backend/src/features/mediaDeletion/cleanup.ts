@@ -61,10 +61,37 @@ export function persistResolvedCleanup(
       targetIdentity: {
         provider: target.provider,
         instanceKey: target.instanceKey,
+        configurationIdentity: target.configurationIdentity,
         instanceId: target.instanceId,
         instanceName: target.instanceName,
       },
     })),
+  };
+}
+
+export function persistResolvedCleanupIdentity(
+  cleanup: ResolvedCleanupItem,
+): PersistedResolvedCleanupItem {
+  const persisted = persistResolvedCleanup(cleanup);
+  const selectedJobIds = new Set(persisted.downloadJobs.map((job) => job.jobId));
+  const sources = [...new Map(
+    persisted.sources.filter((source) => selectedJobIds.has(source.downloadId)).map((source) => [
+      `${source.downloadId}:${source.importedPath ?? ''}`,
+      source,
+    ]),
+  ).values()];
+  return {
+    ...persisted,
+    // The torrent hash fixes the payload manifest. Keeping thousands of manifest
+    // entries in every season target would only duplicate evidence that is fetched
+    // and revalidated immediately before deletion.
+    downloadJobs: persisted.downloadJobs.map((job) => ({ ...job, manifestFiles: [] })),
+    // Execution only needs enough association evidence to prove coverage for the
+    // selected jobs. Show-wide history and preview-only summaries belong to the
+    // operation preview, not to every durable media target.
+    sources,
+    arrTargets: [],
+    retainedPaths: [],
   };
 }
 
@@ -79,6 +106,7 @@ export function rehydrateResolvedCleanup(
     const matches = targets.filter((target) =>
       target.provider === targetIdentity.provider &&
       target.instanceKey === targetIdentity.instanceKey &&
+      target.configurationIdentity === targetIdentity.configurationIdentity &&
       target.instanceId === targetIdentity.instanceId &&
       target.instanceName === targetIdentity.instanceName
     );
@@ -87,6 +115,8 @@ export function rehydrateResolvedCleanup(
     }
     if (
       typeof job.jobId !== 'string' || !job.jobId ||
+      typeof targetIdentity.configurationIdentity !== 'string' ||
+      !targetIdentity.configurationIdentity ||
       job.provider !== targetIdentity.provider ||
       job.instanceKey !== targetIdentity.instanceKey ||
       job.instanceName !== targetIdentity.instanceName ||
