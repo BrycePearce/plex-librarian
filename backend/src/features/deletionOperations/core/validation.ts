@@ -18,11 +18,23 @@ import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/re
 
 export interface DurableTargetRecord {
   id: number;
-  targetKind: 'whole_item' | 'movie_version' | 'episode_version' | 'sonarr_series';
+  targetKind: 'whole_item' | 'movie_version' | 'episode_version';
   snapshot: string;
 }
 
 export type DurableVersionTechnicalSnapshot = PlexMediaTechnicalDetails;
+
+export interface DurableRetainedVersionSnapshot {
+  mediaId: number;
+  plexPath?: string;
+  fileSize: number | null;
+  videoResolution: string | null;
+  height: number | null;
+  bitrate: number | null;
+  videoCodec: string | null;
+  container: string | null;
+  classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
+}
 
 export interface DurableTargetSnapshot {
   machineIdentifier: string;
@@ -43,16 +55,9 @@ export interface DurableTargetSnapshot {
   selectedMediaIds?: number[];
   operationMediaIds?: number[];
   classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
-  expectedRetainedVersion?: {
-    mediaId: number;
-    fileSize: number | null;
-    videoResolution: string | null;
-    height: number | null;
-    bitrate: number | null;
-    videoCodec: string | null;
-    container: string | null;
-    classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
-  };
+  expectedPlexPath?: string;
+  expectedRetainedVersion?: DurableRetainedVersionSnapshot;
+  expectedRetainedVersions?: DurableRetainedVersionSnapshot[];
   mediaId?: number;
   fileSize?: number | null;
   videoResolution?: string | null;
@@ -351,12 +356,14 @@ function validateLocalTarget(
     snapshot.seasonRatingKey,
     snapshot.seasonIndex,
     snapshot.episodeIndex,
-    snapshot.fileSize,
-    snapshot.videoResolution,
-    snapshot.height,
-    snapshot.bitrate,
-    snapshot.videoCodec,
-    snapshot.container,
+    ...(snapshot.seasonCleanup === true ? [] : [
+      snapshot.fileSize,
+      snapshot.videoResolution,
+      snapshot.height,
+      snapshot.bitrate,
+      snapshot.videoCodec,
+      snapshot.container,
+    ]),
   ];
   expected.forEach((value, index) =>
     equalNullable(value, row[index + 1], 'local episode identity')
@@ -419,8 +426,34 @@ export async function validateLiveDeletionIdentity(
         equalNullable(snapshot[key], liveVersion[key], `Plex version ${key}`);
       }
     }
-    const expectedRetained = snapshot.expectedRetainedVersion;
-    if (expectedRetained) {
+    const expectedRetainedVersions = snapshot.expectedRetainedVersions ??
+      (snapshot.expectedRetainedVersion ? [snapshot.expectedRetainedVersion] : []);
+    if (
+      snapshot.expectedPlexPath !== undefined ||
+      expectedRetainedVersions.some((entry) => entry.plexPath !== undefined)
+    ) {
+      const pathPreviews = await client.mediaVersionPathPreviews(snapshot.ratingKey);
+      const assertExactPath = (mediaId: number, expectedPath: string, label: string) => {
+        const preview = pathPreviews.find((entry) => entry.mediaId === mediaId);
+        if (
+          !preview || preview.truncated || preview.paths.length !== 1 ||
+          preview.paths[0] !== expectedPath
+        ) mismatch(label);
+      };
+      if (snapshot.expectedPlexPath !== undefined && liveVersion) {
+        assertExactPath(snapshot.mediaId!, snapshot.expectedPlexPath, 'Plex version path');
+      }
+      for (const expectedRetained of expectedRetainedVersions) {
+        if (expectedRetained.plexPath !== undefined) {
+          assertExactPath(
+            expectedRetained.mediaId,
+            expectedRetained.plexPath,
+            'retained Plex version path',
+          );
+        }
+      }
+    }
+    for (const expectedRetained of expectedRetainedVersions) {
       const liveRetained = live.media.find(
         (version) => version.mediaId === expectedRetained.mediaId,
       );
@@ -444,7 +477,7 @@ export async function validateLiveDeletionIdentity(
     }
     if (
       (liveVersion && snapshot.classificationTechnicalDetails) ||
-      expectedRetained?.classificationTechnicalDetails
+      expectedRetainedVersions.some((entry) => entry.classificationTechnicalDetails)
     ) {
       const liveDetails = await client.mediaVersionTechnicalDetails(snapshot.ratingKey);
       if (liveVersion && snapshot.classificationTechnicalDetails) {
@@ -454,12 +487,14 @@ export async function validateLiveDeletionIdentity(
           'Plex version technical profile',
         );
       }
-      if (expectedRetained?.classificationTechnicalDetails) {
-        validateTechnicalDetails(
-          expectedRetained.classificationTechnicalDetails,
-          liveDetails.get(expectedRetained.mediaId),
-          'retained Plex version technical profile',
-        );
+      for (const expectedRetained of expectedRetainedVersions) {
+        if (expectedRetained.classificationTechnicalDetails) {
+          validateTechnicalDetails(
+            expectedRetained.classificationTechnicalDetails,
+            liveDetails.get(expectedRetained.mediaId),
+            'retained Plex version technical profile',
+          );
+        }
       }
     }
   }

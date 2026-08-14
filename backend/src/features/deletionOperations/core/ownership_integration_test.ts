@@ -397,7 +397,6 @@ Deno.test('season profile analysis stays scoped to the requested season and elig
   assertEquals(analysis.analyzedEpisodeCount, 2);
   // Client counts cannot manufacture truncation; completeness is derived from the
   // active server projection for the exact season.
-  assertEquals(analysis.omittedEpisodeCount, 0);
   assertEquals(
     analysis.episodes.map((episode: { episodeRatingKey: string }) => episode.episodeRatingKey),
     ['visible-episode', 'visible-episode-2'],

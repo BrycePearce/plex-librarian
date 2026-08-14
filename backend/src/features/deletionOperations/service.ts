@@ -285,19 +285,25 @@ export async function repeatedDeletionOperation(
   serverId: number,
   clientRequestId: string,
   payload: Record<string, unknown>,
-): Promise<{ operationId: string; status: DeletionOperationStatus } | null> {
+): Promise<
+  {
+    operationId: string;
+    status: DeletionOperationStatus;
+    targetCount: number;
+  } | null
+> {
   const hash = await requestHash(payload);
   return withTransaction((client) => {
     const row = client
       .prepare(
-        'SELECT id, request_hash, status FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
+        'SELECT id, request_hash, status, target_count FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
       )
-      .value<[string, string, DeletionOperationStatus]>(serverId, clientRequestId);
+      .value<[string, string, DeletionOperationStatus, number]>(serverId, clientRequestId);
     if (!row) return null;
     if (row[1] !== hash) {
       throw new DeletionConflictError('clientRequestId was already used with a different request');
     }
-    return { operationId: row[0], status: row[2] };
+    return { operationId: row[0], status: row[2], targetCount: row[3] };
   });
 }
 
@@ -364,6 +370,30 @@ function ensureVersionCapacity(client: SqliteClient, input: NewDeletionOperation
       throw new DeletionConflictError(
         'at least one version must remain; delete the item instead',
         400,
+      );
+    }
+  }
+}
+
+function ensureNoMediaReservationOverlap(
+  client: SqliteClient,
+  input: NewDeletionOperation,
+): void {
+  for (const target of input.targets) {
+    if (!target.reservation) continue;
+    const conflict = client.prepare(
+      `SELECT operation_id FROM media_version_reservations
+       WHERE server_id = ? AND media_kind = ? AND media_id = ?`,
+    ).value<[string]>(
+      input.serverId,
+      target.reservation.mediaKind,
+      target.reservation.mediaId,
+    );
+    if (conflict) {
+      throw new DeletionConflictError(
+        'this media version is already reserved by another deletion',
+        409,
+        conflict[0],
       );
     }
   }
@@ -513,14 +543,14 @@ function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperati
 
 export async function enqueueDeletionOperation(
   input: NewDeletionOperation,
-): Promise<{ operationId: string; status: 'queued' }> {
+): Promise<{ operationId: string; status: DeletionOperationStatus }> {
   const [result] = await enqueueDeletionOperations([input]);
   return result!;
 }
 
 export async function enqueueDeletionOperations(
   inputs: readonly NewDeletionOperation[],
-): Promise<Array<{ operationId: string; status: 'queued' }>> {
+): Promise<Array<{ operationId: string; status: DeletionOperationStatus }>> {
   if (inputs.length === 0) {
     throw new DeletionConflictError('no deletion operations were provided', 400);
   }
@@ -552,8 +582,8 @@ export async function enqueueDeletionOperations(
     })),
   );
   const now = Math.floor(Date.now() / 1000);
-  const ids = withTransaction((client) => {
-    const accepted: string[] = [];
+  const accepted = withTransaction((client) => {
+    const results: Array<{ operationId: string; status: DeletionOperationStatus }> = [];
     for (const { input, hash, operationId } of prepared) {
       if (!activeServerMatches(client, input.serverId)) {
         throw new DeletionConflictError(
@@ -562,16 +592,16 @@ export async function enqueueDeletionOperations(
       }
       const repeated = client
         .prepare(
-          'SELECT id, request_hash FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
+          'SELECT id, request_hash, status FROM deletion_operations WHERE server_id = ? AND client_request_id = ?',
         )
-        .value<[string, string]>(input.serverId, input.clientRequestId);
+        .value<[string, string, DeletionOperationStatus]>(input.serverId, input.clientRequestId);
       if (repeated) {
         if (repeated[1] !== hash) {
           throw new DeletionConflictError(
             'clientRequestId was already used with a different request',
           );
         }
-        accepted.push(repeated[0]);
+        results.push({ operationId: repeated[0], status: repeated[2] });
         continue;
       }
       if (hasIncompleteRelocationBarrier(client, input.serverId, input.libraryKey)) {
@@ -588,19 +618,23 @@ export async function enqueueDeletionOperations(
       ) {
         throw new DeletionConflictError('this library is currently syncing');
       }
-      if (
-        client
-          .prepare(
-            "SELECT id FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
-          )
-          .value<[string]>(input.serverId, input.libraryKey)
-      ) {
-        throw new DeletionConflictError('this library already has an active deletion operation');
+      const activeDeletion = client
+        .prepare(
+          "SELECT id FROM deletion_operations WHERE server_id = ? AND library_key = ? AND status IN ('queued','running','waiting_retry') LIMIT 1",
+        )
+        .value<[string]>(input.serverId, input.libraryKey);
+      if (activeDeletion) {
+        throw new DeletionConflictError(
+          'this library already has an active deletion operation',
+          409,
+          activeDeletion[0],
+        );
       }
       if (activeLibraryOperation(input.serverId, input.libraryKey) !== null) {
         throw new DeletionConflictError('this library is currently syncing or being modified');
       }
       ensureNoRecoveryOverlap(client, input);
+      ensureNoMediaReservationOverlap(client, input);
       ensureVersionCapacity(client, input);
       for (const target of input.targets) {
         if (!target.radarrReservation) continue;
@@ -624,12 +658,21 @@ export async function enqueueDeletionOperations(
       }
       for (const target of input.targets) {
         if (target.kind === 'whole_item') continue;
-        target.snapshot.arrReassignmentMappings = snapshotArrMappingIdentities(
+        const currentMappings = snapshotArrMappingIdentities(
           client,
           input.serverId,
           input.libraryKey,
           target.kind,
         );
+        if (Object.hasOwn(target.snapshot, 'arrReassignmentMappings')) {
+          if (canonical(target.snapshot.arrReassignmentMappings) !== canonical(currentMappings)) {
+            throw new DeletionConflictError(
+              'the accepted Arr mapping configuration changed before deletion was accepted',
+            );
+          }
+        } else if (target.snapshot.seasonCleanup !== true) {
+          target.snapshot.arrReassignmentMappings = currentMappings;
+        }
       }
       client
         .prepare(
@@ -698,12 +741,12 @@ export async function enqueueDeletionOperations(
             );
         }
       }
-      accepted.push(operationId);
+      results.push({ operationId, status: 'queued' });
     }
-    return accepted;
+    return results;
   });
   wakeDeletionWorker();
-  return ids.map((operationId) => ({ operationId, status: 'queued' }));
+  return accepted;
 }
 
 function claimTarget(): DeletionWorkTarget | null {

@@ -1,5 +1,5 @@
-import { assertEquals } from "@std/assert";
-import { api } from "./api.ts";
+import { assertEquals, assertRejects } from "@std/assert";
+import { api, ApiError } from "./api.ts";
 
 Deno.test("season cleanup serializes selections as episode media", async () => {
   const originalFetch = globalThis.fetch;
@@ -8,38 +8,73 @@ Deno.test("season cleanup serializes selections as episode media", async () => {
     captured.input = input;
     captured.init = init;
     return Promise.resolve(
-      Response.json({ operationIds: ["operation-1"], targetCount: 1 }, { status: 202 }),
+      Response.json({ operationId: "operation-1", status: "queued", targetCount: 1 }, {
+        status: 202,
+      }),
     );
   };
 
   try {
+    const options = {
+      previewFingerprint: "a".repeat(64),
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+      // A structurally compatible caller may carry its own selection model. The API
+      // boundary must never let extra properties replace the canonical wire selection.
+      selections: [{ ratingKey: "legacy-episode", deleteMediaIds: [99] }],
+    };
     await api.duplicates.seasonCleanup(
+      "season-1",
       "request-1",
-      [{ ratingKey: "episode-1", deleteMediaIds: [11] }],
-      {
-        analysisFingerprint: "a".repeat(64),
-        expiresAt: 2_000_000_000,
-        coordinateSonarr: false,
-        cleanupDownloads: false,
-      },
+      [{ episodeRatingKey: "episode-1", mediaIds: [11] }],
+      options,
     );
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  assertEquals(captured.input, "/api/duplicates/smart-cleanup");
+  assertEquals(captured.input, "/api/duplicates/seasons/season-1/cleanup");
   assertEquals(JSON.parse(String(captured.init?.body)), {
     clientRequestId: "request-1",
     selections: [{
-      mediaType: "episode",
-      ratingKey: "episode-1",
-      deleteMediaIds: [11],
+      episodeRatingKey: "episode-1",
+      mediaIds: [11],
     }],
-    includeNearIdentical: true,
-    manualSeasonReview: true,
-    analysisFingerprint: "a".repeat(64),
-    expiresAt: 2_000_000_000,
+    previewFingerprint: "a".repeat(64),
     coordinateSonarr: false,
     cleanupDownloads: false,
   });
+});
+
+Deno.test("season cleanup exposes rebuilt previews for explicit reconfirmation", async () => {
+  const originalFetch = globalThis.fetch;
+  const preview = { seasonRatingKey: "season-1", fingerprint: "b".repeat(64) };
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({
+      error: "the authoritative season deletion preview changed",
+      code: "PREVIEW_CHANGED",
+      preview,
+    }, { status: 409 }));
+  try {
+    await assertRejects(
+      () =>
+        api.duplicates.seasonCleanup(
+          "season-1",
+          "request-1",
+          [{ episodeRatingKey: "episode-1", mediaIds: [11] }],
+          {
+            previewFingerprint: "a".repeat(64),
+            coordinateSonarr: false,
+            cleanupDownloads: false,
+          },
+        ),
+      ApiError,
+      "preview changed",
+    ).then((error) => {
+      assertEquals(error.code, "PREVIEW_CHANGED");
+      assertEquals(error.preview, preview);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

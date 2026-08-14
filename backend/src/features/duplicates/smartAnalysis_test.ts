@@ -2,7 +2,6 @@ import { assertEquals } from '@std/assert';
 import { analyzeSmartDuplicateVersions } from '@plex-librarian/shared/smartDuplicateAnalysis.ts';
 import type { MediaVersion, SmartDuplicateCandidate } from '@plex-librarian/shared/types.ts';
 import {
-  isValidManualSeasonCleanupSelection,
   isValidSmartCleanupSelection,
   limitSmartDuplicateCandidates,
   SMART_CLEANUP_GROUP_LIMIT,
@@ -252,12 +251,6 @@ Deno.test('smart cleanup accepts a different version to keep but never every ver
   assertEquals(isValidSmartCleanupSelection(candidate, [1]), false);
   assertEquals(isValidSmartCleanupSelection(candidate, [1, 99]), false);
   assertEquals(isValidSmartCleanupSelection(candidate, [1, 1]), false);
-
-  assertEquals(isValidManualSeasonCleanupSelection(candidate, [1]), true);
-  assertEquals(isValidManualSeasonCleanupSelection(candidate, [1, 2]), true);
-  assertEquals(isValidManualSeasonCleanupSelection(candidate, [1, 2, 3]), false);
-  assertEquals(isValidManualSeasonCleanupSelection(candidate, [99]), false);
-  assertEquals(isValidManualSeasonCleanupSelection(candidate, [1, 1]), false);
 });
 
 Deno.test('smart cleanup caps an automatic pass and prioritizes actionable candidates', () => {

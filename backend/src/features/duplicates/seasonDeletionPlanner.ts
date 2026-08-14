@@ -1,8 +1,12 @@
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { episodeMediaVersions, items } from '../../db/schema.ts';
+import { episodeMediaVersions, items, servers } from '../../db/schema.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
-import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
+import type {
+  PlexMediaTechnicalDetails,
+  PlexMediaVersionPathPreview,
+  PlexMetadataIdentity,
+} from '../../integrations/plex/types.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { arrPathIsWithin, resolveArrPath } from '../mediaDeletion/arrPaths.ts';
@@ -10,15 +14,13 @@ import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import { episodeRootIsWorkflowOwned } from '../deletionOperations/core/ownership.ts';
 import type {
+  MediaVersion,
   SeasonDeletionMemberPreview,
   SeasonDeletionOutcome,
   SeasonDeletionPreviewResponse,
   SeasonDeletionSelection,
 } from '@plex-librarian/shared/types.ts';
-import {
-  seasonDeletionPreviewExpiry,
-  seasonDeletionPreviewIsFresh,
-} from './seasonDeletionFingerprint.ts';
+import { seasonDeletionPreviewExpiry } from './seasonDeletionFingerprint.ts';
 import { SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
 import {
   type PersistedResolvedCleanupItem,
@@ -31,6 +33,8 @@ import {
   type PersistedArrOwnership,
   selectVersionDownloadCleanup,
 } from '../mediaDeletion/versionPlanning.ts';
+import type { NewDeletionTarget } from '../deletionOperations/service.ts';
+import { mediaVersionFromRow } from './mediaVersion.ts';
 
 const MAX_EPISODES = 500;
 const PLEX_VALIDATION_CONCURRENCY = 4;
@@ -42,11 +46,13 @@ export interface PlannedMediaEvidence {
   arrPath: string;
   byteSize: number;
   logicalSize: number | null;
+  version: MediaVersion;
 }
 
 export interface PlannedSeasonChild {
   schemaVersion: 1;
   episodeRatingKey: string;
+  episodeTitle: string;
   selectedMedia: PlannedMediaEvidence[];
   retainedMedia: PlannedMediaEvidence[];
   sonarrEpisodeId: number;
@@ -79,7 +85,9 @@ export interface AuthoritativeSeasonPlan {
   showRatingKey: string;
   seasonRatingKey: string;
   showTitle: string;
-  completeEpisodeRatingKeys: string[];
+  showTvdbId: number | null;
+  coordinateSonarr: boolean;
+  cleanupDownloads: boolean;
   selections: SeasonDeletionSelection[];
   plexOnlyChildren: Array<{
     episodeRatingKey: string;
@@ -163,7 +171,9 @@ function exactPath(version: PlexMediaVersionPathPreview, label: string): string 
 
 function mediaEvidence(
   version: PlexMediaVersionPathPreview,
-  logicalSize: number | null,
+  row: typeof episodeMediaVersions.$inferSelect,
+  liveIdentity: PlexMetadataIdentity['media'][number],
+  liveTechnical: PlexMediaTechnicalDetails | undefined,
   target: ArrDeleteTarget | null,
   label: string,
 ): PlannedMediaEvidence {
@@ -174,7 +184,37 @@ function mediaEvidence(
   }
   const arrPath = target ? resolveArrPath(path, 'library', target.pathMappings) : path;
   if (!arrPath) throw new Error(`${label} Plex path is not covered by one exact Sonarr mapping`);
-  return { mediaId: version.mediaId, path, arrPath, byteSize, logicalSize };
+  const synced = mediaVersionFromRow(row);
+  const authoritativeVersion: MediaVersion = {
+    ...synced,
+    videoResolution: liveIdentity.videoResolution,
+    width: liveTechnical?.width ?? null,
+    height: liveIdentity.height,
+    duration: liveTechnical?.duration ?? null,
+    bitrate: liveIdentity.bitrate,
+    videoCodec: liveIdentity.videoCodec,
+    videoProfile: liveTechnical?.videoProfile ?? null,
+    videoBitDepth: liveTechnical?.videoBitDepth ?? null,
+    videoDynamicRange: liveTechnical?.videoDynamicRange ?? null,
+    videoFrameRate: liveTechnical?.videoFrameRate ?? null,
+    videoScanType: liveTechnical?.videoScanType ?? null,
+    container: liveIdentity.container,
+    audioCodec: liveTechnical?.audioCodec ?? null,
+    audioChannels: liveTechnical?.audioChannels ?? null,
+    audioProfile: liveTechnical?.audioProfile ?? null,
+    audioStreams: liveTechnical?.audioStreams ?? [],
+    subtitleStreams: liveTechnical?.subtitleStreams ?? [],
+    streamDetailsAvailable: liveTechnical?.streamDetailsAvailable === true,
+    fileSize: liveIdentity.fileSize,
+  };
+  return {
+    mediaId: version.mediaId,
+    path,
+    arrPath,
+    byteSize,
+    logicalSize: row.fileSize,
+    version: authoritativeVersion,
+  };
 }
 
 export async function buildAuthoritativeSeasonPlan(input: {
@@ -185,7 +225,15 @@ export async function buildAuthoritativeSeasonPlan(input: {
   selections: readonly SeasonDeletionSelection[];
   coordinateSonarr?: boolean;
   inspectDownloadCleanup?: boolean;
+  cleanupDownloads?: boolean;
 }): Promise<AuthoritativeSeasonPlan> {
+  const [selectedServer] = await db.select({
+    machineIdentifier: servers.machineIdentifier,
+  }).from(servers).where(eq(servers.id, input.serverId)).limit(1);
+  if (!selectedServer) throw new Error('the selected Plex server identity is unavailable');
+  if (selectedServer.machineIdentifier !== input.machineIdentifier) {
+    throw new Error('the live Plex machine identity does not match the selected server');
+  }
   const eligibleEpisodes = await db.select({
     episodeRatingKey: episodeMediaVersions.episodeRatingKey,
   }).from(episodeMediaVersions).where(and(
@@ -352,9 +400,10 @@ export async function buildAuthoritativeSeasonPlan(input: {
       if (selection.mediaIds.some((id) => !ids.has(id)) || selection.mediaIds.length >= ids.size) {
         throw new Error('selected media identities changed or would remove every episode version');
       }
-      const [identity, live] = await Promise.all([
+      const [identity, live, liveTechnical] = await Promise.all([
         input.plexClient.metadataIdentity(selection.episodeRatingKey),
         input.plexClient.mediaVersionPathPreviews(selection.episodeRatingKey),
+        input.plexClient.mediaVersionTechnicalDetails(selection.episodeRatingKey),
       ]);
       if (
         !identity || identity.type !== 'episode' ||
@@ -370,6 +419,12 @@ export async function buildAuthoritativeSeasonPlan(input: {
         throw new Error(
           'live Plex media identities differ from the complete synced episode versions',
         );
+      }
+      const identityByMediaId = new Map(identity.media.map((entry) => [entry.mediaId, entry]));
+      if (
+        identityByMediaId.size !== ids.size || [...ids].some((id) => !identityByMediaId.has(id))
+      ) {
+        throw new Error('live Plex technical identities differ from the complete episode versions');
       }
       const alignedOwners: Array<{
         plan: typeof targetPlans[number];
@@ -445,7 +500,9 @@ export async function buildAuthoritativeSeasonPlan(input: {
         const selectedMedia = selection.mediaIds.map((id) =>
           mediaEvidence(
             live.find((entry) => entry.mediaId === id)!,
-            local.find((row) => row.mediaId === id)!.fileSize,
+            local.find((row) => row.mediaId === id)!,
+            identityByMediaId.get(id)!,
+            liveTechnical.get(id),
             null,
             'selected',
           )
@@ -455,7 +512,9 @@ export async function buildAuthoritativeSeasonPlan(input: {
         ) =>
           mediaEvidence(
             live.find((entry) => entry.mediaId === row.mediaId)!,
-            row.fileSize,
+            row,
+            identityByMediaId.get(row.mediaId)!,
+            liveTechnical.get(row.mediaId),
             null,
             'retained',
           )
@@ -487,7 +546,9 @@ export async function buildAuthoritativeSeasonPlan(input: {
       const selectedMedia = selection.mediaIds.map((id) =>
         mediaEvidence(
           live.find((entry) => entry.mediaId === id)!,
-          local.find((row) => row.mediaId === id)!.fileSize,
+          local.find((row) => row.mediaId === id)!,
+          identityByMediaId.get(id)!,
+          liveTechnical.get(id),
           match.plan.target,
           'selected',
         )
@@ -497,7 +558,9 @@ export async function buildAuthoritativeSeasonPlan(input: {
       ) =>
         mediaEvidence(
           live.find((entry) => entry.mediaId === row.mediaId)!,
-          row.fileSize,
+          row,
+          identityByMediaId.get(row.mediaId)!,
+          liveTechnical.get(row.mediaId),
           match.plan.target,
           'retained',
         )
@@ -583,6 +646,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
       managedGroup.children.push({
         schemaVersion: 1,
         episodeRatingKey: prepared.selection.episodeRatingKey,
+        episodeTitle: byEpisode.get(prepared.selection.episodeRatingKey)![0]!.episodeTitle,
         selectedMedia: prepared.selectedMedia,
         retainedMedia: prepared.retainedMedia,
         sonarrEpisodeId: prepared.episode.id,
@@ -673,11 +737,13 @@ export async function buildAuthoritativeSeasonPlan(input: {
     libraryKey: first.libraryKey,
     showRatingKey: first.showRatingKey,
     seasonRatingKey: input.seasonRatingKey,
+    showTitle: show.title,
+    showTvdbId: show.tvdbId,
     activePlaybackRatingKeys: [],
-    completeEpisodeRatingKeys: [...byEpisode.keys()].sort(),
     selections: normalizedSelections,
     coordinateSonarr: input.coordinateSonarr === true,
     inspectDownloadCleanup: input.inspectDownloadCleanup === true,
+    cleanupDownloads: input.cleanupDownloads === true,
     cleanupEligibleMedia,
     cleanupPlans,
     targetEvidence,
@@ -712,13 +778,137 @@ export async function buildAuthoritativeSeasonPlan(input: {
     fingerprint: planFingerprint,
     expiresAt: seasonDeletionPreviewExpiry(),
   };
-  return { ...evidence, showTitle: show.title, preview };
+  return { ...evidence, preview };
 }
 
-export function assertSeasonPreviewFresh(expiresAt: number): void {
-  if (!seasonDeletionPreviewIsFresh(expiresAt)) {
-    throw new Error('the season deletion preview expired');
+function technicalSnapshot(version: MediaVersion): Record<string, unknown> | undefined {
+  if (!version.streamDetailsAvailable) return undefined;
+  return {
+    width: version.width,
+    height: version.height,
+    duration: version.duration,
+    videoProfile: version.videoProfile,
+    videoBitDepth: version.videoBitDepth,
+    videoDynamicRange: version.videoDynamicRange,
+    videoFrameRate: version.videoFrameRate,
+    videoScanType: version.videoScanType,
+    audioCodec: version.audioCodec,
+    audioChannels: version.audioChannels,
+    audioProfile: version.audioProfile,
+    audioStreams: version.audioStreams,
+    subtitleStreams: version.subtitleStreams,
+    streamDetailsAvailable: version.streamDetailsAvailable,
+  };
+}
+
+export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDeletionTarget[] {
+  const children = new Map<string, {
+    episodeRatingKey: string;
+    episodeTitle: string;
+    selectedMedia: PlannedMediaEvidence[];
+    retainedMedia: PlannedMediaEvidence[];
+    seasonNumber: number;
+    episodeNumber: number;
+  }>();
+  for (const child of plan.plexOnlyChildren) children.set(child.episodeRatingKey, child);
+  for (const group of plan.managedGroups) {
+    for (const child of group.children) children.set(child.episodeRatingKey, child);
   }
+  const targets = plan.selections.flatMap((selection) => {
+    const child = children.get(selection.episodeRatingKey);
+    if (!child) throw new Error('authoritative season target evidence is incomplete');
+    const operationMediaIds = child.selectedMedia.map((entry) => entry.mediaId).sort((a, b) =>
+      a - b
+    );
+    const retained = [...child.retainedMedia].sort((a, b) => a.mediaId - b.mediaId);
+    if (retained.length === 0) {
+      throw new Error('authoritative retained-version evidence is incomplete');
+    }
+    return child.selectedMedia.map((selected) => {
+      const accepted = plan.targetEvidence.find((entry) =>
+        entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
+      );
+      if (!accepted) throw new Error('authoritative season coordination evidence is incomplete');
+      const cleanup = plan.cleanupDownloads
+        ? plan.cleanupPlans.find((entry) =>
+          entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
+        )
+        : undefined;
+      const selectedTechnical = technicalSnapshot(selected.version);
+      const expectedRetainedVersions = retained.map((entry) => {
+        const retainedTechnical = technicalSnapshot(entry.version);
+        return {
+          mediaId: entry.mediaId,
+          plexPath: entry.path,
+          fileSize: entry.version.fileSize,
+          videoResolution: entry.version.videoResolution,
+          height: entry.version.height,
+          bitrate: entry.version.bitrate,
+          videoCodec: entry.version.videoCodec,
+          container: entry.version.container,
+          ...(retainedTechnical ? { classificationTechnicalDetails: retainedTechnical } : {}),
+        };
+      });
+      return {
+        kind: 'episode_version' as const,
+        key: `${child.episodeRatingKey}:${selected.mediaId}`,
+        title: `${plan.showTitle} — ${child.episodeTitle}`,
+        logicalSize: selected.logicalSize,
+        snapshot: {
+          machineIdentifier: plan.machineIdentifier,
+          serverUrl: plan.serverUrl,
+          libraryKey: plan.libraryKey,
+          ratingKey: child.episodeRatingKey,
+          mediaId: selected.mediaId,
+          title: plan.showTitle,
+          type: 'episode',
+          tmdbId: null,
+          tvdbId: plan.showTvdbId,
+          fileSize: selected.version.fileSize,
+          videoResolution: selected.version.videoResolution,
+          height: selected.version.height,
+          bitrate: selected.version.bitrate,
+          videoCodec: selected.version.videoCodec,
+          container: selected.version.container,
+          showTitle: plan.showTitle,
+          episodeTitle: child.episodeTitle,
+          showRatingKey: plan.showRatingKey,
+          seasonRatingKey: plan.seasonRatingKey,
+          seasonIndex: child.seasonNumber,
+          episodeIndex: child.episodeNumber,
+          seasonCleanup: true,
+          skipArrCoordination: !plan.coordinateSonarr,
+          cleanupDownloads: cleanup !== undefined,
+          expectedPlexPath: selected.path,
+          selectedMediaIds: [selected.mediaId],
+          operationMediaIds,
+          ...(selectedTechnical ? { classificationTechnicalDetails: selectedTechnical } : {}),
+          expectedRetainedVersion: expectedRetainedVersions[0],
+          expectedRetainedVersions,
+          ...(plan.coordinateSonarr
+            ? {
+              seasonCoordinationOutcome: accepted.outcome,
+              arrReassignmentMappings: accepted.arrMappingIdentities,
+              arrOwnerships: accepted.arrOwnerships,
+            }
+            : {}),
+          ...(cleanup ? { seasonDownloadCleanup: cleanup.cleanup } : {}),
+        },
+        reservation: {
+          mediaKind: 'episode' as const,
+          mediaId: selected.mediaId,
+          ratingKey: child.episodeRatingKey,
+        },
+      };
+    });
+  });
+  return targets.sort((left, right) =>
+    Number(left.snapshot.episodeIndex) - Number(right.snapshot.episodeIndex) ||
+    String(left.snapshot.ratingKey).localeCompare(String(right.snapshot.ratingKey)) ||
+    Number(left.snapshot.seasonCoordinationOutcome === 'automatic_adoption') -
+      Number(right.snapshot.seasonCoordinationOutcome === 'automatic_adoption') ||
+    Number(left.snapshot.mediaId) - Number(right.snapshot.mediaId)
+  );
 }
 
 async function mapWithConcurrency<T, U>(

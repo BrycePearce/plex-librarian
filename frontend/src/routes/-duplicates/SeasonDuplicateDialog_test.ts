@@ -7,10 +7,13 @@ import {
   refreshExpiredSeasonDeletionPreview,
   seasonDeletionAuthorizationKey,
   seasonDeletionConfirmationDisabled,
+  seasonDeletionConflictOperationId,
   seasonDeletionPreviewIsUsable,
+  seasonDownloadCleanupVisible,
   seasonProfilesDeletionPlan,
   seasonProfileSelection,
 } from "./SeasonDuplicateDialog.tsx";
+import { ApiError } from "../../lib/api.ts";
 import type { DuplicateEpisodeGroup, MediaVersion, SeasonVersionProfile } from "../../lib/api.ts";
 
 function version(mediaId: number): MediaVersion {
@@ -156,6 +159,27 @@ Deno.test("individual season review requires the same authoritative destructive 
   );
 });
 
+Deno.test("season deletion conflicts expose their existing operation", () => {
+  assertEquals(
+    seasonDeletionConflictOperationId(
+      new ApiError(409, "conflict", {
+        code: "DELETION_CONFLICT",
+        operationId: "operation-1",
+      }),
+    ),
+    "operation-1",
+  );
+  assertEquals(
+    seasonDeletionConflictOperationId(
+      new ApiError(409, "request conflict", {
+        code: "REQUEST_ID_CONFLICT",
+        operationId: "operation-1",
+      }),
+    ),
+    null,
+  );
+});
+
 Deno.test("season deletion previews require enough validity to survive submission", () => {
   assertEquals(seasonDeletionPreviewIsUsable(1_006, 1_000), true);
   assertEquals(seasonDeletionPreviewIsUsable(1_005, 1_000), false);
@@ -213,6 +237,12 @@ Deno.test("destructive destination authorization is bound to the exact media sel
     ]),
     false,
   );
+});
+
+Deno.test("season download cleanup is offered only for verified selected versions", () => {
+  assertEquals(seasonDownloadCleanupVisible(false, { cleanupEligibleVersionCount: 2 }), false);
+  assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 0 }), false);
+  assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 2 }), true);
 });
 
 Deno.test("season profile selection expands only explicit members into deletion ids", () => {

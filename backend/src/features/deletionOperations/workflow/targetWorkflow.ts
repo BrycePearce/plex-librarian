@@ -71,11 +71,7 @@ import {
   type DeletionWorkTarget,
   PlexReconciliationError,
 } from '../core/types.ts';
-import {
-  DeletionValidationError,
-  type DurableTargetSnapshot,
-  validateDeletionTarget,
-} from '../core/validation.ts';
+import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
 
 function persistRadarrRemovalDownloadCleanup(
   target: DeletionWorkTarget,
@@ -877,11 +873,6 @@ async function ensureVersionDeleted(
 }
 
 export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<void> {
-  if (target.targetKind === 'sonarr_series') {
-    throw new DeletionValidationError(
-      'This abandoned season-coordinator target is unsupported. Reset the development database or dismiss it after reviewing its prior state.',
-    );
-  }
   const release = tryAcquireLibraryOperation(
     target.serverId,
     JSON.parse(target.snapshot).libraryKey,

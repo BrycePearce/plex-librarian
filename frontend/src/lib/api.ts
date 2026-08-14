@@ -27,6 +27,7 @@ import type {
   SavePlexPathMappingRequest,
   SaveQbittorrentInstanceRequest,
   SaveSeerrInstanceRequest,
+  SeasonCleanupResponse,
   SeasonDeletionPreviewResponse,
   SeasonVersionAnalysisResponse,
   SeerrInstance,
@@ -163,11 +164,23 @@ const BASE = "/api";
 export class ApiError extends Error {
   status: number;
   operationId?: string;
+  code?: string;
+  preview?: SeasonDeletionPreviewResponse;
 
-  constructor(status: number, message: string, operationId?: string) {
+  constructor(
+    status: number,
+    message: string,
+    options?: {
+      operationId?: string;
+      code?: string;
+      preview?: SeasonDeletionPreviewResponse;
+    },
+  ) {
     super(message);
     this.status = status;
-    this.operationId = operationId;
+    this.operationId = options?.operationId;
+    this.code = options?.code;
+    this.preview = options?.preview;
   }
 }
 
@@ -192,12 +205,18 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
       error?: string;
       operationId?: unknown;
+      code?: unknown;
+      preview?: unknown;
     };
     const message = body.error ?? res.statusText;
     const operationId = typeof body.operationId === "string" && body.operationId.length > 0
       ? body.operationId
       : undefined;
-    throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1), operationId);
+    throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1), {
+      operationId,
+      code: typeof body.code === "string" ? body.code : undefined,
+      preview: body.preview as SeasonDeletionPreviewResponse | undefined,
+    });
   }
   return res.json() as Promise<T>;
 }
@@ -335,7 +354,6 @@ export const api = {
         deleteMediaIds: number[];
       }>,
       includeNearIdentical: boolean,
-      manualSeasonReview = false,
     ) =>
       apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
         method: "POST",
@@ -343,35 +361,34 @@ export const api = {
           clientRequestId,
           selections,
           includeNearIdentical,
-          ...(manualSeasonReview ? { manualSeasonReview: true } : {}),
         }),
       }),
     seasonCleanup: (
+      seasonRatingKey: string,
       clientRequestId: string,
       selections: Array<{
-        ratingKey: string;
-        deleteMediaIds: number[];
+        episodeRatingKey: string;
+        mediaIds: number[];
       }>,
-      preview: {
-        analysisFingerprint: string;
-        expiresAt: number;
+      options: {
+        previewFingerprint: string;
         coordinateSonarr: boolean;
         cleanupDownloads: boolean;
       },
     ) =>
-      apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
-        method: "POST",
-        body: JSON.stringify({
-          clientRequestId,
-          selections: selections.map((selection) => ({
-            mediaType: "episode" as const,
-            ...selection,
-          })),
-          includeNearIdentical: true,
-          manualSeasonReview: true,
-          ...preview,
-        }),
-      }),
+      apiFetch<SeasonCleanupResponse>(
+        `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/cleanup`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            clientRequestId,
+            selections,
+            previewFingerprint: options.previewFingerprint,
+            coordinateSonarr: options.coordinateSonarr,
+            cleanupDownloads: options.cleanupDownloads,
+          }),
+        },
+      ),
     analyzeSeasonVersions: (
       seasonRatingKey: string,
       episodeRatingKeys: string[],

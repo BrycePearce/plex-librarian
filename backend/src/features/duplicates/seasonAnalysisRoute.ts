@@ -10,17 +10,10 @@ import type {
 import { analyzeSeasonVersionProfiles } from '@plex-librarian/shared/seasonVersionProfiles.ts';
 import { episodeRootIsWorkflowOwned } from '../deletionOperations/core/ownership.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
-import {
-  enrichSeasonEpisodeEvidence,
-  SMART_CLEANUP_DELETE_IDS_LIMIT,
-  SMART_CLEANUP_GROUP_LIMIT,
-} from './smartAnalysis.ts';
-import {
-  seasonDeletionFingerprint,
-  seasonDeletionPreviewExpiry,
-} from './seasonDeletionFingerprint.ts';
-import { createPlexClient } from '../../integrations/plex/index.ts';
+import { enrichSeasonEpisodeEvidence, SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { buildAuthoritativeSeasonPlan } from './seasonDeletionPlanner.ts';
+import { parseSeasonDeletionRequest, SeasonCleanupRequestError } from './seasonCleanupRoute.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 const MAX_EPISODES = 500;
@@ -138,7 +131,6 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
     ),
   );
   const analysis = analyzeSeasonVersionProfiles(episodes, pathHints);
-  const analysisFingerprint = await seasonDeletionFingerprint(serverId, eligibleRows);
   return c.json(
     {
       season: {
@@ -149,70 +141,37 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
         seasonIndex: first.seasonIndex,
       },
       analyzedEpisodeCount: episodes.length,
-      omittedEpisodeCount: 0,
       recommendedProfileId: analysis.recommendedProfileId,
       profiles: analysis.profiles,
       episodes,
       uncertainEpisodeRatingKeys: analysis.uncertainEpisodeRatingKeys,
-      analysisFingerprint,
-      expiresAt: seasonDeletionPreviewExpiry(),
     } satisfies SeasonVersionAnalysisResponse,
   );
 });
 
 router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'season not found' }, 404);
-  const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-  const rawSelections = Array.isArray(body?.selections) ? body.selections : null;
-  if (
-    rawSelections === null || rawSelections.length === 0 ||
-    rawSelections.length > SMART_CLEANUP_GROUP_LIMIT
-  ) {
-    return c.json({ error: 'exact episode/media selections are required' }, 400);
-  }
-  const selections = rawSelections.flatMap((raw) => {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-    const value = raw as Record<string, unknown>;
-    if (
-      typeof value.episodeRatingKey !== 'string' || value.episodeRatingKey.length === 0 ||
-      !Array.isArray(value.mediaIds) || value.mediaIds.length === 0 ||
-      value.mediaIds.length > SMART_CLEANUP_DELETE_IDS_LIMIT ||
-      !value.mediaIds.every((id) => Number.isSafeInteger(id) && Number(id) >= 0)
-    ) return [];
-    return [{ episodeRatingKey: value.episodeRatingKey, mediaIds: value.mediaIds as number[] }];
-  });
-  if (selections.length !== rawSelections.length) {
-    return c.json({ error: 'exact episode/media selections are required' }, 400);
-  }
-  if (
-    (body?.coordinateSonarr !== undefined && typeof body.coordinateSonarr !== 'boolean') ||
-    (body?.cleanupDownloads !== undefined && typeof body.cleanupDownloads !== 'boolean')
-  ) {
-    return c.json({ error: 'destination choices must be booleans' }, 400);
-  }
-  const coordinateSonarr = body?.coordinateSonarr === true;
-  const cleanupDownloads = body?.cleanupDownloads === true;
-  if (cleanupDownloads && !coordinateSonarr) {
-    return c.json({ error: 'download cleanup requires Sonarr coordination' }, 400);
-  }
   try {
-    const client = await createPlexClient();
-    const machineIdentifier = await client.identity();
+    const intent = parseSeasonDeletionRequest(
+      c.req.param('seasonRatingKey'),
+      await c.req.json().catch(() => null),
+      false,
+    );
+    const active = await resolveActiveServer();
     const plan = await buildAuthoritativeSeasonPlan({
-      serverId,
-      machineIdentifier,
-      plexClient: client,
-      seasonRatingKey: c.req.param('seasonRatingKey'),
-      selections,
-      coordinateSonarr,
-      inspectDownloadCleanup: cleanupDownloads,
+      serverId: active.serverId,
+      machineIdentifier: await active.client.identity(),
+      plexClient: active.client,
+      seasonRatingKey: intent.seasonRatingKey,
+      selections: intent.selections,
+      coordinateSonarr: intent.coordinateSonarr,
+      inspectDownloadCleanup: intent.coordinateSonarr,
+      cleanupDownloads: intent.cleanupDownloads,
     });
     return c.json(plan.preview);
   } catch (error) {
     return c.json({
       error: error instanceof Error ? error.message : 'could not build season deletion preview',
-    }, 409);
+    }, error instanceof SeasonCleanupRequestError ? 400 : 409);
   }
 });
 

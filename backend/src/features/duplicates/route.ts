@@ -22,6 +22,7 @@ import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import smartCleanupRoute from './smartCleanupRoute.ts';
 import seasonAnalysisRoute from './seasonAnalysisRoute.ts';
+import seasonCleanupRoute from './seasonCleanupRoute.ts';
 import { technicalDetailUpdate } from './technicalDetails.ts';
 import { findRadarrMovieReservation } from '../deletionOperations/service.ts';
 import type {
@@ -40,10 +41,11 @@ function parseMediaIds(body: unknown): number[] | null {
 }
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
-// Smart cleanup performs its durable warning-overlap check before resolving Plex.
-// Register it ahead of the general active-server middleware so a warned target can
-// still be redirected to its original operation after sync prunes the projection.
+// Smart cleanup performs its durable warning-overlap check before resolving Plex, and
+// season cleanup must replay an accepted request without Plex access. Register both
+// ahead of the general active-server middleware.
 router.route('/', smartCleanupRoute);
+router.route('/', seasonCleanupRoute);
 router.use('*', withActiveServerId);
 router.route('/', listRoute);
 router.route('/', seasonAnalysisRoute);

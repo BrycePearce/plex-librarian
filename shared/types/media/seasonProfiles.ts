@@ -1,4 +1,5 @@
 import type { DuplicateEpisodeGroup } from './duplicates.ts';
+import type { DeletionOperationStatus } from '../deletion/operations.ts';
 
 export interface SeasonVersionProfileMember {
   episodeRatingKey: string;
@@ -30,14 +31,10 @@ export interface SeasonVersionAnalysisResponse {
     seasonIndex: number;
   };
   analyzedEpisodeCount: number;
-  omittedEpisodeCount: number;
   recommendedProfileId: string | null;
   profiles: SeasonVersionProfile[];
   episodes: DuplicateEpisodeGroup[];
   uncertainEpisodeRatingKeys: string[];
-  /** Authorizes only a fresh server-side reconstruction of these exact episode/media rows. */
-  analysisFingerprint: string;
-  expiresAt: number;
 }
 
 export type SeasonDeletionOutcome =
@@ -47,6 +44,23 @@ export type SeasonDeletionOutcome =
 export interface SeasonDeletionSelection {
   episodeRatingKey: string;
   mediaIds: number[];
+}
+
+export interface SeasonDeletionIntent {
+  selections: SeasonDeletionSelection[];
+  coordinateSonarr: boolean;
+  cleanupDownloads: boolean;
+}
+
+export interface SeasonCleanupRequest extends SeasonDeletionIntent {
+  clientRequestId: string;
+  previewFingerprint: string;
+}
+
+export interface SeasonCleanupResponse {
+  operationId: string;
+  status: DeletionOperationStatus;
+  targetCount: number;
 }
 
 export interface SeasonDeletionMemberPreview {

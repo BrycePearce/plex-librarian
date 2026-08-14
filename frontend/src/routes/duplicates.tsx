@@ -186,11 +186,23 @@ function DuplicatesPage() {
   const deleteSeasonMutation = useMutation({
     mutationFn: (request: {
       selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
-      analysisFingerprint: string;
-      expiresAt: number;
+      previewFingerprint: string;
       coordinateSonarr: boolean;
       cleanupDownloads: boolean;
-    }) => api.duplicates.seasonCleanup(seasonCleanupRequestId.current, request.selections, request),
+    }) =>
+      api.duplicates.seasonCleanup(
+        reviewSeason!.seasonRatingKey,
+        seasonCleanupRequestId.current,
+        request.selections.map((selection) => ({
+          episodeRatingKey: selection.ratingKey,
+          mediaIds: selection.deleteMediaIds,
+        })),
+        {
+          previewFingerprint: request.previewFingerprint,
+          coordinateSonarr: request.coordinateSonarr,
+          cleanupDownloads: request.cleanupDownloads,
+        },
+      ),
     onSuccess: (result) => {
       const invalidations = [
         queryKeys.duplicates.all,
@@ -200,9 +212,7 @@ function DuplicatesPage() {
         queryKeys.mediaRemovals.all,
         queryKeys.versionDeletionPreview.all,
       ];
-      for (const operationId of result.operationIds) {
-        trackDeletionOperation(operationId, invalidations);
-      }
+      trackDeletionOperation(result.operationId, invalidations);
       seasonDialogRef.current?.close();
       setReviewSeason(null);
     },
