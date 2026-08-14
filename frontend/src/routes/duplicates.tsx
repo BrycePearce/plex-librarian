@@ -2,6 +2,7 @@ import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
 import { api } from "../lib/api.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
@@ -113,7 +114,7 @@ function DuplicatesPage() {
   const [reviewSeason, setReviewSeason] = useState<DuplicateSeasonGroup | null>(null);
   const versionDialogRef = useRef<HTMLDialogElement>(null);
   const seasonDialogRef = useRef<HTMLDialogElement>(null);
-  const seasonCleanupRequestId = useRef(crypto.randomUUID());
+  const seasonCleanupRequestId = useRef(uuidv4());
 
   useEffect(() => {
     if (!isSyncing) return;
@@ -259,7 +260,7 @@ function DuplicatesPage() {
 
   function openSeasonReview(season: DuplicateSeasonGroup) {
     if (isSyncing) return;
-    seasonCleanupRequestId.current = crypto.randomUUID();
+    seasonCleanupRequestId.current = uuidv4();
     deleteSeasonMutation.reset();
     setReviewSeason(season);
   }
