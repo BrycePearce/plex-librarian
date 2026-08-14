@@ -2784,6 +2784,76 @@ Deno.test('manual season cleanup queues one durable operation across episodes', 
   );
 });
 
+Deno.test('manual season cleanup accepts legacy selections without a media type', async () => {
+  reset();
+  addManualSeasonEpisode('legacy-show', 'legacy-season', 'legacy-episode', 1, [111, 112]);
+  const preview = await seasonPreviewEvidence('legacy-season', ['legacy-episode']);
+
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'legacy-season-cleanup',
+      selections: [{ ratingKey: 'legacy-episode', deleteMediaIds: [111] }],
+      includeNearIdentical: true,
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  assertEquals(result.targetCount, 1);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT target_kind, target_key FROM deletion_targets WHERE operation_id = ?',
+      ).value<[string, string]>(result.operationIds[0])
+    ),
+    ['episode_version', 'legacy-episode:111'],
+  );
+});
+
+Deno.test('ordinary smart cleanup still requires an explicit media type', async () => {
+  reset();
+  addSmartCleanupMovie('strict-smart-route');
+
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'strict-smart-cleanup',
+      selections: [{ ratingKey: 'strict-smart-route', deleteMediaIds: [11] }],
+      includeNearIdentical: false,
+    }),
+  });
+
+  assertEquals(response.status, 400);
+  assertEquals((await response.json()).error, 'one or more cleanup selections are invalid');
+});
+
+Deno.test('season deletion preview rejects empty and oversized selections before planning', async () => {
+  reset();
+
+  for (
+    const selections of [
+      [],
+      [{
+        episodeRatingKey: 'episode-1',
+        mediaIds: Array.from({ length: 11 }, (_, index) => index),
+      }],
+    ]
+  ) {
+    const response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ selections }),
+    });
+    assertEquals(response.status, 400);
+    assertEquals((await response.json()).error, 'exact episode/media selections are required');
+  }
+});
+
 Deno.test('season cleanup requires Sonarr coordination before download cleanup', async () => {
   reset();
   addManualSeasonEpisode('download-show', 'download-season', 'download-episode', 1, [111, 112]);

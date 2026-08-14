@@ -137,16 +137,22 @@ router.post('/smart-cleanup', async (c) => {
   const parsed = selections.map((selection) => {
     if (!selection || typeof selection !== 'object') return null;
     const value = selection as Record<string, unknown>;
+    // Season cleanup is an episode-only workflow. Accept the raw dialog selection
+    // shape used by older frontend bundles and normalize it to the durable API shape.
+    // Explicitly supplied media types still have to be valid and are checked below.
+    const mediaType = manualSeasonReview && value.mediaType === undefined
+      ? 'episode'
+      : value.mediaType;
     if (
-      (value.mediaType !== 'movie' && value.mediaType !== 'episode') ||
-      typeof value.ratingKey !== 'string' ||
+      (mediaType !== 'movie' && mediaType !== 'episode') ||
+      typeof value.ratingKey !== 'string' || value.ratingKey.length === 0 ||
       !Array.isArray(value.deleteMediaIds) ||
       value.deleteMediaIds.length === 0 ||
       value.deleteMediaIds.length > SMART_CLEANUP_DELETE_IDS_LIMIT ||
       !value.deleteMediaIds.every((id) => Number.isSafeInteger(id) && Number(id) >= 0)
     ) return null;
     return {
-      mediaType: value.mediaType,
+      mediaType,
       ratingKey: value.ratingKey,
       deleteMediaIds: [...new Set(value.deleteMediaIds as number[])].sort((a, b) => a - b),
     };

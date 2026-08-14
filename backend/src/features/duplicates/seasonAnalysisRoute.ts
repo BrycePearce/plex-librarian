@@ -10,7 +10,11 @@ import type {
 import { analyzeSeasonVersionProfiles } from '@plex-librarian/shared/seasonVersionProfiles.ts';
 import { episodeRootIsWorkflowOwned } from '../deletionOperations/core/ownership.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
-import { enrichSeasonEpisodeEvidence, SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
+import {
+  enrichSeasonEpisodeEvidence,
+  SMART_CLEANUP_DELETE_IDS_LIMIT,
+  SMART_CLEANUP_GROUP_LIMIT,
+} from './smartAnalysis.ts';
 import {
   seasonDeletionFingerprint,
   seasonDeletionPreviewExpiry,
@@ -160,18 +164,25 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'season not found' }, 404);
   const body = await c.req.json().catch(() => null) as Record<string, unknown> | null;
-  const selections = Array.isArray(body?.selections)
-    ? body.selections.flatMap((raw) => {
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
-      const value = raw as Record<string, unknown>;
-      if (
-        typeof value.episodeRatingKey !== 'string' || !Array.isArray(value.mediaIds) ||
-        !value.mediaIds.every((id) => Number.isSafeInteger(id) && Number(id) >= 0)
-      ) return [];
-      return [{ episodeRatingKey: value.episodeRatingKey, mediaIds: value.mediaIds as number[] }];
-    })
-    : [];
-  if (selections.length !== (Array.isArray(body?.selections) ? body.selections.length : -1)) {
+  const rawSelections = Array.isArray(body?.selections) ? body.selections : null;
+  if (
+    rawSelections === null || rawSelections.length === 0 ||
+    rawSelections.length > SMART_CLEANUP_GROUP_LIMIT
+  ) {
+    return c.json({ error: 'exact episode/media selections are required' }, 400);
+  }
+  const selections = rawSelections.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const value = raw as Record<string, unknown>;
+    if (
+      typeof value.episodeRatingKey !== 'string' || value.episodeRatingKey.length === 0 ||
+      !Array.isArray(value.mediaIds) || value.mediaIds.length === 0 ||
+      value.mediaIds.length > SMART_CLEANUP_DELETE_IDS_LIMIT ||
+      !value.mediaIds.every((id) => Number.isSafeInteger(id) && Number(id) >= 0)
+    ) return [];
+    return [{ episodeRatingKey: value.episodeRatingKey, mediaIds: value.mediaIds as number[] }];
+  });
+  if (selections.length !== rawSelections.length) {
     return c.json({ error: 'exact episode/media selections are required' }, 400);
   }
   if (
