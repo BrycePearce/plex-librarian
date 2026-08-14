@@ -1,11 +1,13 @@
 import { assertEquals } from "@std/assert";
-import type { DuplicateGroup, MediaVersion } from "../../lib/api.ts";
+import type { DuplicateGroup, DuplicateSeasonGroup, MediaVersion } from "../../lib/api.ts";
 import {
   duplicatePageSummary,
   reclaimableKilobytes,
+  seasonDifferenceChips,
+  seasonSummaryAccessibleText,
   versionQualityLabels,
 } from "./duplicatePresentation.ts";
-import { compareDuplicateVersions } from "@shared/mediaComparison";
+import { compareDuplicateVersions, summarizeDuplicateComparisons } from "@shared/mediaComparison";
 
 function version(
   mediaId: number,
@@ -96,6 +98,7 @@ Deno.test("comparison identifies a matching technical profile without claiming e
     {
       kind: "same-profile",
       label: "Same technical profile",
+      differenceCodes: [],
       reasons: [
         "Plex reports matching runtime, video, and audio characteristics",
       ],
@@ -112,6 +115,7 @@ Deno.test("comparison can match complete core metadata when Plex omits stream ar
     {
       kind: "same-profile",
       label: "Same technical profile",
+      differenceCodes: [],
       reasons: [
         "Plex reports matching runtime, video, and audio characteristics",
       ],
@@ -137,6 +141,7 @@ Deno.test("comparison reports meaningful video, runtime, and audio differences",
     {
       kind: "different",
       label: "Meaningful differences",
+      differenceCodes: ["resolution", "bitrate", "runtime", "audio-tracks"],
       reasons: [
         "Resolution differs",
         "Bitrate differs",
@@ -162,6 +167,7 @@ Deno.test("comparison flags frame rate and interlacing differences", () => {
     {
       kind: "different",
       label: "Meaningful differences",
+      differenceCodes: ["frame-rate", "interlacing"],
       reasons: ["Frame rate differs", "Interlacing differs"],
     },
   );
@@ -171,6 +177,7 @@ Deno.test("comparison remains unknown when Plex metadata is sparse", () => {
   assertEquals(compareDuplicateVersions([version(1, 10), version(2, 10)]), {
     kind: "unknown",
     label: "Needs review",
+    differenceCodes: [],
     reasons: [
       "Plex did not report enough technical metadata to compare safely",
     ],
@@ -201,4 +208,114 @@ Deno.test("duplicatePageSummary does not present partial storage as a total", ()
     storageKilobytes: null,
     reclaimableKilobytes: null,
   });
+});
+
+Deno.test("duplicatePageSummary includes every episode nested under a season", () => {
+  const season: DuplicateSeasonGroup = {
+    mediaType: "season",
+    duplicateGroupCount: 2,
+    libraryKey: "shows",
+    showRatingKey: "show-1",
+    seasonRatingKey: "season-1",
+    showTitle: "Show",
+    showThumb: null,
+    seasonIndex: 1,
+    combinedFileSize: 100,
+    comparisonSummary: {
+      episodeCount: 2,
+      differentEpisodeCount: 0,
+      sameProfileEpisodeCount: 0,
+      needsReviewEpisodeCount: 2,
+      differences: [],
+    },
+    episodes: [
+      {
+        mediaType: "episode",
+        libraryKey: "shows",
+        episodeRatingKey: "episode-1",
+        showRatingKey: "show-1",
+        seasonRatingKey: "season-1",
+        showTitle: "Show",
+        showThumb: null,
+        seasonIndex: 1,
+        episodeIndex: 1,
+        episodeTitle: "Pilot",
+        combinedFileSize: 40,
+        versions: [version(1, 10), version(2, 30)],
+      },
+      {
+        mediaType: "episode",
+        libraryKey: "shows",
+        episodeRatingKey: "episode-2",
+        showRatingKey: "show-1",
+        seasonRatingKey: "season-1",
+        showTitle: "Show",
+        showThumb: null,
+        seasonIndex: 1,
+        episodeIndex: 2,
+        episodeTitle: "Second",
+        combinedFileSize: 60,
+        versions: [version(3, 20), version(4, 40)],
+      },
+    ],
+  };
+
+  assertEquals(duplicatePageSummary([season]), {
+    versionCount: 4,
+    storageKilobytes: 100,
+    reclaimableKilobytes: 30,
+  });
+});
+
+Deno.test("season comparison summary partitions outcomes and overlaps difference counts", () => {
+  const summary = summarizeDuplicateComparisons([
+    compareDuplicateVersions([
+      detailedVersion(1),
+      detailedVersion(2, { width: 3840, height: 2160, audioCodec: "truehd" }),
+    ]),
+    compareDuplicateVersions([
+      detailedVersion(3),
+      detailedVersion(4, { width: 3840, height: 2160 }),
+    ]),
+    compareDuplicateVersions([detailedVersion(5), detailedVersion(6)]),
+    compareDuplicateVersions([version(7, 10), version(8, 10)]),
+  ]);
+
+  assertEquals(summary, {
+    episodeCount: 4,
+    differentEpisodeCount: 2,
+    sameProfileEpisodeCount: 1,
+    needsReviewEpisodeCount: 1,
+    differences: [
+      { code: "resolution", episodeCount: 2 },
+      { code: "audio-tracks", episodeCount: 1 },
+    ],
+  });
+});
+
+Deno.test("season chips select prevalent categories with deterministic overflow", () => {
+  const summary = {
+    episodeCount: 14,
+    differentEpisodeCount: 11,
+    sameProfileEpisodeCount: 1,
+    needsReviewEpisodeCount: 2,
+    differences: [
+      { code: "subtitle-tracks" as const, episodeCount: 3 },
+      { code: "audio-tracks" as const, episodeCount: 6 },
+      { code: "resolution" as const, episodeCount: 9 },
+      { code: "dynamic-range" as const, episodeCount: 2 },
+    ],
+  };
+
+  assertEquals(seasonDifferenceChips(summary), {
+    chips: [
+      { code: "resolution", episodeCount: 9, label: "resolution" },
+      { code: "audio-tracks", episodeCount: 6, label: "audio" },
+    ],
+    remaining: 2,
+  });
+  assertEquals(
+    seasonSummaryAccessibleText(summary),
+    "14 duplicate episodes, 9 resolution, 6 audio, 3 subtitles, 2 HDR, 1 matching profile, 2 need review. Difference category counts may overlap.",
+  );
 });

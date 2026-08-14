@@ -106,6 +106,7 @@ export function VersionDeletionServiceMarks({
 
 export function AdvancedVersionDeletionTree({
   title,
+  ancestors = [],
   versions,
   preview,
   availableVersions,
@@ -115,6 +116,7 @@ export function AdvancedVersionDeletionTree({
   onToggleVersion,
 }: {
   title: string;
+  ancestors?: string[];
   versions: VersionTreeEntry[];
   preview?: VersionDeletionPreviewResponse;
   availableVersions: MediaVersionPathPreview[];
@@ -160,15 +162,28 @@ export function AdvancedVersionDeletionTree({
       </div>
       <div className="max-h-72 overflow-y-auto px-2.5 py-1">
         <section className="py-1">
-          <div className="flex min-w-0 items-center gap-2 text-xs leading-5">
-            <span
-              className="min-w-0 flex-1 truncate font-semibold"
-              title={title}
+          {ancestors.map((ancestor, index) => (
+            <div
+              key={`${ancestor}:${index}`}
+              className="flex min-w-0 items-center gap-2 text-xs leading-5"
+              style={{ marginLeft: `${index * 0.75}rem` }}
             >
+              {index > 0 && <span className="text-base-content/25">└</span>}
+              <span className="min-w-0 flex-1 truncate font-semibold" title={ancestor}>
+                {ancestor}
+              </span>
+            </div>
+          ))}
+          <div
+            className="flex min-w-0 items-center gap-2 text-xs leading-5"
+            style={{ marginLeft: `${ancestors.length * 0.75}rem` }}
+          >
+            {ancestors.length > 0 && <span className="text-base-content/25">└</span>}
+            <span className="min-w-0 flex-1 truncate font-semibold" title={title}>
               {title}
             </span>
           </div>
-          <div className="ml-1.5">
+          <div style={{ marginLeft: `${0.375 + ancestors.length * 0.75}rem` }}>
             {showPlexPaths && versions.map((version) => {
               const versionPreview = previewByMediaId.get(version.mediaId);
               return (

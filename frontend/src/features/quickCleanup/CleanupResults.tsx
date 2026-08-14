@@ -8,12 +8,16 @@ import {
   Sparkles,
   Tv,
 } from "lucide-react";
-import type { SmartDuplicateAnalysisResponse, SmartDuplicateCandidate } from "../../lib/api.ts";
+import type {
+  SmartDuplicateAnalysisResponse,
+  SmartDuplicateCandidate,
+  SmartDuplicateEpisodeCandidate,
+} from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { versionLabel } from "../../lib/mediaVersion.ts";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { CandidateFileDetails } from "./CandidateFileDetails.tsx";
-import { candidateKey, candidateReclaimableSize } from "./model.ts";
+import { candidateKey, candidateReclaimableSize, selectedSize } from "./model.ts";
 
 type RecommendedConfidence = "obvious" | "near-identical";
 
@@ -25,6 +29,10 @@ interface CleanupResultsProps {
   reclaimableSize: number | null;
   onToggleCandidate: (candidate: SmartDuplicateCandidate) => void;
   onSetConfidenceSelection: (confidence: RecommendedConfidence, selected: boolean) => void;
+  onSetCandidateSelection: (
+    candidates: readonly SmartDuplicateCandidate[],
+    selected: boolean,
+  ) => void;
   onExpandedCandidateChange: (key: string | null) => void;
   onKeepChange: (candidate: SmartDuplicateCandidate, mediaId: number) => void;
 }
@@ -74,6 +82,133 @@ function ConfidenceSelectionToggle({
   );
 }
 
+function CandidateRow({
+  candidate,
+  nested = false,
+  checked,
+  expanded,
+  keepMediaId,
+  onToggle,
+  onExpandedChange,
+  onKeepChange,
+}: {
+  candidate: SmartDuplicateCandidate;
+  nested?: boolean;
+  checked: boolean;
+  expanded: boolean;
+  keepMediaId: number;
+  onToggle: () => void;
+  onExpandedChange: () => void;
+  onKeepChange: (mediaId: number) => void;
+}) {
+  const keepVersion = candidate.versions.find((version) => version.mediaId === keepMediaId);
+  const savings = candidateReclaimableSize(candidate, keepMediaId);
+  const detailsId = `quick-cleanup-details-${candidate.mediaType}-${candidate.ratingKey}`;
+  const title = nested && candidate.mediaType === "episode"
+    ? `E${String(candidate.episodeIndex).padStart(2, "0")} — ${candidate.episodeTitle}`
+    : candidate.title;
+  const context = nested && candidate.mediaType === "episode" ? null : candidate.context;
+
+  return (
+    <div className={nested ? "smart-cleanup-episode" : undefined}>
+      <div className={`smart-cleanup-candidate ${checked ? "is-selected" : ""}`}>
+        <label
+          className="smart-cleanup-candidate-toggle"
+          title={checked ? "Exclude from cleanup" : "Include in cleanup"}
+        >
+          <input
+            type="checkbox"
+            className="checkbox checkbox-sm checkbox-primary"
+            checked={checked}
+            aria-label={`${checked ? "Exclude" : "Include"} ${title} ${
+              checked ? "from" : "in"
+            } cleanup`}
+            onChange={onToggle}
+          />
+        </label>
+        <button
+          type="button"
+          className="smart-cleanup-candidate-review"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={onExpandedChange}
+        >
+          <span className="smart-cleanup-candidate-copy">
+            <strong className="block truncate">{title}</strong>
+            <small className="block truncate">
+              {context && `${context} · `}
+              Remove {candidate.deleteMediaIds.length}{" "}
+              {candidate.deleteMediaIds.length === 1 ? "version" : "versions"}
+              {keepVersion && ` · Keep ${versionLabel(keepVersion)}`}
+            </small>
+          </span>
+          <span
+            className={`badge badge-sm ${
+              candidate.confidence === "obvious" ? "badge-success" : "badge-warning"
+            } badge-outline`}
+            title={candidate.reasons.join(". ")}
+          >
+            {candidate.confidence === "obvious" ? "Likely identical" : "Near-identical"}
+          </span>
+          <span className="w-24 text-right font-mono text-xs">
+            {savings != null ? formatKilobytes(savings) : "Unknown"}
+          </span>
+          <span className="smart-cleanup-files-button">
+            Review
+            <ChevronDown
+              className={`size-3 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </span>
+        </button>
+      </div>
+      {expanded && (
+        <div id={detailsId} role="region" aria-label={`${title} files`}>
+          <CandidateFileDetails
+            candidate={candidate}
+            keepMediaId={keepMediaId}
+            onKeepChange={onKeepChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SeasonSelectionToggle({
+  candidates,
+  selected,
+  onChange,
+}: {
+  candidates: readonly SmartDuplicateEpisodeCandidate[];
+  selected: ReadonlySet<string>;
+  onChange: (selected: boolean) => void;
+}) {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  const selectedCount =
+    candidates.filter((candidate) => selected.has(candidateKey(candidate))).length;
+  const checked = selectedCount === candidates.length;
+  const indeterminate = selectedCount > 0 && !checked;
+  useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <label
+      className="smart-cleanup-season-toggle"
+      title={`${selectedCount} of ${candidates.length} episodes selected`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input
+        ref={checkboxRef}
+        type="checkbox"
+        className="checkbox checkbox-sm checkbox-primary"
+        checked={checked}
+        aria-checked={indeterminate ? "mixed" : checked}
+        onChange={(event) => onChange(event.currentTarget.checked)}
+      />
+    </label>
+  );
+}
+
 export function CleanupResults({
   analysis,
   selected,
@@ -82,6 +217,7 @@ export function CleanupResults({
   reclaimableSize,
   onToggleCandidate,
   onSetConfidenceSelection,
+  onSetCandidateSelection,
   onExpandedCandidateChange,
   onKeepChange,
 }: CleanupResultsProps) {
@@ -105,6 +241,19 @@ export function CleanupResults({
     (candidate) =>
       candidate.confidence === "near-identical" && selected.has(candidateKey(candidate)),
   ).length;
+  const episodeCandidates = visibleCandidates.filter(
+    (candidate): candidate is SmartDuplicateEpisodeCandidate => candidate.mediaType === "episode",
+  );
+  const seasonCandidates = new Map<string, SmartDuplicateEpisodeCandidate[]>();
+  for (const candidate of episodeCandidates) {
+    const key = `${candidate.libraryKey}:${candidate.showRatingKey}:${candidate.seasonRatingKey}`;
+    const group = seasonCandidates.get(key) ?? [];
+    group.push(candidate);
+    seasonCandidates.set(key, group);
+  }
+  for (const group of seasonCandidates.values()) {
+    group.sort((left, right) => left.episodeIndex - right.episodeIndex);
+  }
 
   return (
     <>
@@ -188,93 +337,76 @@ export function CleanupResults({
                     {mediaType === "movie" ? "Movie libraries" : "TV libraries"}
                     <span>{section.length.toLocaleString()}</span>
                   </summary>
-                  {section.map((candidate) => {
-                    const key = candidateKey(candidate);
-                    const checked = selected.has(key);
-                    const expanded = expandedCandidate === key;
-                    const keepMediaId = keepSelections.get(key) ?? candidate.keepMediaId;
-                    const keepVersion = candidate.versions.find((version) =>
-                      version.mediaId === keepMediaId
-                    );
-                    const candidateSavings = candidateReclaimableSize(candidate, keepMediaId);
-                    const detailsId = `quick-cleanup-details-${mediaType}-${candidate.ratingKey}`;
-                    return (
-                      <div key={key}>
-                        <div
-                          className={`smart-cleanup-candidate ${checked ? "is-selected" : ""}`}
-                        >
-                          <label
-                            className="smart-cleanup-candidate-toggle"
-                            title={checked ? "Exclude from cleanup" : "Include in cleanup"}
-                          >
-                            <input
-                              type="checkbox"
-                              className="checkbox checkbox-sm checkbox-primary"
-                              checked={checked}
-                              aria-label={`${checked ? "Exclude" : "Include"} ${candidate.title} ${
-                                checked ? "from" : "in"
-                              } cleanup`}
-                              onChange={() => onToggleCandidate(candidate)}
+                  {mediaType === "episode"
+                    ? [...seasonCandidates.entries()].map(([seasonKey, candidates]) => {
+                      const first = candidates[0]!;
+                      const selectedCount = candidates.filter((candidate) =>
+                        selected.has(candidateKey(candidate))
+                      ).length;
+                      const seasonSavings = selectedSize(candidates, selected, keepSelections);
+                      return (
+                        <details key={seasonKey} className="smart-cleanup-season">
+                          <summary className="smart-cleanup-season-title">
+                            <SeasonSelectionToggle
+                              candidates={candidates}
+                              selected={selected}
+                              onChange={(checked) => onSetCandidateSelection(candidates, checked)}
                             />
-                          </label>
-                          <button
-                            type="button"
-                            className="smart-cleanup-candidate-review"
-                            aria-expanded={expanded}
-                            aria-controls={detailsId}
-                            onClick={() => onExpandedCandidateChange(expanded ? null : key)}
-                          >
-                            <span className="smart-cleanup-candidate-copy">
-                              <strong className="block truncate">{candidate.title}</strong>
-                              <small className="block truncate">
-                                {candidate.context && `${candidate.context} · `}
-                                Remove {candidate.deleteMediaIds.length}{" "}
-                                {candidate.deleteMediaIds.length === 1 ? "version" : "versions"}
-                                {keepVersion && ` · Keep ${versionLabel(keepVersion)}`}
+                            <span className="smart-cleanup-season-copy">
+                              <strong>{first.title}</strong>
+                              <small>
+                                Season {first.seasonIndex} · {candidates.length}{" "}
+                                {candidates.length === 1
+                                  ? "duplicate episode"
+                                  : "duplicate episodes"}
                               </small>
                             </span>
-                            <span
-                              className={`badge badge-sm ${
-                                candidate.confidence === "obvious"
-                                  ? "badge-success"
-                                  : candidate.confidence === "near-identical"
-                                  ? "badge-warning"
-                                  : "badge-info"
-                              } badge-outline`}
-                              title={candidate.reasons.join(". ")}
-                            >
-                              {candidate.confidence === "obvious"
-                                ? "Likely identical"
-                                : "Near-identical"}
+                            <span className="smart-cleanup-season-selection">
+                              {selectedCount}/{candidates.length} selected
                             </span>
-                            <span className="w-24 text-right font-mono text-xs">
-                              {candidateSavings != null
-                                ? formatKilobytes(candidateSavings)
-                                : "Unknown"}
+                            <span className="smart-cleanup-season-savings">
+                              {seasonSavings !== null ? formatKilobytes(seasonSavings) : "Unknown"}
                             </span>
-                            <span className="smart-cleanup-files-button">
-                              Review
-                              <ChevronDown
-                                className={`size-3 transition-transform ${
-                                  expanded ? "rotate-180" : ""
-                                }`}
+                            <ChevronDown className="smart-cleanup-season-chevron size-4" />
+                          </summary>
+                          {candidates.map((candidate) => {
+                            const key = candidateKey(candidate);
+                            const keepMediaId = keepSelections.get(key) ?? candidate.keepMediaId;
+                            return (
+                              <CandidateRow
+                                key={key}
+                                candidate={candidate}
+                                nested
+                                checked={selected.has(key)}
+                                expanded={expandedCandidate === key}
+                                keepMediaId={keepMediaId}
+                                onToggle={() => onToggleCandidate(candidate)}
+                                onExpandedChange={() =>
+                                  onExpandedCandidateChange(expandedCandidate === key ? null : key)}
+                                onKeepChange={(mediaId) => onKeepChange(candidate, mediaId)}
                               />
-                            </span>
-                          </button>
-                        </div>
-                        {expanded && (
-                          <div id={detailsId} role="region" aria-label={`${candidate.title} files`}>
-                            <CandidateFileDetails
-                              candidate={candidate}
-                              keepMediaId={keepMediaId}
-                              onKeepChange={(mediaId) =>
-                                onKeepChange(candidate, mediaId)}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                            );
+                          })}
+                        </details>
+                      );
+                    })
+                    : section.map((candidate) => {
+                      const key = candidateKey(candidate);
+                      const keepMediaId = keepSelections.get(key) ?? candidate.keepMediaId;
+                      return (
+                        <CandidateRow
+                          key={key}
+                          candidate={candidate}
+                          checked={selected.has(key)}
+                          expanded={expandedCandidate === key}
+                          keepMediaId={keepMediaId}
+                          onToggle={() => onToggleCandidate(candidate)}
+                          onExpandedChange={() =>
+                            onExpandedCandidateChange(expandedCandidate === key ? null : key)}
+                          onKeepChange={(mediaId) => onKeepChange(candidate, mediaId)}
+                        />
+                      );
+                    })}
                 </details>
               );
             })}

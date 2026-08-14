@@ -5,7 +5,9 @@ import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexMediaTechnicalDetails } from '../../integrations/plex/types.ts';
 import { analyzeSmartDuplicateVersions } from '@plex-librarian/shared/smartDuplicateAnalysis.ts';
+import { bestMediaVersionCandidate } from '@plex-librarian/shared/mediaVersionRanking.ts';
 import type {
+  MediaVersion,
   SmartDuplicateAnalysisResponse,
   SmartDuplicateCandidate,
 } from '@plex-librarian/shared/types.ts';
@@ -143,6 +145,56 @@ async function enrichThinDuplicateGroups(
   );
 }
 
+export async function enrichEpisodeTechnicalDetails(
+  serverId: number,
+  episodeVersions: Map<string, EpisodeVersionRow[]>,
+): Promise<void> {
+  await enrichThinDuplicateGroups(serverId, new Map(), episodeVersions);
+}
+
+/**
+ * Refresh every episode in a bounded season review and return its live path hints.
+ * Paths help match release families across a season, but remain non-authoritative:
+ * the durable deletion workflow independently reloads and validates exact paths.
+ */
+export async function enrichSeasonEpisodeEvidence(
+  serverId: number,
+  episodeVersions: Map<string, EpisodeVersionRow[]>,
+): Promise<Map<string, Map<number, PlexMediaTechnicalDetails>>> {
+  const evidence = new Map<string, Map<number, PlexMediaTechnicalDetails>>();
+  if (episodeVersions.size === 0) return evidence;
+  const active = await resolveActiveServer();
+  if (active.serverId !== serverId) return evidence;
+  const groups = [...episodeVersions.entries()].sort(([left], [right]) =>
+    left.localeCompare(right)
+  );
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(TECHNICAL_ENRICHMENT_CONCURRENCY, groups.length) },
+      async () => {
+        while (nextIndex < groups.length) {
+          const [ratingKey, rows] = groups[nextIndex++]!;
+          try {
+            const details = await active.client.mediaVersionTechnicalDetails(ratingKey);
+            persistTechnicalDetails(serverId, {
+              mediaType: 'episode',
+              ratingKey,
+              totalSize: rows.reduce((total, row) => total + (row.fileSize ?? 0), 0),
+              rows,
+            }, details);
+            evidence.set(ratingKey, details);
+          } catch {
+            // Missing live evidence leaves the episode protected by the existing
+            // incomplete-detail handling instead of failing the rest of the season.
+          }
+        }
+      },
+    ),
+  );
+  return evidence;
+}
+
 export function isValidSmartCleanupSelection(
   candidate: SmartDuplicateCandidate,
   deleteMediaIds: readonly number[],
@@ -151,6 +203,18 @@ export function isValidSmartCleanupSelection(
   return deleteMediaIds.length === candidate.versions.length - 1 &&
     new Set(deleteMediaIds).size === deleteMediaIds.length &&
     deleteMediaIds.every((mediaId) => candidateMediaIds.has(mediaId));
+}
+
+export function isValidManualSeasonCleanupSelection(
+  candidate: SmartDuplicateCandidate,
+  deleteMediaIds: readonly number[],
+): boolean {
+  const candidateMediaIds = new Set(candidate.versions.map((version) => version.mediaId));
+  const selected = new Set(deleteMediaIds);
+  return deleteMediaIds.length > 0 &&
+    selected.size === deleteMediaIds.length &&
+    deleteMediaIds.every((mediaId) => candidateMediaIds.has(mediaId)) &&
+    candidateMediaIds.size - selected.size >= 1;
 }
 
 export function limitSmartDuplicateCandidates(
@@ -194,7 +258,13 @@ async function loadInBatches<T>(
 
 export async function buildSmartDuplicateAnalysis(
   serverId: number,
-  options: { movies: boolean; tv: boolean },
+  options: {
+    movies: boolean;
+    tv: boolean;
+    episodeRatingKeys?: readonly string[];
+    includeManualCandidates?: boolean;
+    enrichTechnicalDetails?: boolean;
+  },
 ): Promise<SmartDuplicateAnalysisResponse> {
   const [movieGroups, episodeGroups] = await Promise.all([
     options.movies
@@ -222,6 +292,9 @@ export async function buildSmartDuplicateAnalysis(
         .from(episodeMediaVersions)
         .where(and(
           eq(episodeMediaVersions.serverId, serverId),
+          ...(options.episodeRatingKeys
+            ? [inArray(episodeMediaVersions.episodeRatingKey, [...options.episodeRatingKeys])]
+            : []),
           not(episodeRootIsWorkflowOwned(
             serverId,
             sql`${episodeMediaVersions.libraryKey}`,
@@ -285,7 +358,9 @@ export async function buildSmartDuplicateAnalysis(
     group.push(row);
     episodeVersions.set(row.episodeRatingKey, group);
   }
-  await enrichThinDuplicateGroups(serverId, movieVersions, episodeVersions);
+  if (options.enrichTechnicalDetails !== false) {
+    await enrichThinDuplicateGroups(serverId, movieVersions, episodeVersions);
+  }
 
   const candidates: SmartDuplicateCandidate[] = [];
   for (const group of movieGroups) {
@@ -293,7 +368,8 @@ export async function buildSmartDuplicateAnalysis(
     if (!item) continue;
     const versions = (movieVersions.get(group.ratingKey) ?? []).map(mediaVersionFromRow);
     if (versions.length - 1 > SMART_CLEANUP_DELETE_IDS_LIMIT) continue;
-    const recommendation = analyzeSmartDuplicateVersions(versions);
+    const recommendation = analyzeSmartDuplicateVersions(versions) ??
+      (options.includeManualCandidates ? manualRecommendation(versions) : null);
     if (!recommendation) continue;
     candidates.push({
       mediaType: 'movie',
@@ -311,7 +387,8 @@ export async function buildSmartDuplicateAnalysis(
     if (!first) continue;
     const versions = rows.map(mediaVersionFromRow);
     if (versions.length - 1 > SMART_CLEANUP_DELETE_IDS_LIMIT) continue;
-    const recommendation = analyzeSmartDuplicateVersions(versions);
+    const recommendation = analyzeSmartDuplicateVersions(versions) ??
+      (options.includeManualCandidates ? manualRecommendation(versions) : null);
     if (!recommendation) continue;
     const show = showByKey.get(first.showRatingKey);
     candidates.push({
@@ -320,6 +397,11 @@ export async function buildSmartDuplicateAnalysis(
       ratingKey: group.ratingKey,
       title: show?.title ?? 'Unknown show',
       context: `S${first.seasonIndex}E${first.episodeIndex} · ${first.episodeTitle}`,
+      showRatingKey: first.showRatingKey,
+      seasonRatingKey: first.seasonRatingKey,
+      seasonIndex: first.seasonIndex,
+      episodeIndex: first.episodeIndex,
+      episodeTitle: first.episodeTitle,
       versions,
       ...recommendation,
     });
@@ -331,5 +413,23 @@ export async function buildSmartDuplicateAnalysis(
     analyzedGroups,
     protectedGroups: analyzedGroups - limitedCandidates.length,
     candidates: limitedCandidates,
+  };
+}
+
+function manualRecommendation(versions: readonly MediaVersion[]) {
+  const keepMediaId = bestMediaVersionCandidate(
+    versions,
+    versions.map((version) => version.mediaId),
+  );
+  if (keepMediaId === null || versions.length < 2) return null;
+  const deleted = versions.filter((version) => version.mediaId !== keepMediaId);
+  return {
+    confidence: 'review' as const,
+    keepMediaId,
+    deleteMediaIds: deleted.map((version) => version.mediaId).sort((left, right) => left - right),
+    reclaimableSize: deleted.every((version) => version.fileSize !== null)
+      ? deleted.reduce((total, version) => total + version.fileSize!, 0)
+      : null,
+    reasons: ['Selected for explicit season review'],
   };
 }

@@ -2,8 +2,7 @@ import type { MediaVersion } from './versions.ts';
 
 export type SmartDuplicateConfidence = 'obvious' | 'near-identical' | 'review';
 
-export interface SmartDuplicateCandidate {
-  mediaType: 'movie' | 'episode';
+interface SmartDuplicateCandidateBase {
   libraryKey: string;
   ratingKey: string;
   title: string;
@@ -15,6 +14,23 @@ export interface SmartDuplicateCandidate {
   reasons: string[];
   versions: MediaVersion[];
 }
+
+export interface SmartDuplicateMovieCandidate extends SmartDuplicateCandidateBase {
+  mediaType: 'movie';
+}
+
+export interface SmartDuplicateEpisodeCandidate extends SmartDuplicateCandidateBase {
+  mediaType: 'episode';
+  showRatingKey: string;
+  seasonRatingKey: string;
+  seasonIndex: number;
+  episodeIndex: number;
+  episodeTitle: string;
+}
+
+export type SmartDuplicateCandidate =
+  | SmartDuplicateMovieCandidate
+  | SmartDuplicateEpisodeCandidate;
 
 export interface SmartDuplicateAnalysisResponse {
   analyzedGroups: number;

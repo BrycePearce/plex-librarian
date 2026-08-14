@@ -1,5 +1,4 @@
 import { compareDuplicateVersions } from "@shared/mediaComparison";
-import { ChevronRight } from "lucide-react";
 import type { DuplicateGroup } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { PosterThumb } from "../../components/PosterThumb.tsx";
@@ -11,10 +10,12 @@ export function DuplicateGroupRow({
   item,
   onReview,
   disabled = false,
+  nested = false,
 }: {
   item: DuplicateGroup;
   onReview: () => void;
   disabled?: boolean;
+  nested?: boolean;
 }) {
   const reclaimable = reclaimableKilobytes(item.versions);
   const reclaimablePercent = reclaimable != null && item.combinedFileSize
@@ -31,6 +32,15 @@ export function DuplicateGroupRow({
       <div className="min-w-0">
         <div className="font-medium truncate max-w-xs">{item.title}</div>
         {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
+      </div>
+    )
+    : nested
+    ? (
+      <div className="min-w-0">
+        <div className="font-medium truncate max-w-xs">
+          E{String(item.episodeIndex).padStart(2, "0")} — {item.episodeTitle}
+        </div>
+        <div className="text-xs text-base-content/40">Episode duplicate</div>
       </div>
     )
     : (
@@ -63,15 +73,17 @@ export function DuplicateGroupRow({
         ? `Duplicate versions for ${itemLabel}; review unavailable during sync`
         : `Review duplicate versions for ${itemLabel}`}
     >
-      <td>
+      <td className={nested ? "duplicates-episode-title-cell" : undefined}>
         <div className="inline-flex items-center gap-3 max-w-full">
-          <PosterThumb
-            thumb={item.mediaType === "movie" ? item.thumb : item.showThumb}
-            width={60}
-            height={90}
-            className="w-10 h-14"
-            hoverScope="row"
-          />
+          {!nested && (
+            <PosterThumb
+              thumb={item.mediaType === "movie" ? item.thumb : item.showThumb}
+              width={60}
+              height={90}
+              className="w-10 h-14"
+              hoverScope="row"
+            />
+          )}
           {title}
         </div>
       </td>
@@ -126,7 +138,7 @@ export function DuplicateGroupRow({
           </span>
           {reclaimable != null && (
             <small title="Potential space if the largest version is kept">
-              {formatKilobytes(reclaimable)} extra
+              {formatKilobytes(reclaimable)} potential savings
             </small>
           )}
         </div>
@@ -143,12 +155,6 @@ export function DuplicateGroupRow({
             />
           </div>
         )}
-      </td>
-      <td className="text-right">
-        <ChevronRight
-          className="ml-auto size-4 text-base-content/30 transition-all group-hover:translate-x-0.5 group-hover:text-base-content/70 group-focus-visible:translate-x-0.5 group-focus-visible:text-base-content/70"
-          aria-hidden="true"
-        />
       </td>
     </tr>
   );

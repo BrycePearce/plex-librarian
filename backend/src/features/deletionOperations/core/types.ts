@@ -2,7 +2,7 @@ export interface DeletionWorkTarget {
   id: number;
   operationId: string;
   serverId: number;
-  targetKind: 'whole_item' | 'movie_version' | 'episode_version';
+  targetKind: 'whole_item' | 'movie_version' | 'episode_version' | 'sonarr_series';
   targetKey: string;
   snapshot: string;
   logicalSize: number | null;

@@ -42,6 +42,22 @@ export function nonSupersededCancelledCount(
   return Math.max(0, cancelledCount - supersededCount);
 }
 
+export function deletionAttentionSummary(
+  removalConfirmedCount: number,
+  failedCount: number,
+): string {
+  return `${removalConfirmedCount} removed · ${failedCount} need attention`;
+}
+
+export function deletionWarningSummary(
+  removalConfirmedCount: number,
+  warningCount: number,
+): string {
+  return removalConfirmedCount === 0
+    ? "No Plex media removal was confirmed"
+    : `${removalConfirmedCount} removed · ${warningCount} warning`;
+}
+
 export function retryableRelocationSafeTargetCount(
   targets: ReadonlyArray<{
     status: string;

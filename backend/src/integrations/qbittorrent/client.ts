@@ -18,6 +18,8 @@ export interface QbittorrentTorrent {
 }
 
 const PUBLIC_FILE_LIMIT = 100;
+const MANIFEST_MAX_BYTES = 8 * 1024 * 1024;
+const MANIFEST_MAX_RECORDS = 10_000;
 
 export class QbittorrentApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -139,6 +141,7 @@ export class QbittorrentClient {
     path: string,
     init?: RequestInit,
     parse: 'json' | 'text' = 'json',
+    maxBytes?: number,
   ): Promise<T> {
     await this.ensureAccess();
     let response: Response;
@@ -168,8 +171,35 @@ export class QbittorrentClient {
         response.status,
       );
     }
-    if (parse === 'text') return await response.text() as T;
-    const text = await response.text();
+    let text: string;
+    if (maxBytes === undefined) {
+      text = await response.text();
+    } else {
+      if (!response.body) throw new QbittorrentApiError('qBittorrent returned an empty response');
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        total += next.value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new QbittorrentApiError(
+            `qBittorrent response exceeded the ${maxBytes}-byte safety limit`,
+          );
+        }
+        chunks.push(next.value);
+      }
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      text = new TextDecoder().decode(bytes);
+    }
+    if (parse === 'text') return text as T;
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
@@ -186,7 +216,15 @@ export class QbittorrentClient {
     if (!record) return null;
     const files = await this.request<Array<Record<string, unknown>>>(
       `/torrents/files?hash=${encodeURIComponent(hash)}`,
+      undefined,
+      'json',
+      MANIFEST_MAX_BYTES,
     );
+    if (!Array.isArray(files) || files.length > MANIFEST_MAX_RECORDS) {
+      throw new QbittorrentApiError(
+        `qBittorrent manifest exceeded the ${MANIFEST_MAX_RECORDS}-record safety limit`,
+      );
+    }
     const completed = Number(record['completion_on']);
     const manifestFiles = files.flatMap((file) => {
       const path = String(file['name'] ?? '').trim();

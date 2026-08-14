@@ -6,6 +6,7 @@
     "./schedule.ts": "./schedule.ts",
     "./mediaComparison.ts": "./mediaComparison.ts",
     "./mediaVersionRanking.ts": "./mediaVersionRanking.ts",
-    "./smartDuplicateAnalysis.ts": "./smartDuplicateAnalysis.ts"
+    "./smartDuplicateAnalysis.ts": "./smartDuplicateAnalysis.ts",
+    "./seasonVersionProfiles.ts": "./seasonVersionProfiles.ts"
   }
 }

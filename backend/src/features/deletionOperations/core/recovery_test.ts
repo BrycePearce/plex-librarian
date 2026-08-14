@@ -9,11 +9,12 @@ Deno.test('startup requeues running targets for full replay', () => {
       id TEXT PRIMARY KEY, status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
     );
     CREATE TABLE deletion_targets (
-      id INTEGER PRIMARY KEY, status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
+      id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, target_kind TEXT NOT NULL, status TEXT NOT NULL,
+      next_retry_at INTEGER, updated_at INTEGER NOT NULL
     );
     INSERT INTO deletion_operations VALUES ('op', 'running', 50, 1);
-    INSERT INTO deletion_targets VALUES (1, 'running', 50, 1);
-    INSERT INTO deletion_targets VALUES (2, 'running', 50, 1);
+    INSERT INTO deletion_targets VALUES (1, 'op', 'episode_version', 'running', 50, 1);
+    INSERT INTO deletion_targets VALUES (2, 'op', 'episode_version', 'running', 50, 1);
   `);
 
   recoverInterruptedDeletionWork(sqlite, 100);
@@ -45,15 +46,16 @@ Deno.test('startup preserves management holds and reconciles safe reservation te
       id TEXT PRIMARY KEY, status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
     );
     CREATE TABLE deletion_targets (
-      id INTEGER PRIMARY KEY, status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
+      id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, target_kind TEXT NOT NULL, status TEXT NOT NULL,
+      next_retry_at INTEGER, updated_at INTEGER NOT NULL
     );
     CREATE TABLE radarr_movie_reservations (
       target_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
     INSERT INTO deletion_operations VALUES ('op', 'running', NULL, 1);
-    INSERT INTO deletion_targets VALUES (1, 'running', NULL, 1);
-    INSERT INTO deletion_targets VALUES (2, 'needs_attention', NULL, 1);
-    INSERT INTO deletion_targets VALUES (3, 'completed', NULL, 1);
+    INSERT INTO deletion_targets VALUES (1, 'op', 'episode_version', 'running', NULL, 1);
+    INSERT INTO deletion_targets VALUES (2, 'op', 'episode_version', 'needs_attention', NULL, 1);
+    INSERT INTO deletion_targets VALUES (3, 'op', 'episode_version', 'completed', NULL, 1);
     INSERT INTO radarr_movie_reservations VALUES (1, 'reserved', 1);
     INSERT INTO radarr_movie_reservations VALUES (2, 'management_hold', 1);
     INSERT INTO radarr_movie_reservations VALUES (3, 'reserved', 1);
@@ -66,6 +68,41 @@ Deno.test('startup preserves management holds and reconciles safe reservation te
       'SELECT target_id, state, updated_at FROM radarr_movie_reservations ORDER BY target_id',
     ).values(),
     [[1, 'reserved', 100], [2, 'management_hold', 1]],
+  );
+  sqlite.close();
+});
+
+Deno.test('startup abandons legacy season coordinator targets without resuming them', () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE deletion_operations (
+      id TEXT PRIMARY KEY, status TEXT NOT NULL, next_retry_at INTEGER, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE deletion_targets (
+      id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, target_kind TEXT NOT NULL, status TEXT NOT NULL,
+      next_retry_at INTEGER, error TEXT, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO deletion_operations VALUES ('op', 'running', NULL, 1);
+    INSERT INTO deletion_targets VALUES (1, 'op', 'sonarr_series', 'running', NULL, NULL, 1);
+    INSERT INTO deletion_targets VALUES (2, 'op', 'episode_version', 'running', NULL, NULL, 1);
+  `);
+
+  recoverInterruptedDeletionWork(sqlite, 100);
+
+  assertEquals(
+    sqlite.prepare('SELECT target_kind, status, error FROM deletion_targets ORDER BY id').values(),
+    [
+      [
+        'sonarr_series',
+        'needs_attention',
+        'abandoned season-coordinator targets cannot be resumed; reset the development database or review and dismiss this operation',
+      ],
+      ['episode_version', 'queued', null],
+    ],
+  );
+  assertEquals(
+    sqlite.prepare('SELECT status, next_retry_at, updated_at FROM deletion_operations').value(),
+    ['needs_attention', null, 100],
   );
   sqlite.close();
 });

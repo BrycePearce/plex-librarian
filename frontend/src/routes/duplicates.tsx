@@ -3,13 +3,15 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
 import { api } from "../lib/api.ts";
-import type { DuplicateGroup } from "../lib/api.ts";
+import type { DuplicateGroup, DuplicateSeasonGroup } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import { useDeleteItems } from "../lib/useDeleteItems.ts";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow.tsx";
+import { DuplicateSeasonRows } from "./-duplicates/DuplicateSeasonRows.tsx";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog.tsx";
+import { SeasonDuplicateDialog } from "./-duplicates/SeasonDuplicateDialog.tsx";
 import { QuickCleanupAction } from "../features/quickCleanup/QuickCleanupAction.tsx";
 import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionState.ts";
 import { DuplicatesTableSkeleton } from "../components/Skeletons.tsx";
@@ -108,12 +110,17 @@ function DuplicatesPage() {
   });
 
   const [reviewItem, setReviewItem] = useState<DuplicateGroup | null>(null);
+  const [reviewSeason, setReviewSeason] = useState<DuplicateSeasonGroup | null>(null);
   const versionDialogRef = useRef<HTMLDialogElement>(null);
+  const seasonDialogRef = useRef<HTMLDialogElement>(null);
+  const seasonCleanupRequestId = useRef(crypto.randomUUID());
 
   useEffect(() => {
     if (!isSyncing) return;
     versionDialogRef.current?.close();
+    seasonDialogRef.current?.close();
     setReviewItem(null);
+    setReviewSeason(null);
   }, [isSyncing]);
 
   // Both delete paths invalidate the same four query roots — the whole-item path
@@ -175,6 +182,29 @@ function DuplicatesPage() {
     },
   });
 
+  const deleteSeasonMutation = useMutation({
+    mutationFn: (request: {
+      selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
+      analysisFingerprint: string;
+      expiresAt: number;
+    }) => api.duplicates.seasonCleanup(seasonCleanupRequestId.current, request.selections, request),
+    onSuccess: (result) => {
+      const invalidations = [
+        queryKeys.duplicates.all,
+        queryKeys.stale.all,
+        queryKeys.libraries.all,
+        queryKeys.events.all,
+        queryKeys.mediaRemovals.all,
+        queryKeys.versionDeletionPreview.all,
+      ];
+      for (const operationId of result.operationIds) {
+        trackDeletionOperation(operationId, invalidations);
+      }
+      seasonDialogRef.current?.close();
+      setReviewSeason(null);
+    },
+  });
+
   function handleConfirm(
     group: DuplicateGroup,
     plan: {
@@ -222,7 +252,16 @@ function DuplicatesPage() {
 
   function openReview(item: DuplicateGroup) {
     if (isSyncing) return;
+    seasonDialogRef.current?.close();
+    setReviewSeason(null);
     setReviewItem(item);
+  }
+
+  function openSeasonReview(season: DuplicateSeasonGroup) {
+    if (isSyncing) return;
+    seasonCleanupRequestId.current = crypto.randomUUID();
+    deleteSeasonMutation.reset();
+    setReviewSeason(season);
   }
 
   function closeReview() {
@@ -244,7 +283,7 @@ function DuplicatesPage() {
           tone="accent"
           description={data
             ? (
-              `${data.total.toLocaleString()} with multiple synced versions`
+              `${data.duplicateGroupTotal.toLocaleString()} movies or episodes with multiple synced versions`
             )
             : <span className="skeleton inline-block h-3 w-40 align-middle" />}
           actions={<QuickCleanupAction disabled={isSyncing} />}
@@ -307,8 +346,10 @@ function DuplicatesPage() {
               }
               meta={data
                 ? search
-                  ? `${data.total.toLocaleString()} match${data.total === 1 ? "" : "es"}`
-                  : `${data.total.toLocaleString()} groups`
+                  ? `${data.duplicateGroupTotal.toLocaleString()} match${
+                    data.duplicateGroupTotal === 1 ? "" : "es"
+                  } in ${data.total.toLocaleString()} movie/season rows`
+                  : `${data.duplicateGroupTotal.toLocaleString()} duplicate groups · ${data.total.toLocaleString()} movie/season rows`
                 : undefined}
             />
 
@@ -319,7 +360,7 @@ function DuplicatesPage() {
                     <Layers3 className="size-4" />
                   </span>
                   <span className="duplicates-summary-copy">
-                    <span>Versions on this page</span>
+                    <span>Versions in this review pass</span>
                     <strong>{summary.versionCount.toLocaleString()}</strong>
                   </span>
                 </div>
@@ -341,7 +382,7 @@ function DuplicatesPage() {
                     <Sparkles className="size-4" />
                   </span>
                   <span className="duplicates-summary-copy">
-                    <span>Extra copies on page · largest kept</span>
+                    <span>Potential savings · largest kept</span>
                     <strong>
                       {summary.reclaimableKilobytes != null
                         ? formatKilobytes(summary.reclaimableKilobytes)
@@ -372,20 +413,31 @@ function DuplicatesPage() {
                     <thead>
                       <tr>
                         <th>Title</th>
-                        <th>Versions</th>
+                        <th>Duplicates</th>
                         <th>Storage footprint</th>
-                        <th />
                       </tr>
                     </thead>
                     <tbody>
-                      {data?.groups.map((item) => (
-                        <DuplicateGroupRow
-                          key={item.mediaType === "movie" ? item.ratingKey : item.episodeRatingKey}
-                          item={item}
-                          onReview={() => openReview(item)}
-                          disabled={isSyncing}
-                        />
-                      ))}
+                      {data?.groups.map((item) =>
+                        item.mediaType === "movie"
+                          ? (
+                            <DuplicateGroupRow
+                              key={item.ratingKey}
+                              item={item}
+                              onReview={() => openReview(item)}
+                              disabled={isSyncing}
+                            />
+                          )
+                          : (
+                            <DuplicateSeasonRows
+                              key={`${item.showRatingKey}:${item.seasonRatingKey}`}
+                              season={item}
+                              disabled={isSyncing}
+                              onReviewSeason={openSeasonReview}
+                              onReviewEpisode={openReview}
+                            />
+                          )
+                      )}
                     </tbody>
                   </table>
                 </DataSurface>
@@ -406,6 +458,14 @@ function DuplicatesPage() {
         error={deleteVersionsMutation.error ?? deleteWholeItemMutation.error}
         onConfirm={(plan) => reviewItem && handleConfirm(reviewItem, plan)}
         onCancel={closeReview}
+      />
+      <SeasonDuplicateDialog
+        dialogRef={seasonDialogRef}
+        season={reviewSeason}
+        pending={deleteSeasonMutation.isPending}
+        error={deleteSeasonMutation.error}
+        onConfirm={(selections) => deleteSeasonMutation.mutate(selections)}
+        onClose={() => setReviewSeason(null)}
       />
     </div>
   );

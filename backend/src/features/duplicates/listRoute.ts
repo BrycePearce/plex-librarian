@@ -7,13 +7,15 @@ import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   DuplicateEpisodeGroup,
-  DuplicateGroup,
+  DuplicateListGroup,
   DuplicateMovieGroup,
+  DuplicateSeasonGroup,
   DuplicatesResponse,
 } from '@plex-librarian/shared/types.ts';
 import {
   compareDuplicateVersions,
   type DuplicateComparisonFilter,
+  summarizeDuplicateComparisons,
 } from '@plex-librarian/shared/mediaComparison.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import {
@@ -33,12 +35,48 @@ router.use('*', withActiveServerId);
 // so that's a known, remote tradeoff rather than a support-ticket surprise.
 const GROUP_FETCH_CAP = 2000;
 const VERSION_FILTER_BATCH_SIZE = 400;
+// Technical comparison filters must inspect every duplicate episode in each candidate
+// season, but retaining all of those version rows at once can scale with the whole TV
+// library. Process only a small number of seasons at a time and retain lightweight
+// summaries until the final page is known.
+const SEASON_FILTER_BATCH_SIZE = 25;
+const SEASON_EPISODE_READ_PAGE_SIZE = 500;
+// The list endpoint carries full media/stream detail for every returned episode.
+// Keep only a compact preview per season; opening the season performs the separately
+// bounded authoritative analysis.
+const SEASON_LIST_EPISODE_SAMPLE_LIMIT = 20;
+const SEASON_READ_CONCURRENCY = 4;
 
-type GroupStub = {
-  mediaType: 'movie' | 'episode';
+type MovieStub = {
+  mediaType: 'movie';
   ratingKey: string;
   combinedFileSize: number | null;
 };
+
+type EpisodeStub = {
+  mediaType: 'episode';
+  ratingKey: string;
+  libraryKey: string;
+  showRatingKey: string;
+  seasonRatingKey: string;
+  seasonIndex: number;
+  episodeIndex: number;
+  episodeTitle: string;
+  combinedFileSize: number | null;
+};
+
+type SeasonStub = {
+  mediaType: 'season';
+  libraryKey: string;
+  showRatingKey: string;
+  seasonRatingKey: string;
+  seasonIndex: number;
+  combinedFileSize: number | null;
+  duplicateGroupCount: number;
+  episodes: EpisodeStub[];
+};
+
+type ListStub = MovieStub | SeasonStub;
 
 // Movies with 2+ synced Media versions — Plex's own multi-version grouping. TV episodes
 // with 2+ synced versions the same way, but see episodeMediaVersions in db/schema.ts:
@@ -89,32 +127,39 @@ router.get('/', async (c) => {
       )`,
     )
     : undefined;
+  // `episode_media_versions` is populated only for genuine duplicates during sync, but a
+  // durable version deletion can temporarily leave the retained singleton projection
+  // behind until the next full sync. Keep that residual row out of every listing path.
+  const episodeStillHasDuplicates = sql`(
+    select count(*) from episode_media_versions as duplicate_versions
+    where duplicate_versions.server_id = ${episodeMediaVersions.serverId}
+      and duplicate_versions.episode_rating_key = ${episodeMediaVersions.episodeRatingKey}
+  ) >= 2`;
 
   const serverId = c.get('activeServerId');
   if (serverId === null) {
-    return c.json({ search, limit, offset, total: 0, groups: [] } satisfies DuplicatesResponse);
+    return c.json(
+      {
+        search,
+        limit,
+        offset,
+        total: 0,
+        duplicateGroupTotal: 0,
+        groups: [],
+      } satisfies DuplicatesResponse,
+    );
   }
 
-  // Any group ranked beyond position (offset + limit) can never appear on this page,
-  // whether it's interleaved from the movie or episode list — the top (offset + limit)
-  // merged-and-sorted results can only ever be drawn from the top (offset + limit) of
-  // each source list (a group outside that range has too many same-type groups ranked
-  // ahead of it to reach the merged page even in the best case). So fetching only that
-  // many per type (rather than always GROUP_FETCH_CAP) is exact, not an approximation —
-  // it just means shallow pages read and sort far fewer rows than deep ones.
-  const fetchLimit = comparison === 'all'
-    ? Math.min(GROUP_FETCH_CAP, offset + limit)
-    : GROUP_FETCH_CAP;
+  // TV entries are paginated by season, so rank and cap seasons in SQL. Applying the
+  // cap to episodes first can cut a season in half and understate both its size and its
+  // duplicate count.
+  const fetchLimit = GROUP_FETCH_CAP;
 
-  const [movieStubRows, episodeStubRows] = await Promise.all([
+  const [movieStubRows, seasonStubRows] = await Promise.all([
     wantMovies
       ? db.select({
         itemRatingKey: itemMediaVersions.itemRatingKey,
         combinedFileSize: sql<string | null>`cast(sum(${itemMediaVersions.fileSize}) as text)`,
-        // count(*) over () counts every HAVING-qualifying group before ORDER BY/LIMIT
-        // truncate the result — one pass gets both the page and the true total,
-        // instead of a second full GROUP BY/HAVING scan just to count groups.
-        totalGroups: sql<number>`count(*) over ()`,
       })
         .from(itemMediaVersions)
         .where(and(
@@ -133,9 +178,18 @@ router.get('/', async (c) => {
       : Promise.resolve([]),
     wantTv
       ? db.select({
-        episodeRatingKey: episodeMediaVersions.episodeRatingKey,
-        combinedFileSize: sql<string | null>`cast(sum(${episodeMediaVersions.fileSize}) as text)`,
-        totalGroups: sql<number>`count(*) over ()`,
+        libraryKey: episodeMediaVersions.libraryKey,
+        showRatingKey: episodeMediaVersions.showRatingKey,
+        seasonRatingKey: episodeMediaVersions.seasonRatingKey,
+        seasonIndex: episodeMediaVersions.seasonIndex,
+        combinedFileSize: sql<string | null>`cast(
+          case
+            when count(${episodeMediaVersions.fileSize}) = count(*)
+              then sum(${episodeMediaVersions.fileSize})
+            else null
+          end as text
+        )`,
+        duplicateGroupCount: sql<number>`count(distinct ${episodeMediaVersions.episodeRatingKey})`,
       })
         .from(episodeMediaVersions)
         .where(and(
@@ -147,65 +201,195 @@ router.get('/', async (c) => {
             sql`${episodeMediaVersions.showRatingKey}`,
           )),
           episodeSearchCond,
+          episodeStillHasDuplicates,
         ))
-        .groupBy(episodeMediaVersions.episodeRatingKey)
+        .groupBy(
+          episodeMediaVersions.libraryKey,
+          episodeMediaVersions.showRatingKey,
+          episodeMediaVersions.seasonRatingKey,
+          episodeMediaVersions.seasonIndex,
+        )
         .having(HAS_DUPLICATE_VERSIONS)
         .orderBy(desc(sql`sum(${episodeMediaVersions.fileSize})`))
         .limit(fetchLimit)
       : Promise.resolve([]),
   ]);
 
-  // Clamped to GROUP_FETCH_CAP per type to match what stubs (and therefore pages) can
-  // actually contain — an uncapped total here would overstate the paginable set on a
-  // server with more than GROUP_FETCH_CAP genuine duplicate groups of one type, leaving
-  // the client's pagination pointing at offsets that always return an empty page.
-  const unfilteredTotal = Math.min(movieStubRows[0]?.totalGroups ?? 0, GROUP_FETCH_CAP) +
-    Math.min(episodeStubRows[0]?.totalGroups ?? 0, GROUP_FETCH_CAP);
+  const movieStubs = movieStubRows.map((s): MovieStub => ({
+    mediaType: 'movie',
+    ratingKey: s.itemRatingKey,
+    combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
+  }));
+  const seasonStubs = seasonStubRows.map((s): SeasonStub => ({
+    mediaType: 'season',
+    libraryKey: s.libraryKey,
+    showRatingKey: s.showRatingKey,
+    seasonRatingKey: s.seasonRatingKey,
+    seasonIndex: s.seasonIndex,
+    combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
+    duplicateGroupCount: s.duplicateGroupCount,
+    episodes: [],
+  }));
 
-  const stubs: GroupStub[] = [
-    ...movieStubRows.map((s): GroupStub => ({
-      mediaType: 'movie',
-      ratingKey: s.itemRatingKey,
-      combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
-    })),
-    ...episodeStubRows.map((s): GroupStub => ({
-      mediaType: 'episode',
-      ratingKey: s.episodeRatingKey,
-      combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
-    })),
-  ].sort((a, b) => (b.combinedFileSize ?? 0) - (a.combinedFileSize ?? 0));
+  const loadEligibleSeasonEpisodeKeys = async (
+    season: SeasonStub,
+    offset = 0,
+    limit = SEASON_EPISODE_READ_PAGE_SIZE,
+  ): Promise<string[]> => {
+    const rows = await db.select({
+      ratingKey: episodeMediaVersions.episodeRatingKey,
+      episodeIndex: episodeMediaVersions.episodeIndex,
+    }).from(episodeMediaVersions).where(and(
+      eq(episodeMediaVersions.serverId, serverId),
+      eq(episodeMediaVersions.libraryKey, season.libraryKey),
+      eq(episodeMediaVersions.showRatingKey, season.showRatingKey),
+      eq(episodeMediaVersions.seasonRatingKey, season.seasonRatingKey),
+      not(episodeRootIsWorkflowOwned(
+        serverId,
+        sql`${episodeMediaVersions.libraryKey}`,
+        sql`${episodeMediaVersions.episodeRatingKey}`,
+        sql`${episodeMediaVersions.showRatingKey}`,
+      )),
+      episodeSearchCond,
+      episodeStillHasDuplicates,
+    )).groupBy(
+      episodeMediaVersions.episodeRatingKey,
+      episodeMediaVersions.episodeIndex,
+    ).having(HAS_DUPLICATE_VERSIONS).orderBy(
+      episodeMediaVersions.episodeIndex,
+      episodeMediaVersions.episodeRatingKey,
+    ).limit(limit).offset(offset);
+    return rows.map((row) => row.ratingKey);
+  };
+
+  const loadEpisodeVersionRows = async (episodeKeys: string[]) => {
+    const pages = await mapWithConcurrency(
+      keyBatches(episodeKeys),
+      SEASON_READ_CONCURRENCY,
+      (batch) =>
+        db.select().from(episodeMediaVersions).where(and(
+          eq(episodeMediaVersions.serverId, serverId),
+          inArray(episodeMediaVersions.episodeRatingKey, batch),
+        )),
+    );
+    return pages.flat();
+  };
+
+  const loadSeasonPassEpisodeKeys = async (season: SeasonStub): Promise<string[]> => {
+    if (comparison === 'all') {
+      return loadEligibleSeasonEpisodeKeys(season, 0, SEASON_LIST_EPISODE_SAMPLE_LIMIT);
+    }
+    const matchingKeys: string[] = [];
+    let offset = 0;
+    while (matchingKeys.length < SEASON_LIST_EPISODE_SAMPLE_LIMIT) {
+      const episodeKeys = await loadEligibleSeasonEpisodeKeys(season, offset);
+      if (episodeKeys.length === 0) break;
+      const versionRows = await loadEpisodeVersionRows(episodeKeys);
+      const versionsByEpisode = groupVersions(versionRows, (row) => row.episodeRatingKey);
+      for (const episode of episodeStubsFromRows(versionRows)) {
+        if (
+          compareDuplicateVersions(versionsByEpisode.get(episode.ratingKey) ?? []).kind ===
+            comparison
+        ) {
+          matchingKeys.push(episode.ratingKey);
+          if (matchingKeys.length === SEASON_LIST_EPISODE_SAMPLE_LIMIT) break;
+        }
+      }
+      offset += episodeKeys.length;
+      if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
+    }
+    return matchingKeys;
+  };
 
   let preloadedMovieVersionRows: Array<typeof itemMediaVersions.$inferSelect> | null = null;
   let preloadedEpisodeVersionRows: Array<typeof episodeMediaVersions.$inferSelect> | null = null;
-  let filteredStubs = stubs;
+  let filteredMovieStubs = movieStubs;
+  let filteredSeasonStubs = seasonStubs;
   if (comparison !== 'all') {
-    const movieKeys = stubs.filter((stub) => stub.mediaType === 'movie').map((stub) =>
-      stub.ratingKey
-    );
-    const episodeKeys = stubs.filter((stub) => stub.mediaType === 'episode').map((stub) =>
-      stub.ratingKey
-    );
-    [preloadedMovieVersionRows, preloadedEpisodeVersionRows] = await Promise.all([
-      loadMovieVersionRows(serverId, movieKeys),
-      loadEpisodeVersionRows(serverId, episodeKeys),
-    ]);
+    const movieKeys = movieStubs.map((stub) => stub.ratingKey);
+    preloadedMovieVersionRows = await loadMovieVersionRows(serverId, movieKeys);
     const allMovieVersions = groupVersions(preloadedMovieVersionRows, (row) => row.itemRatingKey);
-    const allEpisodeVersions = groupVersions(
-      preloadedEpisodeVersionRows,
-      (row) => row.episodeRatingKey,
-    );
-    filteredStubs = stubs.filter((stub) => {
-      const versions = stub.mediaType === 'movie'
-        ? allMovieVersions.get(stub.ratingKey) ?? []
-        : allEpisodeVersions.get(stub.ratingKey) ?? [];
+    filteredMovieStubs = movieStubs.filter((stub) => {
+      const versions = allMovieVersions.get(stub.ratingKey) ?? [];
       return compareDuplicateVersions(versions).kind === comparison;
     });
+    filteredSeasonStubs = [];
+    for (const seasonBatch of arrayBatches(seasonStubs, SEASON_FILTER_BATCH_SIZE)) {
+      const summaries = await mapWithConcurrency(
+        seasonBatch,
+        SEASON_READ_CONCURRENCY,
+        async (season) => {
+          let offset = 0;
+          let duplicateGroupCount = 0;
+          let combinedFileSize: number | null = 0;
+          while (true) {
+            const episodeKeys = await loadEligibleSeasonEpisodeKeys(season, offset);
+            if (episodeKeys.length === 0) break;
+            const versionRows = await loadEpisodeVersionRows(episodeKeys);
+            const versionsByEpisode = groupVersions(versionRows, (row) => row.episodeRatingKey);
+            for (const episode of episodeStubsFromRows(versionRows)) {
+              const versions = versionsByEpisode.get(episode.ratingKey) ?? [];
+              if (compareDuplicateVersions(versions).kind !== comparison) continue;
+              duplicateGroupCount++;
+              combinedFileSize = combinedFileSize === null || episode.combinedFileSize === null
+                ? null
+                : combinedFileSize + episode.combinedFileSize;
+            }
+            offset += episodeKeys.length;
+            if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
+          }
+          return { season, duplicateGroupCount, combinedFileSize };
+        },
+      );
+      for (const { season, duplicateGroupCount, combinedFileSize } of summaries) {
+        if (duplicateGroupCount === 0) continue;
+        filteredSeasonStubs.push({
+          ...season,
+          episodes: [],
+          duplicateGroupCount,
+          combinedFileSize,
+        });
+      }
+    }
   }
 
-  const total = comparison === 'all' ? unfilteredTotal : filteredStubs.length;
-  const page = filteredStubs.slice(offset, offset + limit);
+  const listStubs: ListStub[] = [...filteredMovieStubs, ...filteredSeasonStubs].sort(
+    (a, b) => (b.combinedFileSize ?? 0) - (a.combinedFileSize ?? 0),
+  );
+  const total = listStubs.length;
+  const duplicateGroupTotal = filteredMovieStubs.length +
+    filteredSeasonStubs.reduce((total, season) => total + season.duplicateGroupCount, 0);
+  const page = listStubs.slice(offset, offset + limit);
   const pageMovieKeys = page.filter((s) => s.mediaType === 'movie').map((s) => s.ratingKey);
-  const pageEpisodeKeys = page.filter((s) => s.mediaType === 'episode').map((s) => s.ratingKey);
+  const pageSeasons = page.filter((stub): stub is SeasonStub => stub.mediaType === 'season');
+  const pageSeasonEpisodeKeys = await mapWithConcurrency(
+    pageSeasons,
+    SEASON_READ_CONCURRENCY,
+    (season) => loadSeasonPassEpisodeKeys(season),
+  );
+  preloadedEpisodeVersionRows = await loadEpisodeVersionRows(pageSeasonEpisodeKeys.flat());
+  const pageEpisodeVersions = groupVersions(
+    preloadedEpisodeVersionRows,
+    (row) => row.episodeRatingKey,
+  );
+  const episodesBySeason = new Map<string, EpisodeStub[]>();
+  for (const episode of episodeStubsFromRows(preloadedEpisodeVersionRows)) {
+    if (
+      comparison !== 'all' &&
+      compareDuplicateVersions(pageEpisodeVersions.get(episode.ratingKey) ?? []).kind !== comparison
+    ) continue;
+    const episodes = episodesBySeason.get(episode.seasonRatingKey) ?? [];
+    episodes.push(episode);
+    episodesBySeason.set(episode.seasonRatingKey, episodes);
+  }
+  for (const stub of page) {
+    if (stub.mediaType === 'season') {
+      stub.episodes = episodesBySeason.get(stub.seasonRatingKey) ?? [];
+    }
+  }
+  const pageEpisodeKeys = page.flatMap((stub) =>
+    stub.mediaType === 'season' ? stub.episodes.map((episode) => episode.ratingKey) : []
+  );
 
   const [movieItemRows, movieVersionRows, episodeVersionRows] = await Promise.all([
     pageMovieKeys.length === 0 ? [] : db.select({
@@ -256,7 +440,7 @@ router.get('/', async (c) => {
   const showByKey = new Map(showRows.map((r) => [r.ratingKey, r]));
 
   const groups = page
-    .map((stub): DuplicateGroup | null => {
+    .map((stub): DuplicateListGroup | null => {
       if (stub.mediaType === 'movie') {
         const item = movieItemByKey.get(stub.ratingKey);
         if (!item) return null;
@@ -271,28 +455,85 @@ router.get('/', async (c) => {
           versions: movieVersionsByKey.get(stub.ratingKey) ?? [],
         } satisfies DuplicateMovieGroup;
       }
-      const versionRows = episodeVersionRows.filter((v) => v.episodeRatingKey === stub.ratingKey);
-      const first = versionRows[0];
-      if (!first) return null;
-      const show = showByKey.get(first.showRatingKey);
+      const show = showByKey.get(stub.showRatingKey);
+      const episodes = stub.episodes.map((episode): DuplicateEpisodeGroup | null => {
+        const versions = episodeVersionsByKey.get(episode.ratingKey) ?? [];
+        if (versions.length < 2) return null;
+        return {
+          mediaType: 'episode',
+          libraryKey: episode.libraryKey,
+          episodeRatingKey: episode.ratingKey,
+          showRatingKey: episode.showRatingKey,
+          seasonRatingKey: episode.seasonRatingKey,
+          showTitle: show?.title ?? 'Unknown show',
+          showThumb: show?.thumb ?? null,
+          seasonIndex: episode.seasonIndex,
+          episodeIndex: episode.episodeIndex,
+          episodeTitle: episode.episodeTitle,
+          combinedFileSize: episode.combinedFileSize,
+          versions,
+        } satisfies DuplicateEpisodeGroup;
+      }).filter((episode): episode is DuplicateEpisodeGroup => episode !== null)
+        .sort((a, b) => a.episodeIndex - b.episodeIndex);
+      if (episodes.length === 0) return null;
       return {
-        mediaType: 'episode',
-        libraryKey: first.libraryKey,
-        episodeRatingKey: stub.ratingKey,
-        showRatingKey: first.showRatingKey,
+        mediaType: 'season',
+        libraryKey: stub.libraryKey,
+        showRatingKey: stub.showRatingKey,
+        seasonRatingKey: stub.seasonRatingKey,
         showTitle: show?.title ?? 'Unknown show',
         showThumb: show?.thumb ?? null,
-        seasonIndex: first.seasonIndex,
-        episodeIndex: first.episodeIndex,
-        episodeTitle: first.episodeTitle,
+        seasonIndex: stub.seasonIndex,
+        duplicateGroupCount: stub.duplicateGroupCount,
         combinedFileSize: stub.combinedFileSize,
-        versions: episodeVersionsByKey.get(stub.ratingKey) ?? [],
-      } satisfies DuplicateEpisodeGroup;
+        comparisonSummary: summarizeDuplicateComparisons(
+          episodes.map((episode) => compareDuplicateVersions(episode.versions)),
+        ),
+        episodes,
+      } satisfies DuplicateSeasonGroup;
     })
-    .filter((g): g is DuplicateGroup => g !== null);
+    .filter((g): g is DuplicateListGroup => g !== null);
 
-  return c.json({ search, limit, offset, total, groups } satisfies DuplicatesResponse);
+  return c.json(
+    {
+      search,
+      limit,
+      offset,
+      total,
+      duplicateGroupTotal,
+      groups,
+    } satisfies DuplicatesResponse,
+  );
 });
+
+function episodeStubsFromRows(
+  rows: Array<typeof episodeMediaVersions.$inferSelect>,
+): EpisodeStub[] {
+  const grouped = new Map<string, Array<typeof episodeMediaVersions.$inferSelect>>();
+  for (const row of rows) {
+    const versions = grouped.get(row.episodeRatingKey) ?? [];
+    versions.push(row);
+    grouped.set(row.episodeRatingKey, versions);
+  }
+  return [...grouped.entries()].flatMap(([ratingKey, versions]) => {
+    if (versions.length < 2) return [];
+    const first = versions[0]!;
+    const sizes = versions.map((version) => version.fileSize);
+    return [{
+      mediaType: 'episode',
+      ratingKey,
+      libraryKey: first.libraryKey,
+      showRatingKey: first.showRatingKey,
+      seasonRatingKey: first.seasonRatingKey,
+      seasonIndex: first.seasonIndex,
+      episodeIndex: first.episodeIndex,
+      episodeTitle: first.episodeTitle,
+      combinedFileSize: sizes.every((size) => size !== null)
+        ? sizes.reduce<number>((total, size) => total + (size ?? 0), 0)
+        : null,
+    }];
+  });
+}
 
 function groupVersions<T extends Parameters<typeof mediaVersionFromRow>[0]>(
   rows: T[],
@@ -311,11 +552,34 @@ function groupVersions<T extends Parameters<typeof mediaVersionFromRow>[0]>(
 export default router;
 
 function keyBatches(keys: string[]): string[][] {
-  const batches: string[][] = [];
-  for (let start = 0; start < keys.length; start += VERSION_FILTER_BATCH_SIZE) {
-    batches.push(keys.slice(start, start + VERSION_FILTER_BATCH_SIZE));
+  return arrayBatches(keys, VERSION_FILTER_BATCH_SIZE);
+}
+
+function arrayBatches<T>(values: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let start = 0; start < values.length; start += size) {
+    batches.push(values.slice(start, start + size));
   }
   return batches;
+}
+
+async function mapWithConcurrency<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  map: (value: T) => Promise<U>,
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex++;
+        results[index] = await map(values[index]!);
+      }
+    },
+  ));
+  return results;
 }
 
 async function loadMovieVersionRows(
@@ -327,21 +591,6 @@ async function loadMovieVersionRows(
       db.select().from(itemMediaVersions).where(and(
         eq(itemMediaVersions.serverId, serverId),
         inArray(itemMediaVersions.itemRatingKey, batch),
-      ))
-    ),
-  );
-  return pages.flat();
-}
-
-async function loadEpisodeVersionRows(
-  serverId: number,
-  keys: string[],
-): Promise<Array<typeof episodeMediaVersions.$inferSelect>> {
-  const pages = await Promise.all(
-    keyBatches(keys).map((batch) =>
-      db.select().from(episodeMediaVersions).where(and(
-        eq(episodeMediaVersions.serverId, serverId),
-        inArray(episodeMediaVersions.episodeRatingKey, batch),
       ))
     ),
   );

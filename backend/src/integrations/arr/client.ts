@@ -48,6 +48,14 @@ export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export const RADARR_CATALOG_MAX_RECORDS = 50_000;
 export const RADARR_FILESYSTEM_MAX_BYTES = 2 * 1024 * 1024;
 export const RADARR_FILESYSTEM_MAX_ENTRIES = 2_000;
+export const SONARR_SEASON_COORDINATION_MIN_VERSION = '4.0.0.748';
+export const SONARR_SERIES_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
+export const SONARR_SERIES_SNAPSHOT_MAX_RECORDS = 50_000;
+export const SONARR_ACTIVITY_MAX_RECORDS = 1_000;
+export const SONARR_MANUAL_IMPORT_MAX_RECORDS = 500;
+export const SONARR_MONITORING_CHUNK_SIZE = 50;
+const ARR_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
+const ARR_HISTORY_MAX_RECORDS = 50_000;
 
 export interface RadarrFilesystemEntry {
   path: string;
@@ -137,6 +145,44 @@ export interface ArrEpisodeManagedFile {
   shared?: boolean;
 }
 
+export interface SonarrSeriesEpisode {
+  id: number;
+  seriesId: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeFileId: number;
+  monitored: boolean;
+}
+
+export interface SonarrSeriesEpisodeFile {
+  id: number;
+  seriesId: number;
+  path: string;
+  relativePath: string;
+  size: number;
+  episodeIds: number[];
+}
+
+export interface SonarrSeriesSnapshot {
+  episodes: SonarrSeriesEpisode[];
+  files: SonarrSeriesEpisodeFile[];
+}
+
+const SONARR_EPISODE_FILE_OWNER_MAX_RECORDS = 500;
+
+export interface SonarrManualImportCandidate {
+  path: string;
+  episodeIds: number[];
+  rejectionReasons: string[];
+}
+
+export interface SonarrSeasonCoordinationCapabilities {
+  available: boolean;
+  version: string | null;
+  minimumVersion: typeof SONARR_SEASON_COORDINATION_MIN_VERSION;
+  reason?: string;
+}
+
 export class ArrApiError extends Error {
   constructor(
     message: string,
@@ -194,6 +240,15 @@ async function sha256(value: unknown): Promise<string> {
 
 function radarrPathComparison(path: string): string {
   return path.trim().replaceAll('\\', '/').replace(/\/+$/, '').toLocaleLowerCase('en-US');
+}
+
+function absolutePathComparison(path: string): string | null {
+  const trimmed = path.trim();
+  if (!trimmed || trimmed !== path) return null;
+  const unix = trimmed.startsWith('/');
+  const windows = /^[A-Za-z]:[\\/]/.test(trimmed) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(trimmed);
+  if (!unix && !windows) return null;
+  return trimmed.replaceAll('\\', '/').replace(/\/+$/, '').toLocaleLowerCase('en-US');
 }
 
 const RADARR_COMPUTED_MOVIE_FIELDS = new Set([
@@ -282,11 +337,17 @@ export class ArrClient {
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
         throw new ArrApiError(
-          `Radarr returned ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
+          `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned ${response.status}${
+            detail ? `: ${detail.slice(0, 300)}` : ''
+          }`,
           response.status,
         );
       }
-      if (!response.body) throw new ArrApiError(`Radarr returned an empty ${description}`);
+      if (!response.body) {
+        throw new ArrApiError(
+          `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned an empty ${description}`,
+        );
+      }
       const reader = response.body.getReader();
       const chunks: Uint8Array[] = [];
       let total = 0;
@@ -296,7 +357,11 @@ export class ArrClient {
         total += next.value.byteLength;
         if (total > maxBytes) {
           controller.abort();
-          throw new ArrApiError(`Radarr ${description} exceeded the ${maxBytes}-byte safety limit`);
+          throw new ArrApiError(
+            `${
+              this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+            } ${description} exceeded the ${maxBytes}-byte safety limit`,
+          );
         }
         chunks.push(next.value);
       }
@@ -309,12 +374,16 @@ export class ArrClient {
       try {
         return JSON.parse(new TextDecoder().decode(bytes)) as T;
       } catch {
-        throw new ArrApiError(`Radarr returned malformed ${description}`);
+        throw new ArrApiError(
+          `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned malformed ${description}`,
+        );
       }
     } catch (error) {
       if (error instanceof ArrApiError) throw error;
       throw new ArrApiError(
-        `Radarr is unreachable while reading ${description}: ${
+        `${
+          this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+        } is unreachable while reading ${description}: ${
           error instanceof Error ? error.message : 'request failed'
         }`,
       );
@@ -643,9 +712,347 @@ export class ArrClient {
     };
   }
 
+  async sonarrSeasonCoordinationCapabilities(): Promise<SonarrSeasonCoordinationCapabilities> {
+    if (this.type !== 'sonarr') {
+      return {
+        available: false,
+        version: null,
+        minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION,
+        reason: 'Season coordination requires Sonarr',
+      };
+    }
+    const status = await this.request<{ version?: unknown; appName?: unknown }>('/system/status');
+    const version = typeof status.version === 'string' ? status.version.trim() : null;
+    if (typeof status.appName !== 'string' || status.appName.toLowerCase() !== 'sonarr') {
+      return {
+        available: false,
+        version,
+        minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION,
+        reason: 'The configured service did not identify itself as Sonarr',
+      };
+    }
+    if (!version || !versionAtLeast(version, SONARR_SEASON_COORDINATION_MIN_VERSION)) {
+      return {
+        available: false,
+        version,
+        minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION,
+        reason: version
+          ? `Sonarr ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer is required; this instance reports ${version}`
+          : `Sonarr version could not be verified; ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer is required`,
+      };
+    }
+    return { available: true, version, minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION };
+  }
+
+  async sonarrSeriesSnapshot(seriesId: number): Promise<SonarrSeriesSnapshot> {
+    if (this.type !== 'sonarr' || !Number.isSafeInteger(seriesId) || seriesId <= 0) {
+      throw new ArrApiError('A positive Sonarr series ID is required');
+    }
+    const [episodePayload, filePayload] = await Promise.all([
+      this.boundedRequest<unknown>(
+        `/episode?seriesId=${seriesId}`,
+        SONARR_SERIES_SNAPSHOT_MAX_BYTES,
+        'series episode snapshot',
+      ),
+      this.boundedRequest<unknown>(
+        `/episodefile?seriesId=${seriesId}`,
+        SONARR_SERIES_SNAPSHOT_MAX_BYTES,
+        'series EpisodeFile snapshot',
+      ),
+    ]);
+    if (!Array.isArray(episodePayload) || !Array.isArray(filePayload)) {
+      throw new ArrApiError('Sonarr returned an unsupported series snapshot');
+    }
+    if (
+      episodePayload.length > SONARR_SERIES_SNAPSHOT_MAX_RECORDS ||
+      filePayload.length > SONARR_SERIES_SNAPSHOT_MAX_RECORDS
+    ) {
+      throw new ArrApiError(
+        `Sonarr series snapshot exceeded the ${SONARR_SERIES_SNAPSHOT_MAX_RECORDS}-record safety limit`,
+      );
+    }
+    const episodeIds = new Set<number>();
+    const coordinates = new Set<string>();
+    const episodes = episodePayload.map((raw): SonarrSeriesEpisode => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned a malformed episode snapshot record');
+      }
+      const value = raw as Record<string, unknown>;
+      const id = Number(value.id);
+      const actualSeriesId = Number(value.seriesId);
+      const seasonNumber = Number(value.seasonNumber);
+      const episodeNumber = Number(value.episodeNumber);
+      const episodeFileId = Number(value.episodeFileId ?? 0);
+      const coordinate = `${seasonNumber}:${episodeNumber}`;
+      if (
+        !Number.isSafeInteger(id) || id <= 0 || actualSeriesId !== seriesId ||
+        !Number.isSafeInteger(seasonNumber) || seasonNumber < 0 ||
+        !Number.isSafeInteger(episodeNumber) || episodeNumber <= 0 ||
+        !Number.isSafeInteger(episodeFileId) || episodeFileId < 0 ||
+        typeof value.monitored !== 'boolean' || episodeIds.has(id) || coordinates.has(coordinate)
+      ) {
+        throw new ArrApiError('Sonarr returned conflicting or malformed episode identities');
+      }
+      episodeIds.add(id);
+      coordinates.add(coordinate);
+      return {
+        id,
+        seriesId,
+        seasonNumber,
+        episodeNumber,
+        episodeFileId,
+        monitored: value.monitored,
+      };
+    });
+    const owners = new Map<number, number[]>();
+    for (const episode of episodes) {
+      if (episode.episodeFileId === 0) continue;
+      const ids = owners.get(episode.episodeFileId) ?? [];
+      ids.push(episode.id);
+      owners.set(episode.episodeFileId, ids);
+    }
+    const fileIds = new Set<number>();
+    const files = filePayload.map((raw): SonarrSeriesEpisodeFile => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned a malformed EpisodeFile snapshot record');
+      }
+      const value = raw as Record<string, unknown>;
+      const id = Number(value.id);
+      const actualSeriesId = Number(value.seriesId);
+      const path = typeof value.path === 'string' ? value.path.trim() : '';
+      const relativePath = typeof value.relativePath === 'string' ? value.relativePath.trim() : '';
+      const size = Number(value.size);
+      const normalized = absolutePathComparison(path);
+      if (
+        !Number.isSafeInteger(id) || id <= 0 || fileIds.has(id) || actualSeriesId !== seriesId ||
+        !normalized || !relativePath || !Number.isSafeInteger(size) || size <= 0
+      ) {
+        throw new ArrApiError('Sonarr returned conflicting or malformed EpisodeFile identities');
+      }
+      fileIds.add(id);
+      return {
+        id,
+        seriesId,
+        path,
+        relativePath,
+        size,
+        episodeIds: [...(owners.get(id) ?? [])].sort((a, b) => a - b),
+      };
+    });
+    if ([...owners.keys()].some((id) => !fileIds.has(id))) {
+      throw new ArrApiError('Sonarr episode snapshot references a missing EpisodeFile');
+    }
+    return { episodes, files };
+  }
+
+  async sonarrManualImportPreflight(
+    candidates: readonly {
+      path: string;
+      seriesId: number;
+      seasonNumber: number;
+      episodeIds: number[];
+    }[],
+  ): Promise<SonarrManualImportCandidate[]> {
+    if (
+      this.type !== 'sonarr' || candidates.length === 0 ||
+      candidates.length > SONARR_MANUAL_IMPORT_MAX_RECORDS
+    ) {
+      throw new ArrApiError(
+        'Sonarr manual-import preflight candidates are outside the safety bound',
+      );
+    }
+    const payload = candidates.map((candidate) => ({
+      path: candidate.path,
+      downloadId: '',
+      seriesId: candidate.seriesId,
+      // Reprocess without caller-selected episode identities. Supplying episodeIds
+      // makes Sonarr reapply those choices, so an echoed association would not prove
+      // that the retained path is independently recognizable during RescanSeries.
+      seasonNumber: null,
+      episodeIds: [],
+      releaseGroup: '',
+      quality: {
+        quality: { id: 0, name: 'Unknown', source: 'unknown', resolution: 0 },
+        revision: { version: 1, real: 0, isRepack: false },
+      },
+      languages: [{ id: 0, name: 'Unknown' }],
+      indexerFlags: 0,
+      releaseType: 'unknown',
+    }));
+    const result = await this.request<unknown>('/manualimport', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!Array.isArray(result) || result.length !== candidates.length) {
+      throw new ArrApiError('Sonarr returned an unsupported manual-import preflight response');
+    }
+    return result.map((raw, index) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned a malformed manual-import candidate');
+      }
+      const value = raw as Record<string, unknown>;
+      const path = typeof value.path === 'string' ? value.path.trim() : '';
+      const episodes = Array.isArray(value.episodes) ? value.episodes : [];
+      const episodeIds = episodes.map((episode) =>
+        Number(
+          episode && typeof episode === 'object' ? (episode as Record<string, unknown>).id : NaN,
+        )
+      );
+      const rejections = Array.isArray(value.rejections) ? value.rejections : [];
+      const rejectionReasons = rejections.map((rejection) =>
+        String(
+          rejection && typeof rejection === 'object'
+            ? (rejection as Record<string, unknown>).reason ?? ''
+            : '',
+        )
+      ).filter(Boolean);
+      if (
+        absolutePathComparison(path) !== absolutePathComparison(candidates[index]!.path) ||
+        episodeIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      ) {
+        throw new ArrApiError('Sonarr changed or malformed manual-import preflight identity');
+      }
+      return { path, episodeIds: [...new Set(episodeIds)].sort((a, b) => a - b), rejectionReasons };
+    });
+  }
+
+  async sonarrSeriesActivity(
+    seriesId: number,
+    allowedCommandIds: readonly number[] = [],
+  ): Promise<RadarrActivityEvidence> {
+    if (this.type !== 'sonarr') throw new ArrApiError('Series activity reads require Sonarr');
+    const [queue, commands] = await Promise.all([
+      this.boundedRequest<unknown>(
+        `/queue?seriesIds=${seriesId}&includeSeries=false&includeEpisode=false&pageSize=${SONARR_ACTIVITY_MAX_RECORDS}`,
+        2 * 1024 * 1024,
+        'series queue response',
+      ),
+      this.boundedRequest<unknown>(
+        '/command?includeCompleted=false',
+        2 * 1024 * 1024,
+        'command response',
+      ),
+    ]);
+    const queueObject = queue && typeof queue === 'object' && !Array.isArray(queue)
+      ? queue as Record<string, unknown>
+      : null;
+    const queueRecords = queueObject && Array.isArray(queueObject.records)
+      ? queueObject.records
+      : null;
+    const queueTotal = Number(queueObject?.totalRecords);
+    if (
+      !queueRecords || !Number.isSafeInteger(queueTotal) || queueTotal < 0 ||
+      queueTotal !== queueRecords.length || !Array.isArray(commands) ||
+      queueRecords.length > SONARR_ACTIVITY_MAX_RECORDS ||
+      commands.length > SONARR_ACTIVITY_MAX_RECORDS
+    ) {
+      throw new ArrApiError('Sonarr returned unsupported or oversized queue/command evidence');
+    }
+    const blocking: RadarrActivityEvidence['blocking'] = [];
+    for (const raw of queueRecords) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned malformed queue activity evidence');
+      }
+      const value = raw as Record<string, unknown>;
+      if (Number(value.seriesId) !== seriesId) {
+        throw new ArrApiError('Sonarr returned queue activity outside the requested series');
+      }
+      const id = Number(value.id);
+      blocking.push({
+        source: 'queue',
+        id: Number.isSafeInteger(id) ? id : 0,
+        name: String(value.trackedDownloadStatus ?? value.status ?? 'download/import'),
+      });
+    }
+    const allowed = new Set(allowedCommandIds);
+    const blockedNames = /(import|download|search|rescan|refresh|rename|move)/i;
+    for (const raw of commands) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned malformed command activity evidence');
+      }
+      const value = raw as Record<string, unknown>;
+      const body = value.body && typeof value.body === 'object' && !Array.isArray(value.body)
+        ? value.body as Record<string, unknown>
+        : {};
+      const ids = [
+        value.seriesId,
+        body.seriesId,
+        ...(Array.isArray(value.seriesIds) ? value.seriesIds : []),
+        ...(Array.isArray(body.seriesIds) ? body.seriesIds : []),
+      ].map(Number).filter(Number.isSafeInteger);
+      const name = String(value.name ?? body.name ?? value.commandName ?? '');
+      const id = Number(value.id);
+      if (!blockedNames.test(name) || (Number.isSafeInteger(id) && allowed.has(id))) continue;
+      // A relevant command without an attributable series boundary may be global or
+      // path-scoped. It is unsafe to assume it cannot mutate this series.
+      if (ids.length > 0 && !ids.includes(seriesId)) continue;
+      blocking.push({ source: 'command', id: Number.isSafeInteger(id) ? id : 0, name });
+    }
+    return { quiet: blocking.length === 0, blocking };
+  }
+
   async deleteManagedFile(fileId: number): Promise<void> {
     const resource = this.type === 'radarr' ? 'moviefile' : 'episodefile';
     await this.request<void>(`/${resource}/${fileId}`, { method: 'DELETE' });
+  }
+
+  async sonarrEpisodeFile(fileId: number): Promise<SonarrSeriesEpisodeFile | null> {
+    if (this.type !== 'sonarr' || !Number.isSafeInteger(fileId) || fileId <= 0) {
+      throw new ArrApiError('A positive Sonarr EpisodeFile ID is required');
+    }
+    let value: Record<string, unknown>;
+    try {
+      value = await this.request<Record<string, unknown>>(`/episodefile/${fileId}`);
+    } catch (error) {
+      if (error instanceof ArrApiError && error.status === 404) return null;
+      throw error;
+    }
+    const id = Number(value.id);
+    const seriesId = Number(value.seriesId);
+    const path = typeof value.path === 'string' ? value.path.trim() : '';
+    const relativePath = typeof value.relativePath === 'string' ? value.relativePath.trim() : '';
+    const size = Number(value.size);
+    if (
+      id !== fileId || !Number.isSafeInteger(seriesId) || seriesId <= 0 ||
+      !absolutePathComparison(path) || !relativePath || !Number.isSafeInteger(size) || size <= 0
+    ) {
+      throw new ArrApiError('Sonarr returned a malformed EpisodeFile resource');
+    }
+    return { id, seriesId, path, relativePath, size, episodeIds: [] };
+  }
+
+  async sonarrEpisodeFileOwnerIds(fileId: number, seriesId: number): Promise<number[]> {
+    if (
+      this.type !== 'sonarr' || !Number.isSafeInteger(fileId) || fileId <= 0 ||
+      !Number.isSafeInteger(seriesId) || seriesId <= 0
+    ) {
+      throw new ArrApiError('Positive Sonarr EpisodeFile and series IDs are required');
+    }
+    const payload = await this.boundedRequest<unknown>(
+      `/episode?episodeFileId=${fileId}`,
+      2 * 1024 * 1024,
+      'EpisodeFile ownership response',
+    );
+    if (!Array.isArray(payload) || payload.length > SONARR_EPISODE_FILE_OWNER_MAX_RECORDS) {
+      throw new ArrApiError('Sonarr returned unsupported or oversized EpisodeFile ownership');
+    }
+    const ownerIds = new Set<number>();
+    for (const raw of payload) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned malformed EpisodeFile ownership');
+      }
+      const record = raw as Record<string, unknown>;
+      const id = Number(record.id);
+      if (
+        !Number.isSafeInteger(id) || id <= 0 || ownerIds.has(id) ||
+        Number(record.seriesId) !== seriesId || Number(record.episodeFileId) !== fileId
+      ) {
+        throw new ArrApiError('Sonarr returned conflicting EpisodeFile ownership');
+      }
+      ownerIds.add(id);
+    }
+    return [...ownerIds].sort((left, right) => left - right);
   }
 
   async rescanMedia(mediaId: number): Promise<void> {
@@ -1188,19 +1595,25 @@ export class ArrClient {
     const path = this.type === 'radarr'
       ? `/history/movie?movieId=${mediaId}&includeMovie=false`
       : `/history/series?seriesId=${mediaId}&includeSeries=false&includeEpisode=false`;
-    const records = await this.request<
-      Array<{
-        id?: number;
-        date?: string;
-        eventType?: string;
-        downloadId?: string;
-        data?: {
-          droppedPath?: string;
-          sourcePath?: string;
-          importedPath?: string;
-        };
-      }>
-    >(path);
+    const payload = await this.boundedRequest<unknown>(
+      path,
+      ARR_HISTORY_MAX_BYTES,
+      'download history response',
+    );
+    if (!Array.isArray(payload) || payload.length > ARR_HISTORY_MAX_RECORDS) {
+      throw new ArrApiError('Arr returned unsupported or oversized download history evidence');
+    }
+    const records = payload as Array<{
+      id?: number;
+      date?: string;
+      eventType?: string;
+      downloadId?: string;
+      data?: {
+        droppedPath?: string;
+        sourcePath?: string;
+        importedPath?: string;
+      };
+    }>;
     const associations = new Map<string, ArrTorrentAssociation>();
     for (const record of records) {
       if (record.eventType?.toLowerCase() !== 'downloadfolderimported') continue;

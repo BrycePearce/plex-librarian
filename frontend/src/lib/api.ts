@@ -27,6 +27,8 @@ import type {
   SavePlexPathMappingRequest,
   SaveQbittorrentInstanceRequest,
   SaveSeerrInstanceRequest,
+  SeasonDeletionPreviewResponse,
+  SeasonVersionAnalysisResponse,
   SeerrInstance,
   SeerrIntegrationSettings,
   Settings,
@@ -72,7 +74,9 @@ export type {
   DownloadCleanupPreviewResponse,
   DuplicateEpisodeGroup,
   DuplicateGroup,
+  DuplicateListGroup,
   DuplicateMovieGroup,
+  DuplicateSeasonGroup,
   DuplicatesResponse,
   EventType,
   LibrariesResponse,
@@ -96,6 +100,9 @@ export type {
   RequestFollowThroughDetailItem,
   RequestFollowThroughDetailsResponse,
   Season,
+  SeasonDeletionPreviewResponse,
+  SeasonVersionAnalysisResponse,
+  SeasonVersionProfile,
   SeerrInstance,
   SeerrIntegrationSettings,
   Settings,
@@ -103,6 +110,7 @@ export type {
   SmartDuplicateAnalysisResponse,
   SmartDuplicateCandidate,
   SmartDuplicateCleanupResponse,
+  SmartDuplicateEpisodeCandidate,
   StaleItem,
   StaleQuickCleanupCandidate,
   StaleQuickCleanupOrder,
@@ -327,6 +335,7 @@ export const api = {
         deleteMediaIds: number[];
       }>,
       includeNearIdentical: boolean,
+      manualSeasonReview = false,
     ) =>
       apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
         method: "POST",
@@ -334,8 +343,53 @@ export const api = {
           clientRequestId,
           selections,
           includeNearIdentical,
+          ...(manualSeasonReview ? { manualSeasonReview: true } : {}),
         }),
       }),
+    seasonCleanup: (
+      clientRequestId: string,
+      selections: Array<{
+        ratingKey: string;
+        deleteMediaIds: number[];
+      }>,
+      preview: {
+        analysisFingerprint: string;
+        expiresAt: number;
+      },
+    ) =>
+      apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          clientRequestId,
+          selections: selections.map((selection) => ({
+            mediaType: "episode" as const,
+            ...selection,
+          })),
+          includeNearIdentical: true,
+          manualSeasonReview: true,
+          ...preview,
+        }),
+      }),
+    analyzeSeasonVersions: (
+      seasonRatingKey: string,
+      episodeRatingKeys: string[],
+      totalEpisodeCount: number,
+    ) =>
+      apiFetch<SeasonVersionAnalysisResponse>(
+        `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/analysis`,
+        {
+          method: "POST",
+          body: JSON.stringify({ episodeRatingKeys, totalEpisodeCount }),
+        },
+      ),
+    seasonDeletionPreview: (
+      seasonRatingKey: string,
+      selections: Array<{ episodeRatingKey: string; mediaIds: number[] }>,
+    ) =>
+      apiFetch<SeasonDeletionPreviewResponse>(
+        `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/deletion-preview`,
+        { method: "POST", body: JSON.stringify({ selections }) },
+      ),
     deleteMovieMediaVersion: (ratingKey: string, mediaId: number) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/movies/${encodeURIComponent(ratingKey)}/media/${mediaId}`,

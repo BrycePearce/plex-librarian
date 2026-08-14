@@ -330,6 +330,13 @@
       "when": 1786160000000,
       "tag": "0047_radarr_path_adoption",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1786512840101,
+      "tag": "0048_episode_season_index",
+      "breakpoints": true
     }
   ]
 }

@@ -445,7 +445,9 @@ function ensureNoRecoveryOverlap(client: SqliteClient, input: NewDeletionOperati
       `SELECT t.operation_id, t.status, t.target_kind, t.target_key, t.snapshot
      FROM deletion_targets t
      JOIN deletion_operations o ON o.id = t.operation_id
-     WHERE o.server_id = ? AND o.library_key = ? AND t.status IN ('needs_attention','completed_with_warning')`,
+     WHERE o.server_id = ? AND o.library_key = ?
+       AND (t.status = 'needs_attention'
+         OR (t.status = 'completed_with_warning' AND t.phase <> 'finalizing'))`,
     )
     .values<[string, 'needs_attention' | 'completed_with_warning', DeletionKind, string, string]>(
       input.serverId,
@@ -713,6 +715,21 @@ function claimTarget(): DeletionWorkTarget | null {
               t.phase, t.removal_confirmed_at, t.plex_attempt_count
        FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id
        WHERE (t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?))
+         AND (
+           json_extract(t.snapshot, '$.seasonCleanup') IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM deletion_targets season_prior
+             WHERE season_prior.operation_id = t.operation_id
+               AND season_prior.ordinal < t.ordinal
+               AND NOT (
+                 season_prior.status = 'completed'
+                 OR (
+                   season_prior.status = 'completed_with_warning'
+                   AND season_prior.phase = 'finalizing'
+                 )
+               )
+           )
+         )
          AND (
            json_extract(t.snapshot, '$.arrReassignments') IS NULL
            OR NOT EXISTS (
@@ -1016,11 +1033,12 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         radarrRemovalFallback?: unknown;
         resolutionState?: 'management_hold';
       };
-      const lifecycleRow: RelocationLifecycleRow = {
+      const legacyUnsupported = String(target[2]) === 'sonarr_series';
+      const lifecycleRow: RelocationLifecycleRow | null = legacyUnsupported ? null : {
         targetId: Number(target[0]),
         operationId: id,
         serverId,
-        targetKind: String(target[2]) as DeletionKind,
+        targetKind: String(target[2]) as 'whole_item' | 'movie_version' | 'episode_version',
         targetKey: String(target[3]),
         status: String(target[5]),
         phase: String(target[7]),
@@ -1029,65 +1047,72 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         error: target[13] === null ? null : String(target[13]),
         snapshot,
       };
-      return { target, snapshot, lifecycleRow };
+      return { target, snapshot, lifecycleRow, legacyUnsupported };
     });
     const lifecycleEvidence = loadRelocationLifecycleEvidence(
       client,
-      projectedTargets.map(({ lifecycleRow }) => lifecycleRow),
+      projectedTargets.flatMap(({ lifecycleRow }) => lifecycleRow === null ? [] : [lifecycleRow]),
     );
-    result.targets = projectedTargets.map(({ target, snapshot, lifecycleRow }) => {
-      const targetResult = Object.fromEntries(
-        [
-          'id',
-          'ordinal',
-          'targetKind',
-          'targetKey',
-          'title',
-          'status',
-          'attemptCount',
-          'phase',
-          'removalConfirmedAt',
-          'plexReconciledAt',
-          'plexAttemptCount',
-          'warning',
-          'nextRetryAt',
-          'error',
-          'logicalSize',
-        ].map((key, index) => [key, target[index]]),
-      );
-      targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
-      targetResult.arrCoordinationConfigured = snapshot.mode === 'coordinated' ||
-        snapshot.unmonitorFromArr === true ||
-        (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
-        (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0) ||
-        snapshot.radarrRemovalFallback !== undefined;
-      if (snapshot.resolutionState === 'management_hold') {
-        targetResult.resolutionState = 'management_hold';
-      }
-      const radarrPathPlan = Array.isArray(snapshot.arrReassignments)
-        ? (snapshot.arrReassignments[0] as { radarrPathPlan?: unknown } | undefined)?.radarrPathPlan
-        : undefined;
-      if (radarrPathPlan) targetResult.radarrPathAdoption = radarrPathPlan;
-      if (snapshot.radarrRemovalFallback) {
-        targetResult.radarrRemovalFallback = snapshot.radarrRemovalFallback;
-      }
-      const lifecycle = classifyRelocationLifecycle(
-        lifecycleRow,
-        lifecycleEvidence.get(lifecycleRow.targetId)!,
-      );
-      targetResult.relocationGuidanceState = lifecycle.guidanceState;
-      targetResult.relocationSyncBarrierState = lifecycle.barrierState;
-      if (lifecycle.guidance) targetResult.relocationGuidance = lifecycle.guidance;
-      if (lifecycle.barrier) targetResult.relocationSyncBarrier = lifecycle.barrier;
-      targetResult.supersededReason = isRelocationSupersededTarget({
-          status: targetResult.status,
-          error: targetResult.error,
-          snapshot,
-        })
-        ? targetResult.error
-        : null;
-      return targetResult;
-    });
+    result.targets = projectedTargets.map(
+      ({ target, snapshot, lifecycleRow, legacyUnsupported }) => {
+        const targetResult = Object.fromEntries(
+          [
+            'id',
+            'ordinal',
+            'targetKind',
+            'targetKey',
+            'title',
+            'status',
+            'attemptCount',
+            'phase',
+            'removalConfirmedAt',
+            'plexReconciledAt',
+            'plexAttemptCount',
+            'warning',
+            'nextRetryAt',
+            'error',
+            'logicalSize',
+          ].map((key, index) => [key, target[index]]),
+        );
+        targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
+        if (legacyUnsupported) {
+          targetResult.unsupportedLegacyWorkflow = true;
+          return targetResult;
+        }
+        targetResult.arrCoordinationConfigured = snapshot.mode === 'coordinated' ||
+          snapshot.unmonitorFromArr === true ||
+          (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
+          (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0) ||
+          snapshot.radarrRemovalFallback !== undefined;
+        if (snapshot.resolutionState === 'management_hold') {
+          targetResult.resolutionState = 'management_hold';
+        }
+        const radarrPathPlan = Array.isArray(snapshot.arrReassignments)
+          ? (snapshot.arrReassignments[0] as { radarrPathPlan?: unknown } | undefined)
+            ?.radarrPathPlan
+          : undefined;
+        if (radarrPathPlan) targetResult.radarrPathAdoption = radarrPathPlan;
+        if (snapshot.radarrRemovalFallback) {
+          targetResult.radarrRemovalFallback = snapshot.radarrRemovalFallback;
+        }
+        const lifecycle = classifyRelocationLifecycle(
+          lifecycleRow!,
+          lifecycleEvidence.get(lifecycleRow!.targetId)!,
+        );
+        targetResult.relocationGuidanceState = lifecycle.guidanceState;
+        targetResult.relocationSyncBarrierState = lifecycle.barrierState;
+        if (lifecycle.guidance) targetResult.relocationGuidance = lifecycle.guidance;
+        if (lifecycle.barrier) targetResult.relocationSyncBarrier = lifecycle.barrier;
+        targetResult.supersededReason = isRelocationSupersededTarget({
+            status: targetResult.status,
+            error: targetResult.error,
+            snapshot,
+          })
+          ? targetResult.error
+          : null;
+        return targetResult;
+      },
+    );
     return result;
   });
 }
@@ -1099,6 +1124,8 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
       .prepare(
         `SELECT id FROM deletion_targets
        WHERE operation_id = ? AND status = 'queued'
+         AND phase = 'validating'
+         AND attempt_count = 0
          AND NOT (
            (
              COALESCE(json_extract(snapshot, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
@@ -1271,17 +1298,37 @@ export function dismissDeletionOperation(id: string, serverId: number): boolean 
       .value<[string]>(id, serverId);
     if (!operation || !activeServerMatches(client, serverId)) return false;
 
+    // Dismissal is an acknowledgement, not proof that it is safe to continue with
+    // later destructive work. Require untouched sequential season targets to be
+    // cancelled first so dismissal cannot silently resume them with stale evidence.
+    const blockedSequentialDismissal = client.prepare(
+      `SELECT 1
+       FROM deletion_targets unresolved
+       JOIN deletion_targets later ON later.operation_id = unresolved.operation_id
+         AND later.ordinal > unresolved.ordinal
+       WHERE unresolved.operation_id = ?
+         AND json_extract(unresolved.snapshot, '$.seasonCleanup') = 1
+         AND (
+           unresolved.status = 'needs_attention'
+           OR (unresolved.status = 'completed_with_warning' AND unresolved.phase <> 'finalizing')
+         )
+         AND later.status IN ('queued','running','waiting_retry')
+       LIMIT 1`,
+    ).value<[number]>(id);
+    if (blockedSequentialDismissal) return false;
+
     const targets = client.prepare(
-      `SELECT id FROM deletion_targets
+      `SELECT id, target_kind FROM deletion_targets
        WHERE operation_id = ?
          AND (
            status = 'needs_attention'
            OR (status = 'completed_with_warning' AND phase <> 'finalizing')
          )
-         AND json_type(snapshot, '$.relocationGuidance') IS NULL
-         AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
-         AND json_type(snapshot, '$.resolutionState') IS NULL`,
-    ).values<[number]>(id);
+          AND json_type(snapshot, '$.relocationGuidance') IS NULL
+          AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
+          AND json_type(snapshot, '$.resolutionState') IS NULL
+          `,
+    ).values<[number, DeletionKind]>(id);
     if (targets.length === 0) return false;
 
     for (const [targetId] of targets) {

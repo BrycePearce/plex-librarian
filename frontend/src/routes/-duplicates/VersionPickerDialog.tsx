@@ -322,7 +322,12 @@ export function VersionPickerDialog({
         }
         advanced={
           <AdvancedVersionDeletionTree
-            title={item.mediaType === "movie" ? item.title : item.episodeTitle}
+            title={item.mediaType === "movie"
+              ? item.title
+              : `E${String(item.episodeIndex).padStart(2, "0")} — ${item.episodeTitle}`}
+            ancestors={item.mediaType === "episode"
+              ? [item.showTitle, `Season ${item.seasonIndex}`]
+              : undefined}
             versions={item.versions.map((version) => {
               const displayVersion = refreshedByMediaId.get(version.mediaId) ?? version;
               return {

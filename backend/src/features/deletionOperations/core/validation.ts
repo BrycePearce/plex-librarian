@@ -18,7 +18,7 @@ import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/re
 
 export interface DurableTargetRecord {
   id: number;
-  targetKind: 'whole_item' | 'movie_version' | 'episode_version';
+  targetKind: 'whole_item' | 'movie_version' | 'episode_version' | 'sonarr_series';
   snapshot: string;
 }
 

@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertStringIncludes } from '@std/assert';
 import { Hono } from 'hono';
 import { resolve } from '@std/path';
 
@@ -10,6 +10,8 @@ const { runMigrations } = await import('../../../db/migrate.ts');
 await runMigrations(testDbPath, resolve(import.meta.dirname!, '../../../../drizzle'));
 const { withTransaction } = await import('../../../db/index.ts');
 const duplicatesRoute = (await import('../../duplicates/listRoute.ts')).default;
+const seasonAnalysisRoute = (await import('../../duplicates/seasonAnalysisRoute.ts')).default;
+const { withActiveServerId } = await import('../../../middleware/activeServer.ts');
 const librariesRoute = (await import('../../libraries/route.ts')).default;
 const deletionOperationsRoute = (await import('../route.ts')).default;
 const { buildSmartDuplicateAnalysis } = await import('../../duplicates/smartAnalysis.ts');
@@ -136,6 +138,42 @@ withTransaction((client) => {
     season.run(seasonKey, show, NOW);
     for (const size of sizes) episodeVersion.run(mediaId++, episode, seasonKey, show, size, NOW);
   }
+  for (const size of [340, 240]) {
+    episodeVersion.run(
+      mediaId++,
+      'visible-episode-2',
+      'visible-show-season',
+      'visible-show',
+      size,
+      NOW,
+    );
+  }
+  client.prepare(
+    `UPDATE episode_media_versions
+     SET width = 3840, height = 2160
+     WHERE media_id = (
+       SELECT min(media_id) FROM episode_media_versions
+       WHERE server_id = 1 AND episode_rating_key = 'visible-episode-2'
+     )`,
+  ).run();
+  // Durable version deletion can leave one retained projection until the next sync.
+  // Two such rows in one season must not combine into a false season-level duplicate.
+  episodeVersion.run(
+    mediaId++,
+    'visible-singleton-1',
+    'visible-show-season',
+    'visible-show',
+    180,
+    NOW,
+  );
+  episodeVersion.run(
+    mediaId++,
+    'visible-singleton-2',
+    'visible-show-season',
+    'visible-show',
+    170,
+    NOW,
+  );
 });
 
 insertOperation('op-owned-movie', 'movies', 'movie_version', 'needs_attention', 'Owned Movie', {
@@ -203,9 +241,23 @@ withTransaction((client) => {
 });
 
 const app = new Hono();
+app.use('/api/duplicates/seasons/*', withActiveServerId);
 app.route('/api/duplicates', duplicatesRoute);
+app.route('/api/duplicates', seasonAnalysisRoute);
 app.route('/api/libraries', librariesRoute);
 app.route('/api/deletion-operations', deletionOperationsRoute);
+
+function duplicateRatingKeys(groups: Array<Record<string, unknown>>): string[] {
+  return groups.flatMap((group) => {
+    if (group.mediaType === 'season') {
+      return (group.episodes as Array<{ episodeRatingKey: string }>).map((episode) =>
+        episode.episodeRatingKey
+      );
+    }
+    const ratingKey = group.ratingKey;
+    return typeof ratingKey === 'string' ? [ratingKey] : [];
+  });
+}
 
 Deno.test('workflow-owned duplicate roots are excluded before totals and pagination', async () => {
   const first = await (await app.request('/api/duplicates?limit=1&offset=0')).json();
@@ -213,23 +265,52 @@ Deno.test('workflow-owned duplicate roots are excluded before totals and paginat
   const comparison = await (await app.request(
     '/api/duplicates?comparison=same-profile&limit=20',
   )).json();
+  const different = await (await app.request(
+    '/api/duplicates?comparison=different&limit=20',
+  )).json();
   assertEquals(first.total, 4);
+  assertEquals(first.duplicateGroupTotal, 5);
   assertEquals(second.total, 4);
   assertEquals(
-    [...first.groups, ...second.groups].some((group) =>
+    duplicateRatingKeys([...first.groups, ...second.groups]).some((ratingKey) =>
       ['owned-movie', 'owned-episode', 'whole-owned-movie', 'whole-owned-episode'].includes(
-        group.ratingKey ?? group.episodeRatingKey,
+        ratingKey,
       )
     ),
     false,
   );
   assertEquals(comparison.total, 4);
+  assertEquals(comparison.duplicateGroupTotal, 4);
   assertEquals(
-    comparison.groups.map((group: { ratingKey?: string; episodeRatingKey?: string }) =>
-      group.ratingKey ?? group.episodeRatingKey
-    ).sort(),
-    ['completed-movie', 'visible-episode', 'visible-movie', 'warning-finalized-movie'],
+    duplicateRatingKeys(comparison.groups).sort(),
+    [
+      'completed-movie',
+      'visible-episode',
+      'visible-movie',
+      'warning-finalized-movie',
+    ],
   );
+  const tvSeason = comparison.groups.find((group: { mediaType: string }) =>
+    group.mediaType === 'season'
+  );
+  assertEquals(tvSeason.episodes.length, 1);
+  assertEquals(tvSeason.comparisonSummary, {
+    episodeCount: 1,
+    differentEpisodeCount: 0,
+    sameProfileEpisodeCount: 1,
+    needsReviewEpisodeCount: 0,
+    differences: [],
+  });
+  assertEquals(different.total, 1);
+  assertEquals(different.duplicateGroupTotal, 1);
+  assertEquals(duplicateRatingKeys(different.groups), ['visible-episode-2']);
+  assertEquals(different.groups[0].comparisonSummary, {
+    episodeCount: 1,
+    differentEpisodeCount: 1,
+    sameProfileEpisodeCount: 0,
+    needsReviewEpisodeCount: 0,
+    differences: [{ code: 'resolution', episodeCount: 1 }],
+  });
   assertEquals(
     withTransaction((client) =>
       client.prepare(
@@ -238,6 +319,110 @@ Deno.test('workflow-owned duplicate roots are excluded before totals and paginat
     ),
     2,
   );
+});
+
+Deno.test('season duplicate payloads are capped to one server-side review pass', async () => {
+  const seasonKey = 'bounded-season';
+  withTransaction((client) => {
+    client.prepare(
+      `INSERT INTO seasons
+        (server_id, rating_key, show_rating_key, library_key, season_index, title, updated_at)
+       VALUES (1, ?, 'visible-show', 'shows', 99, 'Bounded season', ?)`,
+    ).run(seasonKey, NOW);
+    const insert = client.prepare(
+      `INSERT INTO episode_media_versions
+        (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key,
+         library_key, episode_title, episode_index, season_index, stream_details_available,
+         file_size, updated_at)
+       VALUES (1, ?, ?, ?, 'visible-show', 'shows', ?, ?, 99, 0, ?, ?)`,
+    );
+    for (let episodeIndex = 1; episodeIndex <= 501; episodeIndex++) {
+      const episodeKey = `bounded-episode-${episodeIndex}`;
+      insert.run(
+        100_000 + episodeIndex * 2,
+        episodeKey,
+        seasonKey,
+        `Bounded ${episodeIndex}`,
+        episodeIndex,
+        200,
+        NOW,
+      );
+      insert.run(
+        100_001 + episodeIndex * 2,
+        episodeKey,
+        seasonKey,
+        `Bounded ${episodeIndex}`,
+        episodeIndex,
+        100,
+        NOW,
+      );
+    }
+  });
+
+  try {
+    const response = await app.request('/api/duplicates?type=tv&search=Bounded');
+    assertEquals(response.status, 200);
+    const data = await response.json();
+    assertEquals(data.total, 1);
+    assertEquals(data.duplicateGroupTotal, 501);
+    assertEquals(data.groups[0].duplicateGroupCount, 501);
+    assertEquals(data.groups[0].episodes.length, 20);
+    const analysis = await app.request(`/api/duplicates/seasons/${seasonKey}/analysis`, {
+      method: 'POST',
+    });
+    assertEquals(analysis.status, 409);
+    assertStringIncludes(
+      (await analysis.json()).error,
+      'exceeds the supported safety limit of 500',
+    );
+  } finally {
+    withTransaction((client) => {
+      client.prepare('DELETE FROM seasons WHERE server_id = 1 AND rating_key = ?').run(seasonKey);
+    });
+  }
+});
+
+Deno.test('season profile analysis stays scoped to the requested season and eligible roots', async () => {
+  const response = await app.request('/api/duplicates/seasons/visible-show-season/analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      episodeRatingKeys: ['visible-episode', 'visible-episode-2'],
+      totalEpisodeCount: 5,
+    }),
+  });
+  assertEquals(response.status, 200);
+  const analysis = await response.json();
+  assertEquals(analysis.analyzedEpisodeCount, 2);
+  // Client counts cannot manufacture truncation; completeness is derived from the
+  // active server projection for the exact season.
+  assertEquals(analysis.omittedEpisodeCount, 0);
+  assertEquals(
+    analysis.episodes.map((episode: { episodeRatingKey: string }) => episode.episodeRatingKey),
+    ['visible-episode', 'visible-episode-2'],
+  );
+
+  const crossSeason = await app.request(
+    '/api/duplicates/seasons/visible-show-season/analysis',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ episodeRatingKeys: ['visible-episode', 'owned-episode'] }),
+    },
+  );
+  assertEquals(crossSeason.status, 200);
+  const disguised = await crossSeason.json();
+  assertEquals(
+    disguised.episodes.map((episode: { episodeRatingKey: string }) => episode.episodeRatingKey),
+    ['visible-episode', 'visible-episode-2'],
+  );
+
+  const owned = await app.request('/api/duplicates/seasons/owned-show-season/analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ episodeRatingKeys: ['owned-episode'] }),
+  });
+  assertEquals(owned.status, 409);
 });
 
 Deno.test('stale duplicate and smart cleanup queries exclude workflow-owned roots', async () => {
@@ -259,7 +444,13 @@ Deno.test('stale duplicate and smart cleanup queries exclude workflow-owned root
   const smart = await buildSmartDuplicateAnalysis(1, { movies: true, tv: true });
   assertEquals(
     smart.candidates.map((candidate) => candidate.ratingKey).sort(),
-    ['completed-movie', 'visible-episode', 'visible-movie', 'warning-finalized-movie'],
+    [
+      'completed-movie',
+      'visible-episode',
+      'visible-episode-2',
+      'visible-movie',
+      'warning-finalized-movie',
+    ],
   );
   const quick = analyzeStaleQuickCleanup(1, 'movies', 365, NOW);
   assertEquals(
@@ -267,6 +458,44 @@ Deno.test('stale duplicate and smart cleanup queries exclude workflow-owned root
     false,
   );
   assertEquals(isStaleQuickCleanupCandidate(1, 'movies', 365, 'owned-single', NOW), false);
+});
+
+Deno.test('season storage stays unknown when any included version size is unknown', async () => {
+  withTransaction((client) => {
+    client.prepare(
+      `INSERT INTO items
+        (server_id, rating_key, library_key, title, type, added_at, file_size, updated_at)
+       VALUES (1, 'unknown-size-show', 'shows', 'Unknown Size Show', 'show', ?, NULL, ?)`,
+    ).run(OLD, NOW);
+    client.prepare(
+      `INSERT INTO seasons
+        (server_id, rating_key, show_rating_key, library_key, season_index, title, updated_at)
+       VALUES (1, 'unknown-size-season', 'unknown-size-show', 'shows', 1, 'Season 1', ?)`,
+    ).run(NOW);
+    const insertVersion = client.prepare(
+      `INSERT INTO episode_media_versions
+        (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key,
+         library_key, episode_title, episode_index, season_index, width, height, duration,
+         bitrate, video_codec, container, audio_codec, audio_channels, audio_streams_json,
+         subtitle_streams_json, stream_details_available, file_size, updated_at)
+       VALUES (1, ?, 'unknown-size-episode', 'unknown-size-season', 'unknown-size-show',
+               'shows', 'Unknown Size Episode', 1, 1, 1920, 1080, 3600000, 8000,
+               'h264', 'mkv', 'aac', 2, '[]', '[]', 1, ?, ?)`,
+    );
+    insertVersion.run(10_001, 500, NOW);
+    insertVersion.run(10_002, null, NOW);
+  });
+
+  for (const comparison of ['all', 'same-profile']) {
+    const suffix = comparison === 'all' ? '' : `&comparison=${comparison}`;
+    const response = await (await app.request(
+      `/api/duplicates?type=tv&search=Unknown%20Size&limit=20${suffix}`,
+    )).json();
+    assertEquals(response.total, 1);
+    assertEquals(response.duplicateGroupTotal, 1);
+    assertEquals(response.groups[0].combinedFileSize, null);
+    assertEquals(response.groups[0].episodes[0].combinedFileSize, null);
+  }
 });
 
 Deno.test('current attention listing includes unresolved warnings exactly once', async () => {

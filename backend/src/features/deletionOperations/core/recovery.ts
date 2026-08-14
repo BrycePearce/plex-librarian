@@ -9,6 +9,16 @@ interface RecoveryClient {
 export function recoverInterruptedDeletionWork(client: RecoveryClient, now: number): void {
   try {
     client.prepare(
+      `UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL,
+         error = 'abandoned season-coordinator targets cannot be resumed; reset the development database or review and dismiss this operation',
+         updated_at = ?
+       WHERE target_kind = 'sonarr_series' AND status NOT IN ('completed','completed_with_warning','cancelled')`,
+    ).run(now);
+  } catch (error) {
+    if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;
+  }
+  try {
+    client.prepare(
       `DELETE FROM radarr_movie_reservations
        WHERE target_id IN (SELECT id FROM deletion_targets WHERE status IN ('completed','cancelled'))`,
     ).run();
@@ -27,6 +37,18 @@ export function recoverInterruptedDeletionWork(client: RecoveryClient, now: numb
   client.prepare(
     "UPDATE deletion_operations SET status = 'queued', next_retry_at = NULL, updated_at = ? WHERE status = 'running'",
   ).run(now);
+  try {
+    client.prepare(
+      `UPDATE deletion_operations
+       SET status = 'needs_attention', next_retry_at = NULL, updated_at = ?
+       WHERE id IN (
+         SELECT operation_id FROM deletion_targets
+         WHERE target_kind = 'sonarr_series' AND status = 'needs_attention'
+       )`,
+    ).run(now);
+  } catch (error) {
+    if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;
+  }
   try {
     client.prepare(
       `UPDATE radarr_movie_reservations

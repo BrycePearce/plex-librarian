@@ -117,6 +117,8 @@ export interface PlexMediaStreamSummary {
 }
 
 export interface PlexMediaTechnicalDetails {
+  /** Exact single-part path used only as non-authoritative comparison evidence. */
+  filePath?: string | null;
   width: number | null;
   height: number | null;
   duration: number | null;

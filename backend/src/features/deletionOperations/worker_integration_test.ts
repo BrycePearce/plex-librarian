@@ -18,6 +18,7 @@ const { withTransaction } = await import('../../db/index.ts');
 const {
   cancelDeletionOperation,
   DeletionConflictError,
+  dismissDeletionOperation,
   enqueueDeletionOperation,
   enqueueDeletionOperations,
   getDeletionOperation,
@@ -48,6 +49,42 @@ const { finalizeSyncLog } = await import('../sync/syncLog.ts');
 const { resolveActiveServer } = await import('../../integrations/plex/index.ts');
 const { createApp } = await import('../../app.ts');
 const app = createApp();
+
+async function seasonPreviewEvidence(seasonRatingKey: string, episodeRatingKeys: string[]) {
+  const response = await app.request(
+    `/api/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/analysis`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ episodeRatingKeys, totalEpisodeCount: episodeRatingKeys.length }),
+    },
+  );
+  assertEquals(response.status, 200, await response.clone().text());
+  const analysis = await response.json();
+  assertEquals(analysis.omittedEpisodeCount, 0);
+  const selections = episodeRatingKeys.map((episodeRatingKey) => {
+    const mediaIds = withTransaction((client) =>
+      client.prepare(
+        'SELECT media_id FROM episode_media_versions WHERE episode_rating_key = ? ORDER BY media_id',
+      ).values<[number]>(episodeRatingKey).map(([id]) => id)
+    );
+    return { episodeRatingKey, mediaIds: mediaIds.slice(0, -1) };
+  });
+  const deletionResponse = await app.request(
+    `/api/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/deletion-preview`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ selections }),
+    },
+  );
+  assertEquals(deletionResponse.status, 200, await deletionResponse.clone().text());
+  const deletionPreview = await deletionResponse.json();
+  return {
+    analysisFingerprint: deletionPreview.fingerprint,
+    expiresAt: deletionPreview.expiresAt,
+  };
+}
 
 const live = new Map<string, PlexRawMetadata>();
 const bulkMetadataOverrides = new Map<string, PlexRawMetadata>();
@@ -108,14 +145,21 @@ let sonarrManagedFileId = 10;
 let sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
 let sonarrManagedMediaId: number | null = null;
 let sonarrRescanTargetPath: string | null = null;
+let sonarrRescanHook: (() => void) | null = null;
 let sonarrRescanCount = 0;
 let sonarrMonitorMutationCount = 0;
 let sonarrMonitored = true;
 let sonarrManagedFileShared = false;
+let sonarrActivityReadCount = 0;
+let blockSonarrActivityAtRead: number | null = null;
+let seasonPackQbit = false;
+let seasonPackMixed = false;
+let seasonPackForeignOwner = false;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
 let qbitRequestCount = 0;
 let fetchCount = 0;
+let technicalDetailsRequestCount = 0;
 let historyAccountId: unknown = null;
 let reportedPlexLibraries: Array<{ key: string; title: string; type: string }> | null = null;
 const torrentHash = 'a'.repeat(40);
@@ -205,7 +249,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(Response.json(radarrExclusion));
     }
     if (url.pathname === '/api/v3/queue') {
-      return Promise.resolve(Response.json({ records: [] }));
+      return Promise.resolve(Response.json({ records: [], totalRecords: 0 }));
     }
     if (url.pathname === '/api/v3/command' && (init?.method ?? 'GET') === 'GET') {
       return Promise.resolve(Response.json([]));
@@ -361,17 +405,72 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }
   }
   if (url.hostname === 'sonarr') {
+    if (url.pathname === '/api/v3/system/status') {
+      return Promise.resolve(Response.json({ appName: 'Sonarr', version: '4.0.0.748' }));
+    }
     if (url.pathname === '/api/v3/series') {
       return Promise.resolve(Response.json([{
         id: 8,
+        tvdbId: 20,
         title: 'Example Show',
         path: '/tv/Show',
       }]));
+    }
+    if (url.pathname === '/api/v3/queue') {
+      sonarrActivityReadCount++;
+      const blocked = sonarrActivityReadCount === blockSonarrActivityAtRead;
+      return Promise.resolve(Response.json({
+        records: blocked ? [{ id: 901, seriesId: 8, status: 'importing' }] : [],
+        totalRecords: blocked ? 1 : 0,
+      }));
+    }
+    if (url.pathname === '/api/v3/command' && (init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve(Response.json([]));
+    }
+    if (url.pathname === '/api/v3/command/81') {
+      return Promise.resolve(Response.json({ id: 81, status: 'completed' }));
+    }
+    if (url.pathname === '/api/v3/manualimport' && init?.method === 'POST') {
+      const candidates = JSON.parse(String(init.body)) as Array<
+        { path: string; episodeIds: number[] }
+      >;
+      return Promise.resolve(Response.json(candidates.map((candidate) => ({
+        path: candidate.path,
+        // Model Sonarr independently parsing the retained path. The production
+        // preflight deliberately sends no caller-selected episode IDs.
+        episodes: candidate.path === sonarrRescanTargetPath ? [{ id: 9 }] : [],
+        rejections: [],
+      }))));
+    }
+    if (url.pathname === '/api/v3/history/series' && seasonPackQbit) {
+      return Promise.resolve(Response.json([{
+        id: 501,
+        eventType: 'downloadFolderImported',
+        downloadId: torrentHash,
+        data: {
+          droppedPath: '/downloads/release/old.mkv',
+          sourcePath: '/downloads/release',
+          importedPath: sonarrManagedPath,
+        },
+      }]));
+    }
+    if (url.pathname === '/api/v3/history' && seasonPackQbit) {
+      const records = [{ seriesId: 8 }, ...(seasonPackForeignOwner ? [{ seriesId: 99 }] : [])];
+      return Promise.resolve(Response.json({ totalRecords: records.length, records }));
+    }
+    if (url.pathname === '/api/v3/episode/monitor' && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as { episodeIds: number[]; monitored: boolean };
+      sonarrMonitorMutationCount++;
+      sonarrMonitored = body.monitored;
+      return Promise.resolve(
+        Response.json(body.episodeIds.map((id) => ({ id, monitored: body.monitored }))),
+      );
     }
     if (url.pathname === '/api/v3/episode') {
       return Promise.resolve(Response.json([
         {
           id: 9,
+          seriesId: 8,
           seasonNumber: 1,
           episodeNumber: 1,
           episodeFileId: sonarrManagedFilePresent ? sonarrManagedFileId : 0,
@@ -380,6 +479,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         ...(sonarrManagedFileShared
           ? [{
             id: 11,
+            seriesId: 8,
             seasonNumber: 1,
             episodeNumber: 2,
             episodeFileId: sonarrManagedFileId,
@@ -387,6 +487,19 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
           }]
           : []),
       ]));
+    }
+    if (url.pathname === '/api/v3/episodefile') {
+      return Promise.resolve(Response.json(
+        sonarrManagedFilePresent
+          ? [{
+            id: sonarrManagedFileId,
+            seriesId: 8,
+            relativePath: sonarrManagedPath.replace('/tv/Show/', ''),
+            path: sonarrManagedPath,
+            size: 40_000,
+          }]
+          : [],
+      ));
     }
     if (url.pathname === '/api/v3/episode/9' && (init?.method ?? 'GET') === 'GET') {
       if (
@@ -435,8 +548,12 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       url.pathname === `/api/v3/episodefile/${sonarrManagedFileId}` &&
       (init?.method ?? 'GET') === 'GET'
     ) {
+      if (!sonarrManagedFilePresent) {
+        return Promise.resolve(new Response('missing', { status: 404 }));
+      }
       return Promise.resolve(Response.json({
         id: sonarrManagedFileId,
+        seriesId: 8,
         relativePath: sonarrManagedPath.replace('/tv/Show/', ''),
         path: sonarrManagedPath,
         size: 40_000,
@@ -467,11 +584,12 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         sonarrManagedFileId++;
         sonarrManagedFilePresent = true;
       }
+      sonarrRescanHook?.();
       if (loseArrRescanResponse) {
         loseArrRescanResponse = false;
         return Promise.reject(new TypeError('lost Sonarr rescan response'));
       }
-      return Promise.resolve(Response.json({ id: 81 }));
+      return Promise.resolve(Response.json({ id: 81, status: 'queued' }));
     }
   }
   if (url.hostname === 'qbit') {
@@ -483,15 +601,18 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
           ? [{
             hash: torrentHash,
             name: 'Release',
-            size: 100_000,
-            content_path: '/downloads/release',
+            size: seasonPackQbit ? 40_000 : 100_000,
+            content_path: seasonPackQbit ? '/downloads/release/old.mkv' : '/downloads/release',
             save_path: '/downloads',
           }]
           : [],
       ));
     }
     if (url.pathname === '/api/v2/torrents/files') {
-      return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100_000 }]));
+      return Promise.resolve(Response.json([{
+        name: seasonPackQbit ? 'release/old.mkv' : 'release/movie.mkv',
+        size: seasonPackQbit ? 40_000 : 100_000,
+      }, ...(seasonPackMixed ? [{ name: 'release/unselected.mkv', size: 40_000 }] : [])]));
     }
     if (url.pathname === '/api/v2/torrents/delete' && init?.method === 'POST') {
       qbitDeleteCount++;
@@ -527,6 +648,9 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
   }
   const metadata = url.pathname.match(/^\/library\/metadata\/([^/]+)$/);
   if (metadata) {
+    if (url.searchParams.get('includeOptionalElements') === 'Stream') {
+      technicalDetailsRequestCount++;
+    }
     const ratingKey = decodeURIComponent(metadata[1]);
     if (pendingPlexMediaRemoval?.ratingKey === ratingKey) {
       const pendingItem = live.get(ratingKey);
@@ -615,14 +739,21 @@ function reset(): void {
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
   sonarrManagedMediaId = null;
   sonarrRescanTargetPath = null;
+  sonarrRescanHook = null;
   sonarrRescanCount = 0;
   sonarrMonitorMutationCount = 0;
   sonarrMonitored = true;
   sonarrManagedFileShared = false;
+  sonarrActivityReadCount = 0;
+  blockSonarrActivityAtRead = null;
+  seasonPackQbit = false;
+  seasonPackMixed = false;
+  seasonPackForeignOwner = false;
   qbitPresent = false;
   qbitDeleteCount = 0;
   qbitRequestCount = 0;
   fetchCount = 0;
+  technicalDetailsRequestCount = 0;
   historyAccountId = null;
   reportedPlexLibraries = null;
   wholeDeleteOrder.length = 0;
@@ -828,6 +959,90 @@ function addSmartCleanupMovie(ratingKey: string, persistDetails = true): void {
   ];
 }
 
+function addManualSeasonEpisode(
+  showRatingKey: string,
+  seasonRatingKey: string,
+  episodeRatingKey: string,
+  episodeIndex: number,
+  mediaIds: readonly number[],
+): void {
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT OR IGNORE INTO items (server_id, rating_key, library_key, title, type, added_at, file_size, updated_at) VALUES (1, ?, 'shows', ?, 'show', 1, 100, 1)",
+    ).run(showRatingKey, `Show ${showRatingKey}`);
+    client.prepare(
+      "INSERT OR IGNORE INTO seasons (server_id, rating_key, show_rating_key, library_key, season_index, title, file_size, updated_at) VALUES (1, ?, ?, 'shows', 1, 'Season 1', 100, 1)",
+    ).run(seasonRatingKey, showRatingKey);
+    const insert = client.prepare(
+      `INSERT INTO episode_media_versions
+       (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key,
+        library_key, episode_title, episode_index, season_index, file_size,
+        video_resolution, bitrate, video_codec, container, updated_at)
+       VALUES (1, ?, ?, ?, ?, 'shows', ?, ?, 1, ?, ?, ?, 'h264', 'mkv', 1)`,
+    );
+    for (const [index, mediaId] of mediaIds.entries()) {
+      insert.run(
+        mediaId,
+        episodeRatingKey,
+        seasonRatingKey,
+        showRatingKey,
+        `Episode ${episodeIndex}`,
+        episodeIndex,
+        index === 0 ? 40 : 80,
+        index === 0 ? '720' : '1080',
+        index === 0 ? 2_000 : 8_000,
+      );
+    }
+  });
+  live.set(showRatingKey, {
+    ratingKey: showRatingKey,
+    title: `Show ${showRatingKey}`,
+    type: 'show',
+    librarySectionID: 'shows',
+  });
+  live.set(episodeRatingKey, {
+    ratingKey: episodeRatingKey,
+    title: `Episode ${episodeIndex}`,
+    type: 'episode',
+    librarySectionID: 'shows',
+    grandparentRatingKey: showRatingKey,
+    parentRatingKey: seasonRatingKey,
+    parentIndex: 1,
+    index: episodeIndex,
+    Media: mediaIds.map((id, index) => ({
+      id,
+      videoResolution: index === 0 ? '720' : '1080',
+      width: index === 0 ? 1280 : 1920,
+      height: index === 0 ? 720 : 1080,
+      duration: 3_600_000,
+      bitrate: index === 0 ? 2_000 : 8_000,
+      videoCodec: 'h264',
+      videoProfile: 'high',
+      videoDynamicRange: 'sdr',
+      videoFrameRate: '24p',
+      container: 'mkv',
+      audioCodec: 'aac',
+      audioChannels: 2,
+      audioProfile: 'lc',
+      Part: [{
+        file: `/tv/${showRatingKey}-${episodeRatingKey}-${id}.mkv`,
+        size: index === 0 ? 40_000 : 80_000,
+        Stream: [
+          { streamType: 1, bitDepth: 8, scanType: 'progressive' },
+          {
+            streamType: 2,
+            codec: 'aac',
+            languageCode: 'eng',
+            channels: 2,
+            channelLayout: 'stereo',
+            default: true,
+          },
+        ],
+      }],
+    })),
+  });
+}
+
 function configureRadarr(withQbit = false): void {
   withTransaction((client) => {
     client.prepare(
@@ -844,7 +1059,7 @@ function configureRadarr(withQbit = false): void {
   });
 }
 
-function configureSonarr(): void {
+function configureSonarr(withQbit = false): void {
   withTransaction((client) => {
     client.prepare(
       "INSERT INTO arr_instances (id, server_id, type, name, url, api_key, created_at, updated_at) VALUES (2, 1, 'sonarr', 'Sonarr', 'http://sonarr', 'key', 1, 1)",
@@ -852,6 +1067,11 @@ function configureSonarr(): void {
     client.prepare(
       "INSERT INTO arr_library_mappings (server_id, library_key, arr_instance_id, add_import_exclusion) VALUES (1, 'shows', 2, 0)",
     ).run();
+    if (withQbit) {
+      client.prepare(
+        "INSERT INTO qbittorrent_instances (id, server_id, name, url, username, password, created_at, updated_at) VALUES (1, 1, 'qBittorrent', 'http://qbit', '', '', 1, 1)",
+      ).run();
+    }
   });
 }
 
@@ -2449,6 +2669,540 @@ Deno.test('quick cleanup endpoints persist the analyzed keeper in the durable ta
   assertEquals(parsed.expectedRetainedVersion.mediaId, 12);
   assertEquals(parsed.expectedRetainedVersion.bitrate, 10_000);
   assertEquals(parsed.height, 1080);
+});
+
+Deno.test('manual season cleanup queues one durable operation across episodes', async () => {
+  reset();
+  addManualSeasonEpisode('manual-show', 'manual-season', 'manual-episode-1', 1, [101, 102]);
+  addManualSeasonEpisode('manual-show', 'manual-season', 'manual-episode-2', 2, [201, 202]);
+
+  const preview = await seasonPreviewEvidence('manual-season', [
+    'manual-episode-1',
+    'manual-episode-2',
+  ]);
+  const requestBody = JSON.stringify({
+    clientRequestId: 'manual-season-cleanup',
+    selections: [
+      { mediaType: 'episode', ratingKey: 'manual-episode-1', deleteMediaIds: [101] },
+      { mediaType: 'episode', ratingKey: 'manual-episode-2', deleteMediaIds: [201] },
+    ],
+    includeNearIdentical: true,
+    manualSeasonReview: true,
+    ...preview,
+  });
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: requestBody,
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  assertEquals(result.targetCount, 2);
+  assertEquals(result.operationIds.length, 1);
+  const repeated = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: requestBody,
+  });
+  assertEquals(repeated.status, 202, await repeated.clone().text());
+  assertEquals(await repeated.json(), result);
+  const conflicting = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...JSON.parse(requestBody),
+      selections: [
+        { mediaType: 'episode', ratingKey: 'manual-episode-1', deleteMediaIds: [102] },
+        { mediaType: 'episode', ratingKey: 'manual-episode-2', deleteMediaIds: [201] },
+      ],
+    }),
+  });
+  assertEquals(conflicting.status, 409);
+  const rows = withTransaction((client) =>
+    client.prepare(
+      `SELECT o.client_request_id, t.target_kind, t.target_key,
+              json_extract(t.snapshot, '$.seasonCleanup'),
+              json_extract(t.snapshot, '$.expectedRetainedVersion.mediaId')
+       FROM deletion_operations o
+       JOIN deletion_targets t ON t.operation_id = o.id
+       WHERE o.id = ? ORDER BY t.ordinal`,
+    ).values(result.operationIds[0])
+  );
+  assertEquals(rows, [
+    ['manual-season-cleanup:0', 'episode_version', 'manual-episode-1:101', 1, 102],
+    ['manual-season-cleanup:0', 'episode_version', 'manual-episode-2:201', 1, 202],
+  ]);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(result.operationIds[0])?.[0]
+    ),
+    2,
+  );
+  // The authoritative season preview enriches each selected episode once before
+  // fingerprinting. Durable acceptance/execution must not repeat those reads.
+  assertEquals(technicalDetailsRequestCount, 2);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        `SELECT SUM(stream_details_available)
+         FROM episode_media_versions
+         WHERE episode_rating_key IN ('manual-episode-1', 'manual-episode-2')`,
+      ).value<[number]>()?.[0]
+    ),
+    4,
+  );
+  await settle();
+  const executionErrors = withTransaction((client) =>
+    client.prepare(
+      'SELECT target_key, error FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
+    ).values(result.operationIds[0])
+  );
+  assertEquals(
+    getDeletionOperation(result.operationIds[0], 1)?.status,
+    'completed',
+    JSON.stringify(executionErrors),
+  );
+  assertEquals(live.get('manual-episode-1')?.Media?.map((media) => media.id), [102]);
+  assertEquals(live.get('manual-episode-2')?.Media?.map((media) => media.id), [202]);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(result.operationIds[0])?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('season cleanup rejects download cleanup instead of silently ignoring it', async () => {
+  reset();
+  addManualSeasonEpisode('download-show', 'download-season', 'download-episode', 1, [111, 112]);
+  const preview = await seasonPreviewEvidence('download-season', ['download-episode']);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-download-cleanup',
+      selections: [{ mediaType: 'episode', ratingKey: 'download-episode', deleteMediaIds: [111] }],
+      manualSeasonReview: true,
+      cleanupDownloads: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 400);
+  assertStringIncludes((await response.json()).error, 'does not support download cleanup');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT COUNT(*) FROM deletion_operations WHERE client_request_id LIKE 'season-download-cleanup:%'",
+      ).value<[number]>()?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('season cleanup accepts the supported maximum as one fully persisted operation', async () => {
+  reset();
+  const episodeKeys: string[] = [];
+  for (let episode = 1; episode <= 50; episode++) {
+    const key = `maximum-episode-${episode.toString().padStart(3, '0')}`;
+    episodeKeys.push(key);
+    addManualSeasonEpisode(
+      'maximum-show',
+      'maximum-season',
+      key,
+      episode,
+      [episode * 10 + 1, episode * 10 + 2],
+    );
+  }
+  const preview = await seasonPreviewEvidence('maximum-season', episodeKeys);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-supported-maximum',
+      selections: episodeKeys.map((ratingKey, index) => ({
+        mediaType: 'episode',
+        ratingKey,
+        deleteMediaIds: [(index + 1) * 10 + 1],
+      })),
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  assertEquals(result.operationIds.length, 1);
+  assertEquals(result.targetCount, 50);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        `SELECT COUNT(*), COUNT(r.target_id)
+         FROM deletion_targets t
+         LEFT JOIN media_version_reservations r ON r.target_id = t.id
+         WHERE t.operation_id = ?`,
+      ).value<[number, number]>(result.operationIds[0])
+    ),
+    [50, 50],
+  );
+});
+
+Deno.test('season cleanup pauses later ordinals and resumes without repeating completed work', async () => {
+  reset();
+  addManualSeasonEpisode('pause-show', 'pause-season', 'pause-episode-1', 1, [121, 122]);
+  addManualSeasonEpisode('pause-show', 'pause-season', 'pause-episode-2', 2, [221, 222]);
+  addManualSeasonEpisode('pause-show', 'pause-season', 'pause-episode-3', 3, [321, 322]);
+  const preview = await seasonPreviewEvidence('pause-season', [
+    'pause-episode-1',
+    'pause-episode-2',
+    'pause-episode-3',
+  ]);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-pause-resume',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'pause-episode-1', deleteMediaIds: [121] },
+        { mediaType: 'episode', ratingKey: 'pause-episode-2', deleteMediaIds: [221] },
+        { mediaType: 'episode', ratingKey: 'pause-episode-3', deleteMediaIds: [321] },
+      ],
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationIds: [operationId] } = await response.json();
+  const originalSecondEpisode = structuredClone(live.get('pause-episode-2')!);
+  live.get('pause-episode-2')!.Media = [originalSecondEpisode.Media![0]!];
+  await settle();
+  const paused = getDeletionOperation(operationId, 1)!;
+  assertEquals(paused.status, 'needs_attention');
+  assertEquals(paused.completedCount, 1);
+  assertEquals(paused.failedCount, 1);
+  assertEquals(
+    (paused.targets as Array<{ status: string }>).map((target) => target.status),
+    ['completed', 'needs_attention', 'queued'],
+  );
+  const deletesBeforeRetry = plexMediaDeleteCount;
+  live.set('pause-episode-2', originalSecondEpisode);
+  assertEquals(retryDeletionOperation(operationId, 1), true);
+  await settle();
+  const completed = getDeletionOperation(operationId, 1)!;
+  assertEquals(completed.status, 'completed');
+  assertEquals(completed.completedCount, 3);
+  assertEquals(plexMediaDeleteCount - deletesBeforeRetry, 2);
+});
+
+Deno.test('season cleanup warning pauses later ordinals and remains recheckable', async () => {
+  reset();
+  addManualSeasonEpisode('warning-show', 'warning-season', 'warning-episode-1', 1, [131, 132]);
+  addManualSeasonEpisode('warning-show', 'warning-season', 'warning-episode-2', 2, [231, 232]);
+  const preview = await seasonPreviewEvidence('warning-season', [
+    'warning-episode-1',
+    'warning-episode-2',
+  ]);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-warning-pause',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'warning-episode-1', deleteMediaIds: [131] },
+        { mediaType: 'episode', ratingKey: 'warning-episode-2', deleteMediaIds: [231] },
+      ],
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationIds: [operationId] } = await response.json();
+
+  withTransaction((client) => {
+    client.prepare(
+      `UPDATE deletion_targets
+       SET status = 'completed_with_warning', phase = 'plex_reconciliation', warning = 'Plex metadata needs attention'
+       WHERE operation_id = ? AND ordinal = 0`,
+    ).run(operationId);
+    refreshDeletionOperation(client, operationId);
+  });
+
+  const paused = getDeletionOperation(operationId, 1)!;
+  assertEquals(paused.status, 'needs_attention');
+  assertEquals(
+    (paused.targets as Array<{ status: string }>).map((target) => target.status),
+    ['completed_with_warning', 'queued'],
+  );
+  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  assertEquals(
+    (getDeletionOperation(operationId, 1)!.targets as Array<{ status: string }>).map((target) =>
+      target.status
+    ),
+    ['queued', 'queued'],
+  );
+});
+
+Deno.test('finalized season audit warning allows later ordinals without replay', async () => {
+  reset();
+  addManualSeasonEpisode('audit-show', 'audit-season', 'audit-episode-1', 1, [151, 152]);
+  addManualSeasonEpisode('audit-show', 'audit-season', 'audit-episode-2', 2, [251, 252]);
+  const preview = await seasonPreviewEvidence('audit-season', [
+    'audit-episode-1',
+    'audit-episode-2',
+  ]);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-finalized-warning',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'audit-episode-1', deleteMediaIds: [151] },
+        { mediaType: 'episode', ratingKey: 'audit-episode-2', deleteMediaIds: [251] },
+      ],
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationIds: [operationId] } = await response.json();
+
+  // Model the first selected version disappearing after acceptance. Its retained
+  // version is still valid, so reconciliation produces a finalized audit warning.
+  live.get('audit-episode-1')!.Media = [live.get('audit-episode-1')!.Media![1]!];
+  const deletesBeforeRun = plexMediaDeleteCount;
+  await settle();
+
+  const completed = getDeletionOperation(operationId, 1)!;
+  assertEquals(completed.status, 'completed_with_warning');
+  assertEquals(
+    (completed.targets as Array<{ status: string; phase: string }>).map((target) => [
+      target.status,
+      target.phase,
+    ]),
+    [
+      ['completed_with_warning', 'finalizing'],
+      ['completed', 'finalizing'],
+    ],
+  );
+  assertEquals(plexMediaDeleteCount - deletesBeforeRun, 1);
+  assertEquals(live.get('audit-episode-2')?.Media?.map((media) => media.id), [252]);
+});
+
+Deno.test('season cleanup requires queued targets to be cancelled before dismissal', async () => {
+  reset();
+  addManualSeasonEpisode('dismiss-show', 'dismiss-season', 'dismiss-episode-1', 1, [141, 142]);
+  addManualSeasonEpisode('dismiss-show', 'dismiss-season', 'dismiss-episode-2', 2, [241, 242]);
+  const preview = await seasonPreviewEvidence('dismiss-season', [
+    'dismiss-episode-1',
+    'dismiss-episode-2',
+  ]);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-dismiss-pause',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'dismiss-episode-1', deleteMediaIds: [141] },
+        { mediaType: 'episode', ratingKey: 'dismiss-episode-2', deleteMediaIds: [241] },
+      ],
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationIds: [operationId] } = await response.json();
+
+  withTransaction((client) => {
+    client.prepare(
+      "UPDATE deletion_targets SET status = 'needs_attention', error = 'manual repair required' WHERE operation_id = ? AND ordinal = 0",
+    ).run(operationId);
+    refreshDeletionOperation(client, operationId);
+  });
+
+  assertEquals(dismissDeletionOperation(operationId, 1), false);
+  assertEquals(cancelDeletionOperation(operationId, 1), true);
+  assertEquals(dismissDeletionOperation(operationId, 1), true);
+  const dismissed = getDeletionOperation(operationId, 1)!;
+  assertEquals(dismissed.status, 'completed_with_warning');
+  assertEquals(
+    (dismissed.targets as Array<{ status: string }>).map((target) => target.status),
+    ['completed_with_warning', 'cancelled'],
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('manual season lanes delete multiple explicit versions while one remains', async () => {
+  reset();
+  addManualSeasonEpisode(
+    'manual-three-show',
+    'manual-three-season',
+    'manual-three-episode',
+    1,
+    [301, 302, 303],
+  );
+
+  const preview = await seasonPreviewEvidence('manual-three-season', ['manual-three-episode']);
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'manual-season-one-lane',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'manual-three-episode', deleteMediaIds: [301, 302] },
+      ],
+      manualSeasonReview: true,
+      ...preview,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  assertEquals(result.targetCount, 2);
+
+  await settle();
+  const targetErrors = withTransaction((client) =>
+    client.prepare(
+      'SELECT target_key, error FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
+    ).values(result.operationIds[0])
+  );
+  assertEquals(
+    getDeletionOperation(result.operationIds[0], 1)?.status,
+    'completed',
+    JSON.stringify(targetErrors),
+  );
+  assertEquals(live.get('manual-three-episode')?.Media?.map((media) => media.id), [303]);
+});
+
+Deno.test('manual season cleanup rejects selections spanning seasons', async () => {
+  reset();
+  addManualSeasonEpisode('manual-show', 'manual-season-1', 'manual-episode-1', 1, [101, 102]);
+  addManualSeasonEpisode('manual-show', 'manual-season-2', 'manual-episode-2', 2, [201, 202]);
+
+  const response = await app.request('/api/duplicates/smart-cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'manual-cross-season',
+      selections: [
+        { mediaType: 'episode', ratingKey: 'manual-episode-1', deleteMediaIds: [101] },
+        { mediaType: 'episode', ratingKey: 'manual-episode-2', deleteMediaIds: [201] },
+      ],
+      includeNearIdentical: true,
+      manualSeasonReview: true,
+    }),
+  });
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).error,
+    'season cleanup selections must belong to one season',
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT COUNT(*) FROM deletion_operations WHERE client_request_id LIKE 'manual-cross-season:%'",
+      ).value<[number]>()?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('authoritative season submission rejects expired and drifted fingerprints', async () => {
+  reset();
+  addManualSeasonEpisode('fingerprint-show', 'fingerprint-season', 'fingerprint-episode', 1, [
+    601,
+    602,
+  ]);
+  const preview = await seasonPreviewEvidence('fingerprint-season', ['fingerprint-episode']);
+  const request = (clientRequestId: string, evidence: Record<string, unknown>) =>
+    app.request('/api/duplicates/smart-cleanup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId,
+        selections: [{
+          mediaType: 'episode',
+          ratingKey: 'fingerprint-episode',
+          deleteMediaIds: [601],
+        }],
+        manualSeasonReview: true,
+        ...evidence,
+      }),
+    });
+  const expired = await request('season-expired-preview', { ...preview, expiresAt: 1 });
+  assertEquals(expired.status, 409);
+  assertStringIncludes((await expired.json()).error, 'expired');
+
+  withTransaction((client) =>
+    client.prepare(
+      'UPDATE episode_media_versions SET file_size = file_size + 1 WHERE episode_rating_key = ? AND media_id = ?',
+    ).run('fingerprint-episode', 601)
+  );
+  const drifted = await request('season-drifted-preview', preview);
+  assertEquals(drifted.status, 409);
+  assertStringIncludes((await drifted.json()).error, 'changed');
+});
+
+Deno.test('authoritative managed season preview rejects shared, multipart, and active playback', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedFileShared = true;
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/shared.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/better.mkv';
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+  let response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }] }),
+  });
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'shared');
+
+  sonarrManagedFileShared = false;
+  live.get('episode-1')!.Media![0]!.Part!.push({
+    file: '/tv/Show/Season 01/second-part.mkv',
+    size: 1,
+  });
+  response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }] }),
+  });
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'multipart');
+
+  live.get('episode-1')!.Media![0]!.Part = [{ file: sonarrManagedPath, size: 40_000 }];
+  sonarrManagedPath = '/different/namespace/managed.mkv';
+  response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }] }),
+  });
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'could not be aligned');
+
+  sonarrManagedPath = '/tv/Show/Season 01/shared.mkv';
+  live.get('episode-1')!.Media![0]!.Part = [{ file: sonarrManagedPath, size: 40_000 }];
+  activePlaybackRatingKey = 'episode-1';
+  response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }] }),
+  });
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'active playback');
 });
 
 Deno.test('quick analysis enriches thin synced rows before classifying candidates', async () => {
@@ -5387,6 +6141,31 @@ Deno.test('cancellation releases only reservations for targets that never starte
       ).value<[number]>(operationId)?.[0]
     ),
     0,
+  );
+});
+
+Deno.test('cancellation preserves a recovered Sonarr target that already started', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  const operationId = await enqueueEpisodeReassignment(21);
+  withTransaction((client) => {
+    client.prepare(
+      `UPDATE deletion_targets
+       SET status = 'queued', phase = 'arr_coordination', attempt_count = 1
+       WHERE operation_id = ?`,
+    ).run(operationId);
+  });
+
+  assertEquals(cancelDeletionOperation(operationId, 1), false);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'queued');
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = ?',
+      ).value<[number]>(operationId)?.[0]
+    ),
+    1,
   );
 });
 

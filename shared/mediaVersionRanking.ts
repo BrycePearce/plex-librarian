@@ -14,6 +14,19 @@ function resolutionScore(version: MediaVersionQualityCandidate): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+export function compareMediaVersionQuality(
+  left: MediaVersionQualityCandidate,
+  right: MediaVersionQualityCandidate,
+): number {
+  const leftRank = [resolutionScore(left), left.bitrate ?? 0, left.fileSize ?? 0];
+  const rightRank = [resolutionScore(right), right.bitrate ?? 0, right.fileSize ?? 0];
+  for (let index = 0; index < leftRank.length; index++) {
+    if (leftRank[index] === rightRank[index]) continue;
+    return leftRank[index]! > rightRank[index]! ? 1 : -1;
+  }
+  return 0;
+}
+
 export function bestMediaVersionCandidate(
   versions: readonly MediaVersionQualityCandidate[],
   candidateMediaIds: readonly number[],
@@ -22,22 +35,8 @@ export function bestMediaVersionCandidate(
   const eligible = versions.filter((version) => candidates.has(version.mediaId));
   if (eligible.length === 0) return null;
   return eligible.reduce((best, version) => {
-    const bestRank = [
-      resolutionScore(best),
-      best.bitrate ?? 0,
-      best.fileSize ?? 0,
-      -best.mediaId,
-    ];
-    const rank = [
-      resolutionScore(version),
-      version.bitrate ?? 0,
-      version.fileSize ?? 0,
-      -version.mediaId,
-    ];
-    for (let index = 0; index < rank.length; index++) {
-      if (rank[index] === bestRank[index]) continue;
-      return rank[index]! > bestRank[index]! ? version : best;
-    }
-    return best;
+    const comparison = compareMediaVersionQuality(version, best);
+    if (comparison !== 0) return comparison > 0 ? version : best;
+    return version.mediaId < best.mediaId ? version : best;
   }).mediaId;
 }

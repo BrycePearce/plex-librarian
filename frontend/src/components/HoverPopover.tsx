@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -49,6 +49,7 @@ export function HoverPopover({
   const anchorRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const [position, setPosition] = useState({ left: -10_000, top: -10_000 });
 
   useLayoutEffect(() => {
@@ -73,6 +74,17 @@ export function HoverPopover({
     };
   }, [open, content]);
 
+  useEffect(() => {
+    if (!pinned) return;
+    const dismiss = (event: PointerEvent) => {
+      if (anchorRef.current?.contains(event.target as Node)) return;
+      setPinned(false);
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [pinned]);
+
   const portalRoot = anchorRef.current?.closest("dialog") ??
     (typeof document === "undefined" ? null : document.body);
 
@@ -84,17 +96,27 @@ export function HoverPopover({
         tabIndex={anchorTabIndex}
         aria-describedby={open ? id : undefined}
         onPointerEnter={() => setOpen(true)}
-        onPointerLeave={() => setOpen(false)}
+        onPointerLeave={() => {
+          if (!pinned) setOpen(false);
+        }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        onBlur={() => {
+          if (!pinned) setOpen(false);
+        }}
         onClick={openOnClick
           ? (event) => {
             event.stopPropagation();
-            setOpen(true);
+            setPinned((current) => {
+              setOpen(!current);
+              return !current;
+            });
           }
           : undefined}
         onKeyDown={(event) => {
-          if (event.key === "Escape") setOpen(false);
+          if (event.key === "Escape") {
+            setPinned(false);
+            setOpen(false);
+          }
         }}
       >
         {children}

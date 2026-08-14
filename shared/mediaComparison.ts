@@ -1,10 +1,52 @@
-import type { MediaVersion } from './types.ts';
+import type { MediaVersion } from './types/media/versions.ts';
+
+export const DUPLICATE_DIFFERENCE_CODES = [
+  'resolution',
+  'runtime',
+  'video-encoding',
+  'dynamic-range',
+  'bitrate',
+  'frame-rate',
+  'interlacing',
+  'container',
+  'audio-tracks',
+  'subtitle-tracks',
+] as const;
+
+export type DuplicateDifferenceCode = typeof DUPLICATE_DIFFERENCE_CODES[number];
+
+export const DUPLICATE_DIFFERENCE_LABELS: Record<DuplicateDifferenceCode, string> = {
+  resolution: 'Resolution differs',
+  runtime: 'Runtime differs',
+  'video-encoding': 'Video encoding differs',
+  'dynamic-range': 'HDR format differs',
+  bitrate: 'Bitrate differs',
+  'frame-rate': 'Frame rate differs',
+  interlacing: 'Interlacing differs',
+  container: 'Container differs',
+  'audio-tracks': 'Audio tracks differ',
+  'subtitle-tracks': 'Subtitle tracks differ',
+};
 
 export type DuplicateComparison = {
   kind: 'same-profile' | 'different' | 'unknown';
   label: string;
+  differenceCodes: DuplicateDifferenceCode[];
   reasons: string[];
 };
+
+export interface DuplicateSeasonDifferenceCount {
+  code: DuplicateDifferenceCode;
+  episodeCount: number;
+}
+
+export interface DuplicateSeasonComparisonSummary {
+  episodeCount: number;
+  differentEpisodeCount: number;
+  sameProfileEpisodeCount: number;
+  needsReviewEpisodeCount: number;
+  differences: DuplicateSeasonDifferenceCount[];
+}
 
 // Mirrors DuplicateComparison["kind"] exactly (plus "all") rather than inventing a finer
 // split — the per-reason detail (which attribute differs) is still available in
@@ -57,23 +99,24 @@ export function compareDuplicateVersions(
     return {
       kind: 'unknown',
       label: 'Needs review',
+      differenceCodes: [],
       reasons: ['Only one version is available'],
     };
   }
 
-  const differences: string[] = [];
+  const differenceCodes: DuplicateDifferenceCode[] = [];
   const dimensions = versions.map((version) =>
     version.width != null && version.height != null
       ? `${version.width}x${version.height}`
       : normalized(version.videoResolution)
   );
-  if (knownValuesDiffer(dimensions)) differences.push('Resolution differs');
+  if (knownValuesDiffer(dimensions)) differenceCodes.push('resolution');
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoDynamicRange)),
     )
   ) {
-    differences.push('HDR format differs');
+    differenceCodes.push('dynamic-range');
   }
   if (
     knownValuesDiffer(
@@ -84,29 +127,29 @@ export function compareDuplicateVersions(
     ) ||
     knownValuesDiffer(versions.map((version) => version.videoBitDepth))
   ) {
-    differences.push('Video encoding differs');
+    differenceCodes.push('video-encoding');
   }
   if (numericRangeDiffers(versions.map((version) => version.bitrate))) {
-    differences.push('Bitrate differs');
+    differenceCodes.push('bitrate');
   }
   if (
     knownValuesDiffer(versions.map((version) => normalized(version.container)))
   ) {
-    differences.push('Container differs');
+    differenceCodes.push('container');
   }
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoFrameRate)),
     )
   ) {
-    differences.push('Frame rate differs');
+    differenceCodes.push('frame-rate');
   }
   if (
     knownValuesDiffer(
       versions.map((version) => normalized(version.videoScanType)),
     )
   ) {
-    differences.push('Interlacing differs');
+    differenceCodes.push('interlacing');
   }
 
   const durations = versions.map((version) => version.duration).filter(
@@ -116,7 +159,7 @@ export function compareDuplicateVersions(
     durations.length >= 2 &&
     Math.max(...durations) - Math.min(...durations) > 2_000
   ) {
-    differences.push('Runtime differs');
+    differenceCodes.push('runtime');
   }
 
   const detailedAudioSignatures = versions.map((version) => streamSignature(version, 'audio'));
@@ -130,19 +173,20 @@ export function compareDuplicateVersions(
       versions.map((version) => normalized(version.audioProfile)),
     )
   ) {
-    differences.push('Audio tracks differ');
+    differenceCodes.push('audio-tracks');
   }
 
   const subtitleSignatures = versions.map((version) => streamSignature(version, 'subtitle'));
   if (knownValuesDiffer(subtitleSignatures)) {
-    differences.push('Subtitle tracks differ');
+    differenceCodes.push('subtitle-tracks');
   }
 
-  if (differences.length > 0) {
+  if (differenceCodes.length > 0) {
     return {
       kind: 'different',
       label: 'Meaningful differences',
-      reasons: differences,
+      differenceCodes,
+      reasons: differenceCodes.map((code) => DUPLICATE_DIFFERENCE_LABELS[code]),
     };
   }
 
@@ -174,6 +218,7 @@ export function compareDuplicateVersions(
     return {
       kind: 'same-profile',
       label: 'Same technical profile',
+      differenceCodes: [],
       reasons: [
         'Plex reports matching runtime, video, and audio characteristics',
       ],
@@ -183,8 +228,39 @@ export function compareDuplicateVersions(
   return {
     kind: 'unknown',
     label: 'Needs review',
+    differenceCodes: [],
     reasons: [
       'Plex did not report enough technical metadata to compare safely',
     ],
+  };
+}
+
+export function summarizeDuplicateComparisons(
+  comparisons: readonly DuplicateComparison[],
+): DuplicateSeasonComparisonSummary {
+  const counts = new Map<DuplicateDifferenceCode, number>();
+  let differentEpisodeCount = 0;
+  let sameProfileEpisodeCount = 0;
+  let needsReviewEpisodeCount = 0;
+
+  for (const comparison of comparisons) {
+    if (comparison.kind === 'different') differentEpisodeCount++;
+    else if (comparison.kind === 'same-profile') sameProfileEpisodeCount++;
+    else needsReviewEpisodeCount++;
+
+    for (const code of new Set(comparison.differenceCodes)) {
+      counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+  }
+
+  return {
+    episodeCount: comparisons.length,
+    differentEpisodeCount,
+    sameProfileEpisodeCount,
+    needsReviewEpisodeCount,
+    differences: DUPLICATE_DIFFERENCE_CODES.flatMap((code) => {
+      const episodeCount = counts.get(code) ?? 0;
+      return episodeCount > 0 ? [{ code, episodeCount }] : [];
+    }),
   };
 }

@@ -137,3 +137,27 @@ Deno.test('client rejects failed authentication', async () => {
     'qBittorrent login failed',
   );
 });
+
+Deno.test('client rejects oversized qBittorrent manifests before retaining them', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.includes('/torrents/info')) {
+      return Promise.resolve(Response.json([{
+        hash: 'abc',
+        name: 'large',
+        content_path: '/downloads/large',
+        save_path: '/downloads',
+      }]));
+    }
+    return Promise.resolve(Response.json(
+      Array.from({ length: 10_001 }, (_, index) => ({ name: `large/${index}.mkv`, size: 1 })),
+    ));
+  });
+
+  await assertRejects(
+    () => client.torrent('abc'),
+    QbittorrentApiError,
+    '10000-record safety limit',
+  );
+});

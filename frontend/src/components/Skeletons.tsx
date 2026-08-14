@@ -318,9 +318,8 @@ export function DuplicatesTableSkeleton({ rows = 8 }: { rows?: number }) {
         <thead>
           <tr>
             <th>Title</th>
-            <th>Versions</th>
-            <th>Combined size</th>
-            <th />
+            <th>Duplicates</th>
+            <th>Storage footprint</th>
           </tr>
         </thead>
         <tbody>
@@ -338,7 +337,6 @@ export function DuplicatesTableSkeleton({ rows = 8 }: { rows?: number }) {
               <td>
                 <div className="skeleton h-3 w-20" />
               </td>
-              <td />
             </tr>
           ))}
         </tbody>

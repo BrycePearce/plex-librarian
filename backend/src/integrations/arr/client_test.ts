@@ -356,7 +356,7 @@ Deno.test('Radarr activity permits only the exact persisted rescan command', asy
       return Promise.resolve(
         Response.json(
           path.endsWith('/queue')
-            ? { records: [] }
+            ? { records: [], totalRecords: 0 }
             : [{ id: 77, movieId: 42, name: 'RescanMovie' }],
         ),
       );
@@ -379,7 +379,7 @@ Deno.test('Radarr activity attributes bulk movie commands to every targeted movi
       return Promise.resolve(
         Response.json(
           path.endsWith('/queue')
-            ? { records: [] }
+            ? { records: [], totalRecords: 0 }
             : [{ id: 91, name: 'RenameMovie', body: { movieIds: [7, 42] } }],
         ),
       );
@@ -1210,5 +1210,145 @@ Deno.test('Radarr exact-ID absence distinguishes 404 from identity drift', async
     () => conflicting.radarrMovieExistsById(42),
     ArrApiError,
     'conflicting or malformed targeted movie',
+  );
+});
+
+Deno.test('Sonarr season coordination rejects v3 and accepts the compatibility floor', async () => {
+  for (const [version, available] of [['3.0.10.1567', false], ['4.0.0.748', true]] as const) {
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr',
+      'key',
+      () => Promise.resolve(Response.json({ appName: 'Sonarr', version })),
+    );
+    const result = await client.sonarrSeasonCoordinationCapabilities();
+    assertEquals(result.available, available);
+    assertEquals(result.version, version);
+  }
+});
+
+Deno.test('Sonarr series snapshot derives exact EpisodeFile ownership and rejects shared files', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/episode')) {
+      return Promise.resolve(Response.json([
+        {
+          id: 11,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 1,
+          episodeFileId: 90,
+          monitored: true,
+        },
+        {
+          id: 12,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 2,
+          episodeFileId: 90,
+          monitored: false,
+        },
+      ]));
+    }
+    return Promise.resolve(Response.json([
+      { id: 90, seriesId: 7, path: '/tv/Show/shared.mkv', relativePath: 'shared.mkv', size: 100 },
+    ]));
+  });
+  const snapshot = await client.sonarrSeriesSnapshot(7);
+  assertEquals(snapshot.files[0]?.episodeIds, [11, 12]);
+});
+
+Deno.test('Sonarr targeted EpisodeFile ownership is exact and rejects cross-series records', async () => {
+  const valid = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const url = new URL(String(input));
+    assertEquals(url.searchParams.get('episodeFileId'), '90');
+    return Promise.resolve(Response.json([
+      { id: 12, seriesId: 7, episodeFileId: 90 },
+      { id: 11, seriesId: 7, episodeFileId: 90 },
+    ]));
+  });
+  assertEquals(await valid.sonarrEpisodeFileOwnerIds(90, 7), [11, 12]);
+
+  const drifted = new ArrClient(
+    'sonarr',
+    'http://sonarr',
+    'key',
+    () => Promise.resolve(Response.json([{ id: 11, seriesId: 8, episodeFileId: 90 }])),
+  );
+  await assertRejects(
+    () => drifted.sonarrEpisodeFileOwnerIds(90, 7),
+    ArrApiError,
+    'conflicting EpisodeFile ownership',
+  );
+});
+
+Deno.test('Sonarr manual-import preflight preserves exact paths, associations, and rejections', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (_input, init) => {
+    assertEquals(init?.method, 'POST');
+    const body = JSON.parse(String(init?.body)) as Array<Record<string, unknown>>;
+    assertEquals(body[0]?.episodeIds, []);
+    assertEquals(body[0]?.seasonNumber, null);
+    return Promise.resolve(Response.json([{
+      path: '/tv/Show/retained.mkv',
+      episodes: [{ id: 11 }],
+      rejections: [],
+    }]));
+  });
+  assertEquals(
+    await client.sonarrManualImportPreflight([{
+      path: '/tv/Show/retained.mkv',
+      seriesId: 7,
+      seasonNumber: 1,
+      episodeIds: [11],
+    }]),
+    [{ path: '/tv/Show/retained.mkv', episodeIds: [11], rejectionReasons: [] }],
+  );
+});
+
+Deno.test('Sonarr activity blocks foreign work but permits its persisted rescan command', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/queue')) {
+      return Promise.resolve(Response.json({ records: [], totalRecords: 0 }));
+    }
+    return Promise.resolve(Response.json([
+      { id: 70, name: 'RescanSeries', body: { seriesId: 7 } },
+      { id: 71, name: 'RenameSeries', body: { seriesId: 7 } },
+    ]));
+  });
+  assertEquals(await client.sonarrSeriesActivity(7, [70]), {
+    quiet: false,
+    blocking: [{ source: 'command', id: 71, name: 'RenameSeries' }],
+  });
+});
+
+Deno.test('Sonarr activity blocks relevant commands without a proven series boundary', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/queue')) {
+      return Promise.resolve(Response.json({ records: [], totalRecords: 0 }));
+    }
+    return Promise.resolve(Response.json([
+      { id: 72, name: 'DownloadedEpisodesScan', body: { path: '/downloads' } },
+      { id: 73, name: 'RefreshSeries', body: { seriesId: 8 } },
+    ]));
+  });
+  assertEquals(await client.sonarrSeriesActivity(7), {
+    quiet: false,
+    blocking: [{ source: 'command', id: 72, name: 'DownloadedEpisodesScan' }],
+  });
+});
+
+Deno.test('Sonarr activity rejects truncated queue evidence', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    return Promise.resolve(
+      Response.json(path.endsWith('/queue') ? { records: [], totalRecords: 1 } : []),
+    );
+  });
+  await assertRejects(
+    () => client.sonarrSeriesActivity(7),
+    ArrApiError,
+    'unsupported or oversized queue/command evidence',
   );
 });

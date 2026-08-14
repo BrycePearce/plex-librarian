@@ -23,6 +23,7 @@ import { hasAnyIncompleteRelocationBarrier } from '../deletionOperations/relocat
 import { mediaRatingKeyIsPlaying } from '../mediaDeletion/activePlayback.ts';
 import {
   buildSmartDuplicateAnalysis,
+  isValidManualSeasonCleanupSelection,
   isValidSmartCleanupSelection,
   SMART_CLEANUP_DELETE_IDS_LIMIT,
   SMART_CLEANUP_GROUP_LIMIT,
@@ -32,6 +33,8 @@ import type {
   SmartDuplicateCandidate,
   SmartDuplicateCleanupResponse,
 } from '@plex-librarian/shared/types.ts';
+import { seasonDeletionPreviewIsFresh } from './seasonDeletionFingerprint.ts';
+import { buildAuthoritativeSeasonPlan } from './seasonDeletionPlanner.ts';
 
 function classificationTechnicalSnapshot(version: MediaVersion): PlexMediaTechnicalDetails {
   return {
@@ -109,6 +112,12 @@ router.post('/smart-cleanup', async (c) => {
   const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId : '';
   const selections = Array.isArray(body.selections) ? body.selections : [];
   const includeNearIdentical = body.includeNearIdentical === true;
+  const manualSeasonReview = body.manualSeasonReview === true;
+  const analysisFingerprint = typeof body.analysisFingerprint === 'string'
+    ? body.analysisFingerprint
+    : '';
+  const expiresAt = Number(body.expiresAt);
+  const cleanupDownloads = body.cleanupDownloads === true;
   if (!/^[A-Za-z0-9._:-]{1,124}$/.test(clientRequestId)) {
     return c.json(
       { error: 'clientRequestId must be a non-empty string of at most 124 characters' },
@@ -120,6 +129,9 @@ router.post('/smart-cleanup', async (c) => {
       { error: `selections must contain between 1 and ${SMART_CLEANUP_GROUP_LIMIT} groups` },
       400,
     );
+  }
+  if (manualSeasonReview && cleanupDownloads) {
+    return c.json({ error: 'season cleanup does not support download cleanup' }, 400);
   }
   const parsed = selections.map((selection) => {
     if (!selection || typeof selection !== 'object') return null;
@@ -141,6 +153,11 @@ router.post('/smart-cleanup', async (c) => {
   if (parsed.some((selection) => selection === null)) {
     return c.json({ error: 'one or more cleanup selections are invalid' }, 400);
   }
+  const normalizedSelections = parsed as Array<{
+    mediaType: 'movie' | 'episode';
+    ratingKey: string;
+    deleteMediaIds: number[];
+  }>;
 
   let activeServer: Awaited<ReturnType<typeof resolveActiveServer>> | null = null;
   const persistedServerId = locallyActiveServerId();
@@ -149,15 +166,12 @@ router.post('/smart-cleanup', async (c) => {
     if (activeServer === null) return c.json({ error: 'Plex is not configured' }, 404);
   }
   const serverId = persistedServerId ?? activeServer!.serverId;
-  const normalizedSelections = parsed as Array<{
-    mediaType: 'movie' | 'episode';
-    ratingKey: string;
-    deleteMediaIds: number[];
-  }>;
   const batchPayload = {
-    path: '/api/duplicates/smart-cleanup',
+    path: manualSeasonReview ? '/api/duplicates/season-cleanup' : '/api/duplicates/smart-cleanup',
     selections: normalizedSelections,
     includeNearIdentical,
+    ...(manualSeasonReview ? { manualSeasonReview: true } : {}),
+    ...(manualSeasonReview ? { analysisFingerprint, expiresAt } : {}),
   };
   try {
     const repeated = await repeatedDeletionOperationBatch(
@@ -198,11 +212,78 @@ router.post('/smart-cleanup', async (c) => {
     return c.json({ error: 'the active Plex server changed during cleanup' }, 409);
   }
 
-  const analysis = await buildSmartDuplicateAnalysis(serverId, { movies: true, tv: true });
+  if (manualSeasonReview) {
+    if (normalizedSelections.some((selection) => selection.mediaType !== 'episode')) {
+      return c.json({ error: 'season cleanup accepts episode selections only' }, 400);
+    }
+    const selectedRows = await db.select({ seasonRatingKey: episodeMediaVersions.seasonRatingKey })
+      .from(episodeMediaVersions).where(and(
+        eq(episodeMediaVersions.serverId, serverId),
+        inArray(
+          episodeMediaVersions.episodeRatingKey,
+          normalizedSelections.map((entry) => entry.ratingKey),
+        ),
+      ));
+    const seasonKeys = [...new Set(selectedRows.map((row) => row.seasonRatingKey))];
+    if (seasonKeys.length !== 1) {
+      return c.json({ error: 'season cleanup selections must belong to one season' }, 409);
+    }
+    if (!/^[a-f0-9]{64}$/.test(analysisFingerprint) || !seasonDeletionPreviewIsFresh(expiresAt)) {
+      return c.json({ error: 'the authoritative season deletion preview expired' }, 409);
+    }
+    try {
+      const machineIdentifier = await activeServer.client.identity();
+      const plan = await buildAuthoritativeSeasonPlan({
+        serverId,
+        machineIdentifier,
+        plexClient: activeServer.client,
+        seasonRatingKey: seasonKeys[0]!,
+        selections: normalizedSelections.map((entry) => ({
+          episodeRatingKey: entry.ratingKey,
+          mediaIds: entry.deleteMediaIds,
+        })),
+      });
+      if (plan.preview.fingerprint !== analysisFingerprint) {
+        return c.json({ error: 'the authoritative season deletion preview changed' }, 409);
+      }
+    } catch (error) {
+      if (error instanceof DeletionConflictError) {
+        return c.json({
+          error: error.message,
+          ...(error.operationId ? { operationId: error.operationId } : {}),
+        }, error.status as 400 | 404 | 409);
+      }
+      return c.json({
+        error: error instanceof Error ? error.message : 'season cleanup could not be validated',
+      }, 409);
+    }
+  }
+
+  if (
+    manualSeasonReview &&
+    normalizedSelections.some((selection) => selection.mediaType !== 'episode')
+  ) {
+    return c.json({ error: 'season cleanup accepts episode selections only' }, 400);
+  }
+  const analysis = await buildSmartDuplicateAnalysis(serverId, {
+    movies: !manualSeasonReview,
+    tv: true,
+    ...(manualSeasonReview
+      ? {
+        episodeRatingKeys: normalizedSelections.map((selection) => selection.ratingKey),
+        includeManualCandidates: true,
+        // The user already reviewed the exact selected media IDs. Avoid hundreds of
+        // synchronous per-episode Plex lookups before the durable work is accepted;
+        // execution still revalidates identity, ancestry, ownership, playback, and the
+        // selected/retained media IDs against Plex.
+        enrichTechnicalDetails: false,
+      }
+      : {}),
+  });
   const allowed = new Map(
     analysis.candidates
       .filter((candidate) =>
-        candidate.confidence === 'obvious' ||
+        manualSeasonReview || candidate.confidence === 'obvious' ||
         (includeNearIdentical && candidate.confidence === 'near-identical')
       )
       .map((candidate) => [`${candidate.mediaType}:${candidate.ratingKey}`, candidate]),
@@ -215,7 +296,9 @@ router.post('/smart-cleanup', async (c) => {
     if (
       !candidate ||
       selectedKeys.has(key) ||
-      !isValidSmartCleanupSelection(candidate, selection.deleteMediaIds)
+      !(manualSeasonReview
+        ? isValidManualSeasonCleanupSelection(candidate, selection.deleteMediaIds)
+        : isValidSmartCleanupSelection(candidate, selection.deleteMediaIds))
     ) {
       return c.json(
         { error: 'the cleanup plan changed; analyze duplicates again before deleting' },
@@ -227,6 +310,21 @@ router.post('/smart-cleanup', async (c) => {
       ...candidate,
       deleteMediaIds: selection.deleteMediaIds,
     });
+  }
+  if (manualSeasonReview) {
+    const episodeCandidates = selectedCandidates.filter((candidate) =>
+      candidate.mediaType === 'episode'
+    );
+    const first = episodeCandidates[0];
+    if (
+      !first || episodeCandidates.some((candidate) =>
+        candidate.libraryKey !== first.libraryKey ||
+        candidate.showRatingKey !== first.showRatingKey ||
+        candidate.seasonRatingKey !== first.seasonRatingKey
+      )
+    ) {
+      return c.json({ error: 'season cleanup selections must belong to one season' }, 409);
+    }
   }
 
   const machineIdentifier = withTransaction((client) =>
@@ -344,9 +442,12 @@ router.post('/smart-cleanup', async (c) => {
           seasonIndex: episodeRow?.seasonIndex ?? null,
           episodeIndex: episodeRow?.episodeIndex ?? null,
           cleanupDownloads: false,
+          ...(manualSeasonReview ? { seasonCleanup: true } : {}),
           selectedMediaIds: [row.mediaId],
           operationMediaIds: candidate.deleteMediaIds,
-          classificationTechnicalDetails: classificationTechnicalSnapshot(sourceVersion),
+          ...(sourceVersion.streamDetailsAvailable
+            ? { classificationTechnicalDetails: classificationTechnicalSnapshot(sourceVersion) }
+            : {}),
           expectedRetainedVersion: {
             mediaId: retainedVersion.mediaId,
             fileSize: retainedVersion.fileSize,
@@ -355,7 +456,11 @@ router.post('/smart-cleanup', async (c) => {
             bitrate: retainedVersion.bitrate,
             videoCodec: retainedVersion.videoCodec,
             container: retainedVersion.container,
-            classificationTechnicalDetails: classificationTechnicalSnapshot(retainedVersion),
+            ...(retainedVersion.streamDetailsAvailable
+              ? {
+                classificationTechnicalDetails: classificationTechnicalSnapshot(retainedVersion),
+              }
+              : {}),
           },
           height: row.height,
         },
@@ -366,6 +471,14 @@ router.post('/smart-cleanup', async (c) => {
         },
       });
     }
+  }
+
+  if (manualSeasonReview) {
+    targets.sort((left, right) =>
+      Number(left.snapshot.episodeIndex) - Number(right.snapshot.episodeIndex) ||
+      String(left.snapshot.ratingKey).localeCompare(String(right.snapshot.ratingKey)) ||
+      Number(left.snapshot.mediaId) - Number(right.snapshot.mediaId)
+    );
   }
 
   const grouped = new Map<string, NewDeletionTarget[]>();

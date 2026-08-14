@@ -773,6 +773,10 @@ export const episodeMediaVersions = sqliteTable(
       table.serverId,
       table.episodeRatingKey,
     ),
+    seasonIdx: index('episode_media_versions_season_idx').on(
+      table.serverId,
+      table.seasonRatingKey,
+    ),
     libraryIdx: index('episode_media_versions_library_idx').on(table.serverId, table.libraryKey),
     showIdx: index('episode_media_versions_show_idx').on(table.serverId, table.showRatingKey),
   }),

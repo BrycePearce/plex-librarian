@@ -39,10 +39,19 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
     `SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND ${relocationSupersededPredicateSql()}`,
   ).value<[number]>(operationId)?.[0] ?? 0;
   const active = running + queued + retrying;
+  const sequentialSeasonCleanup = client.prepare(
+    "SELECT 1 FROM deletion_targets WHERE operation_id = ? AND json_extract(snapshot, '$.seasonCleanup') = 1 LIMIT 1",
+  ).value<[number]>(operationId) !== undefined;
+  const unresolvedWarnings = client.prepare(
+    "SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND status = 'completed_with_warning' AND phase <> 'finalizing'",
+  ).value<[number]>(operationId)?.[0] ?? 0;
   let status: DeletionOperationStatus;
   let finishedAt: number | null = null;
-  if (active > 0) status = running > 0 ? 'running' : queued > 0 ? 'queued' : 'waiting_retry';
-  else {
+  if ((failed > 0 || (unresolvedWarnings > 0 && active > 0)) && sequentialSeasonCleanup) {
+    status = 'needs_attention';
+  } else if (active > 0) {
+    status = running > 0 ? 'running' : queued > 0 ? 'queued' : 'waiting_retry';
+  } else {
     status = failed > 0
       ? 'needs_attention'
       : warnings > 0

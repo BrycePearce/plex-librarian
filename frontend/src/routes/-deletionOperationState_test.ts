@@ -1,7 +1,9 @@
 import { assertEquals } from "@std/assert";
 import {
+  deletionAttentionSummary,
   deletionOperationPollInterval,
   deletionOperationTitle,
+  deletionWarningSummary,
   isRelocationGuidanceActive,
   nonSupersededCancelledCount,
   retryableRelocationSafeTargetCount,
@@ -14,6 +16,15 @@ Deno.test("deletion operation UI polls only while work can still change", () => 
   assertEquals(deletionOperationPollInterval("completed_with_warning"), false);
   assertEquals(deletionOperationPollInterval("needs_attention"), false);
   assertEquals(deletionOperationPollInterval("cancelled"), false);
+});
+
+Deno.test("partial Sonarr failures report confirmed removals", () => {
+  assertEquals(deletionAttentionSummary(1, 1), "1 removed · 1 need attention");
+});
+
+Deno.test("warning summaries do not claim removal after a safe rollback", () => {
+  assertEquals(deletionWarningSummary(0, 1), "No Plex media removal was confirmed");
+  assertEquals(deletionWarningSummary(2, 1), "2 removed · 1 warning");
 });
 
 Deno.test("relocation guidance is active only before its sync barrier", () => {

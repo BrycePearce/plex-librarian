@@ -21,6 +21,7 @@ import {
 import listRoute from './listRoute.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import smartCleanupRoute from './smartCleanupRoute.ts';
+import seasonAnalysisRoute from './seasonAnalysisRoute.ts';
 import { technicalDetailUpdate } from './technicalDetails.ts';
 import { findRadarrMovieReservation } from '../deletionOperations/service.ts';
 import type {
@@ -45,6 +46,7 @@ const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.route('/', smartCleanupRoute);
 router.use('*', withActiveServerId);
 router.route('/', listRoute);
+router.route('/', seasonAnalysisRoute);
 
 router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
   const ratingKey = c.req.param('ratingKey');

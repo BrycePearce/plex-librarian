@@ -9,7 +9,9 @@ import { formatKilobytes } from "../../lib/format.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import {
   activeDeletionStatuses,
+  deletionAttentionSummary,
   deletionOperationPollInterval,
+  deletionWarningSummary,
   retryableRelocationSafeTargetCount,
 } from "../../routes/-deletionOperationState.ts";
 
@@ -183,9 +185,7 @@ function DeletionOperationToast({
             {completed
               ? "Deletion complete"
               : warning
-              ? data?.removalConfirmedCount === 0
-                ? "Arr removal completed; Plex removal was not confirmed"
-                : "Media removed; Plex metadata needs attention"
+              ? "Deletion completed with warning"
               : needsAttention
               ? "Deletion needs attention"
               : data?.status === "cancelled"
@@ -200,11 +200,9 @@ function DeletionOperationToast({
                 formatKilobytes(data.logicalSizeRemoved)
               } logical size removed`
               : warning && data
-              ? data.removalConfirmedCount === 0
-                ? "The item or other versions may remain"
-                : `${data.removalConfirmedCount} removed · ${data.warningCount} warning`
+              ? deletionWarningSummary(data.removalConfirmedCount, data.warningCount)
               : needsAttention && data
-              ? `${data.completedCount} completed · ${data.failedCount} need attention`
+              ? deletionAttentionSummary(data.removalConfirmedCount, data.failedCount)
               : current
               ? `${current.title} · ${
                 current.phase === "plex_reconciliation"

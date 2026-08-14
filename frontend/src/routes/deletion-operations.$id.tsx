@@ -105,6 +105,7 @@ function DeletionOperationPage() {
     "completed_with_warning",
   );
   const retryableCount = retryableFailedCount + retryableWarningCount;
+  const hasQueuedTargets = operation.targets.some((target) => target.status === "queued");
   const manuallyDismissed = operation.targets.some((target) =>
     target.warning?.startsWith("Dismissed after manual intervention")
   );
@@ -139,6 +140,14 @@ function DeletionOperationPage() {
               value={`${operation.completedCount} / ${operation.targetCount}`}
             />
             <Stat label="Failed" value={String(operation.failedCount)} />
+            <Stat
+              label="Waiting"
+              value={String(
+                operation.targets.filter((target) =>
+                  target.status === "queued" || target.status === "waiting_retry"
+                ).length,
+              )}
+            />
             <Stat label="Warning" value={String(operation.warningCount)} />
             <Stat label="Removed" value={String(operation.removalConfirmedCount)} />
             <Stat
@@ -163,6 +172,14 @@ function DeletionOperationPage() {
             />
             <Stat label="Superseded" value={String(operation.supersededCount)} />
           </div>
+          {operation.status === "needs_attention" &&
+            operation.targets.some((target) => target.status === "queued") && (
+            <div className="alert alert-warning text-sm">
+              A version needs attention. Later selected versions are safely waiting and will resume
+              in order after the unresolved version succeeds. Cancel the waiting versions first if
+              you want to dismiss the unresolved result.
+            </div>
+          )}
           {current && activeDeletionStatuses.has(operation.status) && (
             <div className="flex items-center gap-3 rounded-lg bg-base-100 px-4 py-3">
               {current.status === "waiting_retry"
@@ -197,7 +214,7 @@ function DeletionOperationPage() {
                 Verify repaired Radarr state
               </button>
             )}
-            {operation.targets.some((target) => target.status === "queued") && (
+            {hasQueuedTargets && (
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
@@ -219,7 +236,8 @@ function DeletionOperationPage() {
                 Recheck
               </button>
             )}
-            {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+            {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) &&
+              !hasQueuedTargets && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"

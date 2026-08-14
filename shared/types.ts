@@ -15,6 +15,7 @@ export type * from './types/integrations/seerr.ts';
 export type * from './types/media/versions.ts';
 export type * from './types/media/duplicates.ts';
 export type * from './types/media/smartDuplicates.ts';
+export type * from './types/media/seasonProfiles.ts';
 
 export type * from './types/deletion/cleanup.ts';
 export type * from './types/deletion/operations.ts';

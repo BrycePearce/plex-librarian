@@ -873,7 +873,11 @@ export class PlexClient {
     for (const metadata of data.MediaContainer.Metadata ?? []) {
       for (const media of metadata.Media ?? []) {
         if (media.id == null) continue;
-        result.set(media.id, technicalDetails(media));
+        const parts = existingFileParts(media);
+        result.set(media.id, {
+          ...technicalDetails(media),
+          filePath: parts.length === 1 ? parts[0]!.file : null,
+        });
       }
     }
     return result;

@@ -120,6 +120,836 @@
   --comparison-color: var(--color-accent);
 }
 
+.duplicates-season-row {
+  border-left: 2px solid color-mix(in oklab, var(--color-primary) 48%, transparent);
+  background: color-mix(in oklab, var(--color-base-200) 72%, transparent);
+}
+
+.duplicates-season-row:hover,
+.duplicates-season-row:focus-visible {
+  background: color-mix(in oklab, var(--color-primary) 7%, var(--color-base-200));
+}
+
+.duplicates-season-summary-cell {
+  display: flex;
+  min-width: 17rem;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.duplicates-season-summary-anchor {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.duplicates-season-summary {
+  display: flex;
+  min-width: 0;
+  min-height: 2.75rem;
+  flex: 1;
+  align-items: center;
+  gap: 0.625rem;
+  margin: -0.375rem -0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: inherit;
+  text-align: left;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.duplicates-season-summary:hover,
+.duplicates-season-summary:focus-visible {
+  border-color: color-mix(in oklab, var(--color-primary) 22%, transparent);
+  background: color-mix(in oklab, var(--color-primary) 9%, transparent);
+  outline: none;
+}
+
+.duplicates-season-summary-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.duplicates-season-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.duplicates-season-chips,
+.duplicates-season-mobile-outcome {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.duplicates-season-mobile-outcome {
+  display: none;
+  color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+  font-size: 0.64rem;
+}
+
+.duplicates-season-mobile-outcome > span + span::before {
+  margin-right: 0.25rem;
+  content: "·";
+}
+
+.duplicates-season-difference-chip,
+.duplicates-season-review {
+  border: 1px solid color-mix(in oklab, var(--color-warning) 24%, transparent);
+  border-radius: 999px;
+  padding: 0.08rem 0.35rem;
+  background: color-mix(in oklab, var(--color-warning) 7%, transparent);
+  color: color-mix(in oklab, var(--color-base-content) 64%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.58rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.duplicates-season-difference-chip.is-match {
+  border-color: color-mix(in oklab, var(--color-success) 28%, transparent);
+  background: color-mix(in oklab, var(--color-success) 7%, transparent);
+}
+
+.duplicates-season-review {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.2rem;
+  border-color: color-mix(in oklab, var(--color-info) 28%, transparent);
+  background: color-mix(in oklab, var(--color-info) 7%, transparent);
+}
+
+.duplicates-season-expand {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.duplicates-season-expand:hover,
+.duplicates-season-expand:focus-visible {
+  border-color: color-mix(in oklab, var(--color-primary) 22%, transparent);
+  background: color-mix(in oklab, var(--color-primary) 12%, transparent);
+  outline: none;
+}
+
+.duplicates-season-expand:hover > svg,
+.duplicates-season-expand:focus-visible > svg {
+  color: var(--color-primary);
+}
+
+.duplicates-season-popover {
+  min-width: 15rem;
+}
+
+.duplicates-season-popover-list {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.45rem;
+}
+
+.duplicates-season-popover-list > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.duplicates-season-popover-list strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.duplicates-season-popover-list .is-review {
+  color: color-mix(in oklab, var(--color-info) 72%, var(--color-base-content));
+}
+
+.duplicates-season-popover p {
+  margin-top: 0.55rem;
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+
+.season-batch-dialog {
+  place-items: center;
+  padding-block: clamp(1rem, 4vh, 2rem);
+}
+
+.season-batch-modal {
+  --color-primary: var(--workspace-color, var(--color-accent));
+  --color-primary-content: var(--color-accent-content);
+
+  display: flex;
+  max-height: calc(100dvh - 2rem);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.season-batch-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.15rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--color-base-300);
+  background: var(--color-base-100);
+  flex: 0 0 auto;
+}
+
+.season-batch-header-icon {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 30%, transparent);
+  border-radius: 0.7rem;
+  background: color-mix(in oklab, var(--color-primary) 10%, transparent);
+  color: var(--color-primary);
+}
+
+.season-batch-header-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.45rem;
+  color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.season-batch-header-summary > span + span::before {
+  margin-right: 0.75rem;
+  content: "·";
+}
+
+.season-batch-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  padding: 0.9rem 1.25rem 1rem;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.season-batch-toolbar {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.season-batch-toolbar-actions {
+  justify-content: flex-end;
+}
+
+.season-batch-select-all {
+  display: inline-flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.6rem;
+  color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.season-batch-mode {
+  margin-left: auto;
+  padding: 0.15rem;
+  border: 1px solid var(--color-base-300);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--color-base-200) 70%, transparent);
+}
+
+.season-batch-individual-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+
+.season-profile-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+
+.season-profile-lanes {
+  display: grid;
+  max-height: 27.5rem;
+  gap: 0.75rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+  overscroll-behavior: contain;
+}
+
+.season-profile-loading,
+.season-profile-empty,
+.season-profile-note {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  color: color-mix(in oklab, currentColor 65%, transparent);
+  font-size: 0.8rem;
+}
+
+.season-profile-note {
+  animation: season-content-enter 160ms ease-out both;
+}
+
+.season-profile-card {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) 6.25rem;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  border: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+  border-radius: 0.85rem;
+  padding: 0.9rem 1rem;
+  text-align: left;
+  background: color-mix(in oklab, var(--color-base-200) 55%, transparent);
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.season-profile-card:hover,
+.season-profile-card:focus-visible {
+  border-color: color-mix(in oklab, var(--color-primary) 24%, var(--color-base-300));
+  box-shadow: 0 0.55rem 1.4rem color-mix(in oklab, var(--color-base-300) 36%, transparent);
+}
+
+.season-profile-card.is-selected {
+  border-color: color-mix(in oklab, var(--color-primary) 38%, var(--color-base-300));
+  background: color-mix(in oklab, var(--color-primary) 2%, var(--color-base-200));
+}
+
+.season-profile-radio {
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid color-mix(in oklab, currentColor 30%, transparent);
+  border-radius: 0.35rem;
+  color: var(--color-primary-content);
+  font-size: 0.7rem;
+}
+
+.season-profile-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.season-profile-card.is-selected .season-profile-radio {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.season-profile-guard {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.season-profile-guard .badge {
+  white-space: nowrap;
+}
+
+.season-profile-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.season-profile-copy > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.season-profile-copy > small {
+  color: color-mix(in oklab, currentColor 58%, transparent);
+  font-size: 0.75rem;
+}
+
+.season-profile-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.season-profile-heading > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.season-profile-coverage {
+  display: grid;
+  grid-template-columns: 7rem minmax(3rem, 1fr) 6.3rem 4.5rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.18rem;
+  color: color-mix(in oklab, currentColor 58%, transparent);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.season-profile-coverage-range {
+  overflow: hidden;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.season-profile-coverage-meter {
+  height: 0.26rem;
+  min-width: 2.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+}
+
+.season-profile-coverage-meter > span {
+  display: block;
+  min-width: 0.16rem;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-secondary) 52%, transparent),
+    color-mix(in oklab, var(--color-primary) 42%, transparent)
+  );
+  transition: filter 180ms ease, box-shadow 180ms ease;
+}
+
+.season-profile-card.is-selected .season-profile-coverage-meter > span {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-secondary) 88%, white 4%),
+    color-mix(in oklab, var(--color-primary) 78%, white 3%)
+  );
+  box-shadow: 0 0 0.55rem color-mix(in oklab, var(--color-primary) 20%, transparent);
+}
+
+.season-profile-coverage-count,
+.season-profile-size {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.season-profile-size {
+  color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
+  font-weight: 700;
+}
+
+.season-profile-variants {
+  display: inline-flex;
+  border: 1px solid color-mix(in oklab, var(--color-warning) 25%, transparent);
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+  background: color-mix(in oklab, var(--color-warning) 8%, transparent);
+  color: color-mix(in oklab, var(--color-warning) 65%, var(--color-base-content));
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.season-version-preview {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--color-base-200) 45%, transparent);
+  animation: season-content-enter 160ms ease-out both;
+}
+
+.season-version-preview-summary {
+  display: flex;
+  width: 100%;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.8rem 1rem;
+  color: inherit;
+  text-align: left;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.season-version-preview-summary:hover,
+.season-version-preview-summary:focus-visible {
+  color: color-mix(in oklab, var(--color-base-content) 88%, var(--color-primary));
+  outline: none;
+}
+
+.season-version-preview-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 150ms ease;
+}
+
+.season-version-preview.is-open .season-version-preview-content {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.season-version-preview-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.season-version-preview-list {
+  max-height: 16rem;
+  overflow-y: auto;
+  border-top: 1px solid color-mix(in oklab, currentColor 10%, transparent);
+}
+
+.season-version-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.55rem 1rem;
+  font-size: 0.75rem;
+}
+
+.season-version-preview-row + .season-version-preview-row {
+  border-top: 1px solid color-mix(in oklab, currentColor 7%, transparent);
+}
+
+.season-version-preview-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.season-version-preview-row span:nth-child(2) {
+  color: color-mix(in oklab, currentColor 58%, transparent);
+}
+
+.season-version-preview-row strong {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.season-batch-filter {
+  margin-left: auto;
+}
+
+.season-batch-filter + .season-batch-mode {
+  margin-left: 0;
+}
+
+.season-batch-filter-status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: color-mix(in oklab, var(--color-base-content) 52%, transparent);
+  font-size: 0.7rem;
+  animation: season-content-enter 160ms ease-out both;
+}
+
+.season-batch-list {
+  max-height: min(55vh, 33rem);
+  overflow-y: auto;
+  border: 1px solid var(--color-base-300);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--color-base-200) 24%, transparent);
+}
+
+.season-batch-episode {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 8%, transparent);
+  transition: background-color 150ms ease;
+}
+
+.season-batch-episode:last-child {
+  border-bottom: 0;
+}
+
+.season-batch-episode.is-selected {
+  background: color-mix(in oklab, var(--color-primary) 2.5%, transparent);
+}
+
+.season-batch-episode-toggle {
+  display: grid;
+  cursor: pointer;
+  place-items: center;
+}
+
+.season-batch-episode-summary {
+  display: grid;
+  min-width: 0;
+  min-height: 3.7rem;
+  grid-template-columns: minmax(0, 1fr) auto 6rem 1rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.8rem 0.55rem 0;
+  color: inherit;
+  text-align: left;
+}
+
+.season-batch-episode-summary:hover,
+.season-batch-episode-summary:focus-visible {
+  color: color-mix(in oklab, var(--color-base-content) 92%, var(--color-primary));
+  outline: none;
+}
+
+.season-batch-episode-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.season-batch-episode-copy strong,
+.season-batch-episode-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.season-batch-episode-copy strong {
+  font-size: 0.82rem;
+}
+
+.season-batch-episode-copy small {
+  color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
+  font-size: 0.69rem;
+}
+
+.season-batch-comparison {
+  padding: 0.18rem 0.42rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+.season-batch-comparison.is-same-profile {
+  color: var(--color-success);
+}
+
+.season-batch-comparison.is-different {
+  color: var(--color-warning);
+}
+
+.season-batch-comparison.is-unknown {
+  color: var(--color-info);
+}
+
+.season-batch-savings {
+  text-align: right;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+}
+
+.season-batch-episode-details {
+  grid-column: 1 / -1;
+  padding: 0 0.75rem 0.75rem 2.75rem;
+  animation: season-content-enter 160ms ease-out both;
+}
+
+.season-batch-version-list {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in oklab, var(--color-base-200) 56%, transparent);
+}
+
+.season-batch-version-heading {
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--color-base-300);
+  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.season-batch-version {
+  display: flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.48rem 0.65rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent);
+  color: color-mix(in oklab, var(--color-base-content) 64%, transparent);
+  font-size: 0.75rem;
+}
+
+.season-batch-version:last-child {
+  border-bottom: 0;
+}
+
+.season-batch-version.is-kept {
+  background: color-mix(in oklab, var(--color-success) 7%, transparent);
+  color: var(--color-base-content);
+}
+
+.season-batch-version-action {
+  width: 3.25rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.season-batch-version-action.is-keep {
+  color: var(--color-success);
+}
+
+.season-batch-version-action.is-remove {
+  color: color-mix(in oklab, var(--color-error) 75%, var(--color-base-content));
+}
+
+.season-batch-version-size {
+  width: 5rem;
+  flex: 0 0 auto;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+}
+
+.season-batch-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--color-base-300);
+  background: color-mix(in oklab, var(--color-base-200) 72%, var(--color-base-100));
+  flex: 0 0 auto;
+}
+
+@keyframes season-content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-0.3rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.season-batch-total {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+  font-size: 0.68rem;
+}
+
+.season-batch-total strong {
+  color: var(--color-base-content);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 700px) {
+  .season-batch-dialog {
+    padding-block: 0.5rem;
+  }
+
+  .season-batch-modal {
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .duplicates-season-summary-cell {
+    min-width: 13rem;
+  }
+
+  .duplicates-season-chips {
+    display: none;
+  }
+
+  .duplicates-season-mobile-outcome {
+    display: flex;
+  }
+
+  .duplicates-season-review {
+    display: none;
+  }
+
+  .season-batch-filter {
+    margin-left: 0;
+  }
+
+  .season-profile-coverage {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .season-profile-coverage-meter {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .season-profile-coverage-count,
+  .season-profile-size {
+    text-align: left;
+  }
+
+  .season-batch-episode-summary {
+    grid-template-columns: minmax(0, 1fr) 1rem;
+  }
+
+  .season-batch-comparison,
+  .season-batch-savings {
+    display: none;
+  }
+
+  .season-batch-footer {
+    flex-wrap: wrap;
+  }
+
+  .season-batch-total {
+    flex-basis: 100%;
+  }
+}
+
+.duplicates-episode-title-cell {
+  position: relative;
+  padding-left: 4.75rem !important;
+}
+
+.duplicates-episode-title-cell::before {
+  position: absolute;
+  left: 2.15rem;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--color-base-content) 14%, transparent);
+  content: "";
+}
+
 .duplicates-group-row-disabled {
   cursor: default;
 }
@@ -313,7 +1143,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .duplicates-summary-card,
-  .duplicates-summary-icon {
+  .duplicates-summary-icon,
+  .season-profile-note,
+  .season-version-preview,
+  .season-version-preview-content,
+  .season-batch-filter-status,
+  .season-batch-episode-details {
+    animation: none;
     transition: none;
   }
 }

@@ -880,6 +880,7 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
     'Stream',
   );
   assertEquals(details.get(11)?.streamDetailsAvailable, true);
+  assertEquals(details.get(11)?.filePath, '/movies/Example-aac.mkv');
   assertEquals(details.get(11)?.audioStreams, [{
     codec: 'aac',
     language: null,
@@ -892,6 +893,7 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
   // Media 12's Part has no Stream array at all — distinct from "Stream present but
   // empty" — so audio equivalence still can't be verified from this response for it.
   assertEquals(details.get(12)?.streamDetailsAvailable, false);
+  assertEquals(details.get(12)?.filePath, null);
 });
 
 Deno.test('show media path preview pages through live allLeaves metadata', async () => {

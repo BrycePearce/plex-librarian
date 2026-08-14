@@ -147,6 +147,21 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
       });
     }
 
+    function setCandidateSelection(
+      candidates: readonly SmartDuplicateCandidate[],
+      included: boolean,
+    ) {
+      const keys = candidates.map(candidateKey);
+      setSelected((current) => {
+        const next = new Set(current);
+        for (const key of keys) {
+          if (included) next.add(key);
+          else next.delete(key);
+        }
+        return next;
+      });
+    }
+
     function updateKeeper(candidate: SmartDuplicateCandidate, mediaId: number) {
       setKeepSelections((current) => {
         const next = new Map(current);
@@ -225,6 +240,7 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
                   reclaimableSize={reclaimableSize}
                   onToggleCandidate={toggleCandidate}
                   onSetConfidenceSelection={setConfidenceSelection}
+                  onSetCandidateSelection={setCandidateSelection}
                   onExpandedCandidateChange={setExpandedCandidate}
                   onKeepChange={updateKeeper}
                 />
