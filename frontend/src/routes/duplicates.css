@@ -340,7 +340,7 @@
 
 .season-profile-card {
   display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 1.5rem minmax(0, 1fr) 12rem;
   align-items: start;
   gap: 0.8rem;
   width: 100%;
@@ -395,6 +395,7 @@
 
 .season-profile-actions {
   display: flex;
+  width: 12rem;
   min-width: 0;
   max-width: 12rem;
   flex-wrap: wrap;
@@ -967,6 +968,7 @@
 
   .season-profile-actions {
     grid-column: 2;
+    width: auto;
     max-width: none;
     justify-content: flex-start;
   }

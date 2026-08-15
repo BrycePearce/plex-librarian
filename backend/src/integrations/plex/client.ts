@@ -21,6 +21,12 @@ import type {
 } from './types.ts';
 import { plexProjectedKilobytes } from '../../features/mediaDeletion/radarrSize.ts';
 import { buildPlexHeaders } from './headers.ts';
+import {
+  existingFileParts,
+  isFileBackedMedia,
+  type PlexRawMedia as RawMedia,
+  type PlexRawPart as RawPart,
+} from './fileBackedMedia.ts';
 export { buildPlexHeaders, PLEX_CLIENT_PRODUCT, PLEX_TV } from './headers.ts';
 
 const ITEMS_PAGE_SIZE = 300;
@@ -127,26 +133,6 @@ export function mapActiveSessions(raw: PlexRawSession[]): PlexActiveSession[] {
 // recovered — fileSize will be under-reported for those items.
 // Result is stored in kilobytes to keep values well within 32-bit range for @db/sqlite.
 const normalizeSize = (s: number) => s < 0 ? s + 2 ** 32 : s;
-
-type RawMedia = NonNullable<PlexRawMetadata['Media']>[number];
-type RawPart = NonNullable<RawMedia['Part']>[number];
-
-// A Plex Media shell is not a usable library version unless it still owns at least
-// one file-backed Part. `exists` is absent on some PMS responses, so only an explicit
-// false/0 excludes a Part. `accessible` is deliberately not considered: an offline
-// mount may be temporarily inaccessible without the file having been removed from Plex.
-function isExistingFilePart(part: RawPart): part is RawPart & { file: string } {
-  return typeof part.file === 'string' && part.file.length > 0 &&
-    part.exists !== false && part.exists !== 0;
-}
-
-function existingFileParts(media: RawMedia): Array<RawPart & { file: string }> {
-  return (media.Part ?? []).filter(isExistingFilePart);
-}
-
-function isFileBackedMedia(media: RawMedia): media is RawMedia & { id: number } {
-  return Number.isSafeInteger(media.id) && existingFileParts(media).length > 0;
-}
 
 // Sums a single Media entry's own Part sizes — the per-version counterpart to
 // extractFileSize's sum across every Media entry on the item.
@@ -872,7 +858,7 @@ export class PlexClient {
     const result = new Map<number, PlexMediaTechnicalDetails>();
     for (const metadata of data.MediaContainer.Metadata ?? []) {
       for (const media of metadata.Media ?? []) {
-        if (media.id == null) continue;
+        if (!isFileBackedMedia(media)) continue;
         const parts = existingFileParts(media);
         result.set(media.id, {
           ...technicalDetails(media),

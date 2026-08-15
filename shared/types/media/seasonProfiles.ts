@@ -8,6 +8,12 @@ export interface SeasonVersionProfileMember {
   filePath?: string | null;
 }
 
+export type SeasonLaneMatchBasis =
+  | 'release-root'
+  | 'filename-family'
+  | 'technical-only'
+  | 'mixed';
+
 export interface SeasonVersionProfile {
   id: string;
   label: string;
@@ -21,6 +27,8 @@ export interface SeasonVersionProfile {
   audioSummary: string[];
   subtitleSummary: string[];
   sourceHints: string[];
+  /** The fixed evidence that made this lane selectable. */
+  matchBasis: SeasonLaneMatchBasis;
   members: SeasonVersionProfileMember[];
   /** Exact members currently owned by Sonarr's EpisodeFile records. */
   sonarrManagedCount?: number;

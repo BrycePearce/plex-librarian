@@ -867,6 +867,16 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
               }],
             },
             { id: 12, audioCodec: 'truehd', audioChannels: 8, Part: [{}] },
+            {
+              id: 13,
+              audioCodec: 'aac',
+              audioChannels: 2,
+              Part: [
+                { file: '/movies/Example-part-1.mkv' },
+                { file: '/movies/Example-part-2.mkv' },
+              ],
+            },
+            { id: 14, Part: [{ file: '/movies/Example-gone.mkv', exists: false }] },
           ],
         }],
       },
@@ -892,8 +902,10 @@ Deno.test('mediaVersionTechnicalDetails keys full per-item Stream detail by Medi
   }]);
   // Media 12's Part has no Stream array at all — distinct from "Stream present but
   // empty" — so audio equivalence still can't be verified from this response for it.
-  assertEquals(details.get(12)?.streamDetailsAvailable, false);
-  assertEquals(details.get(12)?.filePath, null);
+  assertEquals(details.has(12), false);
+  assertEquals(details.has(14), false);
+  assertEquals(details.get(13)?.streamDetailsAvailable, false);
+  assertEquals(details.get(13)?.filePath, null);
 });
 
 Deno.test('show media path preview pages through live allLeaves metadata', async () => {

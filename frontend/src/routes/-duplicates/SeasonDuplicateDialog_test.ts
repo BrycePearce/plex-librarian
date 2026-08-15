@@ -8,12 +8,14 @@ import {
   MAX_SEASON_CLEANUP_EPISODES,
   refreshAuthorizedSeasonDeletionPreview,
   refreshExpiredSeasonDeletionPreview,
+  seasonChoiceWithoutSonarr,
   seasonDeletionAuthorizationKey,
   seasonDeletionConfirmationDisabled,
   seasonDeletionConflictOperationId,
   seasonDeletionPreviewIsUsable,
   seasonDestinationChoice,
   seasonDownloadCleanupVisible,
+  seasonLaneMatchBasisLabel,
   seasonProfilesDeletionPlan,
   seasonProfileSelection,
   seasonSonarrVisible,
@@ -75,6 +77,7 @@ function profile(id: string, members: SeasonVersionProfile["members"]): SeasonVe
     audioSummary: [],
     subtitleSummary: [],
     sourceHints: [],
+    matchBasis: "technical-only",
     members,
   };
 }
@@ -84,6 +87,13 @@ Deno.test("subtitle labels collapse repeated tracks without hiding their count",
     { label: "eng · SRT", count: 2 },
     { label: "jpn · ASS", count: 1 },
   ]);
+});
+
+Deno.test("season lane match basis uses explicit evidence explanations", () => {
+  assertEquals(seasonLaneMatchBasisLabel("release-root"), "Folder matched");
+  assertEquals(seasonLaneMatchBasisLabel("technical-only"), "Technical match");
+  assertEquals(seasonLaneMatchBasisLabel("mixed"), "Mixed evidence");
+  assertEquals(seasonLaneMatchBasisLabel("filename-family"), "Filename matched");
 });
 
 Deno.test("lane paths group by normalized directory and sort by episode", () => {
@@ -314,7 +324,7 @@ Deno.test("season Sonarr destination requires an actionable aligned version", ()
   assertEquals(seasonSonarrVisible("selection-b", { key: "selection-a", sonarr: true }), false);
 });
 
-Deno.test("season Sonarr coordination is authorized only for the exact selection", () => {
+Deno.test("season destinations are independently authorized for only the exact selection", () => {
   const authorized = {
     key: "selection-a",
     coordinateSonarr: true,
@@ -330,7 +340,34 @@ Deno.test("season Sonarr coordination is authorized only for the exact selection
   });
   assertEquals(
     seasonDestinationChoice("selection-a", { ...authorized, coordinateSonarr: false }),
-    { coordinateSonarr: false, cleanupDownloads: false },
+    { coordinateSonarr: false, cleanupDownloads: true },
+  );
+});
+
+Deno.test("losing Sonarr availability does not clear verified qBittorrent cleanup", () => {
+  assertEquals(
+    seasonChoiceWithoutSonarr("selection-a", {
+      key: "selection-a",
+      coordinateSonarr: true,
+      cleanupDownloads: true,
+    }),
+    {
+      key: "selection-a",
+      coordinateSonarr: false,
+      cleanupDownloads: true,
+    },
+  );
+  assertEquals(
+    seasonChoiceWithoutSonarr("selection-b", {
+      key: "selection-a",
+      coordinateSonarr: true,
+      cleanupDownloads: true,
+    }),
+    {
+      key: "selection-b",
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    },
   );
 });
 
@@ -346,6 +383,7 @@ Deno.test("season profile selection expands only explicit members into deletion 
     audioSummary: ["eng"],
     subtitleSummary: [],
     sourceHints: [],
+    matchBasis: "technical-only",
     members: [
       { episodeRatingKey: "episode-1", mediaId: 11 },
       { episodeRatingKey: "episode-2", mediaId: 21 },

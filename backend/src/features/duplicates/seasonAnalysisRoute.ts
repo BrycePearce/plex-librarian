@@ -193,9 +193,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
     return c.json({ error: 'no eligible duplicate episodes remain in this season' }, 409);
   }
 
-  const liveEvidence = await enrichSeasonEpisodeEvidence(serverId, rowsByEpisode).catch(() =>
-    new Map()
-  );
+  const liveEvidence = await enrichSeasonEpisodeEvidence(serverId, rowsByEpisode);
   const [show] = await db.select({
     title: items.title,
     thumb: items.thumb,
@@ -227,17 +225,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
       versions: rows.map(mediaVersionFromRow),
     }];
   });
-  const pathHints = new Map(
-    episodes.flatMap((episode) =>
-      episode.versions.map((version) =>
-        [
-          `${episode.episodeRatingKey}:${version.mediaId}`,
-          liveEvidence.get(episode.episodeRatingKey)?.get(version.mediaId)?.filePath ?? null,
-        ] as const
-      )
-    ),
-  );
-  const analysis = analyzeSeasonVersionProfiles(episodes, pathHints);
+  const analysis = analyzeSeasonVersionProfiles(episodes, liveEvidence);
   const destinationAlignment = await enrichDestinationAlignment(
     serverId,
     first.libraryKey,

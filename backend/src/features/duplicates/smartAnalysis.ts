@@ -15,6 +15,12 @@ import {
   episodeRootIsWorkflowOwned,
   movieRootIsWorkflowOwned,
 } from '../deletionOperations/core/ownership.ts';
+import {
+  classifyEpisodeLiveEvidence,
+  type EpisodeLiveEvidence,
+  failedEpisodeLiveEvidence,
+} from './seasonLiveEvidence.ts';
+export type { EpisodeLiveEvidence } from './seasonLiveEvidence.ts';
 
 const READ_BATCH_SIZE = 400;
 const READ_CONCURRENCY = 3;
@@ -158,14 +164,25 @@ export async function enrichEpisodeTechnicalDetails(
 export async function enrichSeasonEpisodeEvidence(
   serverId: number,
   episodeVersions: Map<string, EpisodeVersionRow[]>,
-): Promise<Map<string, Map<number, PlexMediaTechnicalDetails>>> {
-  const evidence = new Map<string, Map<number, PlexMediaTechnicalDetails>>();
+): Promise<Map<string, EpisodeLiveEvidence>> {
+  const evidence = new Map<string, EpisodeLiveEvidence>();
   if (episodeVersions.size === 0) return evidence;
-  const active = await resolveActiveServer();
-  if (active.serverId !== serverId) return evidence;
   const groups = [...episodeVersions.entries()].sort(([left], [right]) =>
     left.localeCompare(right)
   );
+  const failed = () => {
+    for (const [ratingKey] of groups) {
+      evidence.set(ratingKey, failedEpisodeLiveEvidence());
+    }
+    return evidence;
+  };
+  let active: Awaited<ReturnType<typeof resolveActiveServer>>;
+  try {
+    active = await resolveActiveServer();
+  } catch {
+    return failed();
+  }
+  if (active.serverId !== serverId) return failed();
   let nextIndex = 0;
   await Promise.all(
     Array.from(
@@ -181,10 +198,12 @@ export async function enrichSeasonEpisodeEvidence(
               totalSize: rows.reduce((total, row) => total + (row.fileSize ?? 0), 0),
               rows,
             }, details);
-            evidence.set(ratingKey, details);
+            evidence.set(
+              ratingKey,
+              classifyEpisodeLiveEvidence(rows.map((row) => row.mediaId), details),
+            );
           } catch {
-            // Missing live evidence leaves the episode protected by the existing
-            // incomplete-detail handling instead of failing the rest of the season.
+            evidence.set(ratingKey, failedEpisodeLiveEvidence());
           }
         }
       },

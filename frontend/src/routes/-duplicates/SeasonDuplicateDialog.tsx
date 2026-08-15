@@ -88,9 +88,20 @@ export function seasonDestinationChoice(
   return choice.key === authorizationKey
     ? {
       coordinateSonarr: choice.coordinateSonarr,
-      cleanupDownloads: choice.coordinateSonarr && choice.cleanupDownloads,
+      cleanupDownloads: choice.cleanupDownloads,
     }
     : { coordinateSonarr: false, cleanupDownloads: false };
+}
+
+export function seasonChoiceWithoutSonarr(
+  authorizationKey: string,
+  choice: { key: string; coordinateSonarr: boolean; cleanupDownloads: boolean },
+): { key: string; coordinateSonarr: false; cleanupDownloads: boolean } {
+  return {
+    key: authorizationKey,
+    coordinateSonarr: false,
+    cleanupDownloads: choice.key === authorizationKey && choice.cleanupDownloads,
+  };
 }
 
 export function seasonDeletionConfirmationDisabled(input: {
@@ -164,6 +175,21 @@ export function countedLabels(labels: readonly string[]): Array<{ label: string;
   const counts = new Map<string, number>();
   for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
   return [...counts].map(([label, count]) => ({ label, count }));
+}
+
+export function seasonLaneMatchBasisLabel(
+  basis: SeasonVersionProfile["matchBasis"],
+): string {
+  switch (basis) {
+    case "release-root":
+      return "Folder matched";
+    case "filename-family":
+      return "Filename matched";
+    case "mixed":
+      return "Mixed evidence";
+    case "technical-only":
+      return "Technical match";
+  }
 }
 
 interface SeasonLanePathEntry {
@@ -698,11 +724,7 @@ export function SeasonDuplicateDialog({
       sonarr: deletionPreview.data.sonarrAvailable,
     });
     if (!deletionPreview.data.sonarrAvailable) {
-      setDestinationChoice({
-        key: authorizationKey,
-        coordinateSonarr: false,
-        cleanupDownloads: false,
-      });
+      setDestinationChoice((current) => seasonChoiceWithoutSonarr(authorizationKey, current));
     }
   }, [authorizationKey, deletionPreview.data]);
   useEffect(() => {
@@ -811,7 +833,7 @@ export function SeasonDuplicateDialog({
           ? [{
             id: "cleanup" as const,
             service: "qbittorrent" as const,
-            label: "qBittorrent",
+            label: "Delete from qBittorrent",
             info:
               `Deletes verified qBittorrent jobs and their downloaded files for ${cleanupEligibleVersionCount} selected ${
                 cleanupEligibleVersionCount === 1 ? "version" : "versions"
@@ -1028,6 +1050,9 @@ export function SeasonDuplicateDialog({
                                 <strong title={profile.sourceHints.join(" · ")}>
                                   {sourceLabel}
                                 </strong>
+                                <span className="badge badge-ghost badge-xs">
+                                  {seasonLaneMatchBasisLabel(profile.matchBasis)}
+                                </span>
                               </span>
                               <small className="season-profile-technical" title={profile.label}>
                                 {profile.label}
@@ -1125,8 +1150,15 @@ export function SeasonDuplicateDialog({
                                       : `These ${profile.coverageCount} files contain ${profile.technicalVariantCount} exact Plex technical signatures.`}
                                   </p>
                                   <p className="text-base-content/55">
-                                    Folder, filename, and technical evidence combine to form this
-                                    season version. Each episode contributes at most one file.
+                                    {profile.matchBasis === "release-root"
+                                      ? "Recurring source folders establish this season version."
+                                      : profile.matchBasis === "mixed"
+                                      ? "Recurring source folders and fixed technical evidence establish this season version."
+                                      : profile.matchBasis === "filename-family"
+                                      ? "A recurring filename family establishes this season version."
+                                      : "Fixed technical evidence establishes this season version."}
+                                    {" "}
+                                    Each episode contributes at most one file.
                                   </p>
                                 </div>
                               }

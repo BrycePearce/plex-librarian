@@ -676,17 +676,35 @@ export async function enqueueDeletionOperations(
           input.libraryKey,
           target.kind,
         );
-        const acceptedMappings = Object.hasOwn(target.snapshot, 'arrReassignmentMappings')
+        const acceptedCoordinatedMappings = Object.hasOwn(
+            target.snapshot,
+            'arrReassignmentMappings',
+          )
           ? target.snapshot.arrReassignmentMappings
-          : (target.snapshot.seasonSonarrInspection as { mappings?: unknown } | undefined)
-            ?.mappings;
-        if (acceptedMappings !== undefined) {
-          if (canonical(acceptedMappings) !== canonical(currentMappings)) {
+          : undefined;
+        const acceptedInspectionMappings = (
+          target.snapshot.seasonSonarrInspection as { mappings?: unknown } | undefined
+        )?.mappings;
+        for (
+          const acceptedMappings of [
+            acceptedCoordinatedMappings,
+            acceptedInspectionMappings,
+          ]
+        ) {
+          if (
+            acceptedMappings !== undefined &&
+            canonical(acceptedMappings) !== canonical(currentMappings)
+          ) {
             throw new DeletionConflictError(
               'the accepted Arr mapping configuration changed before deletion was accepted',
             );
           }
-        } else if (target.snapshot.seasonCleanup !== true) {
+        }
+        if (
+          acceptedCoordinatedMappings === undefined &&
+          acceptedInspectionMappings === undefined &&
+          target.snapshot.seasonCleanup !== true
+        ) {
           target.snapshot.arrReassignmentMappings = currentMappings;
         }
       }

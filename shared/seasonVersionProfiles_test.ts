@@ -4,6 +4,9 @@ import { assertEquals, assertNotEquals } from 'jsr:@std/assert@^1.0.19';
 import type { DuplicateEpisodeGroup, MediaStreamSummary, MediaVersion } from './types.ts';
 import {
   analyzeSeasonVersionProfiles,
+  type SeasonEpisodeLiveEvidence,
+  seasonFilenameFamilyKey,
+  seasonPathEvidence,
   seasonVersionFingerprint,
   seasonVersionSourceHint,
 } from './seasonVersionProfiles.ts';
@@ -59,6 +62,28 @@ function episode(key: string, versions: MediaVersion[]): DuplicateEpisodeGroup {
     combinedFileSize: 600,
     versions,
   };
+}
+
+function completeEvidence(
+  episodes: readonly DuplicateEpisodeGroup[],
+  paths: ReadonlyMap<string, string | null>,
+): Map<string, SeasonEpisodeLiveEvidence> {
+  return new Map(episodes.map((item) => [
+    item.episodeRatingKey,
+    {
+      status: 'complete' as const,
+      versions: new Map(item.versions.map((media) => [
+        media.mediaId,
+        { filePath: paths.get(`${item.episodeRatingKey}:${media.mediaId}`) ?? null },
+      ])),
+    },
+  ]));
+}
+
+function profileMembers(result: ReturnType<typeof analyzeSeasonVersionProfiles>): string[] {
+  return result.profiles.map((profile) =>
+    profile.members.map((member) => `${member.episodeRatingKey}:${member.mediaId}`).sort().join('|')
+  ).sort();
 }
 
 Deno.test('season profile identity ignores sizes, runtime, and stream ordering', () => {
@@ -140,8 +165,8 @@ Deno.test('season lanes assign at most one version per episode', () => {
     episode('episode-3', [dub(5), dub(6), japanese(7)]),
     episode('episode-4', [version(8, { videoCodec: 'hevc' }), japanese(9)]),
   ]);
-  assertEquals(result.profiles.length, 3);
-  assertEquals(result.profiles.map((profile) => profile.coverageCount), [4, 4, 1]);
+  assertEquals(result.profiles.length, 2);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [3, 3]);
   for (const profile of result.profiles) {
     assertEquals(
       new Set(profile.members.map((member) => member.episodeRatingKey)).size,
@@ -149,9 +174,10 @@ Deno.test('season lanes assign at most one version per episode', () => {
     );
   }
   assertEquals(result.recommendedProfileId, null);
+  assertEquals(result.uncertainEpisodeRatingKeys, ['episode-3']);
 });
 
-Deno.test('same-family copies are split into two actionable season lanes', () => {
+Deno.test('indistinguishable same-family copies quarantine later ties', () => {
   const low = (id: number) => version(id, { bitrate: 3_500, fileSize: 200 });
   const high = (id: number) => version(id, { bitrate: 8_000, fileSize: 500 });
   const result = analyzeSeasonVersionProfiles([
@@ -160,14 +186,8 @@ Deno.test('same-family copies are split into two actionable season lanes', () =>
     episode('episode-3', [high(5), low(6)]),
   ]);
 
-  assertEquals(result.profiles.length, 2);
-  assertEquals(result.profiles.map((profile) => profile.coverageCount), [3, 3]);
-  assertEquals(
-    result.profiles.every((profile) =>
-      new Set(profile.members.map((member) => member.episodeRatingKey)).size === 3
-    ),
-    true,
-  );
+  assertEquals(result.profiles, []);
+  assertEquals(result.uncertainEpisodeRatingKeys, ['episode-1', 'episode-2', 'episode-3']);
 });
 
 Deno.test('a one-episode third version becomes a standalone lane', () => {
@@ -196,12 +216,15 @@ Deno.test('path and filename hints align otherwise identical release families', 
   ];
   const result = analyzeSeasonVersionProfiles(
     episodes,
-    new Map([
-      ['episode-1:1', '/tv/Show/alpha/Show.S01E01.alpha.mkv'],
-      ['episode-1:2', '/tv/Show/beta/Show.S01E01.beta.mkv'],
-      ['episode-2:3', '/tv/Show/beta/Show.S01E02.beta.mkv'],
-      ['episode-2:4', '/tv/Show/alpha/Show.S01E02.alpha.mkv'],
-    ]),
+    completeEvidence(
+      episodes,
+      new Map([
+        ['episode-1:1', '/tv/Show/alpha/Show.S01E01.alpha.mkv'],
+        ['episode-1:2', '/tv/Show/beta/Show.S01E01.beta.mkv'],
+        ['episode-2:3', '/tv/Show/beta/Show.S01E02.beta.mkv'],
+        ['episode-2:4', '/tv/Show/alpha/Show.S01E02.alpha.mkv'],
+      ]),
+    ),
   );
 
   assertEquals(result.profiles.length, 2);
@@ -224,6 +247,54 @@ Deno.test('season source hints prefer the release folder above a season director
     'Rurouni Kenshin (2023)',
   );
   assertEquals(seasonVersionSourceHint('D:\\TV\\Show\\Specials\\special.mkv'), 'Show');
+});
+
+Deno.test('season path evidence is platform-aware and keeps relative paths soft', () => {
+  assertEquals(
+    seasonPathEvidence('/TV/Release/Season 01//episode.mkv').releaseRootKey,
+    '/TV/Release',
+  );
+  assertEquals(
+    seasonPathEvidence('/TV/release/Season 01/episode.mkv').releaseRootKey,
+    '/TV/release',
+  );
+  assertEquals(
+    seasonPathEvidence('D:\\TV\\Release\\Season 00\\episode.mkv').releaseRootKey,
+    'd:/tv/release',
+  );
+  assertEquals(
+    seasonPathEvidence('d:/tv/release/Specials/episode.mkv').releaseRootKey,
+    'd:/tv/release',
+  );
+  assertEquals(
+    seasonPathEvidence('\\\\SERVER\\Share\\Release\\Season 1\\episode.mkv').releaseRootKey,
+    '//server/share/release',
+  );
+  assertEquals(seasonPathEvidence('Release/Season 01/episode.mkv').releaseRootKey, null);
+  assertEquals(seasonPathEvidence('episode.mkv').containingDirectoryKey, null);
+  assertEquals(
+    seasonPathEvidence('  /TV/Release/Season 01/episode.mkv  ').originalPath,
+    '  /TV/Release/Season 01/episode.mkv  ',
+  );
+});
+
+Deno.test('filename families retain recurring identity and remove title and technical vocabulary', () => {
+  const item = {
+    ...episode('episode-1', [version(1), version(2)]),
+    showTitle: 'Example Show',
+    episodeTitle: 'Pilot',
+  };
+  assertEquals(
+    seasonFilenameFamilyKey(
+      '/tv/Example Show/Season 01/Example.Show.S01E01.Pilot.1080p.WEB-DL.H264-Alpha.mkv',
+      item,
+    ),
+    'alpha',
+  );
+  assertEquals(
+    seasonFilenameFamilyKey('/tv/Example Show/Season 01/Example.Show.S01E01.Pilot.mkv', item),
+    null,
+  );
 });
 
 Deno.test('season lanes condense hidden profile differences across episodes', () => {
@@ -275,4 +346,352 @@ Deno.test('season profiles never infer a preferred destructive policy', () => {
 
   assertEquals(result.profiles.some((profile) => profile.videoSummary.includes('2160p')), true);
   assertEquals(result.recommendedProfileId, null);
+});
+
+Deno.test('mismatched and failed live evidence remain visible only as uncertain episodes', () => {
+  const episodes = [
+    episode('episode-1', [version(1), version(2, { videoCodec: 'hevc' })]),
+    episode('episode-2', [version(3), version(4, { videoCodec: 'hevc' })]),
+    episode('episode-3', [version(5), version(6, { videoCodec: 'hevc' })]),
+  ];
+  const evidence = completeEvidence(episodes, new Map());
+  evidence.set('episode-1', {
+    status: 'mismatch',
+    versions: new Map([[1, { filePath: null }], [7, { filePath: null }]]),
+    missingExpectedMediaIds: [2],
+    unexpectedLiveMediaIds: [7],
+  });
+  evidence.set('episode-2', { status: 'failed', versions: new Map<number, never>() });
+  const result = analyzeSeasonVersionProfiles(episodes, evidence);
+  assertEquals(result.uncertainEpisodeRatingKeys, ['episode-1', 'episode-2']);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [1, 1]);
+});
+
+Deno.test('recurring release roots survive resolution, codec, audio, and subtitle transitions', () => {
+  const japanese = { ...english, language: 'jpn', title: 'Japanese' };
+  const episodes = [
+    episode('episode-1', [
+      version(1, { height: 480, bitrate: 1_500 }),
+      version(2, { height: 720, videoCodec: 'hevc', bitrate: 3_000 }),
+    ]),
+    episode('episode-2', [
+      version(3, { height: 720, videoCodec: 'hevc', audioStreams: [japanese] }),
+      version(4, { height: 480, subtitleStreams: [{ ...japanese, codec: 'ass' }] }),
+    ]),
+    episode('episode-3', [
+      version(5, { height: 1080, videoCodec: 'av1' }),
+      version(6, { height: 1080, videoCodec: 'av1' }),
+    ]),
+  ];
+  const paths = new Map<string, string | null>();
+  for (const item of episodes) {
+    paths.set(
+      `${item.episodeRatingKey}:${item.versions[0]!.mediaId}`,
+      `/anime/Release A/Season 01/${item.episodeRatingKey}.mkv`,
+    );
+    paths.set(
+      `${item.episodeRatingKey}:${item.versions[1]!.mediaId}`,
+      `/anime/Release B/Season 01/${item.episodeRatingKey}.mkv`,
+    );
+  }
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [3, 3]);
+  assertEquals(result.profiles.map((profile) => profile.matchBasis), [
+    'release-root',
+    'release-root',
+  ]);
+  assertEquals(
+    result.profiles.map((profile) => profile.sourceHints[0]).sort(),
+    ['Release A', 'Release B'],
+  );
+});
+
+Deno.test('multiple recurring roots form deterministic partial lanes without full overlap', () => {
+  const episodes = [
+    episode('episode-1', [version(1), version(2)]),
+    episode('episode-2', [version(3), version(4)]),
+    episode('episode-3', [version(5), version(6)]),
+  ];
+  const roots = [
+    ['A', 'B'],
+    ['A', 'C'],
+    ['B', 'C'],
+  ];
+  const paths = new Map<string, string | null>();
+  episodes.forEach((item, episodeIndex) =>
+    item.versions.forEach((media, versionIndex) => {
+      paths.set(
+        `${item.episodeRatingKey}:${media.mediaId}`,
+        `/anime/${roots[episodeIndex]![versionIndex]!}/Season 01/${item.episodeRatingKey}.mkv`,
+      );
+    })
+  );
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.profiles.length, 3);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [2, 2, 2]);
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+});
+
+Deno.test('technical proximity without a technical lead is quarantined as weak', () => {
+  const episodes = [
+    episode('episode-1', [
+      version(1, { bitrate: 2_000, fileSize: 100 }),
+      version(2, { bitrate: 8_000, fileSize: 500 }),
+    ]),
+    episode('episode-2', [
+      version(3, { bitrate: 2_100, fileSize: 110 }),
+      version(4, { bitrate: 7_900, fileSize: 490 }),
+    ]),
+  ];
+  const result = analyzeSeasonVersionProfiles(episodes);
+  assertEquals(result.profiles, []);
+  assertEquals(result.uncertainEpisodeRatingKeys, ['episode-1', 'episode-2']);
+});
+
+Deno.test('a shared release root stays soft and falls back to fixed technical matching', () => {
+  const episodes = [
+    episode('episode-1', [version(1), version(2, { videoCodec: 'hevc' })]),
+    episode('episode-2', [version(3, { videoCodec: 'hevc' }), version(4)]),
+    episode('episode-3', [version(5), version(6, { videoCodec: 'hevc' })]),
+  ];
+  const paths = new Map<string, string | null>();
+  episodes.forEach((item) =>
+    item.versions.forEach((media) => {
+      paths.set(
+        `${item.episodeRatingKey}:${media.mediaId}`,
+        `/tv/Show/Season 01/${item.episodeRatingKey}.${media.mediaId}.mkv`,
+      );
+    })
+  );
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [3, 3]);
+  assertEquals(result.profiles.map((profile) => profile.matchBasis), [
+    'technical-only',
+    'technical-only',
+  ]);
+});
+
+Deno.test('recurring filename families separate technically identical shared-folder releases', () => {
+  const episodes = [
+    episode('episode-1', [version(1), version(2)]),
+    episode('episode-2', [version(3), version(4)]),
+    episode('episode-3', [version(5), version(6)]),
+  ];
+  const paths = new Map<string, string | null>();
+  for (const item of episodes) {
+    paths.set(
+      `${item.episodeRatingKey}:${item.versions[0]!.mediaId}`,
+      `/tv/Show/Season 01/Show.S01E${item.episodeIndex}.1080p-Alpha.mkv`,
+    );
+    paths.set(
+      `${item.episodeRatingKey}:${item.versions[1]!.mediaId}`,
+      `/tv/Show/Season 01/Show.S01E${item.episodeIndex}.1080p-Beta.mkv`,
+    );
+  }
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [3, 3]);
+  assertEquals(result.profiles.map((profile) => profile.matchBasis), [
+    'filename-family',
+    'filename-family',
+  ]);
+  assertEquals(result.profiles.map((profile) => profile.sourceHints[0]).sort(), ['alpha', 'beta']);
+});
+
+Deno.test('widest unanchored seed matches root lanes while initializing remaining capacity', () => {
+  const rootEpisodes = [
+    episode('episode-1', [
+      version(1, { height: 480, videoCodec: 'h264' }),
+      version(2, { height: 720, videoCodec: 'hevc' }),
+    ]),
+    episode('episode-2', [
+      version(3, { height: 480, videoCodec: 'h264' }),
+      version(4, { height: 720, videoCodec: 'hevc' }),
+    ]),
+  ];
+  const unanchoredEpisodes = [
+    episode('episode-3', [
+      version(5, { height: 480, videoCodec: 'h264' }),
+      version(6, { height: 720, videoCodec: 'hevc' }),
+      version(7, { height: 1080, videoCodec: 'av1' }),
+    ]),
+    episode('episode-4', [
+      version(8, { height: 1080, videoCodec: 'av1' }),
+      version(9, { height: 480, videoCodec: 'h264' }),
+      version(10, { height: 720, videoCodec: 'hevc' }),
+    ]),
+  ];
+  const episodes = [...rootEpisodes, ...unanchoredEpisodes];
+  const paths = new Map<string, string | null>([
+    ['episode-1:1', '/anime/A/Season 01/e1.mkv'],
+    ['episode-1:2', '/anime/B/Season 01/e1.mkv'],
+    ['episode-2:3', '/anime/A/Season 01/e2.mkv'],
+    ['episode-2:4', '/anime/B/Season 01/e2.mkv'],
+  ]);
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [4, 4, 2]);
+});
+
+Deno.test('partial anchored lanes use qualified members before assigning unanchored capacity', () => {
+  const technical = [
+    { videoCodec: 'h264', height: 480 },
+    { videoCodec: 'hevc', height: 720 },
+    { videoCodec: 'av1', height: 1080 },
+  ] as const;
+  const anchoredLaneByEpisode = [0, 0, 1, 1, 2, 2];
+  const episodes = anchoredLaneByEpisode.map((anchoredLane, episodeIndex) => {
+    const remaining = [0, 1, 2].filter((lane) => lane !== anchoredLane);
+    return episode(
+      `episode-${episodeIndex + 1}`,
+      [anchoredLane, ...remaining].map((lane, index) =>
+        version(episodeIndex * 3 + index + 1, technical[lane])
+      ),
+    );
+  });
+  const paths = new Map<string, string | null>();
+  episodes.forEach((item, episodeIndex) => {
+    const anchoredLane = anchoredLaneByEpisode[episodeIndex]!;
+    paths.set(
+      `${item.episodeRatingKey}:${item.versions[0]!.mediaId}`,
+      `/anime/Release ${
+        String.fromCharCode(65 + anchoredLane)
+      }/Season 01/${item.episodeRatingKey}.mkv`,
+    );
+  });
+
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(result.profiles.map((profile) => profile.coverageCount), [6, 6, 6]);
+  assertEquals(
+    result.profiles.map((profile) =>
+      new Set(profile.members.map((member) => {
+        const item = episodes.find((episode) =>
+          episode.episodeRatingKey === member.episodeRatingKey
+        )!;
+        return item.versions.find((media) => media.mediaId === member.mediaId)!.videoCodec;
+      })).size
+    ),
+    [1, 1, 1],
+  );
+});
+
+Deno.test('season lane results are invariant to episode and media row permutations', () => {
+  const episodes = [
+    episode('episode-1', [version(1, { height: 480 }), version(2, { height: 1080 })]),
+    episode('episode-2', [version(3, { height: 720 }), version(4, { height: 480 })]),
+    episode('episode-3', [version(5, { height: 1080 }), version(6, { height: 720 })]),
+  ];
+  const paths = new Map<string, string | null>([
+    ['episode-1:1', '/anime/A/Season 01/e1.mkv'],
+    ['episode-1:2', '/anime/B/Season 01/e1.mkv'],
+    ['episode-2:3', '/anime/A/Season 01/e2.mkv'],
+    ['episode-2:4', '/anime/B/Season 01/e2.mkv'],
+    ['episode-3:5', '/anime/A/Season 01/e3.mkv'],
+    ['episode-3:6', '/anime/B/Season 01/e3.mkv'],
+  ]);
+  const baseline = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  const permuted = episodes.toReversed().map((item) => ({
+    ...item,
+    versions: item.versions.toReversed(),
+  }));
+  const reordered = analyzeSeasonVersionProfiles(permuted, completeEvidence(permuted, paths));
+  assertEquals(profileMembers(reordered), profileMembers(baseline));
+  assertEquals(reordered.uncertainEpisodeRatingKeys, baseline.uncertainEpisodeRatingKeys);
+});
+
+Deno.test('fixed technical representatives make unanchored matching permutation-invariant', () => {
+  const episodes = [
+    episode('episode-1', [
+      version(1, { height: 480, videoCodec: 'h264' }),
+      version(2, { height: 720, videoCodec: 'hevc' }),
+      version(3, { height: 1080, videoCodec: 'av1' }),
+    ]),
+    episode('episode-2', [
+      version(4, { height: 1080, videoCodec: 'av1' }),
+      version(5, { height: 480, videoCodec: 'h264' }),
+      version(6, { height: 720, videoCodec: 'hevc' }),
+    ]),
+    episode('episode-3', [
+      version(7, { height: 720, videoCodec: 'hevc' }),
+      version(8, { height: 1080, videoCodec: 'av1' }),
+      version(9, { height: 480, videoCodec: 'h264' }),
+    ]),
+  ];
+  const baseline = analyzeSeasonVersionProfiles(episodes);
+  const permuted = analyzeSeasonVersionProfiles(
+    episodes.toReversed().map((item) => ({ ...item, versions: item.versions.toReversed() })),
+  );
+  assertEquals(profileMembers(permuted), profileMembers(baseline));
+  assertEquals(baseline.profiles.map((profile) => profile.coverageCount), [3, 3, 3]);
+});
+
+Deno.test('an uncertain episode cannot change other technical assignments', () => {
+  const certain = [
+    episode('episode-1', [version(1), version(2, { videoCodec: 'hevc' })]),
+    episode('episode-2', [version(3), version(4, { videoCodec: 'hevc' })]),
+  ];
+  const baseline = analyzeSeasonVersionProfiles(certain);
+  const withTie = analyzeSeasonVersionProfiles([
+    ...certain,
+    episode('episode-99', [version(99), version(100)]),
+  ]);
+  assertEquals(
+    profileMembers(withTie).map((members) =>
+      members.split('|').filter((member) => !member.startsWith('episode-99:')).join('|')
+    ),
+    profileMembers(baseline),
+  );
+  assertEquals(withTie.uncertainEpisodeRatingKeys, ['episode-99']);
+});
+
+Deno.test('supported 500 episode by 11 lane root fixture stays within the latency budget', () => {
+  const episodes = Array.from({ length: 500 }, (_, episodeIndex) =>
+    episode(
+      `episode-${episodeIndex + 1}`,
+      Array.from({ length: 11 }, (_, laneIndex) =>
+        version(episodeIndex * 11 + laneIndex + 1, {
+          height: 480 + ((episodeIndex + laneIndex) % 4) * 240,
+          videoCodec: (episodeIndex + laneIndex) % 2 === 0 ? 'h264' : 'hevc',
+        })),
+    ));
+  const paths = new Map<string, string | null>();
+  episodes.forEach((item) =>
+    item.versions.forEach((media, laneIndex) => {
+      paths.set(
+        `${item.episodeRatingKey}:${media.mediaId}`,
+        `/anime/Release ${laneIndex + 1}/Season 01/${item.episodeRatingKey}.mkv`,
+      );
+    })
+  );
+  const started = performance.now();
+  const result = analyzeSeasonVersionProfiles(episodes, completeEvidence(episodes, paths));
+  const elapsed = performance.now() - started;
+  assertEquals(result.profiles.length, 11);
+  assertEquals(result.profiles.every((profile) => profile.coverageCount === 500), true);
+  assertEquals(elapsed < 10_000, true, `matcher took ${elapsed.toFixed(0)}ms`);
+});
+
+Deno.test('supported 500 episode by 11 lane technical fixture stays within the latency budget', () => {
+  const episodes = Array.from({ length: 500 }, (_, episodeIndex) => {
+    const versions = Array.from({ length: 11 }, (_, laneIndex) => {
+      const semanticLane = (laneIndex + episodeIndex) % 11;
+      return version(episodeIndex * 11 + laneIndex + 1, {
+        width: 640 + semanticLane * 160,
+        height: 360 + semanticLane * 90,
+        bitrate: 1_000 + semanticLane * 1_000,
+        fileSize: 100 + semanticLane * 50,
+      });
+    });
+    return episode(`episode-${episodeIndex + 1}`, versions);
+  });
+  const started = performance.now();
+  const result = analyzeSeasonVersionProfiles(episodes);
+  const elapsed = performance.now() - started;
+  assertEquals(result.profiles.length, 11);
+  assertEquals(result.profiles.every((profile) => profile.coverageCount === 500), true);
+  assertEquals(result.uncertainEpisodeRatingKeys, []);
+  assertEquals(elapsed < 10_000, true, `matcher took ${elapsed.toFixed(0)}ms`);
 });

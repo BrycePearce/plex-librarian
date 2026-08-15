@@ -3933,12 +3933,9 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
   );
   assertEquals(alignmentResponse.status, 200, await alignmentResponse.clone().text());
   const alignment = await alignmentResponse.json();
-  const managedLane = alignment.profiles.find((profile: {
-    members: Array<{ mediaId: number }>;
-  }) => profile.members.some((member) => member.mediaId === 21));
   assertEquals(alignment.connections, { sonarr: true, qbittorrent: true });
-  assertEquals(managedLane?.sonarrManagedCount, 1);
-  assertEquals(managedLane?.qbittorrentSeededCount, 1);
+  assertEquals(alignment.profiles, []);
+  assertEquals(alignment.uncertainEpisodeRatingKeys, ['episode-1']);
 
   const coordinatedPreview = await app.request(
     '/api/duplicates/seasons/season-1/deletion-preview',
