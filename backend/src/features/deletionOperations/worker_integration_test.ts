@@ -3575,10 +3575,13 @@ Deno.test('season deletion preview rejects empty and oversized selections before
   }
 });
 
-Deno.test('season cleanup requires Sonarr coordination before download cleanup', async () => {
+Deno.test('season cleanup requires verified download coverage when cleanup is selected', async () => {
   reset();
   addManualSeasonEpisode('download-show', 'download-season', 'download-episode', 1, [111, 112]);
-  const preview = await seasonPreviewEvidence('download-season', ['download-episode']);
+  const preview = await seasonPreviewEvidence('download-season', ['download-episode'], {
+    coordinateSonarr: false,
+    cleanupDownloads: true,
+  });
   const response = await seasonCleanupRequest('download-season', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -3586,11 +3589,9 @@ Deno.test('season cleanup requires Sonarr coordination before download cleanup',
       clientRequestId: 'season-download-cleanup',
       selections: [{ episodeRatingKey: 'download-episode', mediaIds: [111] }],
       ...preview,
-      cleanupDownloads: true,
     }),
   });
-  assertEquals(response.status, 400);
-  assertStringIncludes((await response.json()).error, 'requires Sonarr coordination');
+  assertEquals(response.status, 409);
   assertEquals(
     withTransaction((client) =>
       client.prepare(
@@ -3909,7 +3910,7 @@ Deno.test('Plex-only season cleanup deletes managed and unmanaged selected sibli
 
 Deno.test('Plex-only season cleanup does not require one Sonarr adoption candidate', async () => {
   reset();
-  configureSonarr();
+  configureSonarr(true);
   addEpisode();
   withTransaction((client) => {
     client.prepare(
@@ -3918,11 +3919,26 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
   });
   sonarrManagedMediaId = 21;
   sonarrManagedPath = '/tv/Show/Season 01/managed.mkv';
+  seasonPackQbit = true;
+  qbitPresent = true;
   live.get('episode-1')!.Media = [
     { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
     { id: 22, Part: [{ file: '/tv/Show/Season 01/retained-a.mkv', size: 40_000 }] },
     { id: 23, Part: [{ file: '/tv/Show/Season 01/retained-b.mkv', size: 40_000 }] },
   ];
+
+  const alignmentResponse = await app.request(
+    '/api/duplicates/seasons/season-1/analysis',
+    { method: 'POST' },
+  );
+  assertEquals(alignmentResponse.status, 200, await alignmentResponse.clone().text());
+  const alignment = await alignmentResponse.json();
+  const managedLane = alignment.profiles.find((profile: {
+    members: Array<{ mediaId: number }>;
+  }) => profile.members.some((member) => member.mediaId === 21));
+  assertEquals(alignment.connections, { sonarr: true, qbittorrent: true });
+  assertEquals(managedLane?.sonarrManagedCount, 1);
+  assertEquals(managedLane?.qbittorrentSeededCount, 1);
 
   const coordinatedPreview = await app.request(
     '/api/duplicates/seasons/season-1/deletion-preview',
@@ -3947,13 +3963,14 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
       body: JSON.stringify({
         selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
         coordinateSonarr: false,
-        cleanupDownloads: false,
+        cleanupDownloads: true,
       }),
     },
   );
   assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
   const preview = await previewResponse.json();
   assertEquals(preview.sonarrAvailable, false);
+  assertEquals(preview.cleanupEligibleVersionCount, 1);
   assertEquals(preview.automaticAdoptionCount, 0);
   assertEquals(preview.plexOnlyCount, 1);
 
@@ -3965,7 +3982,7 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
       selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
       previewFingerprint: preview.fingerprint,
       coordinateSonarr: false,
-      cleanupDownloads: false,
+      cleanupDownloads: true,
     }),
   });
   assertEquals(response.status, 202, await response.clone().text());
@@ -3979,6 +3996,7 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
     JSON.stringify(getDeletionOperation(result.operationId, 1)),
   );
   assertEquals(sonarrRescanCount, 0);
+  assertEquals(qbitDeleteCount, 1);
   assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22, 23]);
 });
 

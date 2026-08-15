@@ -115,8 +115,8 @@ withTransaction((client) => {
   }
   const season = client.prepare(
     `INSERT INTO seasons
-      (server_id, rating_key, show_rating_key, library_key, season_index, title, updated_at)
-     VALUES (1, ?, ?, 'shows', 1, 'Season 1', ?)`,
+      (server_id, rating_key, show_rating_key, library_key, season_index, title, leaf_count, updated_at)
+     VALUES (1, ?, ?, 'shows', 1, 'Season 1', 24, ?)`,
   );
   const episodeVersion = client.prepare(
     `INSERT INTO episode_media_versions
@@ -294,6 +294,7 @@ Deno.test('workflow-owned duplicate roots are excluded before totals and paginat
     group.mediaType === 'season'
   );
   assertEquals(tvSeason.episodes.length, 1);
+  assertEquals(tvSeason.totalEpisodeCount, 24);
   assertEquals(tvSeason.comparisonSummary, {
     episodeCount: 1,
     differentEpisodeCount: 0,

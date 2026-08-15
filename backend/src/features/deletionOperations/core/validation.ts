@@ -143,7 +143,6 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
     if (
       !snapshot.seasonDownloadCleanup || typeof snapshot.seasonDownloadCleanup !== 'object' ||
       snapshot.seasonCleanup !== true || snapshot.cleanupDownloads !== true ||
-      snapshot.skipArrCoordination === true ||
       snapshot.seasonDownloadCleanup.status !== 'resolved' ||
       snapshot.seasonDownloadCleanup.ratingKey !== snapshot.showRatingKey
     ) {

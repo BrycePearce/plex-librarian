@@ -484,9 +484,6 @@ async function ensureVersionDeleted(
   await assertVersionIsNotPlaying(client, snapshot.ratingKey);
 
   if (snapshot.skipArrCoordination === true) {
-    if (snapshot.cleanupDownloads) {
-      throw new Error('download cleanup requires Arr coordination');
-    }
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(
       target.targetKind,
@@ -494,16 +491,31 @@ async function ensureVersionDeleted(
       arrTargets,
       snapshot.seasonSonarrInspection?.mappings,
     );
-    if ((snapshot.seasonSonarrInspection?.mappings.length ?? 0) > 0) {
+    let inspectionPlan: VersionDeletionPlan | null = null;
+    let acceptedCleanup: ResolvedCleanupItem | null = null;
+    if (
+      (snapshot.seasonSonarrInspection?.mappings.length ?? 0) > 0 ||
+      snapshot.cleanupDownloads === true
+    ) {
       const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
-      const plan = await buildVersionDeletionPlan({
+      if (snapshot.cleanupDownloads === true) {
+        if (!snapshot.seasonDownloadCleanup) {
+          throw new Error('the accepted season download cleanup is missing');
+        }
+        acceptedCleanup = rehydrateResolvedCleanup(
+          snapshot.seasonDownloadCleanup,
+          await getDownloadClientTargets(target.serverId),
+        );
+      }
+      inspectionPlan = await buildVersionDeletionPlan({
         mediaType: 'episode',
         item: snapshot,
         selectedMediaIds: selectedIds,
         liveVersions,
         arrTargets,
-        resolvedCleanup: null,
-        cleanupConfigured: false,
+        resolvedCleanup: acceptedCleanup,
+        cleanupConfigured: acceptedCleanup !== null,
+        allowEpisodeDownloadCleanup: true,
         excludedReassignMediaIds: excludedReassignIds,
         requiredMappingIdentities: snapshot.seasonSonarrInspection!.mappings,
         episodeIdentity: {
@@ -511,10 +523,12 @@ async function ensureVersionDeleted(
           episodeNumber: snapshot.episodeIndex!,
         },
       });
-      if (!plan.arrOwnershipValid) {
-        throw new Error(plan.arrOwnershipReason ?? 'Sonarr ownership could not be re-inspected');
+      if (!inspectionPlan.arrOwnershipValid) {
+        throw new Error(
+          inspectionPlan.arrOwnershipReason ?? 'Sonarr ownership could not be re-inspected',
+        );
       }
-      const currentManagedSelectedMediaIds = plan.arrManagedMediaIds.filter((mediaId) =>
+      const currentManagedSelectedMediaIds = inspectionPlan.arrManagedMediaIds.filter((mediaId) =>
         selectedIds.has(mediaId)
       ).sort((left, right) => left - right);
       if (
@@ -523,6 +537,22 @@ async function ensureVersionDeleted(
       ) {
         throw new Error('Sonarr ownership changed after Plex-only deletion was accepted');
       }
+    }
+    if (snapshot.cleanupDownloads === true) {
+      if (!inspectionPlan?.cleanup || !acceptedCleanup) {
+        throw new Error(
+          inspectionPlan?.preview.cleanupReason ??
+            'the accepted qBittorrent payload no longer covers this season version',
+        );
+      }
+      if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
+      await executeCleanup(
+        target.serverId,
+        new Map([[snapshot.ratingKey, inspectionPlan.cleanup]]),
+        inspectionPlan.cleanup,
+        snapshot.showRatingKey!,
+        snapshot.seasonDownloadCleanup !== undefined,
+      );
     }
     if (!(await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds))) {
       throw new PlexReconciliationError(

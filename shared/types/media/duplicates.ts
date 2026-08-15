@@ -37,6 +37,8 @@ export interface DuplicateSeasonGroup {
   showTitle: string;
   showThumb: string | null;
   seasonIndex: number;
+  /** Total episodes Plex reported for the season at the last successful sync. */
+  totalEpisodeCount: number | null;
   /** Total eligible duplicate episodes represented by this season row. */
   duplicateGroupCount: number;
   combinedFileSize: number | null;

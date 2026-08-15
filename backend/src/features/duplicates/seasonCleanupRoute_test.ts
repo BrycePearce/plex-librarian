@@ -46,6 +46,13 @@ Deno.test('preview and cleanup share strict selection and destination parsing', 
     }, true).selections,
     intent.selections,
   );
+  assertEquals(
+    parseSeasonDeletionRequest('season-1', {
+      ...intent,
+      cleanupDownloads: true,
+    }, false).cleanupDownloads,
+    true,
+  );
 });
 
 Deno.test('season cleanup rejects duplicate identities and generic smart-cleanup fields', () => {
@@ -92,7 +99,6 @@ Deno.test('season cleanup requires exact identifiers, booleans, and fingerprint 
       { ...base, selections: [{ episodeRatingKey: ' episode-1', mediaIds: [11] }] },
       { ...base, coordinateSonarr: 'false' },
       { ...base, previewFingerprint: fingerprint.toUpperCase() },
-      { ...base, cleanupDownloads: true },
     ]
   ) {
     assertThrows(

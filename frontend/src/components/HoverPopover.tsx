@@ -36,14 +36,20 @@ export function HoverPopover({
   content,
   children,
   openOnClick = false,
+  interactive = false,
   anchorClassName,
   anchorTabIndex,
+  popoverAriaLabel,
+  popoverClassName,
 }: {
   content: ReactNode;
   children: ReactNode;
   openOnClick?: boolean;
+  interactive?: boolean;
   anchorClassName?: string;
   anchorTabIndex?: number;
+  popoverAriaLabel?: string;
+  popoverClassName?: string;
 }) {
   const id = useId();
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -78,6 +84,7 @@ export function HoverPopover({
     if (!pinned) return;
     const dismiss = (event: PointerEvent) => {
       if (anchorRef.current?.contains(event.target as Node)) return;
+      if (popoverRef.current?.contains(event.target as Node)) return;
       setPinned(false);
       setOpen(false);
     };
@@ -125,8 +132,13 @@ export function HoverPopover({
         <div
           ref={popoverRef}
           id={id}
-          role="tooltip"
-          className="pointer-events-none fixed z-[1000] max-w-72 rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-left text-xs font-normal normal-case tracking-normal text-base-content shadow-xl"
+          role={interactive ? "dialog" : "tooltip"}
+          aria-label={interactive ? popoverAriaLabel ?? "Details" : undefined}
+          className={`${
+            interactive ? "pointer-events-auto" : "pointer-events-none max-w-72"
+          } fixed z-[1000] rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-left text-xs font-normal normal-case tracking-normal text-base-content shadow-xl ${
+            popoverClassName ?? ""
+          }`}
           style={{ left: position.left, top: position.top }}
         >
           {content}

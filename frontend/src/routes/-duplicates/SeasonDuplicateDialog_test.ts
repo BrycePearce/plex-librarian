@@ -1,6 +1,8 @@
 import { assertEquals } from "@std/assert";
 import {
+  countedLabels,
   episodeCoverageLabel,
+  groupSeasonLanePaths,
   initialIndividualSelectionKeys,
   initialSeasonSelectionKeys,
   MAX_SEASON_CLEANUP_EPISODES,
@@ -76,6 +78,40 @@ function profile(id: string, members: SeasonVersionProfile["members"]): SeasonVe
     members,
   };
 }
+
+Deno.test("subtitle labels collapse repeated tracks without hiding their count", () => {
+  assertEquals(countedLabels(["eng · SRT", "jpn · ASS", "eng · SRT"]), [
+    { label: "eng · SRT", count: 2 },
+    { label: "jpn · ASS", count: 1 },
+  ]);
+});
+
+Deno.test("lane paths group by normalized directory and sort by episode", () => {
+  assertEquals(
+    groupSeasonLanePaths([
+      { episodeRatingKey: "episode-2", episodeIndex: 2, filePath: "D:\\TV\\Show\\S01E02.mkv" },
+      { episodeRatingKey: "episode-1", episodeIndex: 1, filePath: "D:\\TV\\Show\\S01E01.mkv" },
+      { episodeRatingKey: "episode-3", episodeIndex: 3, filePath: null },
+    ]),
+    [{
+      directory: "D:\\TV\\Show",
+      files: [
+        {
+          episodeRatingKey: "episode-1",
+          episodeIndex: 1,
+          filePath: "D:\\TV\\Show\\S01E01.mkv",
+          filename: "S01E01.mkv",
+        },
+        {
+          episodeRatingKey: "episode-2",
+          episodeIndex: 2,
+          filePath: "D:\\TV\\Show\\S01E02.mkv",
+          filename: "S01E02.mkv",
+        },
+      ],
+    }],
+  );
+});
 
 Deno.test("episode coverage compacts sequential and isolated episode indexes", () => {
   assertEquals(episodeCoverageLabel([20, 2, 1, 13, 14, 15, 2]), {
@@ -257,9 +293,18 @@ Deno.test("destructive destination authorization is bound to the exact media sel
 });
 
 Deno.test("season download cleanup is offered only for verified selected versions", () => {
-  assertEquals(seasonDownloadCleanupVisible(false, { cleanupEligibleVersionCount: 2 }), false);
-  assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 0 }), false);
-  assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 2 }), true);
+  assertEquals(
+    seasonDownloadCleanupVisible({ cleanupConfigured: false, cleanupEligibleVersionCount: 2 }),
+    false,
+  );
+  assertEquals(
+    seasonDownloadCleanupVisible({ cleanupConfigured: true, cleanupEligibleVersionCount: 0 }),
+    false,
+  );
+  assertEquals(
+    seasonDownloadCleanupVisible({ cleanupConfigured: true, cleanupEligibleVersionCount: 2 }),
+    true,
+  );
 });
 
 Deno.test("season Sonarr destination requires an actionable aligned version", () => {

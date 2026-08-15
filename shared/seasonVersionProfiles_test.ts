@@ -2,7 +2,11 @@
 
 import { assertEquals, assertNotEquals } from 'jsr:@std/assert@^1.0.19';
 import type { DuplicateEpisodeGroup, MediaStreamSummary, MediaVersion } from './types.ts';
-import { analyzeSeasonVersionProfiles, seasonVersionFingerprint } from './seasonVersionProfiles.ts';
+import {
+  analyzeSeasonVersionProfiles,
+  seasonVersionFingerprint,
+  seasonVersionSourceHint,
+} from './seasonVersionProfiles.ts';
 
 const english: MediaStreamSummary = {
   codec: 'eac3',
@@ -180,6 +184,7 @@ Deno.test('a one-episode third version becomes a standalone lane', () => {
   assertEquals(result.profiles.find((profile) => profile.coverageCount === 1)?.members, [{
     episodeRatingKey: 'episode-1',
     mediaId: 3,
+    filePath: null,
   }]);
 });
 
@@ -206,6 +211,19 @@ Deno.test('path and filename hints align otherwise identical release families', 
     ).sort(),
     ['1,4', '2,3'],
   );
+  assertEquals(result.profiles.map((profile) => profile.sourceHints).sort(), [['alpha'], ['beta']]);
+  assertEquals(
+    result.profiles.flatMap((profile) => profile.members).every((member) => member.filePath),
+    true,
+  );
+});
+
+Deno.test('season source hints prefer the release folder above a season directory', () => {
+  assertEquals(
+    seasonVersionSourceHint('/data/Anime/Rurouni Kenshin (2023)/Season 1/s01e01.mkv'),
+    'Rurouni Kenshin (2023)',
+  );
+  assertEquals(seasonVersionSourceHint('D:\\TV\\Show\\Specials\\special.mkv'), 'Show');
 });
 
 Deno.test('season lanes condense hidden profile differences across episodes', () => {

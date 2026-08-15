@@ -14,10 +14,113 @@ import { enrichSeasonEpisodeEvidence, SMART_CLEANUP_DELETE_IDS_LIMIT } from './s
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { buildAuthoritativeSeasonPlan } from './seasonDeletionPlanner.ts';
 import { parseSeasonDeletionRequest, SeasonCleanupRequestError } from './seasonCleanupRoute.ts';
+import { getArrDeleteTargets } from '../arr/delete.ts';
+import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import { resolveDownloadCleanup } from '../mediaDeletion/cleanup.ts';
+import { resolveArrPath } from '../mediaDeletion/arrPaths.ts';
+import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 const MAX_EPISODES = 500;
 const MAX_VERSIONS_PER_EPISODE = SMART_CLEANUP_DELETE_IDS_LIMIT + 1;
+
+async function enrichDestinationAlignment(
+  serverId: number,
+  libraryKey: string,
+  showRatingKey: string,
+  seasonIndex: number,
+  show: { title: string; tvdbId: number | null },
+  profiles: SeasonVersionAnalysisResponse['profiles'],
+  episodeIndexes: ReadonlyMap<string, number>,
+): Promise<{
+  profiles: SeasonVersionAnalysisResponse['profiles'];
+  connections: { sonarr: boolean; qbittorrent: boolean };
+}> {
+  const [arrTargets, downloadTargets] = await Promise.all([
+    getArrDeleteTargets(serverId, libraryKey).then((targets) =>
+      targets.filter((target) => target.instanceType === 'sonarr')
+    ),
+    getDownloadClientTargets(serverId),
+  ]);
+  const connections = {
+    sonarr: arrTargets.length > 0,
+    qbittorrent: downloadTargets.length > 0,
+  };
+  if (profiles.length === 0 || (!connections.sonarr && !connections.qbittorrent)) {
+    return {
+      profiles: profiles.map((profile) => ({
+        ...profile,
+        sonarrManagedCount: 0,
+        qbittorrentSeededCount: 0,
+      })),
+      connections,
+    };
+  }
+
+  const managedMembers = new Set<string>();
+  if (connections.sonarr && Number.isSafeInteger(show.tvdbId) && show.tvdbId! > 0) {
+    for (const target of arrTargets) {
+      try {
+        const series = await target.client.lookup(show.tvdbId!);
+        if (!series) continue;
+        const snapshot = await target.client.sonarrSeriesSnapshot(series.id);
+        for (const profile of profiles) {
+          for (const member of profile.members) {
+            if (!member.filePath) continue;
+            const episodeIndex = episodeIndexes.get(member.episodeRatingKey);
+            if (episodeIndex === undefined) continue;
+            const episode = snapshot.episodes.find((entry) =>
+              entry.seasonNumber === seasonIndex && entry.episodeNumber === episodeIndex
+            );
+            const file = episode?.episodeFileId
+              ? snapshot.files.find((entry) => entry.id === episode.episodeFileId)
+              : null;
+            const arrPath = resolveArrPath(member.filePath, 'library', target.pathMappings);
+            if (
+              arrPath && file &&
+              normalizeRemoteAbsolute(arrPath)?.comparison ===
+                normalizeRemoteAbsolute(file.path)?.comparison
+            ) {
+              managedMembers.add(`${member.episodeRatingKey}:${member.mediaId}`);
+            }
+          }
+        }
+      } catch {
+        // Destination hints are informational. Destructive preview revalidates them.
+      }
+    }
+  }
+
+  const cleanup = connections.sonarr && connections.qbittorrent
+    ? await resolveDownloadCleanup(
+      showRatingKey,
+      { ...show, type: 'show', tmdbId: null },
+      arrTargets,
+      downloadTargets,
+    ).catch(() => null)
+    : null;
+  const enriched = profiles.map((profile) => {
+    const selectedJobIds = new Set(cleanup?.downloadJobs.map((job) => job.jobId) ?? []);
+    const seededPaths = new Set(
+      (cleanup?.sources ?? []).flatMap((source) => {
+        if (!selectedJobIds.has(source.downloadId) || !source.importedPath) return [];
+        const path = normalizeRemoteAbsolute(source.importedPath)?.comparison;
+        return path ? [path] : [];
+      }),
+    );
+    return {
+      ...profile,
+      sonarrManagedCount: profile.members.filter((member) =>
+        managedMembers.has(`${member.episodeRatingKey}:${member.mediaId}`)
+      ).length,
+      qbittorrentSeededCount: profile.members.filter((member) => {
+        const path = member.filePath ? normalizeRemoteAbsolute(member.filePath)?.comparison : null;
+        return typeof path === 'string' && seededPaths.has(path);
+      }).length,
+    };
+  });
+  return { profiles: enriched, connections };
+}
 
 router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
   const serverId = c.get('activeServerId');
@@ -93,7 +196,11 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
   const liveEvidence = await enrichSeasonEpisodeEvidence(serverId, rowsByEpisode).catch(() =>
     new Map()
   );
-  const [show] = await db.select({ title: items.title, thumb: items.thumb }).from(items).where(and(
+  const [show] = await db.select({
+    title: items.title,
+    thumb: items.thumb,
+    tvdbId: items.tvdbId,
+  }).from(items).where(and(
     eq(items.serverId, serverId),
     eq(items.ratingKey, first.showRatingKey),
   ));
@@ -131,6 +238,26 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
     ),
   );
   const analysis = analyzeSeasonVersionProfiles(episodes, pathHints);
+  const destinationAlignment = await enrichDestinationAlignment(
+    serverId,
+    first.libraryKey,
+    first.showRatingKey,
+    first.seasonIndex,
+    { title: showTitle, tvdbId: show?.tvdbId ?? null },
+    analysis.profiles.map((profile) => ({
+      ...profile,
+      sonarrManagedCount: 0,
+      qbittorrentSeededCount: 0,
+    })),
+    new Map(episodes.map((episode) => [episode.episodeRatingKey, episode.episodeIndex])),
+  ).catch(() => ({
+    profiles: analysis.profiles.map((profile) => ({
+      ...profile,
+      sonarrManagedCount: 0,
+      qbittorrentSeededCount: 0,
+    })),
+    connections: { sonarr: false, qbittorrent: false },
+  }));
   return c.json(
     {
       season: {
@@ -142,7 +269,8 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
       },
       analyzedEpisodeCount: episodes.length,
       recommendedProfileId: analysis.recommendedProfileId,
-      profiles: analysis.profiles,
+      profiles: destinationAlignment.profiles,
+      connections: destinationAlignment.connections,
       episodes,
       uncertainEpisodeRatingKeys: analysis.uncertainEpisodeRatingKeys,
     } satisfies SeasonVersionAnalysisResponse,
@@ -165,7 +293,7 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
       selections: intent.selections,
       inspectSonarr: true,
       coordinateSonarr: intent.coordinateSonarr,
-      inspectDownloadCleanup: intent.coordinateSonarr,
+      inspectDownloadCleanup: true,
       cleanupDownloads: intent.cleanupDownloads,
     });
     return c.json(plan.preview);

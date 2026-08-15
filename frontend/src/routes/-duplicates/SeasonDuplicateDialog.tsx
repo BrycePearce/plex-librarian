@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import { ChevronDown, Layers3, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { compareDuplicateVersions } from "@shared/mediaComparison";
+import { compareDuplicateVersions, summarizeDuplicateComparisons } from "@shared/mediaComparison";
 import type { DuplicateDifferenceCode } from "@shared/mediaComparison";
 import type {
   DuplicateEpisodeGroup,
@@ -17,6 +17,7 @@ import { formatKilobytes } from "../../lib/format.ts";
 import { versionLabel } from "../../lib/mediaVersion.ts";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
+import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import { largestVersionId } from "./versionDeletionState.ts";
@@ -30,10 +31,47 @@ export function seasonDeletionConflictOperationId(error: unknown): string | null
 }
 
 export function seasonDownloadCleanupVisible(
-  coordinateSonarr: boolean,
-  preview: { cleanupEligibleVersionCount: number } | undefined,
+  preview: { cleanupConfigured: boolean; cleanupEligibleVersionCount: number } | undefined,
 ): boolean {
-  return coordinateSonarr && (preview?.cleanupEligibleVersionCount ?? 0) > 0;
+  return preview?.cleanupConfigured === true && preview.cleanupEligibleVersionCount > 0;
+}
+
+function LaneDestinationMark({
+  service,
+  count,
+  total,
+}: {
+  service: "sonarr" | "qbittorrent";
+  count: number;
+  total: number;
+}) {
+  if (count === 0) return null;
+  const name = service === "sonarr" ? "Sonarr" : "qBittorrent";
+  const action = service === "sonarr" ? "manages" : "is seeding";
+  return (
+    <HoverPopover
+      anchorClassName="inline-flex shrink-0"
+      content={
+        <div className="space-y-1">
+          <strong className="block">{name}</strong>
+          <p className="text-base-content/70">
+            {count === total
+              ? `${name} ${action} this season version.`
+              : `${name} ${action} ${count} of this version's ${total} files.`}
+          </p>
+        </div>
+      }
+    >
+      <span
+        className="season-profile-service-mark"
+        role="img"
+        tabIndex={0}
+        aria-label={`${name} ${action} this season version`}
+      >
+        <ServiceIcon service={service} className="size-4" />
+      </span>
+    </HoverPopover>
+  );
 }
 
 export function seasonSonarrVisible(
@@ -120,6 +158,129 @@ interface EpisodeCoverageLabel {
   compact: string;
   full: string;
   truncated: boolean;
+}
+
+export function countedLabels(labels: readonly string[]): Array<{ label: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return [...counts].map(([label, count]) => ({ label, count }));
+}
+
+interface SeasonLanePathEntry {
+  episodeRatingKey: string;
+  episodeIndex: number | null;
+  filePath: string | null;
+}
+
+export interface SeasonLanePathGroup {
+  directory: string;
+  files: Array<SeasonLanePathEntry & { filename: string }>;
+}
+
+export function groupSeasonLanePaths(
+  entries: readonly SeasonLanePathEntry[],
+): SeasonLanePathGroup[] {
+  const groups = new Map<string, SeasonLanePathGroup>();
+  for (const entry of entries) {
+    if (!entry.filePath) continue;
+    const originalPath = entry.filePath.trim();
+    const separator = Math.max(originalPath.lastIndexOf("/"), originalPath.lastIndexOf("\\"));
+    const directory = separator >= 0 ? originalPath.slice(0, separator) || "/" : "No folder";
+    const filename = separator >= 0 ? originalPath.slice(separator + 1) : originalPath;
+    const directoryKey = directory.replaceAll("\\", "/").replace(/\/{2,}/g, "/").toLowerCase();
+    const group = groups.get(directoryKey) ?? { directory, files: [] };
+    group.files.push({ ...entry, filePath: originalPath, filename });
+    groups.set(directoryKey, group);
+  }
+  return [...groups.values()].map((group) => ({
+    ...group,
+    files: group.files.sort((left, right) =>
+      (left.episodeIndex ?? Number.MAX_SAFE_INTEGER) -
+        (right.episodeIndex ?? Number.MAX_SAFE_INTEGER) ||
+      left.episodeRatingKey.localeCompare(right.episodeRatingKey)
+    ),
+  })).sort((left, right) => left.directory.localeCompare(right.directory));
+}
+
+function LanePathsPopover({
+  profile,
+  episodeIndexByRatingKey,
+}: {
+  profile: SeasonVersionProfile;
+  episodeIndexByRatingKey: ReadonlyMap<string, number>;
+}) {
+  const entries = profile.members.map((member) => ({
+    episodeRatingKey: member.episodeRatingKey,
+    episodeIndex: episodeIndexByRatingKey.get(member.episodeRatingKey) ?? null,
+    filePath: member.filePath ?? null,
+  }));
+  const groups = groupSeasonLanePaths(entries);
+  const pathCount = groups.reduce((total, group) => total + group.files.length, 0);
+  const missing = entries.filter((entry) => entry.filePath === null);
+  const label = pathCount === entries.length
+    ? `${pathCount} path${pathCount === 1 ? "" : "s"}`
+    : `${pathCount} / ${entries.length} paths`;
+
+  return (
+    <HoverPopover
+      openOnClick
+      interactive
+      anchorClassName="inline-flex shrink-0"
+      popoverAriaLabel="Season version paths"
+      popoverClassName="season-profile-path-popover"
+      content={
+        <div>
+          <div className="season-profile-path-popover-header">
+            <strong>{pathCount} file{pathCount === 1 ? "" : "s"}</strong>
+            <span>{groups.length} folder{groups.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="season-profile-path-groups">
+            {groups.map((group) => (
+              <section key={group.directory}>
+                <code title={group.directory}>{group.directory}</code>
+                <ul>
+                  {group.files.map((file) => (
+                    <li key={`${file.episodeRatingKey}:${file.filename}`}>
+                      <b>
+                        {file.episodeIndex === null
+                          ? "Episode"
+                          : `E${String(file.episodeIndex).padStart(2, "0")}`}
+                      </b>
+                      <span title={file.filePath ?? undefined}>{file.filename}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            {missing.length > 0 && (
+              <section className="season-profile-path-missing">
+                <strong>Path unavailable</strong>
+                <p>
+                  {missing.map((entry) =>
+                    entry.episodeIndex === null
+                      ? entry.episodeRatingKey
+                      : `E${String(entry.episodeIndex).padStart(2, "0")}`
+                  ).join(", ")}
+                </p>
+              </section>
+            )}
+          </div>
+        </div>
+      }
+    >
+      <button
+        type="button"
+        className={`season-profile-tag season-profile-path-tag ${
+          missing.length > 0 || groups.length > 1 ? "has-warning" : ""
+        }`}
+        aria-label={`Inspect ${label} across ${groups.length} folder${
+          groups.length === 1 ? "" : "s"
+        }`}
+      >
+        {label}
+      </button>
+    </HoverPopover>
+  );
 }
 
 export function episodeCoverageLabel(
@@ -321,12 +482,29 @@ export function SeasonDuplicateDialog({
     () => analyzedEpisodes.map(recommendationFor),
     [analyzedEpisodes, seasonKey],
   );
+  const comparisonSummary = analysis.data
+    ? summarizeDuplicateComparisons(plans.map((plan) => plan.comparison))
+    : season?.comparisonSummary;
   const episodeIndexByRatingKey = useMemo(
     () =>
       new Map(
         analyzedEpisodes.map((episode) => [episode.episodeRatingKey, episode.episodeIndex]),
       ),
     [analyzedEpisodes, seasonKey],
+  );
+  const profilePathByMember = useMemo(
+    () =>
+      new Map(
+        (analysis.data?.profiles ?? []).flatMap((profile) =>
+          profile.members.map((member) =>
+            [
+              `${member.episodeRatingKey}:${member.mediaId}`,
+              member.filePath,
+            ] as const
+          )
+        ),
+      ),
+    [analysis.data?.profiles, seasonKey],
   );
   const [selectedState, setSelectedState] = useState<{ key: string; ids: Set<string> }>({
     key: seasonKey,
@@ -629,7 +807,7 @@ export function SeasonDuplicateDialog({
             },
           }]
           : []),
-        ...(seasonDownloadCleanupVisible(coordinateSonarr, deletionPreview.data)
+        ...(seasonDownloadCleanupVisible(deletionPreview.data)
           ? [{
             id: "cleanup" as const,
             service: "qbittorrent" as const,
@@ -644,7 +822,7 @@ export function SeasonDuplicateDialog({
             onChange: (checked: boolean) =>
               setDestinationChoice({
                 key: authorizationKey,
-                coordinateSonarr: true,
+                coordinateSonarr,
                 cleanupDownloads: checked,
               }),
           }]
@@ -722,20 +900,25 @@ export function SeasonDuplicateDialog({
               Delete a Season {season.seasonIndex} version
             </h2>
             <p className="mt-1 text-sm text-base-content/55">
-              {season.duplicateGroupCount}{" "}
-              {season.duplicateGroupCount === 1 ? "episode" : "episodes"} with multiple versions
+              {analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount} duplicate{" "}
+              {(analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount) === 1
+                ? "episode"
+                : "episodes"}
+              {season.totalEpisodeCount !== null && ` · ${season.totalEpisodeCount} total`}
             </p>
-            {(season.comparisonSummary.sameProfileEpisodeCount > 0 ||
-              season.comparisonSummary.needsReviewEpisodeCount > 0) && (
-              <p className="season-batch-header-summary">
-                {season.comparisonSummary.sameProfileEpisodeCount > 0 && (
-                  <span>{season.comparisonSummary.sameProfileEpisodeCount} matching profiles</span>
-                )}
-                {season.comparisonSummary.needsReviewEpisodeCount > 0 && (
-                  <span>{season.comparisonSummary.needsReviewEpisodeCount} need review</span>
-                )}
-              </p>
-            )}
+            {comparisonSummary &&
+              (comparisonSummary.sameProfileEpisodeCount > 0 ||
+                comparisonSummary.needsReviewEpisodeCount > 0) &&
+              (
+                <p className="season-batch-header-summary">
+                  {comparisonSummary.sameProfileEpisodeCount > 0 && (
+                    <span>{comparisonSummary.sameProfileEpisodeCount} matching profiles</span>
+                  )}
+                  {comparisonSummary.needsReviewEpisodeCount > 0 && (
+                    <span>{comparisonSummary.needsReviewEpisodeCount} need review</span>
+                  )}
+                </p>
+              )}
           </div>
         </header>
 
@@ -786,9 +969,19 @@ export function SeasonDuplicateDialog({
                   <div className="season-profile-lanes">
                     {analysis.data.profiles.map((profile) => {
                       const active = selectedProfileIds.has(profile.id);
-                      const coveragePercent = plans.length === 0
+                      const subtitleLabels = countedLabels(profile.subtitleSummary);
+                      const sourceLabel = profile.sourceHints.length === 1
+                        ? profile.sourceHints[0]!
+                        : profile.sourceHints.length > 1
+                        ? `${profile.sourceHints.length} source folders`
+                        : "Season version";
+                      const coverageDenominator = Math.max(
+                        season.totalEpisodeCount ?? 0,
+                        plans.length,
+                      );
+                      const coveragePercent = coverageDenominator === 0
                         ? 0
-                        : Math.min(100, (profile.coverageCount / plans.length) * 100);
+                        : Math.min(100, (profile.coverageCount / coverageDenominator) * 100);
                       const coverage = episodeCoverageLabel(
                         profile.members.flatMap((member) => {
                           const episodeIndex = episodeIndexByRatingKey.get(member.episodeRatingKey);
@@ -803,94 +996,156 @@ export function SeasonDuplicateDialog({
                         analyzedEpisodes,
                       ).safe;
                       return (
-                        <button
+                        <div
                           key={profile.id}
-                          type="button"
                           className={`season-profile-card ${active ? "is-selected" : ""}`}
-                          aria-pressed={active}
-                          aria-label={`${
-                            active ? "Do not delete" : "Delete"
-                          } ${profile.label} from ${coverage.full}${
-                            profile.technicalVariantCount > 1
-                              ? `, ${profile.technicalVariantCount} technical variants`
-                              : ""
-                          }`}
-                          disabled={unsafe}
-                          title={unsafe
-                            ? "Selecting this lane would remove every version from at least one episode"
-                            : coverage.truncated
-                            ? `Episodes ${coverage.full}`
-                            : undefined}
-                          onClick={() => toggleProfile(profile)}
                         >
-                          <span className="season-profile-radio" aria-hidden="true">
-                            {active ? "✓" : ""}
-                          </span>
-                          <span className="season-profile-copy">
-                            <span className="season-profile-heading">
-                              <strong>{profile.label}</strong>
-                              {profile.technicalVariantCount > 1 && (
-                                <HoverPopover
-                                  anchorClassName="inline-flex shrink-0"
-                                  content={
-                                    <div className="space-y-1.5">
-                                      <strong className="block">
-                                        {profile.technicalVariantCount}{" "}
-                                        technical variants in this lane
-                                      </strong>
-                                      <p className="text-base-content/70">
-                                        These {profile.coverageCount} files resolve to{" "}
-                                        {profile.technicalVariantCount}{" "}
-                                        exact Plex technical signatures. Their combined technical
-                                        and filename/path evidence still makes them the best match
-                                        for one season version.
-                                      </p>
-                                      <p className="text-base-content/55">
-                                        Minor metadata can vary between episodes. Each episode
-                                        contributes at most one file to this lane.
-                                      </p>
-                                    </div>
-                                  }
+                          <button
+                            type="button"
+                            className="season-profile-toggle"
+                            aria-pressed={active}
+                            aria-label={`${active ? "Do not delete" : "Delete"} ${sourceLabel}`}
+                            disabled={unsafe}
+                            title={unsafe
+                              ? "Selecting this lane would remove every version from at least one episode"
+                              : undefined}
+                            onClick={() => toggleProfile(profile)}
+                          >
+                            <span className="season-profile-radio" aria-hidden="true">
+                              {active ? "✓" : ""}
+                            </span>
+                          </button>
+                          <div
+                            className="season-profile-select"
+                            title={unsafe
+                              ? "Selecting this lane would remove every version from at least one episode"
+                              : coverage.truncated
+                              ? `Episodes ${coverage.full}`
+                              : undefined}
+                          >
+                            <span className="season-profile-copy">
+                              <span className="season-profile-heading">
+                                <strong title={profile.sourceHints.join(" · ")}>
+                                  {sourceLabel}
+                                </strong>
+                              </span>
+                              <small className="season-profile-technical" title={profile.label}>
+                                {profile.label}
+                              </small>
+                              <small>
+                                {profile.audioSummary.length > 0
+                                  ? profile.audioSummary.join(", ")
+                                  : "Audio details unavailable"}
+                                {profile.subtitleSummary.length > 0 && (
+                                  <>
+                                    {" · "}
+                                    <HoverPopover
+                                      openOnClick
+                                      anchorTabIndex={0}
+                                      anchorClassName="inline-flex"
+                                      content={
+                                        <div className="space-y-1.5">
+                                          <strong className="block">
+                                            {profile.subtitleSummary.length}{" "}
+                                            subtitle track{profile.subtitleSummary.length === 1
+                                              ? ""
+                                              : "s"}
+                                          </strong>
+                                          <ul className="space-y-0.5 text-base-content/70">
+                                            {subtitleLabels.map(({ label, count }) => (
+                                              <li key={label}>
+                                                {label}
+                                                {count > 1 ? ` ×${count}` : ""}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      }
+                                    >
+                                      <span className="season-profile-subtitle-count">
+                                        {profile.subtitleSummary.length}{" "}
+                                        subtitle track{profile.subtitleSummary.length === 1
+                                          ? ""
+                                          : "s"}
+                                      </span>
+                                    </HoverPopover>
+                                  </>
+                                )}
+                              </small>
+                              <span className="season-profile-coverage">
+                                <span
+                                  className="season-profile-coverage-range"
+                                  title={coverage.full}
                                 >
-                                  <span className="season-profile-variants">
-                                    {profile.technicalVariantCount} variants
-                                  </span>
-                                </HoverPopover>
-                              )}
-                            </span>
-                            <small>
-                              {profile.audioSummary.length > 0
-                                ? profile.audioSummary.join(", ")
-                                : "Audio details unavailable"}
-                              {profile.subtitleSummary.length > 0
-                                ? ` · ${profile.subtitleSummary.length} subtitle track${
-                                  profile.subtitleSummary.length === 1 ? "" : "s"
-                                }`
-                                : ""}
-                            </small>
-                            <span className="season-profile-coverage">
-                              <span className="season-profile-coverage-range" title={coverage.full}>
-                                {coverage.compact}
-                              </span>
-                              <span className="season-profile-coverage-meter" aria-hidden="true">
-                                <span style={{ width: `${coveragePercent}%` }} />
-                              </span>
-                              <span className="season-profile-coverage-count">
-                                {profile.coverageCount} / {plans.length} episodes
-                              </span>
-                              <span className="season-profile-size">
-                                {profile.totalFileSize === null
-                                  ? "Unknown size"
-                                  : formatKilobytes(profile.totalFileSize)}
+                                  {coverage.compact}
+                                </span>
+                                <span className="season-profile-coverage-meter" aria-hidden="true">
+                                  <span style={{ width: `${coveragePercent}%` }} />
+                                </span>
+                                <span className="season-profile-coverage-count">
+                                  {profile.coverageCount} / {coverageDenominator} episodes
+                                </span>
+                                <span className="season-profile-size">
+                                  Total: {profile.totalFileSize === null
+                                    ? "Unknown size"
+                                    : formatKilobytes(profile.totalFileSize)}
+                                </span>
                               </span>
                             </span>
-                          </span>
-                          <span className="season-profile-guard">
+                          </div>
+                          <span className="season-profile-actions">
+                            <LaneDestinationMark
+                              service="sonarr"
+                              count={profile.sonarrManagedCount ?? 0}
+                              total={profile.coverageCount}
+                            />
+                            <LaneDestinationMark
+                              service="qbittorrent"
+                              count={profile.qbittorrentSeededCount ?? 0}
+                              total={profile.coverageCount}
+                            />
+                            <LanePathsPopover
+                              profile={profile}
+                              episodeIndexByRatingKey={episodeIndexByRatingKey}
+                            />
+                            <HoverPopover
+                              openOnClick
+                              anchorClassName="inline-flex shrink-0"
+                              content={
+                                <div className="space-y-1.5">
+                                  <strong className="block">
+                                    {profile.technicalVariantCount}{" "}
+                                    technical signature{profile.technicalVariantCount === 1
+                                      ? ""
+                                      : "s"}
+                                  </strong>
+                                  <p className="text-base-content/70">
+                                    {profile.technicalVariantCount === 1
+                                      ? `All ${profile.coverageCount} files share one exact Plex technical signature.`
+                                      : `These ${profile.coverageCount} files contain ${profile.technicalVariantCount} exact Plex technical signatures.`}
+                                  </p>
+                                  <p className="text-base-content/55">
+                                    Folder, filename, and technical evidence combine to form this
+                                    season version. Each episode contributes at most one file.
+                                  </p>
+                                </div>
+                              }
+                            >
+                              <button
+                                type="button"
+                                className={`season-profile-tag season-profile-signature-tag ${
+                                  profile.technicalVariantCount > 1 ? "has-warning" : ""
+                                }`}
+                              >
+                                {profile.technicalVariantCount}{" "}
+                                signature{profile.technicalVariantCount === 1 ? "" : "s"}
+                              </button>
+                            </HoverPopover>
                             {unsafe && (
                               <span className="badge badge-ghost badge-sm">Must keep one</span>
                             )}
                           </span>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -961,17 +1216,31 @@ export function SeasonDuplicateDialog({
                             const size = versions.every((version) => version.fileSize !== null)
                               ? versions.reduce((total, version) => total + version.fileSize!, 0)
                               : null;
+                            const pathsFor = (items: typeof plan.episode.versions) =>
+                              items.map((version) =>
+                                profilePathByMember.get(
+                                  `${plan.episode.episodeRatingKey}:${version.mediaId}`,
+                                ) ?? "Path unavailable"
+                              );
+                            const selectedPaths = pathsFor(versions);
                             return (
                               <div key={planKey(plan)} className="season-version-preview-row">
-                                <span>
-                                  E{String(plan.episode.episodeIndex).padStart(2, "0")} —{" "}
-                                  {plan.episode.episodeTitle}
-                                </span>
-                                <span>
-                                  {versions.length > 0
-                                    ? versions.map(versionLabel).join(" + ")
-                                    : "Version unavailable"}
-                                </span>
+                                <div className="season-version-preview-episode">
+                                  <span>
+                                    E{String(plan.episode.episodeIndex).padStart(2, "0")} —{" "}
+                                    {plan.episode.episodeTitle}
+                                  </span>
+                                  <small>
+                                    {versions.length > 0
+                                      ? versions.map(versionLabel).join(" + ")
+                                      : "Version unavailable"}
+                                  </small>
+                                </div>
+                                <div className="season-version-preview-paths">
+                                  <span title={selectedPaths.join(" · ")}>
+                                    {selectedPaths.join(" · ")}
+                                  </span>
+                                </div>
                                 <strong>
                                   {size === null ? "Unknown" : formatKilobytes(size)}
                                 </strong>
@@ -1012,7 +1281,7 @@ export function SeasonDuplicateDialog({
                       <option value="different">With differences</option>
                       <option value="unknown">Needs review</option>
                       <option value="same-profile">Matching profiles</option>
-                      {season.comparisonSummary.differences.map((difference) => (
+                      {comparisonSummary?.differences.map((difference) => (
                         <option key={difference.code} value={difference.code}>
                           {difference.code.replaceAll("-", " ")} ({difference.episodeCount})
                         </option>

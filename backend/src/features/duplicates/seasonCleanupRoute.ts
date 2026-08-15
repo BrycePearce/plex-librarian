@@ -64,9 +64,6 @@ export function parseSeasonDeletionRequest(
   if (
     typeof body.coordinateSonarr !== 'boolean' || typeof body.cleanupDownloads !== 'boolean'
   ) invalid('destination choices must be booleans');
-  if (body.cleanupDownloads && !body.coordinateSonarr) {
-    invalid('download cleanup requires Sonarr coordination');
-  }
   if (
     !Array.isArray(body.selections) || body.selections.length === 0 ||
     body.selections.length > SMART_CLEANUP_GROUP_LIMIT
@@ -168,7 +165,7 @@ export async function submitSeasonCleanup(
     selections: parsed.selections,
     inspectSonarr: true,
     coordinateSonarr: parsed.coordinateSonarr,
-    inspectDownloadCleanup: parsed.coordinateSonarr,
+    inspectDownloadCleanup: true,
     cleanupDownloads: parsed.cleanupDownloads,
   });
   if (plan.preview.fingerprint !== parsed.previewFingerprint) {

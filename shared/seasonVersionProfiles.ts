@@ -148,6 +148,15 @@ function comparablePathTokens(path: string | null | undefined): Set<string> {
   );
 }
 
+export function seasonVersionSourceHint(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const parts = path.trim().replaceAll('\\', '/').split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  parts.pop();
+  if (/^(?:season\s*\d+|specials)$/i.test(parts.at(-1) ?? '')) parts.pop();
+  return parts.at(-1) ?? null;
+}
+
 function setSimilarity(left: Set<string>, right: Set<string>): number {
   if (left.size === 0 || right.size === 0) return 0;
   let intersection = 0;
@@ -336,10 +345,16 @@ export function analyzeSeasonVersionProfiles(
       videoSummary,
       audioSummary,
       subtitleSummary,
-      sourceHints: [],
-      members: members.map(({ episode, version }) => ({
+      sourceHints: [
+        ...new Set(members.flatMap(({ filePath }) => {
+          const hint = seasonVersionSourceHint(filePath);
+          return hint ? [hint] : [];
+        })),
+      ].sort(),
+      members: members.map(({ episode, version, filePath }) => ({
         episodeRatingKey: episode.episodeRatingKey,
         mediaId: version.mediaId,
+        filePath,
       })).sort((a, b) => a.episodeRatingKey.localeCompare(b.episodeRatingKey)),
     };
   });

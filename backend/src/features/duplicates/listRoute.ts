@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, desc, eq, inArray, not, or, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
+import { episodeMediaVersions, itemMediaVersions, items, seasons } from '../../db/schema.ts';
 import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -71,6 +71,7 @@ type SeasonStub = {
   showRatingKey: string;
   seasonRatingKey: string;
   seasonIndex: number;
+  totalEpisodeCount: number | null;
   combinedFileSize: number | null;
   reclaimableFileSize: number | null;
   duplicateGroupCount: number;
@@ -220,6 +221,7 @@ router.get('/', async (c) => {
         showRatingKey: eligibleEpisodeRows.showRatingKey,
         seasonRatingKey: eligibleEpisodeRows.seasonRatingKey,
         seasonIndex: eligibleEpisodeRows.seasonIndex,
+        totalEpisodeCount: seasons.leafCount,
         combinedFileSize: sql<string | null>`cast(
           case
             when sum(${eligibleEpisodeRows.knownFileSizeCount}) = sum(${eligibleEpisodeRows.versionCount})
@@ -237,11 +239,19 @@ router.get('/', async (c) => {
         duplicateGroupCount: sql<number>`count(*)`,
       })
         .from(eligibleEpisodeRows)
+        .leftJoin(
+          seasons,
+          and(
+            eq(seasons.serverId, serverId),
+            eq(seasons.ratingKey, eligibleEpisodeRows.seasonRatingKey),
+          ),
+        )
         .groupBy(
           eligibleEpisodeRows.libraryKey,
           eligibleEpisodeRows.showRatingKey,
           eligibleEpisodeRows.seasonRatingKey,
           eligibleEpisodeRows.seasonIndex,
+          seasons.leafCount,
         )
         .orderBy(desc(sql`sum(${eligibleEpisodeRows.combinedFileSize})`))
         .limit(fetchLimit)
@@ -259,6 +269,7 @@ router.get('/', async (c) => {
     showRatingKey: s.showRatingKey,
     seasonRatingKey: s.seasonRatingKey,
     seasonIndex: s.seasonIndex,
+    totalEpisodeCount: s.totalEpisodeCount,
     combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
     reclaimableFileSize: s.reclaimableFileSize != null ? Number(s.reclaimableFileSize) : null,
     duplicateGroupCount: s.duplicateGroupCount,
@@ -529,6 +540,7 @@ router.get('/', async (c) => {
         showTitle: show?.title ?? 'Unknown show',
         showThumb: show?.thumb ?? null,
         seasonIndex: stub.seasonIndex,
+        totalEpisodeCount: stub.totalEpisodeCount,
         duplicateGroupCount: stub.duplicateGroupCount,
         combinedFileSize: stub.combinedFileSize,
         reclaimableFileSize: stub.reclaimableFileSize,

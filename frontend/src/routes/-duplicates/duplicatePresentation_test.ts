@@ -233,6 +233,7 @@ Deno.test("duplicatePageSummary includes every episode nested under a season", (
     showTitle: "Show",
     showThumb: null,
     seasonIndex: 1,
+    totalEpisodeCount: 12,
     combinedFileSize: 100,
     reclaimableFileSize: 30,
     comparisonSummary: {

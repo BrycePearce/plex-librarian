@@ -742,7 +742,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
     if (managedGroup.children.length > 0) managedGroups.set(key, managedGroup);
   }
   const downloadTargets = await getDownloadClientTargets(input.serverId);
-  const seriesCleanup = input.inspectDownloadCleanup === true && input.coordinateSonarr === true
+  const seriesCleanup = input.inspectDownloadCleanup === true
     ? await resolveDownloadCleanup(
       first.showRatingKey,
       { ...show, type: 'show' },
@@ -753,26 +753,50 @@ export async function buildAuthoritativeSeasonPlan(input: {
   const cleanupEligibleMedia: AuthoritativeSeasonPlan['cleanupEligibleMedia'] = [];
   const cleanupPlans: AuthoritativeSeasonPlan['cleanupPlans'] = [];
   if (seriesCleanup) {
-    for (const prepared of preparedSelections) {
+    const selectedEntries = preparedSelections.flatMap((prepared) => {
       const episodeRatingKey = prepared.kind === 'plex_only'
         ? prepared.child.episodeRatingKey
         : prepared.selection.episodeRatingKey;
       const selectedMedia = prepared.kind === 'plex_only'
         ? prepared.child.selectedMedia
         : prepared.selectedMedia;
-      for (const media of selectedMedia) {
-        const normalized = normalizeRemoteAbsolute(media.path)?.comparison;
-        const selectedCleanup = normalized
-          ? selectVersionDownloadCleanup(seriesCleanup, new Set([normalized]))
-          : null;
-        if (selectedCleanup) {
-          cleanupEligibleMedia.push({ episodeRatingKey, mediaId: media.mediaId });
-          cleanupPlans.push({
-            episodeRatingKey,
-            mediaId: media.mediaId,
-            cleanup: persistResolvedCleanupIdentity(selectedCleanup),
-          });
-        }
+      return selectedMedia.flatMap((media) => {
+        const path = normalizeRemoteAbsolute(media.path)?.comparison;
+        return path ? [{ episodeRatingKey, media, path }] : [];
+      });
+    });
+    const selectedCleanup = selectVersionDownloadCleanup(
+      seriesCleanup,
+      new Set(selectedEntries.map((entry) => entry.path)),
+      true,
+    );
+    if (selectedCleanup) {
+      const selectedJobIds = new Set(selectedCleanup.downloadJobs.map((job) => job.jobId));
+      for (const entry of selectedEntries) {
+        const sources = selectedCleanup.sources.filter((source) =>
+          selectedJobIds.has(source.downloadId) && source.importedPath !== null &&
+          normalizeRemoteAbsolute(source.importedPath)?.comparison === entry.path
+        );
+        const sourceJobIds = new Set(sources.map((source) => source.downloadId));
+        const orphanFiles = selectedCleanup.orphanFiles.filter((file) =>
+          normalizeRemoteAbsolute(file.importedPath)?.comparison === entry.path
+        );
+        if (sourceJobIds.size === 0 && orphanFiles.length === 0) continue;
+        const scopedCleanup = {
+          ...selectedCleanup,
+          downloadJobs: selectedCleanup.downloadJobs.filter((job) => sourceJobIds.has(job.jobId)),
+          sources,
+          orphanFiles,
+        };
+        cleanupEligibleMedia.push({
+          episodeRatingKey: entry.episodeRatingKey,
+          mediaId: entry.media.mediaId,
+        });
+        cleanupPlans.push({
+          episodeRatingKey: entry.episodeRatingKey,
+          mediaId: entry.media.mediaId,
+          cleanup: persistResolvedCleanupIdentity(scopedCleanup),
+        });
       }
     }
   }

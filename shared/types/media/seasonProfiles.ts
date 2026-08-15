@@ -4,6 +4,8 @@ import type { DeletionOperationStatus } from '../deletion/operations.ts';
 export interface SeasonVersionProfileMember {
   episodeRatingKey: string;
   mediaId: number;
+  /** Ephemeral Plex path evidence used to verify the inferred season lane. */
+  filePath?: string | null;
 }
 
 export interface SeasonVersionProfile {
@@ -20,6 +22,10 @@ export interface SeasonVersionProfile {
   subtitleSummary: string[];
   sourceHints: string[];
   members: SeasonVersionProfileMember[];
+  /** Exact members currently owned by Sonarr's EpisodeFile records. */
+  sonarrManagedCount?: number;
+  /** Exact members covered by a verified live qBittorrent payload. */
+  qbittorrentSeededCount?: number;
 }
 
 export interface SeasonVersionAnalysisResponse {
@@ -33,6 +39,10 @@ export interface SeasonVersionAnalysisResponse {
   analyzedEpisodeCount: number;
   recommendedProfileId: string | null;
   profiles: SeasonVersionProfile[];
+  connections?: {
+    sonarr: boolean;
+    qbittorrent: boolean;
+  };
   episodes: DuplicateEpisodeGroup[];
   uncertainEpisodeRatingKeys: string[];
 }
