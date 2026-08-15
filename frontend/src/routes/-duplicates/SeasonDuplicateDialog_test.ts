@@ -4,14 +4,17 @@ import {
   initialIndividualSelectionKeys,
   initialSeasonSelectionKeys,
   MAX_SEASON_CLEANUP_EPISODES,
+  refreshAuthorizedSeasonDeletionPreview,
   refreshExpiredSeasonDeletionPreview,
   seasonDeletionAuthorizationKey,
   seasonDeletionConfirmationDisabled,
   seasonDeletionConflictOperationId,
   seasonDeletionPreviewIsUsable,
+  seasonDestinationChoice,
   seasonDownloadCleanupVisible,
   seasonProfilesDeletionPlan,
   seasonProfileSelection,
+  seasonSonarrVisible,
 } from "./SeasonDuplicateDialog.tsx";
 import { ApiError } from "../../lib/api.ts";
 import type { DuplicateEpisodeGroup, MediaVersion, SeasonVersionProfile } from "../../lib/api.ts";
@@ -218,6 +221,20 @@ Deno.test("fresh season deletion previews submit without another authoritative r
   assertEquals(result, fresh);
 });
 
+Deno.test("season preview refresh is discarded when destructive intent changes in flight", async () => {
+  let currentKey = "selection-a";
+  const refreshed = refreshAuthorizedSeasonDeletionPreview(
+    undefined,
+    () => {
+      currentKey = "selection-b";
+      return Promise.resolve({ data: { expiresAt: Math.floor(Date.now() / 1000) + 60 } });
+    },
+    "selection-a",
+    () => currentKey,
+  );
+  assertEquals(await refreshed, undefined);
+});
+
 Deno.test("destructive destination authorization is bound to the exact media selection", () => {
   const original = seasonDeletionAuthorizationKey([
     { ratingKey: "episode-2", deleteMediaIds: [22, 21] },
@@ -243,6 +260,33 @@ Deno.test("season download cleanup is offered only for verified selected version
   assertEquals(seasonDownloadCleanupVisible(false, { cleanupEligibleVersionCount: 2 }), false);
   assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 0 }), false);
   assertEquals(seasonDownloadCleanupVisible(true, { cleanupEligibleVersionCount: 2 }), true);
+});
+
+Deno.test("season Sonarr destination requires an actionable aligned version", () => {
+  assertEquals(seasonSonarrVisible("selection-a", undefined), false);
+  assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: false }), false);
+  assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: true }), true);
+  assertEquals(seasonSonarrVisible("selection-b", { key: "selection-a", sonarr: true }), false);
+});
+
+Deno.test("season Sonarr coordination is authorized only for the exact selection", () => {
+  const authorized = {
+    key: "selection-a",
+    coordinateSonarr: true,
+    cleanupDownloads: true,
+  };
+  assertEquals(seasonDestinationChoice("selection-a", authorized), {
+    coordinateSonarr: true,
+    cleanupDownloads: true,
+  });
+  assertEquals(seasonDestinationChoice("selection-b", authorized), {
+    coordinateSonarr: false,
+    cleanupDownloads: false,
+  });
+  assertEquals(
+    seasonDestinationChoice("selection-a", { ...authorized, coordinateSonarr: false }),
+    { coordinateSonarr: false, cleanupDownloads: false },
+  );
 });
 
 Deno.test("season profile selection expands only explicit members into deletion ids", () => {

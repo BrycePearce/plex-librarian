@@ -11,7 +11,11 @@ import {
   type DeletionWorkTarget,
   PlexReconciliationError,
 } from './core/types.ts';
-import { DeletionValidationError } from './core/validation.ts';
+import {
+  DeletionValidationError,
+  type DurableTargetSnapshot,
+  validateArrMonitoringEvidence,
+} from './core/validation.ts';
 import { ensureDeletionTarget } from './workflow/targetWorkflow.ts';
 import { isRelocationSupersededTarget } from './relocation/relocationModel.ts';
 import {
@@ -565,6 +569,14 @@ export async function enqueueDeletionOperations(
     if (input.targets.length === 0) {
       throw new DeletionConflictError('no deletion targets were found', 404);
     }
+    for (const target of input.targets) {
+      if (
+        target.snapshot.seasonCleanup === true &&
+        target.snapshot.skipArrCoordination === true
+      ) {
+        validateArrMonitoringEvidence(target.snapshot as unknown as DurableTargetSnapshot);
+      }
+    }
     const requestKey = `${input.serverId}:${input.clientRequestId}`;
     if (requestIds.has(requestKey)) {
       throw new DeletionConflictError(
@@ -664,8 +676,12 @@ export async function enqueueDeletionOperations(
           input.libraryKey,
           target.kind,
         );
-        if (Object.hasOwn(target.snapshot, 'arrReassignmentMappings')) {
-          if (canonical(target.snapshot.arrReassignmentMappings) !== canonical(currentMappings)) {
+        const acceptedMappings = Object.hasOwn(target.snapshot, 'arrReassignmentMappings')
+          ? target.snapshot.arrReassignmentMappings
+          : (target.snapshot.seasonSonarrInspection as { mappings?: unknown } | undefined)
+            ?.mappings;
+        if (acceptedMappings !== undefined) {
+          if (canonical(acceptedMappings) !== canonical(currentMappings)) {
             throw new DeletionConflictError(
               'the accepted Arr mapping configuration changed before deletion was accepted',
             );

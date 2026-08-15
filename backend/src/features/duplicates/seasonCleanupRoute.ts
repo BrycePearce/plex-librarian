@@ -166,6 +166,7 @@ export async function submitSeasonCleanup(
     plexClient: active.client,
     seasonRatingKey: parsed.seasonRatingKey,
     selections: parsed.selections,
+    inspectSonarr: true,
     coordinateSonarr: parsed.coordinateSonarr,
     inspectDownloadCleanup: parsed.coordinateSonarr,
     cleanupDownloads: parsed.cleanupDownloads,

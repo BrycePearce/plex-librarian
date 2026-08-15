@@ -487,6 +487,43 @@ async function ensureVersionDeleted(
     if (snapshot.cleanupDownloads) {
       throw new Error('download cleanup requires Arr coordination');
     }
+    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+    assertAcceptedArrMappingsUnchanged(
+      target.targetKind,
+      snapshot,
+      arrTargets,
+      snapshot.seasonSonarrInspection?.mappings,
+    );
+    if ((snapshot.seasonSonarrInspection?.mappings.length ?? 0) > 0) {
+      const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
+      const plan = await buildVersionDeletionPlan({
+        mediaType: 'episode',
+        item: snapshot,
+        selectedMediaIds: selectedIds,
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        excludedReassignMediaIds: excludedReassignIds,
+        requiredMappingIdentities: snapshot.seasonSonarrInspection!.mappings,
+        episodeIdentity: {
+          seasonNumber: snapshot.seasonIndex!,
+          episodeNumber: snapshot.episodeIndex!,
+        },
+      });
+      if (!plan.arrOwnershipValid) {
+        throw new Error(plan.arrOwnershipReason ?? 'Sonarr ownership could not be re-inspected');
+      }
+      const currentManagedSelectedMediaIds = plan.arrManagedMediaIds.filter((mediaId) =>
+        selectedIds.has(mediaId)
+      ).sort((left, right) => left - right);
+      if (
+        JSON.stringify(currentManagedSelectedMediaIds) !==
+          JSON.stringify(snapshot.seasonSonarrInspection!.managedSelectedMediaIds)
+      ) {
+        throw new Error('Sonarr ownership changed after Plex-only deletion was accepted');
+      }
+    }
     if (!(await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds))) {
       throw new PlexReconciliationError(
         'at least one unselected live Plex version must remain',

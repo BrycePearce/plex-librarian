@@ -69,11 +69,12 @@ export function assertAcceptedArrMappingsUnchanged(
   targetKind: DeletionWorkTarget['targetKind'],
   snapshot: DurableTargetSnapshot,
   arrTargets: readonly ArrDeleteTarget[],
+  acceptedMappings = snapshot.arrReassignmentMappings,
 ): void {
-  if (snapshot.arrReassignmentMappings === undefined) return;
+  if (acceptedMappings === undefined) return;
   if (
     JSON.stringify(currentArrMappingIdentities(targetKind, arrTargets)) !==
-      JSON.stringify(snapshot.arrReassignmentMappings)
+      JSON.stringify(acceptedMappings)
   ) {
     throw new Error('The mapped Arr instance set changed after deletion was accepted');
   }

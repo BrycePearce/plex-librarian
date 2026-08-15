@@ -36,6 +36,25 @@ export function seasonDownloadCleanupVisible(
   return coordinateSonarr && (preview?.cleanupEligibleVersionCount ?? 0) > 0;
 }
 
+export function seasonSonarrVisible(
+  authorizationKey: string,
+  availability: { key: string; sonarr: boolean } | undefined,
+): boolean {
+  return availability?.key === authorizationKey && availability.sonarr;
+}
+
+export function seasonDestinationChoice(
+  authorizationKey: string,
+  choice: { key: string; coordinateSonarr: boolean; cleanupDownloads: boolean },
+): { coordinateSonarr: boolean; cleanupDownloads: boolean } {
+  return choice.key === authorizationKey
+    ? {
+      coordinateSonarr: choice.coordinateSonarr,
+      cleanupDownloads: choice.coordinateSonarr && choice.cleanupDownloads,
+    }
+    : { coordinateSonarr: false, cleanupDownloads: false };
+}
+
 export function seasonDeletionConfirmationDisabled(input: {
   pending: boolean;
   selectionCount: number;
@@ -69,6 +88,16 @@ export async function refreshExpiredSeasonDeletionPreview<T extends { expiresAt:
   if (preview && seasonDeletionPreviewIsUsable(preview.expiresAt, now)) return preview;
   const refreshed = (await refetch()).data;
   return refreshed && seasonDeletionPreviewIsUsable(refreshed.expiresAt) ? refreshed : undefined;
+}
+
+export async function refreshAuthorizedSeasonDeletionPreview<T extends { expiresAt: number }>(
+  preview: T | undefined,
+  refetch: () => Promise<{ data?: T }>,
+  acceptedSubmissionKey: string,
+  currentSubmissionKey: () => string,
+): Promise<T | undefined> {
+  const refreshed = await refreshExpiredSeasonDeletionPreview(preview, refetch);
+  return currentSubmissionKey() === acceptedSubmissionKey ? refreshed : undefined;
 }
 
 export function seasonDeletionAuthorizationKey(
@@ -314,11 +343,11 @@ export function SeasonDuplicateDialog({
   const [mode, setMode] = useState<ReviewMode>("profiles");
   const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [coordinateSonarr, setCoordinateSonarr] = useState(false);
-  const [cleanupDownloads, setCleanupDownloads] = useState(false);
-  const [destinationAvailability, setDestinationAvailability] = useState({
-    key: seasonKey,
-    sonarr: false,
+  const [confirmationRefreshing, setConfirmationRefreshing] = useState(false);
+  const [destinationChoice, setDestinationChoice] = useState({
+    key: "",
+    coordinateSonarr: false,
+    cleanupDownloads: false,
   });
   const [filter, setFilter] = useState<EpisodeFilter>("all");
   const allCheckboxRef = useRef<HTMLInputElement>(null);
@@ -344,9 +373,7 @@ export function SeasonDuplicateDialog({
     setMode("profiles");
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
-    setCoordinateSonarr(false);
-    setCleanupDownloads(false);
-    setDestinationAvailability({ key: seasonKey, sonarr: false });
+    setDestinationChoice({ key: "", coordinateSonarr: false, cleanupDownloads: false });
     setFilter("all");
   }, [plans, seasonKey]);
 
@@ -417,11 +444,14 @@ export function SeasonDuplicateDialog({
     };
   });
   const authorizationKey = seasonDeletionAuthorizationKey(selections);
-  const authorizationKeyRef = useRef(authorizationKey);
-  useEffect(() => {
-    if (authorizationKeyRef.current === authorizationKey) return;
-    authorizationKeyRef.current = authorizationKey;
-  }, [authorizationKey]);
+  const { coordinateSonarr, cleanupDownloads } = seasonDestinationChoice(
+    authorizationKey,
+    destinationChoice,
+  );
+  const [destinationAvailability, setDestinationAvailability] = useState({
+    key: authorizationKey,
+    sonarr: false,
+  });
   const deleteVersionCount = selections.reduce(
     (total, selection) => total + selection.deleteMediaIds.length,
     0,
@@ -466,43 +496,80 @@ export function SeasonDuplicateDialog({
     staleTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
-    placeholderData: (previousData) => previousData,
   });
+  const submissionKey = JSON.stringify({
+    seasonKey,
+    authorizationKey,
+    coordinateSonarr,
+    cleanupDownloads,
+  });
+  const submissionKeyRef = useRef(submissionKey);
+  submissionKeyRef.current = submissionKey;
+  const submittedPreviewKeyRef = useRef(deletionPreviewKey);
   useEffect(() => {
     if (
       error instanceof ApiError && error.code === "PREVIEW_CHANGED" && error.preview
     ) {
-      queryClient.setQueryData(deletionPreviewKey, error.preview);
+      queryClient.setQueryData(submittedPreviewKeyRef.current, error.preview);
     }
-  }, [error, queryClient, deletionPreviewKey]);
+  }, [error, queryClient]);
   useEffect(() => {
     if (!deletionPreview.data) return;
     setDestinationAvailability({
-      key: seasonKey,
-      sonarr: deletionPreview.data.sonarrConfigured,
+      key: authorizationKey,
+      sonarr: deletionPreview.data.sonarrAvailable,
     });
-  }, [deletionPreview.data, seasonKey]);
+    if (!deletionPreview.data.sonarrAvailable) {
+      setDestinationChoice({
+        key: authorizationKey,
+        coordinateSonarr: false,
+        cleanupDownloads: false,
+      });
+    }
+  }, [authorizationKey, deletionPreview.data]);
+  useEffect(() => {
+    if (!deletionPreview.isError || deletionPreview.isFetching) return;
+    setDestinationAvailability({ key: authorizationKey, sonarr: false });
+    setDestinationChoice({
+      key: authorizationKey,
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    });
+  }, [authorizationKey, deletionPreview.isError, deletionPreview.isFetching]);
   const cleanupEligibleVersionCount = deletionPreview.data?.cleanupEligibleVersionCount ?? 0;
   useEffect(() => {
     if (deletionPreview.data && cleanupEligibleVersionCount === 0) {
-      setCleanupDownloads(false);
+      setDestinationChoice((current) => ({
+        key: authorizationKey,
+        coordinateSonarr: current.key === authorizationKey && current.coordinateSonarr,
+        cleanupDownloads: false,
+      }));
     }
-  }, [cleanupEligibleVersionCount, deletionPreview.data]);
+  }, [authorizationKey, cleanupEligibleVersionCount, deletionPreview.data]);
   if (!season) return <dialog ref={dialogRef} className="modal" onClose={onClose} />;
   const conflictOperationId = seasonDeletionConflictOperationId(error);
 
   async function confirmWithFreshPreview() {
-    const preview = await refreshExpiredSeasonDeletionPreview(
-      deletionPreview.data,
-      deletionPreview.refetch,
-    );
-    if (!preview) return;
-    onConfirm({
-      selections,
-      previewFingerprint: preview.fingerprint,
-      coordinateSonarr,
-      cleanupDownloads,
-    });
+    const acceptedSubmissionKey = submissionKey;
+    setConfirmationRefreshing(true);
+    try {
+      const preview = await refreshAuthorizedSeasonDeletionPreview(
+        deletionPreview.data,
+        deletionPreview.refetch,
+        acceptedSubmissionKey,
+        () => submissionKeyRef.current,
+      );
+      if (!preview) return;
+      submittedPreviewKeyRef.current = deletionPreviewKey;
+      onConfirm({
+        selections,
+        previewFingerprint: preview.fingerprint,
+        coordinateSonarr,
+        cleanupDownloads,
+      });
+    } finally {
+      setConfirmationRefreshing(false);
+    }
   }
 
   function toggleEpisode(key: string) {
@@ -543,7 +610,7 @@ export function SeasonDuplicateDialog({
   const destinationOptions = (
     <DestinationOptions
       options={[
-        ...(destinationAvailability.key === seasonKey && destinationAvailability.sonarr
+        ...(seasonSonarrVisible(authorizationKey, destinationAvailability)
           ? [{
             id: "arr" as const,
             service: "sonarr" as const,
@@ -554,8 +621,11 @@ export function SeasonDuplicateDialog({
             disabled: pending || deletionPreview.isFetching,
             warning: false,
             onChange: (checked: boolean) => {
-              setCoordinateSonarr(checked);
-              if (!checked) setCleanupDownloads(false);
+              setDestinationChoice({
+                key: authorizationKey,
+                coordinateSonarr: checked,
+                cleanupDownloads: false,
+              });
             },
           }]
           : []),
@@ -571,7 +641,12 @@ export function SeasonDuplicateDialog({
             checked: cleanupDownloads,
             disabled: pending || deletionPreview.isFetching,
             warning: false,
-            onChange: setCleanupDownloads,
+            onChange: (checked: boolean) =>
+              setDestinationChoice({
+                key: authorizationKey,
+                coordinateSonarr: true,
+                cleanupDownloads: checked,
+              }),
           }]
           : []),
       ]}
@@ -1061,7 +1136,7 @@ export function SeasonDuplicateDialog({
             type="button"
             className="btn btn-error"
             disabled={seasonDeletionConfirmationDisabled({
-              pending: pending || deletionPreview.isFetching,
+              pending: pending || confirmationRefreshing || deletionPreview.isFetching,
               selectionCount: selections.length,
               mode,
               profileReady: !analysis.isLoading && selectedProfileIds.size > 0 &&
@@ -1073,7 +1148,7 @@ export function SeasonDuplicateDialog({
             })}
             onClick={confirmWithFreshPreview}
           >
-            {pending || deletionPreview.isFetching
+            {pending || confirmationRefreshing || deletionPreview.isFetching
               ? <span className="loading loading-spinner loading-sm" />
               : <Trash2 className="size-4" />}
             Delete {deleteVersionCount} {deleteVersionCount === 1 ? "version" : "versions"}

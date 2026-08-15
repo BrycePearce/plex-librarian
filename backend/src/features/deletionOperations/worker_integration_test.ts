@@ -27,6 +27,7 @@ const {
   setAutomaticDeletionWorkerForTest,
 } = await import('./service.ts');
 const { recoverInterruptedDeletionWork } = await import('./core/recovery.ts');
+const { DeletionValidationError } = await import('./core/validation.ts');
 const { ensureDeletionTarget } = await import('./workflow/targetWorkflow.ts');
 const {
   assertRelocationWorkflowClear,
@@ -160,6 +161,7 @@ let sonarrManagedFileId = 10;
 let sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
 let sonarrManagedMediaId: number | null = null;
 let sonarrRescanTargetPath: string | null = null;
+let rejectSonarrManualImportPreflight = false;
 let sonarrRescanHook: (() => void) | null = null;
 let sonarrRescanCount = 0;
 let sonarrMonitorMutationCount = 0;
@@ -456,7 +458,9 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         // Model Sonarr independently parsing the retained path. The production
         // preflight deliberately sends no caller-selected episode IDs.
         episodes: candidate.path === sonarrRescanTargetPath ? [{ id: 9 }] : [],
-        rejections: [],
+        rejections: rejectSonarrManualImportPreflight
+          ? [{ reason: 'manual import unavailable' }]
+          : [],
       }))));
     }
     if (url.pathname === '/api/v3/history/series' && seasonPackQbit) {
@@ -759,6 +763,7 @@ function reset(): void {
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
   sonarrManagedMediaId = null;
   sonarrRescanTargetPath = null;
+  rejectSonarrManualImportPreflight = false;
   sonarrRescanHook = null;
   sonarrRescanCount = 0;
   sonarrMonitorMutationCount = 0;
@@ -2799,47 +2804,101 @@ Deno.test('season enqueue rolls back operation, targets, and reservations after 
   );
 });
 
-Deno.test('Plex-only season enqueue does not inject unreviewed Arr mapping evidence', async () => {
+Deno.test('Plex-only season enqueue requires reviewed Sonarr inspection evidence', async () => {
   reset();
   configureSonarr();
   addEpisode();
 
-  const result = await enqueueDeletionOperation({
-    clientRequestId: 'season-plex-only-no-arr-evidence',
-    serverId: 1,
-    libraryKey: 'shows',
-    kind: 'episode_version',
-    payload: {
-      seasonRatingKey: 'season-1',
-      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
-      coordinateSonarr: false,
-      cleanupDownloads: false,
-    },
-    targets: [{
-      kind: 'episode_version',
-      key: 'episode-1:21',
-      title: 'Example Show — Pilot',
-      logicalSize: 40,
-      snapshot: {
+  await assertRejects(
+    () =>
+      enqueueDeletionOperation({
+        clientRequestId: 'season-plex-only-no-arr-evidence',
+        serverId: 1,
         libraryKey: 'shows',
-        ratingKey: 'episode-1',
-        showRatingKey: 'show-1',
-        seasonRatingKey: 'season-1',
-        mediaId: 21,
-        seasonCleanup: true,
-        skipArrCoordination: true,
-      },
-      reservation: { mediaKind: 'episode', mediaId: 21, ratingKey: 'episode-1' },
-    }],
-  });
+        kind: 'episode_version',
+        payload: {
+          seasonRatingKey: 'season-1',
+          selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+          coordinateSonarr: false,
+          cleanupDownloads: false,
+        },
+        targets: [{
+          kind: 'episode_version',
+          key: 'episode-1:21',
+          title: 'Example Show — Pilot',
+          logicalSize: 40,
+          snapshot: {
+            libraryKey: 'shows',
+            ratingKey: 'episode-1',
+            showRatingKey: 'show-1',
+            seasonRatingKey: 'season-1',
+            mediaId: 21,
+            seasonCleanup: true,
+            skipArrCoordination: true,
+          },
+          reservation: { mediaKind: 'episode', mediaId: 21, ratingKey: 'episode-1' },
+        }],
+      }),
+    DeletionValidationError,
+    'durable Sonarr inspection guard is missing',
+  );
+});
 
+Deno.test('Plex-only season enqueue rejects inspected Sonarr mapping drift', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+
+  await assertRejects(
+    () =>
+      enqueueDeletionOperation({
+        clientRequestId: 'season-plex-only-mapping-race',
+        serverId: 1,
+        libraryKey: 'shows',
+        kind: 'episode_version',
+        payload: {
+          seasonRatingKey: 'season-1',
+          selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+          coordinateSonarr: false,
+          cleanupDownloads: false,
+        },
+        targets: [{
+          kind: 'episode_version',
+          key: 'episode-1:21',
+          title: 'Example Show — Pilot',
+          logicalSize: 40,
+          snapshot: {
+            libraryKey: 'shows',
+            ratingKey: 'episode-1',
+            showRatingKey: 'show-1',
+            seasonRatingKey: 'season-1',
+            mediaId: 21,
+            seasonCleanup: true,
+            skipArrCoordination: true,
+            seasonSonarrInspection: {
+              mappings: [{
+                instanceId: 2,
+                instanceType: 'sonarr',
+                instanceUrl: 'http://sonarr',
+                configurationUpdatedAt: 0,
+                mappingIdentity: '{"addImportExclusion":false,"pathMappings":[]}',
+              }],
+              managedSelectedMediaIds: [21],
+            },
+          },
+          reservation: { mediaKind: 'episode', mediaId: 21, ratingKey: 'episode-1' },
+        }],
+      }),
+    DeletionConflictError,
+    'accepted Arr mapping configuration changed',
+  );
   assertEquals(
     withTransaction((client) =>
       client.prepare(
-        "SELECT json_type(snapshot, '$.arrReassignmentMappings') FROM deletion_targets WHERE operation_id = ?",
-      ).value<[string | null]>(result.operationId)?.[0] ?? null
+        "SELECT COUNT(*) FROM deletion_operations WHERE client_request_id = 'season-plex-only-mapping-race'",
+      ).value<[number]>()?.[0]
     ),
-    null,
+    0,
   );
 });
 
@@ -3716,17 +3775,41 @@ Deno.test('season cleanup coordinates the managed version after Plex-only siblin
     { id: 22, Part: [{ file: '/tv/Show/Season 01/plex-only.mkv', size: 40_000 }] },
     { id: 23, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
   ];
-  const preview = await seasonPreviewEvidence('season-1', ['episode-1'], {
-    coordinateSonarr: true,
-    cleanupDownloads: false,
-  });
+  const previewResponse = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21, 22] }],
+        coordinateSonarr: true,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.automaticAdoptionCount, 1);
+  assertEquals(preview.plexOnlyCount, 1);
+  assertEquals(
+    preview.members.map((member: { selectedMediaIds: number[]; outcome: string }) => [
+      member.selectedMediaIds,
+      member.outcome,
+    ]),
+    [
+      [[21], 'automatic_adoption'],
+      [[22], 'plex_only'],
+    ],
+  );
   const response = await seasonCleanupRequest('season-1', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       clientRequestId: 'season-multi-version-sonarr',
       selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21, 22] }],
-      ...preview,
+      previewFingerprint: preview.fingerprint,
+      coordinateSonarr: true,
+      cleanupDownloads: false,
     }),
   });
   assertEquals(response.status, 202, await response.clone().text());
@@ -3752,6 +3835,220 @@ Deno.test('season cleanup coordinates the managed version after Plex-only siblin
   );
   assertEquals(sonarrRescanCount, 1);
   assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [23]);
+});
+
+Deno.test('Plex-only season cleanup deletes managed and unmanaged selected siblings', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO episode_media_versions (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key, library_key, episode_title, episode_index, season_index, file_size, updated_at) VALUES (1, 23, 'episode-1', 'season-1', 'show-1', 'shows', 'Pilot', 1, 1, 40, 1)",
+    ).run();
+  });
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/managed.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/retained.mkv';
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: '/tv/Show/Season 01/plex-only.mkv', size: 40_000 }] },
+    { id: 23, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+  const previewResponse = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21, 22] }],
+        coordinateSonarr: false,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.automaticAdoptionCount, 0);
+  assertEquals(preview.plexOnlyCount, 2);
+
+  const response = await seasonCleanupRequest('season-1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-multi-version-plex-only',
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21, 22] }],
+      previewFingerprint: preview.fingerprint,
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT target_key, json_extract(snapshot, '$.seasonSonarrInspection.managedSelectedMediaIds') FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal",
+      ).values(result.operationId)
+    ),
+    [
+      ['episode-1:21', [21]],
+      ['episode-1:22', []],
+    ],
+  );
+
+  await settle();
+
+  assertEquals(
+    getDeletionOperation(result.operationId, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(result.operationId, 1)),
+  );
+  assertEquals(sonarrRescanCount, 0);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [23]);
+});
+
+Deno.test('Plex-only season cleanup does not require one Sonarr adoption candidate', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO episode_media_versions (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key, library_key, episode_title, episode_index, season_index, file_size, updated_at) VALUES (1, 23, 'episode-1', 'season-1', 'show-1', 'shows', 'Pilot', 1, 1, 40, 1)",
+    ).run();
+  });
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/managed.mkv';
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: '/tv/Show/Season 01/retained-a.mkv', size: 40_000 }] },
+    { id: 23, Part: [{ file: '/tv/Show/Season 01/retained-b.mkv', size: 40_000 }] },
+  ];
+
+  const coordinatedPreview = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+        coordinateSonarr: true,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(coordinatedPreview.status, 409);
+  assertStringIncludes(await coordinatedPreview.text(), 'one exact retained version');
+
+  const previewResponse = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+        coordinateSonarr: false,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.sonarrAvailable, false);
+  assertEquals(preview.automaticAdoptionCount, 0);
+  assertEquals(preview.plexOnlyCount, 1);
+
+  const response = await seasonCleanupRequest('season-1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-multiple-retained-plex-only',
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+      previewFingerprint: preview.fingerprint,
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+
+  await settle();
+
+  assertEquals(
+    getDeletionOperation(result.operationId, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(result.operationId, 1)),
+  );
+  assertEquals(sonarrRescanCount, 0);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22, 23]);
+});
+
+Deno.test('Plex-only season cleanup does not require Sonarr adoption preflight', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/managed.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/retained.mkv';
+  rejectSonarrManualImportPreflight = true;
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+
+  const coordinatedPreview = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+        coordinateSonarr: true,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(coordinatedPreview.status, 409);
+
+  const previewResponse = await app.request(
+    '/api/duplicates/seasons/season-1/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+        coordinateSonarr: false,
+        cleanupDownloads: false,
+      }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.sonarrAvailable, false);
+  assertEquals(preview.plexOnlyCount, 1);
+
+  const response = await seasonCleanupRequest('season-1', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-preflight-rejected-plex-only',
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+      previewFingerprint: preview.fingerprint,
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+
+  await settle();
+
+  assertEquals(
+    getDeletionOperation(result.operationId, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(result.operationId, 1)),
+  );
+  assertEquals(sonarrRescanCount, 0);
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
 });
 
 Deno.test('season cleanup uses Plex fallback without touching Sonarr-managed retained media', async () => {
@@ -4198,7 +4495,7 @@ Deno.test('unselected season changes do not invalidate reviewed deletion intent'
   assertEquals(response.status, 202, await response.clone().text());
 });
 
-Deno.test('managed season preview is Plex-only by default and validates Sonarr when selected', async () => {
+Deno.test('season preview discovers actionable Sonarr ownership before coordination is selected', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -4219,8 +4516,8 @@ Deno.test('managed season preview is Plex-only by default and validates Sonarr w
       cleanupDownloads: false,
     }),
   });
-  assertEquals(response.status, 200, await response.clone().text());
-  assertEquals((await response.json()).sonarrAvailable, false);
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'shared');
 
   response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
     method: 'POST',
@@ -4267,6 +4564,20 @@ Deno.test('managed season preview is Plex-only by default and validates Sonarr w
 
   sonarrManagedPath = '/tv/Show/Season 01/shared.mkv';
   live.get('episode-1')!.Media![0]!.Part = [{ file: sonarrManagedPath, size: 40_000 }];
+  response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 200, await response.clone().text());
+  const discovered = await response.json();
+  assertEquals(discovered.sonarrAvailable, true);
+  assertEquals(discovered.automaticAdoptionCount, 0);
+  assertEquals(discovered.plexOnlyCount, 1);
   activePlaybackRatingKey = 'episode-1';
   response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
     method: 'POST',
@@ -4279,6 +4590,71 @@ Deno.test('managed season preview is Plex-only by default and validates Sonarr w
   });
   assertEquals(response.status, 409);
   assertStringIncludes((await response.json()).error, 'active playback');
+  activePlaybackRatingKey = null;
+
+  response = await app.request('/api/duplicates/seasons/season-1/cleanup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: 'season-inspected-plex-only',
+      previewFingerprint: discovered.fingerprint,
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const plexOnlyOperation = await response.json();
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        `SELECT
+           json_type(snapshot, '$.arrReassignmentMappings'),
+           json_type(snapshot, '$.arrOwnerships'),
+           json_type(snapshot, '$.seasonCoordinationOutcome')
+         FROM deletion_targets
+         WHERE operation_id = ?`,
+      ).value<[string | null, string | null, string | null]>(plexOnlyOperation.operationId)
+    ),
+    [null, null, null],
+  );
+  const inspectionGuard = withTransaction((client) =>
+    client.prepare(
+      "SELECT json_extract(snapshot, '$.seasonSonarrInspection') FROM deletion_targets WHERE operation_id = ?",
+    ).value<[{
+      mappings: Array<{ instanceId: number; instanceType: string }>;
+      managedSelectedMediaIds: number[];
+    }]>(plexOnlyOperation.operationId)?.[0]
+  );
+  assertEquals(inspectionGuard?.managedSelectedMediaIds, [21]);
+  assertEquals(inspectionGuard?.mappings.length, 1);
+  assertEquals(inspectionGuard?.mappings[0]?.instanceId, 2);
+  assertEquals(inspectionGuard?.mappings[0]?.instanceType, 'sonarr');
+
+  sonarrManagedMediaId = 22;
+  sonarrManagedPath = sonarrRescanTargetPath;
+  await settle();
+  assertEquals(getDeletionOperation(plexOnlyOperation.operationId, 1)?.status, 'needs_attention');
+  assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [21, 22]);
+});
+
+Deno.test('season Sonarr inspection requires exact TVDB identity even for Plex-only intent', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  withTransaction((client) => client.prepare('UPDATE items SET tvdb_id = NULL').run());
+
+  const response = await app.request('/api/duplicates/seasons/season-1/deletion-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      selections: [{ episodeRatingKey: 'episode-1', mediaIds: [21] }],
+      coordinateSonarr: false,
+      cleanupDownloads: false,
+    }),
+  });
+  assertEquals(response.status, 409);
+  assertStringIncludes((await response.json()).error, 'TVDB identity');
 });
 
 Deno.test('quick analysis enriches thin synced rows before classifying candidates', async () => {

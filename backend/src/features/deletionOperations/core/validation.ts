@@ -50,6 +50,10 @@ export interface DurableTargetSnapshot {
   skipArrCoordination?: boolean;
   seasonCleanup?: boolean;
   seasonCoordinationOutcome?: 'plex_only' | 'automatic_adoption';
+  seasonSonarrInspection?: {
+    mappings: PersistedArrMappingIdentity[];
+    managedSelectedMediaIds: number[];
+  };
   seasonDownloadCleanup?: PersistedResolvedCleanupItem;
   selectedRatingKeys?: string[];
   selectedMediaIds?: number[];
@@ -99,6 +103,33 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (
+    snapshot.seasonCleanup === true && snapshot.skipArrCoordination === true &&
+    snapshot.seasonSonarrInspection === undefined
+  ) {
+    throw new DeletionValidationError('durable Sonarr inspection guard is missing');
+  }
+  if (snapshot.seasonSonarrInspection !== undefined) {
+    const inspection = snapshot.seasonSonarrInspection;
+    if (
+      snapshot.seasonCleanup !== true || snapshot.skipArrCoordination !== true ||
+      !inspection || typeof inspection !== 'object' ||
+      !Array.isArray(inspection.mappings) ||
+      !Array.isArray(inspection.managedSelectedMediaIds) ||
+      inspection.managedSelectedMediaIds.some((mediaId) => !Number.isSafeInteger(mediaId)) ||
+      snapshot.arrReassignmentMappings !== undefined || snapshot.arrOwnerships !== undefined ||
+      snapshot.seasonCoordinationOutcome !== undefined ||
+      inspection.mappings.some((entry) =>
+        !entry || entry.instanceType !== 'sonarr' ||
+        !Number.isSafeInteger(entry.instanceId) || entry.instanceId <= 0 ||
+        typeof entry.instanceUrl !== 'string' || !entry.instanceUrl ||
+        !Number.isSafeInteger(entry.configurationUpdatedAt) ||
+        typeof entry.mappingIdentity !== 'string' || !entry.mappingIdentity
+      )
+    ) {
+      throw new DeletionValidationError('durable Sonarr inspection guard is malformed');
+    }
+  }
   if (snapshot.seasonCoordinationOutcome !== undefined) {
     if (
       !['plex_only', 'automatic_adoption'].includes(snapshot.seasonCoordinationOutcome) ||

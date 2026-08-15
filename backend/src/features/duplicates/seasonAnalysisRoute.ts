@@ -163,6 +163,7 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
       plexClient: active.client,
       seasonRatingKey: intent.seasonRatingKey,
       selections: intent.selections,
+      inspectSonarr: true,
       coordinateSonarr: intent.coordinateSonarr,
       inspectDownloadCleanup: intent.coordinateSonarr,
       cleanupDownloads: intent.cleanupDownloads,
