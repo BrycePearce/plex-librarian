@@ -9,6 +9,30 @@ export interface QbittorrentInstance {
 export interface QbittorrentIntegrationSettings {
   envConfigured: boolean;
   instances: QbittorrentInstance[];
+  targets: Array<{ instanceKey: string; name: string; environmentOwned: boolean }>;
+  pathMappings: QbittorrentPathMapping[];
+}
+
+export interface QbittorrentPathMapping {
+  id: number;
+  instanceKey: string;
+  qbittorrentPath: string;
+  localPath: string;
+  caseSensitive: boolean;
+  revision: number;
+  validationQbittorrentPath: string;
+  validationLocalPath: string;
+  validationSize: number;
+}
+
+export interface SaveQbittorrentPathMappingRequest {
+  instanceKey: string;
+  qbittorrentPath: string;
+  localPath: string;
+  caseSensitive: boolean;
+  validationQbittorrentPath: string;
+  validationLocalPath: string;
+  validationSize: number;
 }
 
 export interface SaveQbittorrentInstanceRequest {

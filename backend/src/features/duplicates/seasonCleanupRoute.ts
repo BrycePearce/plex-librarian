@@ -36,7 +36,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Object.keys(value).sort();
-  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+  const sortedExpected = [...expected].sort();
+  return keys.length === sortedExpected.length &&
+    keys.every((key, index) => key === sortedExpected[index]);
 }
 
 function exactIdentifier(value: unknown): value is string {
@@ -55,15 +57,16 @@ export function parseSeasonDeletionRequest(
     ? [
       'cleanupDownloads',
       'clientRequestId',
-      'coordinateSonarr',
+      'sonarrMode',
       'previewFingerprint',
       'selections',
     ]
-    : ['cleanupDownloads', 'coordinateSonarr', 'selections'];
+    : ['cleanupDownloads', 'selections', 'sonarrMode'];
   if (!exactKeys(body, expectedKeys)) invalid('season cleanup request fields are invalid');
   if (
-    typeof body.coordinateSonarr !== 'boolean' || typeof body.cleanupDownloads !== 'boolean'
-  ) invalid('destination choices must be booleans');
+    !['none', 'adopt_retained', 'remove_and_unmonitor'].includes(String(body.sonarrMode)) ||
+    typeof body.cleanupDownloads !== 'boolean'
+  ) invalid('destination choices are invalid');
   if (
     !Array.isArray(body.selections) || body.selections.length === 0 ||
     body.selections.length > SMART_CLEANUP_GROUP_LIMIT
@@ -98,7 +101,7 @@ export function parseSeasonDeletionRequest(
   const parsed: ParsedSeasonCleanup = {
     seasonRatingKey,
     selections,
-    coordinateSonarr: body.coordinateSonarr,
+    sonarrMode: body.sonarrMode as ParsedSeasonCleanup['sonarrMode'],
     cleanupDownloads: body.cleanupDownloads,
   };
   if (command) {
@@ -122,7 +125,7 @@ export function canonicalSeasonDeletionIntent(input: ParsedSeasonCleanup): Recor
   return {
     seasonRatingKey: input.seasonRatingKey,
     selections: input.selections,
-    coordinateSonarr: input.coordinateSonarr,
+    sonarrMode: input.sonarrMode,
     cleanupDownloads: input.cleanupDownloads,
   };
 }
@@ -164,7 +167,7 @@ export async function submitSeasonCleanup(
     seasonRatingKey: parsed.seasonRatingKey,
     selections: parsed.selections,
     inspectSonarr: true,
-    coordinateSonarr: parsed.coordinateSonarr,
+    sonarrMode: parsed.sonarrMode,
     inspectDownloadCleanup: true,
     cleanupDownloads: parsed.cleanupDownloads,
   });

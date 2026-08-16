@@ -337,6 +337,13 @@
       "when": 1786512840101,
       "tag": "0048_episode_season_index",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1786760000000,
+      "tag": "0049_qbittorrent_path_mappings",
+      "breakpoints": true
     }
   ]
 }

@@ -249,6 +249,36 @@ export const qbittorrentInstances = sqliteTable(
   }),
 );
 
+export const qbittorrentPathMappings = sqliteTable(
+  'qbittorrent_path_mappings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    instanceKey: text('instance_key').notNull(),
+    qbittorrentPath: text('qbittorrent_path').notNull(),
+    localPath: text('local_path').notNull(),
+    caseSensitive: integer('case_sensitive', { mode: 'boolean' }).notNull().default(true),
+    revision: integer('revision').notNull().default(1),
+    validationQbittorrentPath: text('validation_qbittorrent_path').notNull(),
+    validationLocalPath: text('validation_local_path').notNull(),
+    validationSize: integer('validation_size').notNull(),
+    validatedAt: integer('validated_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    instanceIdx: index('qbittorrent_path_mappings_instance_idx').on(
+      table.serverId,
+      table.instanceKey,
+    ),
+    uniquePrefix: uniqueIndex('qbittorrent_path_mappings_unique_prefix').on(
+      table.serverId,
+      table.instanceKey,
+      table.qbittorrentPath,
+    ),
+  }),
+);
+
 // Request-manager connections are server-scoped because one Plex Librarian install
 // can switch between unrelated Plex servers. The API key is intentionally never
 // returned by the public integration route; only a configured boolean crosses the API.

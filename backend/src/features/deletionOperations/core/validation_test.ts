@@ -161,3 +161,78 @@ Deno.test('break-glass Radarr path adoption requires durable explicit authorizat
   );
   validateArrMonitoringEvidence(consentPathSnapshot(true));
 });
+
+function sonarrAdoptionSnapshot(preflightPath: string): DurableTargetSnapshot {
+  const candidate = {
+    path: preflightPath,
+    size: 200,
+    seriesId: 42,
+    seasonNumber: 1,
+    episodeIds: [9],
+    quality: {
+      quality: { id: 1, name: 'HDTV-1080p', source: 'television', resolution: 1080 },
+      revision: { version: 1, real: 0, isRepack: false },
+    },
+    languages: [{ id: 1, name: 'English' }],
+    releaseGroup: '',
+    indexerFlags: 0,
+    releaseType: 'singleEpisode',
+    rejectionReasons: [],
+  };
+  return {
+    machineIdentifier: 'plex-machine',
+    serverUrl: 'http://plex:32400',
+    libraryKey: 'shows',
+    ratingKey: 'episode-1',
+    title: 'Pilot',
+    type: 'episode',
+    tmdbId: null,
+    tvdbId: 100,
+    mediaId: 11,
+    seasonCleanup: true,
+    seasonCoordinationOutcome: 'automatic_adoption',
+    seasonSonarrVersion: '4.0.19.2979',
+    seasonIndex: 1,
+    episodeIndex: 1,
+    seasonSelectedCandidateMediaId: 12,
+    seasonSafeCandidateMediaIds: [12],
+    seasonPreDeletionPreflight: candidate,
+    arrReassignmentMappings: [],
+    arrOwnerships: [],
+    arrReassignments: [{
+      instanceId: 7,
+      instanceType: 'sonarr',
+      instanceUrl: 'http://sonarr:8989',
+      configurationUpdatedAt: 100,
+      mappingIdentity: 'mapping',
+      recordId: 42,
+      recordPath: '/tv/Show',
+      episodeId: 9,
+      managedFileId: 5,
+      managedPath: '/tv/Show/Season 01/old.mkv',
+      managedFileSize: 100,
+      retainedMediaId: 12,
+      retainedPath: '/tv/Show/Season 01/retained.mkv',
+      retainedRecordPath: '/tv/Show',
+      retainedFileSize: 200,
+      originalMonitored: true,
+      sonarrTransition: {
+        candidateAllowlist: [{
+          mediaId: 12,
+          path: '/tv/Show/Season 01/retained.mkv',
+          size: 200,
+        }],
+        preDeletionPreflight: candidate,
+      },
+    }],
+  };
+}
+
+Deno.test('Sonarr pre-deletion evidence is bound to the selected allowlist candidate', () => {
+  validateArrMonitoringEvidence(sonarrAdoptionSnapshot('/tv/Show/Season 01/retained.mkv'));
+  assertThrows(
+    () => validateArrMonitoringEvidence(sonarrAdoptionSnapshot('/tv/Show/Season 01/other.mkv')),
+    DeletionValidationError,
+    'transition evidence is malformed',
+  );
+});

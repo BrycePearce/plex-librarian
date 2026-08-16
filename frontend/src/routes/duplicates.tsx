@@ -187,7 +187,7 @@ function DuplicatesPage() {
     mutationFn: (request: {
       selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
       previewFingerprint: string;
-      coordinateSonarr: boolean;
+      sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
       cleanupDownloads: boolean;
     }) =>
       api.duplicates.seasonCleanup(
@@ -199,7 +199,7 @@ function DuplicatesPage() {
         })),
         {
           previewFingerprint: request.previewFingerprint,
-          coordinateSonarr: request.coordinateSonarr,
+          sonarrMode: request.sonarrMode,
           cleanupDownloads: request.cleanupDownloads,
         },
       ),

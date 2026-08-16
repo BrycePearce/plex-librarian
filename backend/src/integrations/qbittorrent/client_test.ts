@@ -161,3 +161,39 @@ Deno.test('client rejects oversized qBittorrent manifests before retaining them'
     '10000-record safety limit',
   );
 });
+
+Deno.test('direct discovery rejects summaries without absolute content paths', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    if (String(input).endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    return Promise.resolve(Response.json([{
+      hash: 'a'.repeat(40),
+      content_path: '',
+      save_path: '/downloads',
+      total_size: 10,
+      num_files: 1,
+    }]));
+  });
+  await assertRejects(
+    () => client.discoverySummaries(),
+    QbittorrentApiError,
+    'malformed direct-discovery summaries',
+  );
+});
+
+Deno.test('direct discovery rejects a truncated job inventory', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    if (String(input).endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    return Promise.resolve(Response.json(Array.from({ length: 501 }, (_, index) => ({
+      hash: index.toString(16).padStart(40, '0'),
+      content_path: `/downloads/${index}`,
+      save_path: '/downloads',
+      total_size: 10,
+      num_files: 1,
+    }))));
+  });
+  await assertRejects(
+    () => client.discoverySummaries(),
+    QbittorrentApiError,
+    'direct discovery is truncated',
+  );
+});

@@ -1161,6 +1161,26 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
           (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
           (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0) ||
           snapshot.radarrRemovalFallback !== undefined;
+        targetResult.seasonRemovedUnmonitoredAvailable =
+          targetResult.status === 'needs_attention' &&
+          targetResult.phase === 'arr_coordination' &&
+          snapshot.seasonCleanup === true &&
+          snapshot.seasonCoordinationOutcome === 'automatic_adoption' &&
+          Array.isArray(snapshot.arrReassignments) &&
+          snapshot.arrReassignments.some((value) => {
+            const entry = value as {
+              instanceType?: unknown;
+              sonarrTransition?: {
+                adoptedMediaId?: unknown;
+                oldFileRemovalConfirmedAt?: unknown;
+              };
+            };
+            return entry.instanceType === 'sonarr' &&
+              entry.sonarrTransition?.adoptedMediaId === undefined &&
+              typeof entry.sonarrTransition?.oldFileRemovalConfirmedAt === 'number';
+          });
+        targetResult.seasonReassignmentRetryAvailable =
+          targetResult.seasonRemovedUnmonitoredAvailable === true;
         if (snapshot.resolutionState === 'management_hold') {
           targetResult.resolutionState = 'management_hold';
         }
@@ -1207,9 +1227,17 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
            (
              COALESCE(json_extract(snapshot, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
              AND json_type(snapshot, '$.arrReassignments[0].radarrPathPlan.transition') IS NOT NULL
-           )
-           OR json_type(snapshot, '$.radarrRemovalFallback.transition') IS NOT NULL
-         )`,
+            )
+            OR json_type(snapshot, '$.radarrRemovalFallback.transition') IS NOT NULL
+            OR (
+              json_extract(snapshot, '$.arrReassignments[0].instanceType') = 'sonarr'
+              AND json_type(
+                snapshot,
+                '$.arrReassignments[0].sonarrTransition.payloadProtectionAt'
+              ) IS NOT NULL
+            )
+            OR json_type(snapshot, '$.seasonBreakGlass.monitoringProtectedAt') IS NOT NULL
+          )`,
       )
       .values<[number]>(id);
     if (

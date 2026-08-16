@@ -112,7 +112,8 @@ Do not use `localhost`, which points back at Plex Librarian itself.
 ### Optional qBittorrent cleanup
 
 Add qBittorrent under **Settings → Media connections** to inspect live torrents
-associated with Sonarr/Radarr import history. The deletion preview shows the
+associated with Sonarr/Radarr import history or verified direct path mappings.
+The deletion preview shows the
 bounded payload tree plus the job's tracker host, ratio, upload total, and
 cumulative seeding time. When explicitly selected, Plex Librarian removes the
 verified job and asks qBittorrent to delete its downloaded payload before Arr

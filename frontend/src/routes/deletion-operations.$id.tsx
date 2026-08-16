@@ -72,6 +72,15 @@ function DeletionOperationPage() {
     mutationFn: () => api.deletionOperations.resolve(id),
     onSuccess: ({ operation }) => qc.setQueryData(queryKey, operation),
   });
+  const acceptRemovedUnmonitored = useMutation({
+    mutationFn: (targetId: number) =>
+      api.deletionOperations.acceptSeasonRemovedAndUnmonitored(id, targetId),
+    onSuccess: (data) => qc.setQueryData(queryKey, data),
+  });
+  const retrySeasonReassignment = useMutation({
+    mutationFn: (targetId: number) => api.deletionOperations.retrySeasonReassignment(id, targetId),
+    onSuccess: (data) => qc.setQueryData(queryKey, data),
+  });
 
   if (query.isLoading) {
     return (
@@ -108,6 +117,12 @@ function DeletionOperationPage() {
   const hasQueuedTargets = operation.targets.some((target) => target.status === "queued");
   const manuallyDismissed = operation.targets.some((target) =>
     target.warning?.startsWith("Dismissed after manual intervention")
+  );
+  const removedUnmonitoredTarget = operation.targets.find((target) =>
+    target.seasonRemovedUnmonitoredAvailable === true
+  );
+  const reassignmentRetryTarget = operation.targets.find((target) =>
+    target.seasonReassignmentRetryAvailable === true
   );
 
   return (
@@ -236,6 +251,33 @@ function DeletionOperationPage() {
                 Recheck
               </button>
             )}
+            {removedUnmonitoredTarget && !activeDeletionStatuses.has(operation.status) && (
+              <button
+                type="button"
+                className="btn btn-warning btn-sm"
+                disabled={acceptRemovedUnmonitored.isPending}
+                onClick={() => {
+                  if (
+                    globalThis.confirm(
+                      "Accept the removed Sonarr file and leave this episode permanently unmonitored? Sonarr will not download or upgrade it until you monitor it again.",
+                    )
+                  ) acceptRemovedUnmonitored.mutate(removedUnmonitoredTarget.id);
+                }}
+              >
+                Accept removed and unmonitored
+              </button>
+            )}
+            {reassignmentRetryTarget && !activeDeletionStatuses.has(operation.status) && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={retrySeasonReassignment.isPending}
+                onClick={() => retrySeasonReassignment.mutate(reassignmentRetryTarget.id)}
+              >
+                <RotateCcw className="size-4" />
+                Retry Sonarr reassignment
+              </button>
+            )}
             {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) &&
               !hasQueuedTargets && (
               <button
@@ -257,6 +299,16 @@ function DeletionOperationPage() {
           </div>
           {retry.isError && <p className="text-sm text-error" role="alert">{retry.error.message}
           </p>}
+          {acceptRemovedUnmonitored.isError && (
+            <p className="text-sm text-error" role="alert">
+              {acceptRemovedUnmonitored.error.message}
+            </p>
+          )}
+          {retrySeasonReassignment.isError && (
+            <p className="text-sm text-error" role="alert">
+              {retrySeasonReassignment.error.message}
+            </p>
+          )}
         </div>
       </section>
 

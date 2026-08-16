@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { qbittorrentInstances } from '../../db/schema.ts';
+import { qbittorrentInstances, qbittorrentPathMappings } from '../../db/schema.ts';
 import {
   normalizeQbittorrentUrl,
   QbittorrentClient,
@@ -21,15 +21,29 @@ export async function qbittorrentConfigured(serverId: number): Promise<boolean> 
 }
 
 export async function getQbittorrentTargets(serverId: number): Promise<DownloadClientTarget[]> {
+  const allMappings = await db.select().from(qbittorrentPathMappings).where(
+    eq(qbittorrentPathMappings.serverId, serverId),
+  );
+  const mappingFor = (instanceKey: string) =>
+    allMappings.filter((mapping) => mapping.instanceKey === instanceKey).map((mapping) => ({
+      id: mapping.id,
+      qbittorrentPath: mapping.qbittorrentPath,
+      localPath: mapping.localPath,
+      caseSensitive: mapping.caseSensitive,
+      revision: mapping.revision,
+    })).sort((left, right) => left.id - right.id);
   const envUrl = Deno.env.get('QBITTORRENT_URL')?.trim();
   if (envUrl) {
     const normalized = normalizeQbittorrentUrl(envUrl);
+    const instanceKey = `env:${normalized}`;
+    const pathMappings = mappingFor(instanceKey);
     return [{
       provider: 'qbittorrent',
-      instanceKey: `env:${normalized}`,
-      configurationIdentity: `env:${normalized}`,
+      instanceKey,
+      configurationIdentity: `env:${normalized}:${JSON.stringify(pathMappings)}`,
       instanceId: null,
       instanceName: 'qBittorrent (environment)',
+      pathMappings,
       client: new QbittorrentDownloadClient(
         new QbittorrentClient(
           normalized,
@@ -43,14 +57,21 @@ export async function getQbittorrentTargets(serverId: number): Promise<DownloadC
   const rows = await db.select().from(qbittorrentInstances).where(
     eq(qbittorrentInstances.serverId, serverId),
   );
-  return rows.map((row) => ({
-    provider: 'qbittorrent',
-    instanceKey: `db:${row.id}`,
-    configurationIdentity: `db:${row.id}:${row.updatedAt}:${normalizeQbittorrentUrl(row.url)}`,
-    instanceId: row.id,
-    instanceName: row.name,
-    client: new QbittorrentDownloadClient(
-      new QbittorrentClient(row.url, row.username, row.password),
-    ),
-  }));
+  return rows.map((row) => {
+    const instanceKey = `db:${row.id}`;
+    const pathMappings = mappingFor(instanceKey);
+    return {
+      provider: 'qbittorrent',
+      instanceKey,
+      configurationIdentity: `db:${row.id}:${row.updatedAt}:${normalizeQbittorrentUrl(row.url)}:${
+        JSON.stringify(pathMappings)
+      }`,
+      instanceId: row.id,
+      instanceName: row.name,
+      pathMappings,
+      client: new QbittorrentDownloadClient(
+        new QbittorrentClient(row.url, row.username, row.password),
+      ),
+    };
+  });
 }

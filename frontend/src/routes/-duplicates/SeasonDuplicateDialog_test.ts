@@ -8,6 +8,7 @@ import {
   MAX_SEASON_CLEANUP_EPISODES,
   refreshAuthorizedSeasonDeletionPreview,
   refreshExpiredSeasonDeletionPreview,
+  seasonBreakGlassVisible,
   seasonChoiceWithoutSonarr,
   seasonDeletionAuthorizationKey,
   seasonDeletionConfirmationDisabled,
@@ -21,7 +22,12 @@ import {
   seasonSonarrVisible,
 } from "./SeasonDuplicateDialog.tsx";
 import { ApiError } from "../../lib/api.ts";
-import type { DuplicateEpisodeGroup, MediaVersion, SeasonVersionProfile } from "../../lib/api.ts";
+import type {
+  DuplicateEpisodeGroup,
+  MediaVersion,
+  SeasonDeletionPreviewResponse,
+  SeasonVersionProfile,
+} from "../../lib/api.ts";
 
 function version(mediaId: number): MediaVersion {
   return {
@@ -94,6 +100,23 @@ Deno.test("season lane match basis uses explicit evidence explanations", () => {
   assertEquals(seasonLaneMatchBasisLabel("technical-only"), "Technical match");
   assertEquals(seasonLaneMatchBasisLabel("mixed"), "Mixed evidence");
   assertEquals(seasonLaneMatchBasisLabel("filename-family"), "Filename matched");
+});
+
+Deno.test("selected break-glass remains visible after its authoritative preview rebuild", () => {
+  assertEquals(
+    seasonBreakGlassVisible({
+      breakGlassAvailable: false,
+      removedAndUnmonitoredCount: 1,
+    } as SeasonDeletionPreviewResponse, "remove_and_unmonitor"),
+    true,
+  );
+  assertEquals(
+    seasonBreakGlassVisible({
+      breakGlassAvailable: false,
+      removedAndUnmonitoredCount: 0,
+    } as SeasonDeletionPreviewResponse, "none"),
+    false,
+  );
 });
 
 Deno.test("lane paths group by normalized directory and sort by episode", () => {
@@ -327,20 +350,20 @@ Deno.test("season Sonarr destination requires an actionable aligned version", ()
 Deno.test("season destinations are independently authorized for only the exact selection", () => {
   const authorized = {
     key: "selection-a",
-    coordinateSonarr: true,
+    sonarrMode: "adopt_retained" as const,
     cleanupDownloads: true,
   };
   assertEquals(seasonDestinationChoice("selection-a", authorized), {
-    coordinateSonarr: true,
+    sonarrMode: "adopt_retained",
     cleanupDownloads: true,
   });
   assertEquals(seasonDestinationChoice("selection-b", authorized), {
-    coordinateSonarr: false,
+    sonarrMode: "none",
     cleanupDownloads: false,
   });
   assertEquals(
-    seasonDestinationChoice("selection-a", { ...authorized, coordinateSonarr: false }),
-    { coordinateSonarr: false, cleanupDownloads: true },
+    seasonDestinationChoice("selection-a", { ...authorized, sonarrMode: "none" }),
+    { sonarrMode: "none", cleanupDownloads: true },
   );
 });
 
@@ -348,24 +371,24 @@ Deno.test("losing Sonarr availability does not clear verified qBittorrent cleanu
   assertEquals(
     seasonChoiceWithoutSonarr("selection-a", {
       key: "selection-a",
-      coordinateSonarr: true,
+      sonarrMode: "adopt_retained",
       cleanupDownloads: true,
     }),
     {
       key: "selection-a",
-      coordinateSonarr: false,
+      sonarrMode: "none",
       cleanupDownloads: true,
     },
   );
   assertEquals(
     seasonChoiceWithoutSonarr("selection-b", {
       key: "selection-a",
-      coordinateSonarr: true,
+      sonarrMode: "adopt_retained",
       cleanupDownloads: true,
     }),
     {
       key: "selection-b",
-      coordinateSonarr: false,
+      sonarrMode: "none",
       cleanupDownloads: false,
     },
   );

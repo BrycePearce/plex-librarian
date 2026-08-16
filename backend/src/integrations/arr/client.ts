@@ -48,7 +48,7 @@ export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export const RADARR_CATALOG_MAX_RECORDS = 50_000;
 export const RADARR_FILESYSTEM_MAX_BYTES = 2 * 1024 * 1024;
 export const RADARR_FILESYSTEM_MAX_ENTRIES = 2_000;
-export const SONARR_SEASON_COORDINATION_MIN_VERSION = '4.0.0.748';
+export const SONARR_SEASON_COORDINATION_MIN_VERSION = '4.0.19.2979';
 export const SONARR_SERIES_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 export const SONARR_SERIES_SNAPSHOT_MAX_RECORDS = 50_000;
 export const SONARR_ACTIVITY_MAX_RECORDS = 1_000;
@@ -172,6 +172,30 @@ const SONARR_EPISODE_FILE_OWNER_MAX_RECORDS = 500;
 
 export interface SonarrManualImportCandidate {
   path: string;
+  size: number;
+  seriesId: number;
+  seasonNumber: number;
+  episodeIds: number[];
+  quality: {
+    quality: { id: number; name: string; source: string; resolution: number };
+    revision: { version: number; real: number; isRepack: boolean };
+  };
+  languages: Array<{ id: number; name: string }>;
+  releaseGroup: string;
+  indexerFlags: number;
+  releaseType: string;
+  rejectionReasons: string[];
+}
+
+export interface SonarrCommandEvidence {
+  id: number;
+  name: string;
+  status: string;
+}
+
+export interface SonarrUntrackedImportCandidate {
+  path: string;
+  size: number;
   episodeIds: number[];
   rejectionReasons: string[];
 }
@@ -218,6 +242,11 @@ function versionAtLeast(actual: string, minimum: string): boolean {
     if (difference !== 0) return difference > 0;
   }
   return true;
+}
+
+export function supportedSonarrSeasonMutationVersion(actual: string): boolean {
+  const major = /^(\d+)\./.exec(actual.trim());
+  return major?.[1] === '4' && versionAtLeast(actual, SONARR_SEASON_COORDINATION_MIN_VERSION);
 }
 
 function stableJson(value: unknown): string {
@@ -325,13 +354,23 @@ export class ArrClient {
     return text ? (JSON.parse(text) as T) : (undefined as T);
   }
 
-  private async boundedRequest<T>(path: string, maxBytes: number, description: string): Promise<T> {
+  private async boundedRequest<T>(
+    path: string,
+    maxBytes: number,
+    description: string,
+    init?: RequestInit,
+  ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        headers: { Accept: 'application/json', 'X-Api-Key': this.apiKey },
+        ...init,
+        headers: {
+          Accept: 'application/json',
+          'X-Api-Key': this.apiKey,
+          ...init?.headers,
+        },
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -563,8 +602,7 @@ export class ArrClient {
     return { id: mediaId, path };
   }
 
-  async fileVisibility(path: string): Promise<'file' | 'folder'> {
-    if (this.type !== 'radarr') throw new ArrApiError('File visibility checks require Radarr');
+  async fileVisibility(path: string): Promise<'file' | 'folder' | 'missing'> {
     const result = await this.request<{ type?: string }>(
       `/filesystem/type?path=${encodeURIComponent(path)}`,
     );
@@ -572,11 +610,17 @@ export class ArrClient {
       !result ||
       typeof result !== 'object' ||
       Array.isArray(result) ||
-      (result.type !== 'file' && result.type !== 'folder')
+      !['file', 'folder', 'missing', 'none', 'unknown'].includes(result.type ?? '')
     ) {
-      throw new ArrApiError('Radarr returned an invalid file visibility response');
+      throw new ArrApiError(
+        `${
+          this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+        } returned an invalid file visibility response`,
+      );
     }
-    return result.type;
+    const type = result.type!;
+    if (type === 'missing' || type === 'none' || type === 'unknown') return 'missing';
+    return type === 'file' ? 'file' : 'folder';
   }
 
   async mediaFiles(mediaId: number): Promise<ArrManagedFile[] | null> {
@@ -731,14 +775,14 @@ export class ArrClient {
         reason: 'The configured service did not identify itself as Sonarr',
       };
     }
-    if (!version || !versionAtLeast(version, SONARR_SEASON_COORDINATION_MIN_VERSION)) {
+    if (!version || !supportedSonarrSeasonMutationVersion(version)) {
       return {
         available: false,
         version,
         minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION,
         reason: version
-          ? `Sonarr ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer is required; this instance reports ${version}`
-          : `Sonarr version could not be verified; ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer is required`,
+          ? `Sonarr ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer within major version 4 is required; this instance reports ${version}`
+          : `Sonarr version could not be verified; ${SONARR_SEASON_COORDINATION_MIN_VERSION} or newer within major version 4 is required`,
       };
     }
     return { available: true, version, minimumVersion: SONARR_SEASON_COORDINATION_MIN_VERSION };
@@ -879,11 +923,16 @@ export class ArrClient {
       indexerFlags: 0,
       releaseType: 'unknown',
     }));
-    const result = await this.request<unknown>('/manualimport', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const result = await this.boundedRequest<unknown>(
+      '/manualimport',
+      SONARR_SERIES_SNAPSHOT_MAX_BYTES,
+      'manual-import preflight response',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
     if (!Array.isArray(result) || result.length !== candidates.length) {
       throw new ArrApiError('Sonarr returned an unsupported manual-import preflight response');
     }
@@ -893,28 +942,228 @@ export class ArrClient {
       }
       const value = raw as Record<string, unknown>;
       const path = typeof value.path === 'string' ? value.path.trim() : '';
+      const size = Number(value.size);
+      const series =
+        value.series && typeof value.series === 'object' && !Array.isArray(value.series)
+          ? value.series as Record<string, unknown>
+          : {};
+      const seriesId = Number(value.seriesId ?? series.id);
+      const seasonNumber = Number(value.seasonNumber);
       const episodes = Array.isArray(value.episodes) ? value.episodes : [];
       const episodeIds = episodes.map((episode) =>
         Number(
           episode && typeof episode === 'object' ? (episode as Record<string, unknown>).id : NaN,
         )
       );
-      const rejections = Array.isArray(value.rejections) ? value.rejections : [];
-      const rejectionReasons = rejections.map((rejection) =>
-        String(
-          rejection && typeof rejection === 'object'
-            ? (rejection as Record<string, unknown>).reason ?? ''
-            : '',
-        )
-      ).filter(Boolean);
+      if (!Array.isArray(value.rejections)) {
+        throw new ArrApiError('Sonarr returned malformed manual-import rejection evidence');
+      }
+      const rejectionReasons = value.rejections.map((rejection) => {
+        if (!rejection || typeof rejection !== 'object' || Array.isArray(rejection)) {
+          throw new ArrApiError('Sonarr returned malformed manual-import rejection evidence');
+        }
+        const reason = (rejection as Record<string, unknown>).reason;
+        if (typeof reason !== 'string' || !reason.trim()) {
+          throw new ArrApiError('Sonarr returned malformed manual-import rejection evidence');
+        }
+        return reason.trim();
+      });
+      const quality = value.quality && typeof value.quality === 'object' &&
+          !Array.isArray(value.quality)
+        ? value.quality as Record<string, unknown>
+        : null;
+      const qualityValue = quality?.quality && typeof quality.quality === 'object' &&
+          !Array.isArray(quality.quality)
+        ? quality.quality as Record<string, unknown>
+        : null;
+      const revision = quality?.revision && typeof quality.revision === 'object' &&
+          !Array.isArray(quality.revision)
+        ? quality.revision as Record<string, unknown>
+        : null;
+      const languages = Array.isArray(value.languages)
+        ? value.languages.map((language) => {
+          const record = language && typeof language === 'object' && !Array.isArray(language)
+            ? language as Record<string, unknown>
+            : {};
+          return { id: Number(record.id), name: String(record.name ?? '').trim() };
+        })
+        : [];
+      const parsedQuality = qualityValue && revision
+        ? {
+          quality: {
+            id: Number(qualityValue.id),
+            name: String(qualityValue.name ?? '').trim(),
+            source: String(qualityValue.source ?? '').trim(),
+            resolution: Number(qualityValue.resolution),
+          },
+          revision: {
+            version: Number(revision.version),
+            real: Number(revision.real),
+            isRepack: revision.isRepack === true,
+          },
+        }
+        : null;
+      const releaseGroup = String(value.releaseGroup ?? '').trim();
+      const indexerFlags = Number(value.indexerFlags);
+      const releaseType = String(value.releaseType ?? '').trim();
       if (
         absolutePathComparison(path) !== absolutePathComparison(candidates[index]!.path) ||
-        episodeIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+        !Number.isSafeInteger(size) || size <= 0 || seriesId !== candidates[index]!.seriesId ||
+        seasonNumber !== candidates[index]!.seasonNumber ||
+        episodeIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        new Set(episodeIds).size !== episodeIds.length ||
+        !parsedQuality || !Number.isSafeInteger(parsedQuality.quality.id) ||
+        !parsedQuality.quality.name || !parsedQuality.quality.source ||
+        !Number.isSafeInteger(parsedQuality.quality.resolution) ||
+        !Number.isSafeInteger(parsedQuality.revision.version) ||
+        !Number.isSafeInteger(parsedQuality.revision.real) || languages.length === 0 ||
+        languages.some((language) =>
+          !Number.isSafeInteger(language.id) || language.id < 0 || !language.name
+        ) || !Number.isSafeInteger(indexerFlags) || indexerFlags < 0 || !releaseType
       ) {
         throw new ArrApiError('Sonarr changed or malformed manual-import preflight identity');
       }
-      return { path, episodeIds: [...new Set(episodeIds)].sort((a, b) => a - b), rejectionReasons };
+      return {
+        path,
+        size,
+        seriesId,
+        seasonNumber,
+        episodeIds: [...new Set(episodeIds)].sort((a, b) => a - b),
+        quality: parsedQuality,
+        languages,
+        releaseGroup,
+        indexerFlags,
+        releaseType,
+        rejectionReasons,
+      };
     });
+  }
+
+  async sonarrManualImport(candidate: SonarrManualImportCandidate): Promise<SonarrCommandEvidence> {
+    if (this.type !== 'sonarr' || candidate.rejectionReasons.length > 0) {
+      throw new ArrApiError('Only a verified Sonarr manual-import candidate may be submitted');
+    }
+    const result = await this.request<Record<string, unknown>>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'ManualImport',
+        files: [{
+          path: candidate.path,
+          downloadId: '',
+          seriesId: candidate.seriesId,
+          seasonNumber: candidate.seasonNumber,
+          episodeIds: candidate.episodeIds,
+          quality: candidate.quality,
+          languages: candidate.languages,
+          releaseGroup: candidate.releaseGroup,
+          indexerFlags: candidate.indexerFlags,
+          releaseType: candidate.releaseType,
+        }],
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return this.parseSonarrCommand(result, 'ManualImport');
+  }
+
+  async sonarrManualImportInventory(
+    seriesId: number,
+    seriesPath: string,
+  ): Promise<SonarrUntrackedImportCandidate[]> {
+    if (
+      this.type !== 'sonarr' || !Number.isSafeInteger(seriesId) || seriesId <= 0 ||
+      !absolutePathComparison(seriesPath)
+    ) throw new ArrApiError('Exact Sonarr series inventory identity is required');
+    const result = await this.boundedRequest<unknown>(
+      `/manualimport?folder=${
+        encodeURIComponent(seriesPath)
+      }&filterExistingFiles=true&seriesId=${seriesId}`,
+      SONARR_SERIES_SNAPSHOT_MAX_BYTES,
+      'manual-import inventory',
+    );
+    if (!Array.isArray(result) || result.length > SONARR_MANUAL_IMPORT_MAX_RECORDS) {
+      throw new ArrApiError('Sonarr returned an unsupported or oversized manual-import inventory');
+    }
+    const seen = new Set<string>();
+    return result.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new ArrApiError('Sonarr returned a malformed manual-import inventory record');
+      }
+      const value = raw as Record<string, unknown>;
+      const path = String(value.path ?? '').trim();
+      const normalized = absolutePathComparison(path);
+      const size = Number(value.size);
+      const actualSeriesId = Number(
+        value.seriesId ??
+          (value.series && typeof value.series === 'object'
+            ? (value.series as Record<string, unknown>).id
+            : NaN),
+      );
+      const episodeIds = (Array.isArray(value.episodes) ? value.episodes : []).map((episode) =>
+        Number(
+          episode && typeof episode === 'object' ? (episode as Record<string, unknown>).id : NaN,
+        )
+      );
+      if (!Array.isArray(value.rejections)) {
+        throw new ArrApiError(
+          'Sonarr returned malformed manual-import inventory rejection evidence',
+        );
+      }
+      const rejectionReasons = value.rejections.map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new ArrApiError(
+            'Sonarr returned malformed manual-import inventory rejection evidence',
+          );
+        }
+        const reason = (item as Record<string, unknown>).reason;
+        if (typeof reason !== 'string' || !reason.trim()) {
+          throw new ArrApiError(
+            'Sonarr returned malformed manual-import inventory rejection evidence',
+          );
+        }
+        return reason.trim();
+      });
+      if (
+        !normalized || seen.has(normalized) || !Number.isSafeInteger(size) || size <= 0 ||
+        actualSeriesId !== seriesId || episodeIds.length === 0 ||
+        episodeIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        new Set(episodeIds).size !== episodeIds.length
+      ) throw new ArrApiError('Sonarr returned conflicting manual-import inventory identity');
+      seen.add(normalized);
+      return {
+        path,
+        size,
+        episodeIds: [...new Set(episodeIds)].sort((a, b) => a - b),
+        rejectionReasons,
+      };
+    });
+  }
+
+  async sonarrCommand(commandId: number): Promise<SonarrCommandEvidence | null> {
+    if (this.type !== 'sonarr' || !Number.isSafeInteger(commandId) || commandId <= 0) {
+      throw new ArrApiError('A positive Sonarr command ID is required');
+    }
+    try {
+      return this.parseSonarrCommand(
+        await this.request<Record<string, unknown>>(`/command/${commandId}`),
+      );
+    } catch (error) {
+      if (error instanceof ArrApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  private parseSonarrCommand(
+    value: Record<string, unknown>,
+    expectedName?: string,
+  ): SonarrCommandEvidence {
+    const id = Number(value.id);
+    const name = String(value.name ?? value.commandName ?? '').trim();
+    const status = String(value.status ?? '').trim().toLowerCase();
+    if (
+      !Number.isSafeInteger(id) || id <= 0 || !name || !status ||
+      (expectedName !== undefined && name.toLowerCase() !== expectedName.toLowerCase())
+    ) throw new ArrApiError('Sonarr returned malformed command evidence');
+    return { id, name, status };
   }
 
   async sonarrSeriesActivity(
@@ -1075,6 +1324,18 @@ export class ArrClient {
       body: JSON.stringify(body),
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  async sonarrRescanSeries(seriesId: number): Promise<SonarrCommandEvidence> {
+    if (this.type !== 'sonarr' || !Number.isSafeInteger(seriesId) || seriesId <= 0) {
+      throw new ArrApiError('A positive Sonarr series ID is required');
+    }
+    const result = await this.request<Record<string, unknown>>('/command', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'RescanSeries', seriesId }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return this.parseSonarrCommand(result, 'RescanSeries');
   }
 
   async monitorTarget(

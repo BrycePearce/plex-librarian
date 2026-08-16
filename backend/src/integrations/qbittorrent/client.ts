@@ -15,11 +15,22 @@ export interface QbittorrentTorrent {
   filesTruncated: boolean;
   /** Complete manifest used internally for path ownership checks. */
   manifestFiles: Array<{ path: string; size: number | null }>;
+  manifestByteSize: number;
+}
+
+export interface QbittorrentDiscoverySummary {
+  hash: string;
+  contentPath: string;
+  savePath: string;
+  size: number;
+  fileCount: number;
 }
 
 const PUBLIC_FILE_LIMIT = 100;
 const MANIFEST_MAX_BYTES = 8 * 1024 * 1024;
 const MANIFEST_MAX_RECORDS = 10_000;
+export const QBITTORRENT_DISCOVERY_MAX_JOBS = 500;
+const DISCOVERY_MAX_BYTES = 4 * 1024 * 1024;
 
 export class QbittorrentApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -248,7 +259,43 @@ export class QbittorrentClient {
       files: manifestFiles.slice(0, PUBLIC_FILE_LIMIT),
       filesTruncated: files.length > PUBLIC_FILE_LIMIT,
       manifestFiles,
+      manifestByteSize: new TextEncoder().encode(JSON.stringify(files)).byteLength,
     };
+  }
+
+  async discoverySummaries(): Promise<QbittorrentDiscoverySummary[]> {
+    const records = await this.request<Array<Record<string, unknown>>>(
+      `/torrents/info?limit=${QBITTORRENT_DISCOVERY_MAX_JOBS + 1}`,
+      undefined,
+      'json',
+      DISCOVERY_MAX_BYTES,
+    );
+    if (!Array.isArray(records) || records.length > QBITTORRENT_DISCOVERY_MAX_JOBS) {
+      throw new QbittorrentApiError('qBittorrent direct discovery is truncated');
+    }
+    const summaries = records.map((record) => ({
+      hash: String(record.hash ?? '').trim().toLowerCase(),
+      contentPath: String(record.content_path ?? '').trim(),
+      savePath: String(record.save_path ?? '').trim(),
+      size: Number(record.size ?? record.total_size),
+      fileCount: Number(record.num_files),
+    })).sort((left, right) => left.hash.localeCompare(right.hash));
+    if (
+      summaries.some((summary) =>
+        !/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(summary.hash) ||
+        !normalizeQbittorrentAbsolute(summary.contentPath) ||
+        !normalizeQbittorrentAbsolute(summary.savePath) ||
+        !Number.isSafeInteger(summary.size) || summary.size <= 0 ||
+        !Number.isSafeInteger(summary.fileCount) || summary.fileCount <= 0
+      ) || new Set(summaries.map((summary) => summary.hash)).size !== summaries.length
+    ) {
+      throw new QbittorrentApiError('qBittorrent returned malformed direct-discovery summaries');
+    }
+    return summaries;
+  }
+
+  async discoveryHashes(): Promise<string[]> {
+    return (await this.discoverySummaries()).map((summary) => summary.hash);
   }
 
   async deleteTorrent(hash: string): Promise<void> {
@@ -263,4 +310,11 @@ export class QbittorrentClient {
       throw new QbittorrentApiError('qBittorrent still reports the torrent after deletion');
     }
   }
+}
+
+function normalizeQbittorrentAbsolute(path: string): boolean {
+  const value = path.trim();
+  return value.startsWith('/') && !value.includes('\\') &&
+      !value.split('/').some((segment) => segment === '..') ||
+    /^[A-Za-z]:[\\/]/.test(value) && !value.split(/[\\/]/).some((segment) => segment === '..');
 }

@@ -25,7 +25,6 @@ import {
   validateDeletionTarget,
   validateLiveDeletionIdentity,
 } from '../core/validation.ts';
-
 const ARR_CONVERGENCE_MAX_ATTEMPTS = 15;
 const ARR_CONVERGENCE_POLL_INTERVAL_MS = 1_000;
 
@@ -43,12 +42,31 @@ export function persistedArrOwnershipMap(
 
 export function persistedRetainedMediaId(snapshot: DurableTargetSnapshot): number | null {
   if (snapshot.radarrRemovalFallback) return snapshot.radarrRemovalFallback.retainedMediaId;
+  if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') return null;
   const retained = new Set(
     (snapshot.arrReassignments ?? []).map((entry) => entry.retainedMediaId),
   );
   if (retained.size === 0) return null;
   if (retained.size !== 1) throw new Error('The persisted Arr reassignment target is inconsistent');
   return [...retained][0]!;
+}
+
+export async function assertAcceptedSonarrMutationVersion(
+  snapshot: DurableTargetSnapshot,
+  target: ArrDeleteTarget,
+): Promise<void> {
+  const expected = snapshot.seasonSonarrVersion;
+  if (target.instanceType !== 'sonarr' || typeof expected !== 'string' || !expected) {
+    throw new Error('The accepted Sonarr mutation version is unavailable');
+  }
+  const capabilities = await target.client.sonarrSeasonCoordinationCapabilities();
+  if (!capabilities.available || capabilities.version !== expected) {
+    throw new Error(
+      `The accepted Sonarr version changed or is outside the supported v4 baseline (expected ${expected}, received ${
+        capabilities.version ?? 'unknown'
+      })`,
+    );
+  }
 }
 
 function currentArrMappingIdentities(
@@ -141,11 +159,31 @@ export function persistArrReassignmentPlan(
       episodeId: entry.episodeId,
       managedFileId: entry.managedFileId,
       managedPath: entry.managedPath,
+      managedFileSize: entry.managedFileSize,
       retainedMediaId: retainMediaId,
       retainedPath,
       retainedRecordPath,
       retainedFileSize: entry.candidateFileSizes.get(retainMediaId) ?? null,
       originalMonitored: entry.monitored,
+      ...(entry.target.instanceType === 'sonarr'
+        ? {
+          sonarrTransition: {
+            candidateAllowlist: [...entry.candidatePaths.entries()].flatMap(([mediaId, path]) => {
+              if (
+                snapshot.seasonSafeCandidateMediaIds &&
+                !snapshot.seasonSafeCandidateMediaIds.includes(mediaId)
+              ) return [];
+              const size = entry.candidateFileSizes.get(mediaId);
+              return Number.isSafeInteger(size) && size! > 0
+                ? [{ mediaId, path, size: size! }]
+                : [];
+            }).sort((left, right) => left.mediaId - right.mediaId),
+            ...(snapshot.seasonPreDeletionPreflight
+              ? { preDeletionPreflight: snapshot.seasonPreDeletionPreflight }
+              : {}),
+          },
+        }
+        : {}),
       ...(entry.radarrPathPlan ? { radarrPathPlan: entry.radarrPathPlan } : {}),
     } satisfies PersistedArrReassignment;
   }).sort((left, right) => left.instanceId - right.instanceId);
@@ -158,7 +196,7 @@ export function persistArrReassignmentPlan(
   const expectedSnapshot = JSON.stringify(snapshot);
   const updated = withTransaction((client) =>
     client.prepare(
-      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'running' AND snapshot = ?",
+      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running') AND snapshot = ?",
     ).run(
       JSON.stringify(persistedSnapshot),
       Math.floor(Date.now() / 1000),
@@ -233,6 +271,85 @@ export async function revalidateArrReassignment(
     client.metadataIdentity(snapshot.ratingKey),
   ]);
   if (!live) throw new Error('The retained Plex item disappeared during Arr reassignment');
+  const persisted = snapshot.arrReassignments?.find((entry) => entry.instanceId === instanceId);
+  if (
+    snapshot.seasonCleanup === true && persisted?.instanceType === 'sonarr' &&
+    persisted.sonarrTransition?.oldFileRemovalConfirmedAt !== undefined &&
+    persisted.episodeId !== null
+  ) {
+    assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
+    const sonarr = arrTargets.find((entry) =>
+      entry.instanceType === 'sonarr' && entry.instanceId === instanceId
+    );
+    if (!sonarr) throw new Error('The accepted Sonarr instance is unavailable');
+    await assertAcceptedSonarrMutationVersion(snapshot, sonarr);
+    if (snapshot.tvdbId === null) throw new Error('The Sonarr series identity is incomplete');
+    const [series, state] = await Promise.all([
+      sonarr.client.lookup(snapshot.tvdbId),
+      sonarr.client.sonarrSeriesSnapshot(persisted.recordId),
+    ]);
+    if (!series || series.id !== persisted.recordId || series.path !== persisted.recordPath) {
+      throw new Error('The accepted Sonarr series identity changed');
+    }
+    const episode = state.episodes.find((entry) => entry.id === persisted.episodeId);
+    if (
+      !episode || episode.seriesId !== persisted.recordId ||
+      episode.seasonNumber !== snapshot.seasonIndex ||
+      episode.episodeNumber !== snapshot.episodeIndex
+    ) throw new Error('The accepted Sonarr episode identity changed');
+    const file = episode.episodeFileId === 0
+      ? null
+      : state.files.find((entry) => entry.id === episode.episodeFileId);
+    if (
+      file && (file.episodeIds.length !== 1 || file.episodeIds[0] !== persisted.episodeId)
+    ) throw new Error('Sonarr adopted a shared or malformed EpisodeFile');
+    const adopted = file
+      ? persisted.sonarrTransition.candidateAllowlist.find((candidate) =>
+        sameRemotePath(file.path, candidate.path) && file.size === candidate.size
+      )
+      : undefined;
+    if (file && !adopted) throw new Error('Sonarr adopted an unauthorized EpisodeFile');
+    const liveIds = new Set(live.media.map((entry) => entry.mediaId));
+    if (
+      persisted.sonarrTransition.candidateAllowlist.some((candidate) =>
+        !liveIds.has(candidate.mediaId)
+      )
+    ) throw new Error('An authorized retained Plex version disappeared during reassignment');
+    await validateLiveDeletionIdentity(client, target.targetKind, snapshot, live);
+    if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await client.activeSessions())) {
+      throw new Error('cannot delete a media version during active playback');
+    }
+    return {
+      target: sonarr,
+      recordId: persisted.recordId,
+      recordPath: persisted.recordPath,
+      episodeId: persisted.episodeId,
+      managedFileId: file?.id ?? null,
+      managedFileSize: file?.size ?? null,
+      managedPath: file?.path ?? null,
+      managedMediaId: adopted?.mediaId ?? null,
+      monitored: episode.monitored,
+      candidatePaths: new Map(
+        persisted.sonarrTransition.candidateAllowlist.map((candidate) => [
+          candidate.mediaId,
+          candidate.path,
+        ]),
+      ),
+      candidateRecordPaths: new Map(
+        persisted.sonarrTransition.candidateAllowlist.map((candidate) => [
+          candidate.mediaId,
+          persisted.recordPath,
+        ]),
+      ),
+      candidateFileSizes: new Map(
+        persisted.sonarrTransition.candidateAllowlist.map((candidate) => [
+          candidate.mediaId,
+          candidate.size,
+        ]),
+      ),
+      alreadyReassigned: adopted !== undefined,
+    };
+  }
   const plan = await buildVersionDeletionPlan({
     mediaType: target.targetKind === 'movie_version' ? 'movie' : 'episode',
     item: snapshot,
@@ -276,7 +393,11 @@ export async function revalidateArrReassignment(
     live,
     plan.arrReassignCandidateMediaIds,
   );
-  if (bestCandidate !== retainedMediaId) {
+  if (
+    snapshot.seasonSafeCandidateMediaIds === undefined && bestCandidate !== retainedMediaId ||
+    snapshot.seasonSafeCandidateMediaIds !== undefined &&
+      !snapshot.seasonSafeCandidateMediaIds.includes(retainedMediaId)
+  ) {
     throw new Error('The persisted retained version is no longer the best available copy');
   }
   if (mediaRatingKeyIsPlaying(snapshot.ratingKey, await client.activeSessions())) {
@@ -299,7 +420,7 @@ function originalMonitored(entry: PersistedArrReassignment): boolean {
   return entry.originalMonitored;
 }
 
-function oldManagedFileIsPresent(
+export function oldManagedFileIsPresent(
   entry: VersionDeletionPlan['eligibleArrReassignments'][number],
   persisted: PersistedArrReassignment,
 ): boolean {
@@ -307,7 +428,7 @@ function oldManagedFileIsPresent(
     sameRemotePath(entry.managedPath, persisted.managedPath);
 }
 
-function retainedFileIsAdopted(
+export function retainedFileIsAdopted(
   entry: VersionDeletionPlan['eligibleArrReassignments'][number],
   persisted: PersistedArrReassignment,
 ): boolean {
@@ -447,6 +568,9 @@ export async function ensureArrReassignmentProtected(
 ): Promise<VersionDeletionPlan['eligibleArrReassignments'][number]> {
   const original = originalMonitored(persisted);
   let entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
+  if (persisted.instanceType === 'sonarr' && snapshot.seasonCleanup === true) {
+    await assertAcceptedSonarrMutationVersion(snapshot, entry.target);
+  }
   const alreadyAdopted = retainedFileIsAdopted(entry, persisted);
   const outsidePathPlan = persisted.radarrPathPlan?.mode !== undefined &&
     persisted.radarrPathPlan.mode !== 'existing_path';
@@ -493,6 +617,46 @@ export async function ensureArrReassignmentProtected(
     );
   }
   return entry;
+}
+
+export async function protectArrReassignmentBeforeDownloadCleanup(
+  target: DeletionWorkTarget,
+  plan: VersionDeletionPlan,
+  snapshot: DurableTargetSnapshot,
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+  retainMediaId: number,
+): Promise<void> {
+  persistArrReassignmentPlan(target.id, snapshot, plan, retainMediaId);
+  await ensureArrMonitoringEvidence(target, snapshot, client);
+  for (const persisted of snapshot.arrReassignments ?? []) {
+    await ensureArrReassignmentProtected(target, snapshot, client, persisted);
+  }
+}
+
+export async function restoreArrReassignmentAfterSafeDownloadFailure(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+): Promise<void> {
+  await ensureArrMonitoringEvidence(target, snapshot, client);
+  for (const persisted of snapshot.arrReassignments ?? []) {
+    const original = originalMonitored(persisted);
+    let entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
+    if (!oldManagedFileIsPresent(entry, persisted)) {
+      throw new DeletionConvergenceError(
+        `${entry.target.instanceName} no longer reports the old managed file; monitoring remains protected`,
+      );
+    }
+    if (entry.monitored !== original) {
+      await setExactMonitoring(entry, persisted, snapshot, original);
+      entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
+    }
+    if (!oldManagedFileIsPresent(entry, persisted) || entry.monitored !== original) {
+      throw new DeletionConvergenceError(
+        `${entry.target.instanceName} did not restore the original monitored state after download cleanup stopped safely`,
+      );
+    }
+  }
 }
 
 export async function restoreArrReassignmentMonitoring(
@@ -581,89 +745,6 @@ export async function radarrReassignmentAlreadyAdopted(
     ) return false;
   }
   return (snapshot.arrReassignments?.length ?? 0) > 0;
-}
-
-export async function waitForArrManagedPath(
-  target: DeletionWorkTarget,
-  plan: VersionDeletionPlan,
-  snapshot: DurableTargetSnapshot,
-  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
-  retainMediaId: number,
-): Promise<void> {
-  persistArrReassignmentPlan(target.id, snapshot, plan, retainMediaId);
-  await ensureArrMonitoringEvidence(target, snapshot, client);
-  for (const persisted of snapshot.arrReassignments!) {
-    if (persisted.instanceType !== 'sonarr') {
-      throw new Error('Radarr reassignment must use the Plex-first coordination path');
-    }
-    let entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
-    const desiredPath = persisted.retainedPath;
-    if (retainedFileIsAdopted(entry, persisted)) {
-      await restoreArrReassignmentMonitoring(target, snapshot, client, persisted);
-      continue;
-    }
-    if (!entry.alreadyReassigned && entry.managedFileId !== null) {
-      entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
-      if (!oldManagedFileIsPresent(entry, persisted)) {
-        throw new Error(`${entry.target.instanceName} changed its managed file before deletion`);
-      }
-      const managedFileId = entry.managedFileId;
-      if (managedFileId === null) {
-        throw new Error(`${entry.target.instanceName} managed file disappeared before deletion`);
-      }
-      try {
-        await entry.target.client.deleteManagedFile(managedFileId);
-      } catch (error) {
-        entry = await revalidateArrReassignment(target, snapshot, client, persisted.instanceId);
-        if (oldManagedFileIsPresent(entry, persisted)) {
-          if (!(error instanceof ArrApiError) || error.status !== 404) throw error;
-        }
-      }
-    }
-    entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
-    if (oldManagedFileIsPresent(entry, persisted)) {
-      throw new DeletionConvergenceError(`${entry.target.instanceName} still reports the old file`);
-    }
-    try {
-      await entry.target.client.rescanMedia(entry.recordId);
-    } catch (error) {
-      if (error instanceof ArrApiError && error.status !== undefined) {
-        throw new ArrApiError(
-          `${error.message}; the episode remains intentionally unmonitored to prevent a replacement download`,
-          error.status,
-        );
-      }
-    }
-
-    let converged = false;
-    for (let attempt = 0; attempt < ARR_CONVERGENCE_MAX_ATTEMPTS; attempt++) {
-      entry = await ensureArrReassignmentProtected(target, snapshot, client, persisted);
-      if (sameRemotePath(entry.managedPath, desiredPath)) {
-        if (entry.managedFileId === null || entry.managedFileId === persisted.managedFileId) {
-          throw new Error(
-            `${entry.target.instanceName} did not create a new managed-file record`,
-          );
-        }
-        if (
-          !Number.isSafeInteger(persisted.retainedFileSize) || persisted.retainedFileSize! <= 0 ||
-          entry.managedFileSize !== persisted.retainedFileSize
-        ) {
-          throw new Error(
-            `${entry.target.instanceName} reported unexpected metadata for the retained file; the episode remains intentionally unmonitored pending safe adoption`,
-          );
-        }
-        converged = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, ARR_CONVERGENCE_POLL_INTERVAL_MS));
-    }
-    if (!converged) {
-      throw new DeletionConvergenceError(
-        `${entry.target.instanceName} did not adopt the retained Plex version; the episode remains intentionally unmonitored to prevent a replacement download`,
-      );
-    }
-    await restoreArrReassignmentMonitoring(target, snapshot, client, persisted);
-  }
 }
 
 export async function waitForRadarrManagedPath(

@@ -366,6 +366,82 @@ Deno.test('execution refuses a hash re-added with a different manifest', async (
   assertEquals(deleted, false);
 });
 
+Deno.test('direct cleanup refuses a changed candidate job inventory before deletion', async () => {
+  let deleted = false;
+  let findJobCalled = false;
+  let discoveryCandidates: unknown = null;
+  const current = {
+    id: hash,
+    name: 'release',
+    state: 'pausedUP',
+    size: 100,
+    uploaded: 0,
+    completedAt: null,
+    ratio: null,
+    seedingTime: 0,
+    contentPath: '/downloads/release/movie.mkv',
+    savePath: '/downloads',
+    trackerHost: null,
+    fileCount: 1,
+    files: [{ path: 'release/movie.mkv', size: 100 }],
+    filesTruncated: false,
+    manifestFiles: [{ path: 'release/movie.mkv', size: 100 }],
+  };
+  const cleanup = {
+    downloadJobs: [{
+      ...current,
+      provider: 'qbittorrent',
+      instanceKey: 'db:1',
+      instanceName: 'qBittorrent',
+      jobId: hash,
+      authorizedSourcePaths: ['/downloads/release/movie.mkv'],
+      directPathEvidence: [],
+      provenance: 'direct_manifest',
+      discoverySummaryFingerprint: 'a'.repeat(64),
+      ownershipSummaryFingerprint: 'b'.repeat(64),
+      manifestFingerprint: 'c'.repeat(64),
+      directDiscoveryCandidates: [{
+        path: '/downloads/release/movie.mkv',
+        caseSensitive: true,
+      }],
+      directPathMappings: [],
+      target: {
+        pathMappings: [],
+        client: {
+          findJob: () => {
+            findJobCalled = true;
+            return Promise.resolve(current);
+          },
+          discoverJobs: (candidates: unknown) => {
+            discoveryCandidates = candidates;
+            return Promise.resolve({
+              jobs: [current],
+              summaryFingerprint: 'd'.repeat(64),
+            });
+          },
+          deleteJob: () => {
+            deleted = true;
+            return Promise.resolve();
+          },
+        },
+      },
+    }],
+    orphanFiles: [],
+  } as unknown as ResolvedCleanupItem;
+
+  await assertRejects(
+    () => executeDownloadedFileCleanup(cleanup, new Set(), new Set()),
+    DownloadedFileCleanupError,
+    'Direct download manifest changed since preview',
+  );
+  assertEquals(findJobCalled, false);
+  assertEquals(discoveryCandidates, [{
+    path: '/downloads/release/movie.mkv',
+    caseSensitive: true,
+  }]);
+  assertEquals(deleted, false);
+});
+
 function arrTarget(historyMovieIds: number[] = [7]) {
   const client = new ArrClient(
     'radarr',

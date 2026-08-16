@@ -6,7 +6,7 @@ import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
 import { InfoTip } from "./InfoTip.tsx";
 
 export interface DeletionDestinationOption {
-  id: "arr" | "arr-path-override" | "cleanup";
+  id: "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
   service?: ServiceIconName;
   label: string;
   info: string;

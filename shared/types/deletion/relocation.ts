@@ -29,6 +29,8 @@ interface DeletionOperationTargetBase {
   error: string | null;
   logicalSize: number | null;
   supersededReason: string | null;
+  seasonRemovedUnmonitoredAvailable?: boolean;
+  seasonReassignmentRetryAvailable?: boolean;
   resolutionState?: 'management_hold';
   radarrPathAdoption?: {
     mode: 'existing_path' | 'adopt_safe_path' | 'adopt_path_with_consent';

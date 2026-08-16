@@ -41,14 +41,19 @@ export interface PersistedPhysicalIdentityEvidence {
 }
 
 function normalizeLocal(input: string): string | null {
-  if (!input.startsWith('/') || input.includes('\\')) return null;
-  const parts = input.split('/').filter((part) => part && part !== '.');
+  const value = input.replaceAll('\\', '/').replace(/\/+$/, '');
+  const drive = /^([A-Za-z]:)\//.exec(value)?.[1];
+  if (!value.startsWith('/') && !drive) return null;
+  const body = drive ? value.slice(drive.length + 1) : value.slice(1);
+  const parts = body.split('/').filter((part) => part && part !== '.');
   if (parts.includes('..')) return null;
-  return `/${parts.join('/')}`;
+  return drive ? `${drive}/${parts.join('/')}` : `/${parts.join('/')}`;
 }
 
 function localWithin(path: string, root: string): boolean {
-  return path === root || path.startsWith(`${root}/`);
+  const candidate = Deno.build.os === 'windows' ? path.toLocaleLowerCase('en-US') : path;
+  const prefix = Deno.build.os === 'windows' ? root.toLocaleLowerCase('en-US') : root;
+  return candidate === prefix || candidate.startsWith(`${prefix}/`);
 }
 
 function remoteWithin(path: string, root: string, caseSensitive: boolean): boolean {
@@ -156,7 +161,7 @@ export function resolvePathNamespace(
   };
 }
 
-async function lstatChain(path: string): Promise<Deno.FileInfo> {
+export async function lstatChain(path: string): Promise<Deno.FileInfo> {
   const windowsDrive = /^([a-zA-Z]:)[\\/]/.exec(path)?.[1];
   const separator = windowsDrive ? '\\' : '/';
   let current = windowsDrive ? `${windowsDrive}\\` : '';

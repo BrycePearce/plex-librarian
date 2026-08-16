@@ -15,6 +15,11 @@ import {
   ManagementHoldConflictError,
   resolveRadarrManagementHold,
 } from './relocation/resolution.ts';
+import {
+  acceptSonarrRemovedAndUnmonitored,
+  retrySonarrSeasonReassignment,
+  SonarrSeasonRecoveryConflictError,
+} from './recovery/sonarrSeason.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -121,6 +126,46 @@ router.post('/:id/resolve', async (c) => {
     return c.json({ resolution, operation: getDeletionOperation(c.req.param('id'), serverId) });
   } catch (error) {
     if (error instanceof ManagementHoldConflictError) {
+      return c.json({ error: error.message }, error.status);
+    }
+    throw error;
+  }
+});
+
+router.post('/:id/targets/:targetId/accept-removed-unmonitored', async (c) => {
+  const serverId = c.get('activeServerId');
+  const body = await c.req.json().catch(() => ({})) as { acknowledge?: unknown };
+  if (body.acknowledge !== true) return c.json({ error: 'acknowledge must be true' }, 400);
+  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
+  try {
+    await acceptSonarrRemovedAndUnmonitored(
+      c.req.param('id'),
+      Number(c.req.param('targetId')),
+      serverId,
+    );
+    wakeDeletionWorker();
+    return c.json(getDeletionOperation(c.req.param('id'), serverId));
+  } catch (error) {
+    if (error instanceof SonarrSeasonRecoveryConflictError) {
+      return c.json({ error: error.message }, error.status);
+    }
+    throw error;
+  }
+});
+
+router.post('/:id/targets/:targetId/retry-sonarr-reassignment', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
+  try {
+    await retrySonarrSeasonReassignment(
+      c.req.param('id'),
+      Number(c.req.param('targetId')),
+      serverId,
+    );
+    wakeDeletionWorker();
+    return c.json(getDeletionOperation(c.req.param('id'), serverId));
+  } catch (error) {
+    if (error instanceof SonarrSeasonRecoveryConflictError) {
       return c.json({ error: error.message }, error.status);
     }
     throw error;

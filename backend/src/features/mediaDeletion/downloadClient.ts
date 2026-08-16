@@ -21,11 +21,66 @@ export interface DownloadJob {
   files: Array<{ path: string; size: number | null }>;
   filesTruncated: boolean;
   manifestFiles: Array<{ path: string; size: number | null }>;
+  /** Approximate serialized manifest bytes retained by the adapter for aggregate budgeting. */
+  manifestByteSize?: number;
+}
+
+export interface DiscoveredDownloadJobs {
+  jobs: DownloadJob[];
+  /** Stable identity of every candidate summary observed around manifest reads. */
+  summaryFingerprint: string;
+}
+
+export interface DownloadDiscoveryCandidate {
+  path: string;
+  caseSensitive: boolean;
 }
 
 export interface DownloadClient {
   findJob(downloadId: string): Promise<DownloadJob | null>;
+  discoverJobs?(
+    candidates: readonly DownloadDiscoveryCandidate[],
+  ): Promise<DiscoveredDownloadJobs>;
   deleteJob(downloadId: string, options: { deleteData: boolean }): Promise<void>;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') {
+    return '{' +
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => JSON.stringify(key) + ':' + stableJson(child))
+        .join(',') +
+      '}';
+  }
+  return JSON.stringify(value);
+}
+
+async function sha256(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(stableJson(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function downloadJobSummaryFingerprint(job: DownloadJob): Promise<string> {
+  return sha256({
+    id: job.id,
+    contentPath: job.contentPath,
+    savePath: job.savePath,
+    size: job.size,
+    fileCount: job.fileCount,
+  });
+}
+
+export function downloadJobManifestFingerprint(job: DownloadJob): Promise<string> {
+  return sha256(
+    [...job.manifestFiles]
+      .map((file) => ({ path: file.path, size: file.size }))
+      .sort((left, right) =>
+        left.path.localeCompare(right.path) || (left.size ?? -1) - (right.size ?? -1)
+      ),
+  );
 }
 
 export interface DownloadClientTarget {
@@ -35,5 +90,12 @@ export interface DownloadClientTarget {
   configurationIdentity: string;
   instanceId: number | null;
   instanceName: string;
+  pathMappings?: Array<{
+    id: number;
+    qbittorrentPath: string;
+    localPath: string;
+    caseSensitive: boolean;
+    revision: number;
+  }>;
   client: DownloadClient;
 }

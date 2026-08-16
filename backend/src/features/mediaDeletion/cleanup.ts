@@ -3,12 +3,21 @@ import type {
   DownloadCleanupPreviewItem,
 } from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
-import type { DownloadClientTarget } from './downloadClient.ts';
+import { and, eq } from 'drizzle-orm';
+import { db } from '../../db/index.ts';
+import { plexPathMappings } from '../../db/schema.ts';
+import {
+  type DownloadClientTarget,
+  type DownloadDiscoveryCandidate,
+  downloadJobManifestFingerprint,
+  downloadJobSummaryFingerprint,
+} from './downloadClient.ts';
 import {
   type AttemptedOrphanFile,
   completedOrphanFileAttempt,
   deleteVerifiedOrphanFile,
   findRetainedSiblingPaths,
+  normalizeRemoteAbsolute,
   type PayloadScanBudget,
   type VerifiedOrphanFile,
   verifyOrphanHardlink,
@@ -19,11 +28,57 @@ import {
   downloadJobOwnsPath,
   downloadPayloadIsExclusivelyOwned,
 } from './ownership.ts';
+import {
+  lstatChain,
+  type PlexNamespaceMappingRecord,
+  resolvePlexToLocal,
+} from './pathNamespace.ts';
+
+export interface DirectPlexPathEvidence {
+  serverId: number;
+  libraryKey: string;
+  plexPath: string;
+  localPath: string;
+  mappingId: number;
+  mappingRevision: number;
+  mappingPlexPath: string;
+  mappingLocalPath: string;
+  mappingCaseSensitive: boolean;
+}
+
+export interface DirectRetainedPathEvidence extends DirectPlexPathEvidence {
+  size: number;
+  device: string;
+  inode: string;
+  canonicalPath: string;
+}
 
 export interface ResolvedDownloadJob extends DownloadCleanupJob {
   target: DownloadClientTarget;
   manifestFiles: Array<{ path: string; size: number | null }>;
   authorizedSourcePaths: string[];
+  directPathEvidence?: Array<{
+    remotePath: string;
+    localPath: string;
+    size: number;
+    device: string;
+    inode: string;
+    canonicalPath: string;
+  }>;
+  directPlexPathEvidence?: DirectPlexPathEvidence[];
+  directRetainedPathEvidence?: DirectRetainedPathEvidence[];
+  provenance?: 'arr_history' | 'direct_manifest';
+  discoverySummaryFingerprint?: string;
+  ownershipSummaryFingerprint?: string;
+  manifestFingerprint?: string;
+  directDiscoveryCandidates?: DownloadDiscoveryCandidate[];
+  directPathMappings?: Array<{
+    id: number;
+    qbittorrentPath: string;
+    localPath: string;
+    caseSensitive: boolean;
+    revision: number;
+  }>;
 }
 
 type CleanupItemWithoutPlexPaths = Omit<
@@ -121,7 +176,23 @@ export function rehydrateResolvedCleanup(
       job.instanceKey !== targetIdentity.instanceKey ||
       job.instanceName !== targetIdentity.instanceName ||
       !Array.isArray(job.authorizedSourcePaths) || job.authorizedSourcePaths.length === 0 ||
-      job.authorizedSourcePaths.some((path) => typeof path !== 'string' || !path)
+      job.authorizedSourcePaths.some((path) => typeof path !== 'string' || !path) ||
+      (job.directPathEvidence !== undefined &&
+        (job.provenance !== 'direct_manifest' ||
+          !Array.isArray(job.directPlexPathEvidence) || job.directPlexPathEvidence.length === 0 ||
+          !Array.isArray(job.directRetainedPathEvidence) ||
+          job.directRetainedPathEvidence.length === 0 ||
+          !/^[a-f0-9]{64}$/.test(job.discoverySummaryFingerprint ?? '') ||
+          !/^[a-f0-9]{64}$/.test(job.ownershipSummaryFingerprint ?? '') ||
+          !/^[a-f0-9]{64}$/.test(job.manifestFingerprint ?? '') ||
+          !Array.isArray(job.directDiscoveryCandidates) ||
+          job.directDiscoveryCandidates.length === 0 ||
+          job.directDiscoveryCandidates.some((candidate) =>
+            !candidate || typeof candidate.path !== 'string' || !candidate.path ||
+            typeof candidate.caseSensitive !== 'boolean' ||
+            normalizeRemoteAbsolute(candidate.path) === null
+          ) ||
+          JSON.stringify(job.directPathMappings) !== JSON.stringify(matches[0]!.pathMappings)))
     ) {
       throw new Error('The durable download cleanup identity is malformed');
     }
@@ -137,6 +208,63 @@ export interface DownloadedFileCleanupResult {
   >;
   deletedOrphanFiles: string[];
   alreadyRemovedOrphanFiles: string[];
+}
+
+async function assertDirectPlexMappingsUnchanged(
+  evidence: readonly DirectPlexPathEvidence[],
+): Promise<void> {
+  if (evidence.length === 0) {
+    throw new Error('Direct Plex path-mapping evidence is missing');
+  }
+  const scopes = new Map<string, { serverId: number; libraryKey: string }>();
+  for (const item of evidence) {
+    if (
+      !Number.isSafeInteger(item.serverId) || item.serverId <= 0 || !item.libraryKey ||
+      !item.plexPath || !item.localPath || !Number.isSafeInteger(item.mappingId) ||
+      item.mappingId <= 0 || !Number.isSafeInteger(item.mappingRevision) ||
+      item.mappingRevision <= 0 || !item.mappingPlexPath || !item.mappingLocalPath ||
+      typeof item.mappingCaseSensitive !== 'boolean'
+    ) throw new Error('Direct Plex path-mapping evidence is malformed');
+    scopes.set(`${item.serverId}:${item.libraryKey}`, {
+      serverId: item.serverId,
+      libraryKey: item.libraryKey,
+    });
+  }
+  const currentByScope = new Map<string, PlexNamespaceMappingRecord[]>();
+  for (const [key, scope] of scopes) {
+    const rows = await db.select().from(plexPathMappings).where(and(
+      eq(plexPathMappings.serverId, scope.serverId),
+      eq(plexPathMappings.libraryKey, scope.libraryKey),
+    ));
+    currentByScope.set(key, rows);
+  }
+  for (const item of evidence) {
+    const rows = currentByScope.get(`${item.serverId}:${item.libraryKey}`) ?? [];
+    const resolved = resolvePlexToLocal(item.plexPath, rows);
+    if (
+      !resolved || resolved.path !== item.localPath || resolved.mapping.id !== item.mappingId ||
+      resolved.mapping.revision !== item.mappingRevision ||
+      resolved.mapping.plexPath !== item.mappingPlexPath ||
+      resolved.mapping.localPath !== item.mappingLocalPath ||
+      resolved.mapping.caseSensitive !== item.mappingCaseSensitive
+    ) throw new Error('Plex path mapping changed since direct cleanup was accepted');
+  }
+}
+
+async function assertDirectRetainedPathsUnchanged(
+  evidence: readonly DirectRetainedPathEvidence[],
+): Promise<void> {
+  for (const item of evidence) {
+    const [info, canonical] = await Promise.all([
+      lstatChain(item.localPath),
+      Deno.realPath(item.localPath),
+    ]);
+    if (
+      !info.isFile || info.isSymlink || info.size !== item.size ||
+      String(info.dev) !== item.device || String(info.ino) !== item.inode ||
+      canonical !== item.canonicalPath
+    ) throw new Error('A retained Plex filesystem identity changed since preview');
+  }
 }
 
 export class DownloadedFileCleanupError extends Error {
@@ -239,6 +367,10 @@ export async function executeDownloadedFileCleanup(
     deletedOrphanFiles: [],
     alreadyRemovedOrphanFiles: [],
   };
+  const directDiscoveries = new Map<
+    DownloadClientTarget['client'],
+    NonNullable<ReturnType<NonNullable<DownloadClientTarget['client']['discoverJobs']>>>
+  >();
   for (const job of cleanup.downloadJobs) {
     const jobKey = `${job.instanceKey}:${job.jobId}`;
     const publicJob = {
@@ -252,8 +384,46 @@ export async function executeDownloadedFileCleanup(
       continue;
     }
     try {
-      const current = await job.target.client.findJob(job.jobId);
+      let current = job.directPathEvidence ? null : await job.target.client.findJob(job.jobId);
       const authorizedPaths = new Set(job.authorizedSourcePaths);
+      if (job.directPathEvidence) {
+        if (!job.target.client.discoverJobs) {
+          throw new Error('Direct download discovery is unavailable during revalidation');
+        }
+        let discovery = directDiscoveries.get(job.target.client);
+        if (!discovery) {
+          discovery = job.target.client.discoverJobs(job.directDiscoveryCandidates ?? []);
+          directDiscoveries.set(job.target.client, discovery);
+        }
+        const liveDiscovery = await discovery;
+        current = liveDiscovery.jobs.find((candidate) => candidate.id === job.jobId) ?? null;
+        for (const evidence of job.directPathEvidence) {
+          const [info, canonical] = await Promise.all([
+            Deno.lstat(evidence.localPath),
+            Deno.realPath(evidence.localPath),
+          ]);
+          if (
+            !info.isFile || info.isSymlink || info.size !== evidence.size ||
+            String(info.dev) !== evidence.device || String(info.ino) !== evidence.inode ||
+            canonical !== evidence.canonicalPath
+          ) {
+            throw new Error('Direct download filesystem ownership changed since preview');
+          }
+        }
+        if (
+          job.provenance !== 'direct_manifest' || !job.discoverySummaryFingerprint ||
+          !job.ownershipSummaryFingerprint || !job.manifestFingerprint || !current ||
+          liveDiscovery.summaryFingerprint !== job.discoverySummaryFingerprint ||
+          await downloadJobSummaryFingerprint(current) !== job.ownershipSummaryFingerprint ||
+          await downloadJobManifestFingerprint(current) !== job.manifestFingerprint ||
+          JSON.stringify(job.directPathMappings) !== JSON.stringify(job.target.pathMappings)
+        ) {
+          throw new Error('Direct download manifest changed since preview');
+        }
+        await assertDirectPlexMappingsUnchanged(job.directPlexPathEvidence ?? []);
+        await assertDirectPlexMappingsUnchanged(job.directRetainedPathEvidence ?? []);
+        await assertDirectRetainedPathsUnchanged(job.directRetainedPathEvidence ?? []);
+      }
       if (
         !current || current.id !== job.jobId ||
         !authorizedPaths.size ||
@@ -588,6 +758,7 @@ export async function resolveDownloadCleanup(
           instanceName: target.instanceName,
           sourcePath,
           authorizedSourcePaths: [...sourcePaths],
+          provenance: 'arr_history' as const,
           target,
         };
         ownedLiveJobs.push(resolvedJob);

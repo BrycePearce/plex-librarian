@@ -46,6 +46,7 @@ import {
 } from '../../mediaDeletion/versionPlanning.ts';
 import {
   assertAcceptedArrMappingsUnchanged,
+  assertAcceptedSonarrMutationVersion,
   assertVersionIsNotPlaying,
   bestLiveReassignmentCandidate,
   directPlexDeletionStillSafe,
@@ -53,9 +54,11 @@ import {
   persistedArrOwnershipMap,
   persistedArrReassignmentMap,
   persistedRetainedMediaId,
+  protectArrReassignmentBeforeDownloadCleanup,
   reconcileArrReassignmentFinalState,
-  waitForArrManagedPath,
+  restoreArrReassignmentAfterSafeDownloadFailure,
 } from '../arr/arrReassignment.ts';
+import { waitForSonarrManagedPath } from '../arr/sonarrReassignmentWorkflow.ts';
 import { advancePhase, confirmReassignedRemoval } from '../core/deletionState.ts';
 import { reconcilePlexTarget } from './plexReconciliation.ts';
 import {
@@ -110,17 +113,417 @@ function assertAcceptedSeasonCoordination(
     throw new Error(plan.arrOwnershipReason ?? 'The accepted Sonarr ownership changed');
   }
   const managed = plan.arrManagedMediaIds.includes(snapshot.mediaId!);
+  const alreadyAdopted = plan.eligibleArrReassignments.some((entry) => entry.alreadyReassigned);
   if (expected === 'plex_only' && managed) {
     throw new Error('Sonarr ownership changed after Plex-only fallback was accepted');
   }
   if (
     expected === 'automatic_adoption' &&
-    (!managed || plan.preview.arrReassignStatus !== 'resolved')
+    (!managed && !alreadyAdopted || plan.preview.arrReassignStatus !== 'resolved')
   ) {
     throw new Error(
       plan.preview.arrReassignReason ?? 'The accepted Sonarr retained-version adoption changed',
     );
   }
+  if (expected === 'removed_and_unmonitored' && !managed) {
+    throw new Error('The accepted Sonarr-managed version is no longer managed as expected');
+  }
+}
+
+function persistBreakGlassProgress(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  field: 'monitoringProtectedAt' | 'fileRemovalAttemptedAt' | 'fileRemovalConfirmedAt',
+): void {
+  const before = JSON.stringify(snapshot);
+  const next = structuredClone(snapshot);
+  if (!next.seasonBreakGlass) throw new Error('Break-glass Sonarr evidence is missing');
+  next.seasonBreakGlass[field] = Math.floor(Date.now() / 1000);
+  const changed = withTransaction((db) =>
+    db.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running') AND snapshot = ?",
+    ).run(JSON.stringify(next), Math.floor(Date.now() / 1000), target.id, before)
+  );
+  if (changed !== 1) {
+    throw new DeletionConvergenceError('Could not persist Sonarr recovery progress');
+  }
+  snapshot.seasonBreakGlass = next.seasonBreakGlass;
+  target.snapshot = JSON.stringify(next);
+}
+
+async function protectBreakGlassEpisode(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<ArrDeleteTarget> {
+  const evidence = snapshot.seasonBreakGlass;
+  if (!evidence) throw new Error('Break-glass Sonarr evidence is missing');
+  const targets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+  assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, targets);
+  const sonarr = targets.find((candidate) =>
+    candidate.instanceType === 'sonarr' && candidate.instanceId === evidence.instanceId
+  );
+  if (!sonarr) throw new Error('The accepted Sonarr instance is unavailable');
+  await assertAcceptedSonarrMutationVersion(snapshot, sonarr);
+  let state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+  let episode = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  const file = episode?.episodeFileId === evidence.episodeFileId
+    ? state.files.find((candidate) => candidate.id === evidence.episodeFileId)
+    : null;
+  const removedAfterAttempt = evidence.fileRemovalAttemptedAt !== undefined &&
+    episode?.episodeFileId === 0 &&
+    !state.files.some((candidate) => candidate.id === evidence.episodeFileId);
+  if (
+    !episode || episode.seriesId !== evidence.seriesId ||
+    episode.seasonNumber !== snapshot.seasonIndex ||
+    episode.episodeNumber !== snapshot.episodeIndex ||
+    (!removedAfterAttempt &&
+      (!file || file.path !== evidence.episodeFilePath ||
+        file.size !== evidence.episodeFileSize || file.episodeIds.length !== 1 ||
+        file.episodeIds[0] !== evidence.episodeId))
+  ) {
+    throw new Error(
+      'The accepted Sonarr episode or EpisodeFile identity changed before monitoring protection',
+    );
+  }
+  if (removedAfterAttempt && episode.monitored !== false) {
+    throw new Error('Sonarr monitoring changed after the accepted EpisodeFile removal attempt');
+  }
+  if (episode.monitored) {
+    await sonarr.client.setSonarrEpisodeMonitored({
+      episodeId: evidence.episodeId,
+      seriesId: evidence.seriesId,
+      seasonNumber: snapshot.seasonIndex!,
+      episodeNumber: snapshot.episodeIndex!,
+    }, false);
+    state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+    episode = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  }
+  if (!episode || episode.monitored !== false) {
+    throw new DeletionConvergenceError('Sonarr did not retain the protective unmonitored state');
+  }
+  if (evidence.monitoringProtectedAt === undefined) {
+    persistBreakGlassProgress(target, snapshot, 'monitoringProtectedAt');
+  }
+  return sonarr;
+}
+
+async function completeBreakGlassRemoval(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  const evidence = snapshot.seasonBreakGlass!;
+  const sonarr = await protectBreakGlassEpisode(target, snapshot);
+  let state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+  const episode = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  if (!episode) throw new Error('The accepted Sonarr episode identity changed');
+  if (episode.episodeFileId !== 0) {
+    const file = state.files.find((candidate) => candidate.id === episode.episodeFileId);
+    if (
+      !file || file.id !== evidence.episodeFileId || file.path !== evidence.episodeFilePath ||
+      file.size !== evidence.episodeFileSize || file.episodeIds.length !== 1 ||
+      file.episodeIds[0] !== evidence.episodeId
+    ) {
+      throw new Error('The accepted Sonarr EpisodeFile identity changed');
+    }
+    if (evidence.fileRemovalAttemptedAt === undefined) {
+      persistBreakGlassProgress(target, snapshot, 'fileRemovalAttemptedAt');
+    }
+    try {
+      await sonarr.client.deleteManagedFile(evidence.episodeFileId);
+    } catch {
+      // Reconcile exact record absence after a potentially ambiguous response.
+    }
+  }
+  state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+  const after = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  if (
+    !after || after.monitored !== false || after.episodeFileId !== 0 ||
+    state.files.some((candidate) => candidate.id === evidence.episodeFileId) ||
+    await sonarr.client.fileVisibility(evidence.episodeFilePath) !== 'missing'
+  ) {
+    throw new DeletionConvergenceError(
+      'Sonarr removal did not converge to exact record and path absence; the episode remains intentionally unmonitored',
+    );
+  }
+  if (evidence.fileRemovalConfirmedAt === undefined) {
+    persistBreakGlassProgress(target, snapshot, 'fileRemovalConfirmedAt');
+  }
+}
+
+async function restoreBreakGlassMonitoringAfterSafeDownloadFailure(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  const evidence = snapshot.seasonBreakGlass;
+  if (!evidence) throw new Error('Break-glass Sonarr evidence is missing');
+  const targets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+  assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, targets);
+  const sonarr = targets.find((candidate) =>
+    candidate.instanceType === 'sonarr' && candidate.instanceId === evidence.instanceId
+  );
+  if (!sonarr) throw new Error('The accepted Sonarr instance is unavailable');
+  await assertAcceptedSonarrMutationVersion(snapshot, sonarr);
+  let state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+  let episode = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  const file = episode?.episodeFileId === evidence.episodeFileId
+    ? state.files.find((candidate) => candidate.id === evidence.episodeFileId)
+    : null;
+  if (
+    !episode || !file || file.path !== evidence.episodeFilePath ||
+    file.size !== evidence.episodeFileSize || file.episodeIds.length !== 1 ||
+    file.episodeIds[0] !== evidence.episodeId
+  ) {
+    throw new DeletionConvergenceError(
+      'The old Sonarr EpisodeFile changed before monitoring could be restored',
+    );
+  }
+  if (episode.monitored !== evidence.originalMonitored) {
+    await sonarr.client.setSonarrEpisodeMonitored({
+      episodeId: evidence.episodeId,
+      seriesId: evidence.seriesId,
+      seasonNumber: snapshot.seasonIndex!,
+      episodeNumber: snapshot.episodeIndex!,
+    }, evidence.originalMonitored);
+    state = await sonarr.client.sonarrSeriesSnapshot(evidence.seriesId);
+    episode = state.episodes.find((candidate) => candidate.id === evidence.episodeId);
+  }
+  if (
+    !episode || episode.monitored !== evidence.originalMonitored ||
+    episode.episodeFileId !== evidence.episodeFileId
+  ) {
+    throw new DeletionConvergenceError(
+      'Sonarr did not restore the original monitored state after download cleanup stopped safely',
+    );
+  }
+}
+
+interface ProtectedSeasonPayloadTarget {
+  target: DeletionWorkTarget;
+  snapshot: DurableTargetSnapshot;
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'];
+  mode: 'automatic_adoption' | 'removed_and_unmonitored';
+}
+
+function persistSeasonPayloadProtection(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): void {
+  const before = JSON.stringify(snapshot);
+  const next = structuredClone(snapshot);
+  const transitions =
+    next.arrReassignments?.flatMap((entry) =>
+      entry.instanceType === 'sonarr' && entry.sonarrTransition ? [entry.sonarrTransition] : []
+    ) ?? [];
+  if (transitions.length === 0) {
+    throw new Error('The durable Sonarr payload-protection plan is incomplete');
+  }
+  const protectedAt = Math.floor(Date.now() / 1000);
+  for (const transition of transitions) transition.payloadProtectionAt = protectedAt;
+  const changed = withTransaction((client) =>
+    client.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running') AND snapshot = ?",
+    ).run(JSON.stringify(next), protectedAt, target.id, before)
+  );
+  if (changed !== 1) {
+    throw new DeletionConvergenceError('Could not persist Sonarr payload protection');
+  }
+  Object.assign(snapshot, next);
+  target.snapshot = JSON.stringify(next);
+}
+
+function activeSeasonOperationTargets(operationId: string): DeletionWorkTarget[] {
+  return withTransaction((client) =>
+    client.prepare(
+      `SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot,
+              t.logical_size, t.phase, t.removal_confirmed_at, t.plex_attempt_count
+       FROM deletion_targets t
+       JOIN deletion_operations o ON o.id = t.operation_id
+       WHERE t.operation_id = ? AND t.status IN ('queued', 'running')
+       ORDER BY t.ordinal`,
+    ).values(operationId).map((row) => ({
+      id: Number(row[0]),
+      operationId: String(row[1]),
+      serverId: Number(row[2]),
+      targetKind: String(row[3]) as DeletionWorkTarget['targetKind'],
+      targetKey: String(row[4]),
+      snapshot: String(row[5]),
+      logicalSize: row[6] === null ? null : Number(row[6]),
+      phase: String(row[7]) as DeletionWorkTarget['phase'],
+      removalConfirmedAt: row[8] === null ? null : Number(row[8]),
+      plexAttemptCount: Number(row[9]),
+    }))
+  );
+}
+
+async function protectSeasonPayloadTargetsBeforeDownloadCleanup(
+  owner: DeletionWorkTarget,
+  ownerSnapshot: DurableTargetSnapshot,
+  cleanup: ResolvedCleanupItem,
+): Promise<ProtectedSeasonPayloadTarget[]> {
+  const payloadPaths = new Set(cleanup.sources.flatMap((source) => {
+    const path = source.importedPath === null
+      ? null
+      : normalizeRemoteAbsolute(source.importedPath)?.comparison;
+    return path ? [path] : [];
+  }));
+  if (payloadPaths.size === 0) {
+    throw new Error('The shared season download payload has no exact Plex path ownership');
+  }
+  const matchedPaths = new Set<string>();
+  const protectedTargets: ProtectedSeasonPayloadTarget[] = [];
+  try {
+    for (const sibling of activeSeasonOperationTargets(owner.operationId)) {
+      const snapshot = sibling.id === owner.id
+        ? ownerSnapshot
+        : JSON.parse(sibling.snapshot) as DurableTargetSnapshot;
+      if (sibling.id === owner.id) sibling.snapshot = owner.snapshot;
+      const selectedPath = snapshot.expectedPlexPath === undefined
+        ? null
+        : normalizeRemoteAbsolute(snapshot.expectedPlexPath)?.comparison ?? null;
+      if (!selectedPath || !payloadPaths.has(selectedPath)) continue;
+      matchedPaths.add(selectedPath);
+      if (
+        snapshot.seasonCoordinationOutcome !== 'automatic_adoption' &&
+        snapshot.seasonCoordinationOutcome !== 'removed_and_unmonitored'
+      ) continue;
+      const validated = await validateDeletionTarget(sibling.serverId, sibling);
+      if (!validated.live) {
+        throw new Error('A selected season payload target disappeared from Plex');
+      }
+      await assertVersionIsNotPlaying(validated.client, snapshot.ratingKey);
+      if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
+        protectedTargets.push({
+          target: sibling,
+          snapshot,
+          client: validated.client,
+          mode: 'removed_and_unmonitored',
+        });
+        await protectBreakGlassEpisode(sibling, snapshot);
+        sibling.snapshot = JSON.stringify(snapshot);
+        continue;
+      }
+      const selectedIds = new Set(snapshot.selectedMediaIds ?? [snapshot.mediaId!]);
+      const excludedIds = new Set(snapshot.operationMediaIds ?? [...selectedIds]);
+      const [liveVersions, arrTargets] = await Promise.all([
+        validated.client.mediaVersionPathPreviews(snapshot.ratingKey),
+        getArrDeleteTargets(sibling.serverId, snapshot.libraryKey),
+      ]);
+      const plan = await buildVersionDeletionPlan({
+        mediaType: 'episode',
+        item: snapshot,
+        selectedMediaIds: selectedIds,
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: null,
+        cleanupConfigured: false,
+        excludedReassignMediaIds: excludedIds,
+        requiredMappingIdentities: snapshot.arrReassignmentMappings,
+        requiredReassignments: persistedArrReassignmentMap(snapshot),
+        requiredOwnerships: persistedArrOwnershipMap(snapshot),
+        serverId: sibling.serverId,
+        libraryKey: snapshot.libraryKey,
+        plexClient: validated.client,
+        versionRanks: validated.live.media,
+        episodeIdentity: {
+          seasonNumber: snapshot.seasonIndex!,
+          episodeNumber: snapshot.episodeIndex!,
+        },
+      });
+      assertAcceptedSeasonCoordination(snapshot, plan);
+      const candidateMediaId = snapshot.seasonSelectedCandidateMediaId ??
+        bestLiveReassignmentCandidate(validated.live, plan.arrReassignCandidateMediaIds);
+      if (
+        candidateMediaId === null ||
+        !plan.arrReassignCandidateMediaIds.includes(candidateMediaId)
+      ) throw new Error('A shared season payload has no authorized retained Sonarr candidate');
+      protectedTargets.push({
+        target: sibling,
+        snapshot,
+        client: validated.client,
+        mode: 'automatic_adoption',
+      });
+      await protectArrReassignmentBeforeDownloadCleanup(
+        sibling,
+        plan,
+        snapshot,
+        validated.client,
+        candidateMediaId,
+      );
+      persistSeasonPayloadProtection(sibling, snapshot);
+      sibling.snapshot = JSON.stringify(snapshot);
+    }
+    if ([...payloadPaths].some((path) => !matchedPaths.has(path))) {
+      throw new Error(
+        'The shared season download payload is not fully covered by active ordered targets',
+      );
+    }
+  } catch (error) {
+    if (protectedTargets.length > 0) {
+      await restoreSeasonPayloadProtectionAfterSafeDownloadFailure(protectedTargets);
+    }
+    throw error;
+  }
+  return protectedTargets;
+}
+
+async function restoreSeasonPayloadProtectionAfterSafeDownloadFailure(
+  targets: readonly ProtectedSeasonPayloadTarget[],
+): Promise<void> {
+  for (const entry of targets) {
+    if (entry.mode === 'automatic_adoption') {
+      // Persisting the reassignment plan is the first protection step. If that
+      // compare-and-swap failed, no monitoring mutation was possible and there
+      // is nothing to restore for this target.
+      if ((entry.snapshot.arrReassignments?.length ?? 0) > 0) {
+        await restoreArrReassignmentAfterSafeDownloadFailure(
+          entry.target,
+          entry.snapshot,
+          entry.client,
+        );
+      }
+    } else {
+      await restoreBreakGlassMonitoringAfterSafeDownloadFailure(entry.target, entry.snapshot);
+    }
+    const before = JSON.stringify(entry.snapshot);
+    const next = structuredClone(entry.snapshot);
+    delete next.arrReassignments;
+    if (next.seasonBreakGlass) {
+      delete next.seasonBreakGlass.monitoringProtectedAt;
+    }
+    const changed = withTransaction((client) =>
+      client.prepare(
+        "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'queued' AND snapshot = ?",
+      ).run(
+        JSON.stringify(next),
+        Math.floor(Date.now() / 1000),
+        entry.target.id,
+        before,
+      )
+    );
+    if (changed === 1) {
+      entry.snapshot = next;
+      entry.target.snapshot = JSON.stringify(next);
+    }
+  }
+}
+
+async function seasonCleanupHasAttemptEvidence(
+  serverId: number,
+  attemptRatingKey: string,
+  cleanup: ResolvedCleanupItem,
+): Promise<boolean> {
+  const [attemptedJobsByItem, attemptedOrphansByItem] = await Promise.all([
+    loadAttemptedDownloadJobKeysByItem(serverId, [attemptRatingKey]),
+    loadAttemptedOrphanFilesByItem(serverId, [attemptRatingKey]),
+  ]);
+  const attemptedJobs = attemptedJobsByItem.get(attemptRatingKey) ?? new Set<string>();
+  if (
+    cleanup.downloadJobs.some((job) => attemptedJobs.has(`${job.instanceKey}:${job.jobId}`))
+  ) return true;
+  const attemptedOrphanPaths = new Set(
+    (attemptedOrphansByItem.get(attemptRatingKey) ?? []).map((entry) => entry.path),
+  );
+  return cleanup.orphanFiles.some((file) => attemptedOrphanPaths.has(file.path));
 }
 
 async function markArrAttempt(
@@ -483,6 +886,33 @@ async function ensureVersionDeleted(
   }
   await assertVersionIsNotPlaying(client, snapshot.ratingKey);
 
+  const interruptedSonarrAdoption = snapshot.seasonCoordinationOutcome ===
+      'automatic_adoption' &&
+    retainedMediaId !== null &&
+    snapshot.arrReassignments?.some((entry) =>
+      entry.instanceType === 'sonarr' &&
+      entry.sonarrTransition?.oldFileRemovalConfirmedAt !== undefined
+    );
+  if (interruptedSonarrAdoption) {
+    if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+    await waitForSonarrManagedPath(target, null, snapshot, client, retainedMediaId!);
+    confirmReassignedRemoval(target);
+    await reconcileArrReassignmentFinalState(target, snapshot, client);
+    await reconcilePlexTarget(target, snapshot);
+    return;
+  }
+
+  if (
+    snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored' &&
+    snapshot.seasonBreakGlass?.fileRemovalConfirmedAt !== undefined
+  ) {
+    if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+    await completeBreakGlassRemoval(target, snapshot);
+    advancePhase(target, 'plex_reconciliation');
+    await reconcilePlexTarget(target, snapshot);
+    return;
+  }
+
   if (snapshot.skipArrCoordination === true) {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(
@@ -491,10 +921,31 @@ async function ensureVersionDeleted(
       arrTargets,
       snapshot.seasonSonarrInspection?.mappings,
     );
+    const inspectedInstanceIds = new Set(
+      snapshot.seasonSonarrInspection?.inspectedInstanceIds ??
+        snapshot.seasonSonarrInspection?.mappings.map((mapping) => mapping.instanceId) ??
+        [],
+    );
+    const directCleanup = snapshot.cleanupDownloads === true &&
+      (snapshot.seasonDownloadCleanup?.downloadJobs.length ?? 0) > 0 &&
+      snapshot.seasonDownloadCleanup!.downloadJobs.every((job) =>
+        job.provenance === 'direct_manifest'
+      );
+    // Direct discovery is deliberately independent of Sonarr. Ownership was useful
+    // preview context, but a later Sonarr outage must not invalidate qBittorrent's
+    // separately persisted manifest, mapping, and filesystem proof.
+    const inspectedArrTargets = directCleanup
+      ? []
+      : arrTargets.filter((candidate) => inspectedInstanceIds.has(candidate.instanceId));
+    const inspectedMappings = directCleanup
+      ? []
+      : snapshot.seasonSonarrInspection?.mappings.filter((mapping) =>
+        inspectedInstanceIds.has(mapping.instanceId)
+      ) ?? [];
     let inspectionPlan: VersionDeletionPlan | null = null;
     let acceptedCleanup: ResolvedCleanupItem | null = null;
     if (
-      (snapshot.seasonSonarrInspection?.mappings.length ?? 0) > 0 ||
+      inspectedMappings.length > 0 ||
       snapshot.cleanupDownloads === true
     ) {
       const liveVersions = await client.mediaVersionPathPreviews(snapshot.ratingKey);
@@ -512,12 +963,12 @@ async function ensureVersionDeleted(
         item: snapshot,
         selectedMediaIds: selectedIds,
         liveVersions,
-        arrTargets,
+        arrTargets: inspectedArrTargets,
         resolvedCleanup: acceptedCleanup,
         cleanupConfigured: acceptedCleanup !== null,
         allowEpisodeDownloadCleanup: true,
         excludedReassignMediaIds: excludedReassignIds,
-        requiredMappingIdentities: snapshot.seasonSonarrInspection!.mappings,
+        requiredMappingIdentities: inspectedMappings,
         episodeIdentity: {
           seasonNumber: snapshot.seasonIndex!,
           episodeNumber: snapshot.episodeIndex!,
@@ -528,14 +979,16 @@ async function ensureVersionDeleted(
           inspectionPlan.arrOwnershipReason ?? 'Sonarr ownership could not be re-inspected',
         );
       }
-      const currentManagedSelectedMediaIds = inspectionPlan.arrManagedMediaIds.filter((mediaId) =>
-        selectedIds.has(mediaId)
-      ).sort((left, right) => left - right);
-      if (
-        JSON.stringify(currentManagedSelectedMediaIds) !==
-          JSON.stringify(snapshot.seasonSonarrInspection!.managedSelectedMediaIds)
-      ) {
-        throw new Error('Sonarr ownership changed after Plex-only deletion was accepted');
+      if (!directCleanup) {
+        const currentManagedSelectedMediaIds = inspectionPlan.arrManagedMediaIds.filter((mediaId) =>
+          selectedIds.has(mediaId)
+        ).sort((left, right) => left - right);
+        if (
+          JSON.stringify(currentManagedSelectedMediaIds) !==
+            JSON.stringify(snapshot.seasonSonarrInspection!.managedSelectedMediaIds)
+        ) {
+          throw new Error('Sonarr ownership changed after Plex-only deletion was accepted');
+        }
       }
     }
     if (snapshot.cleanupDownloads === true) {
@@ -636,7 +1089,10 @@ async function ensureVersionDeleted(
     return;
   }
 
-  if (hasRemainingVersion && retainedMediaId === null) {
+  if (
+    hasRemainingVersion && retainedMediaId === null &&
+    snapshot.seasonCoordinationOutcome !== 'removed_and_unmonitored'
+  ) {
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(target.targetKind, snapshot, arrTargets);
     if (arrTargets.length > 0 || snapshot.arrOwnerships !== undefined) {
@@ -675,17 +1131,29 @@ async function ensureVersionDeleted(
             plan.preview.arrReassignReason ?? 'The Arr-managed version cannot be safely reassigned',
           );
         }
-        const candidateMediaId = bestLiveReassignmentCandidate(
-          liveAtStart,
-          plan.arrReassignCandidateMediaIds,
-        );
+        const candidateMediaId = snapshot.seasonSelectedCandidateMediaId ??
+          bestLiveReassignmentCandidate(liveAtStart, plan.arrReassignCandidateMediaIds);
         if (candidateMediaId === null) {
           throw new Error('No deterministic retained Arr version is available');
+        }
+        if (!plan.arrReassignCandidateMediaIds.includes(candidateMediaId)) {
+          throw new Error('The accepted retained Sonarr candidate is no longer eligible');
         }
         retainedMediaId = candidateMediaId;
       } else {
         persistArrOwnershipPlan(target.id, snapshot, plan);
       }
+    }
+  }
+
+  if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
+    await protectBreakGlassEpisode(target, snapshot);
+    if (!snapshot.cleanupDownloads) {
+      if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+      await completeBreakGlassRemoval(target, snapshot);
+      advancePhase(target, 'plex_reconciliation');
+      await reconcilePlexTarget(target, snapshot);
+      return;
     }
   }
 
@@ -779,14 +1247,55 @@ async function ensureVersionDeleted(
       if (!plan.cleanup) {
         throw new Error(plan.preview.cleanupReason ?? 'cleanup could not be verified');
       }
-      await assertVersionIsNotPlaying(client, snapshot.ratingKey);
-      await executeCleanup(
-        target.serverId,
-        new Map([[snapshot.ratingKey, plan.cleanup]]),
-        plan.cleanup,
-        attemptRatingKey,
-        snapshot.seasonDownloadCleanup !== undefined,
-      );
+      const protectedSeasonPayloadTargets = snapshot.seasonCleanup === true &&
+          plan.cleanup.downloadJobs.length > 0
+        ? await protectSeasonPayloadTargetsBeforeDownloadCleanup(target, snapshot, plan.cleanup)
+        : [];
+      if (retainedMediaId !== null && protectedSeasonPayloadTargets.length === 0) {
+        await protectArrReassignmentBeforeDownloadCleanup(
+          target,
+          plan,
+          snapshot,
+          client,
+          retainedMediaId,
+        );
+      }
+      try {
+        await assertVersionIsNotPlaying(client, snapshot.ratingKey);
+        await executeCleanup(
+          target.serverId,
+          new Map([[snapshot.ratingKey, plan.cleanup]]),
+          plan.cleanup,
+          attemptRatingKey,
+          snapshot.seasonDownloadCleanup !== undefined,
+        );
+      } catch (error) {
+        if (
+          !(await seasonCleanupHasAttemptEvidence(
+            target.serverId,
+            attemptRatingKey,
+            plan.cleanup,
+          ))
+        ) {
+          if (protectedSeasonPayloadTargets.length > 0) {
+            await restoreSeasonPayloadProtectionAfterSafeDownloadFailure(
+              protectedSeasonPayloadTargets,
+            );
+          } else if (retainedMediaId !== null) {
+            await restoreArrReassignmentAfterSafeDownloadFailure(target, snapshot, client);
+          } else if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
+            await restoreBreakGlassMonitoringAfterSafeDownloadFailure(target, snapshot);
+          }
+        }
+        throw error;
+      }
+      if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
+        if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+        await completeBreakGlassRemoval(target, snapshot);
+        advancePhase(target, 'plex_reconciliation');
+        await reconcilePlexTarget(target, snapshot);
+        return;
+      }
       if (retainedMediaId !== null) {
         const [freshVersions, freshArrTargets, freshIdentity] = await Promise.all([
           client.mediaVersionPathPreviews(snapshot.ratingKey),
@@ -833,7 +1342,7 @@ async function ensureVersionDeleted(
       if (target.targetKind === 'movie_version') {
         await coordinateRadarrReassignment(target, snapshot, client, plan, retainedMediaId);
       } else {
-        await waitForArrManagedPath(target, plan, snapshot, client, retainedMediaId);
+        await waitForSonarrManagedPath(target, plan, snapshot, client, retainedMediaId);
         confirmReassignedRemoval(target);
         await reconcileArrReassignmentFinalState(target, snapshot, client);
         await reconcilePlexTarget(target, snapshot);
@@ -918,7 +1427,7 @@ async function ensureVersionDeleted(
         if (target.targetKind === 'movie_version') {
           await coordinateRadarrReassignment(target, snapshot, client, finalPlan, candidateMediaId);
         } else {
-          await waitForArrManagedPath(target, finalPlan, snapshot, client, candidateMediaId);
+          await waitForSonarrManagedPath(target, finalPlan, snapshot, client, candidateMediaId);
           confirmReassignedRemoval(target);
           await reconcileArrReassignmentFinalState(target, snapshot, client);
           await reconcilePlexTarget(target, snapshot);

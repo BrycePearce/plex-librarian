@@ -21,11 +21,13 @@ import type {
   PlexPin,
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
+  QbittorrentPathMapping,
   RemoveUserResponse,
   RequestFollowThroughDetailsResponse,
   SaveArrInstanceRequest,
   SavePlexPathMappingRequest,
   SaveQbittorrentInstanceRequest,
+  SaveQbittorrentPathMappingRequest,
   SaveSeerrInstanceRequest,
   SeasonCleanupResponse,
   SeasonDeletionPreviewResponse,
@@ -97,6 +99,7 @@ export type {
   PlexUser,
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
+  QbittorrentPathMapping,
   RemoveUserResponse,
   RequestFollowThroughDetailItem,
   RequestFollowThroughDetailsResponse,
@@ -372,7 +375,7 @@ export const api = {
       }>,
       options: {
         previewFingerprint: string;
-        coordinateSonarr: boolean;
+        sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
         cleanupDownloads: boolean;
       },
     ) =>
@@ -384,7 +387,7 @@ export const api = {
             clientRequestId,
             selections,
             previewFingerprint: options.previewFingerprint,
-            coordinateSonarr: options.coordinateSonarr,
+            sonarrMode: options.sonarrMode,
             cleanupDownloads: options.cleanupDownloads,
           }),
         },
@@ -404,7 +407,10 @@ export const api = {
     seasonDeletionPreview: (
       seasonRatingKey: string,
       selections: Array<{ episodeRatingKey: string; mediaIds: number[] }>,
-      options: { coordinateSonarr: boolean; cleanupDownloads: boolean },
+      options: {
+        sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+        cleanupDownloads: boolean;
+      },
     ) =>
       apiFetch<SeasonDeletionPreviewResponse>(
         `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/deletion-preview`,
@@ -519,6 +525,23 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ outcome }),
       }),
+    acceptSeasonRemovedAndUnmonitored: (id: string, targetId: number) =>
+      apiFetch<DeletionOperation>(
+        `/deletion-operations/${
+          encodeURIComponent(id)
+        }/targets/${targetId}/accept-removed-unmonitored`,
+        {
+          method: "POST",
+          body: JSON.stringify({ acknowledge: true }),
+        },
+      ),
+    retrySeasonReassignment: (id: string, targetId: number) =>
+      apiFetch<DeletionOperation>(
+        `/deletion-operations/${
+          encodeURIComponent(id)
+        }/targets/${targetId}/retry-sonarr-reassignment`,
+        { method: "POST" },
+      ),
     dismiss: (id: string) =>
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/dismiss`, {
         method: "POST",
@@ -615,6 +638,15 @@ export const api = {
       }),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/qbittorrent/instances/${id}`, {
+        method: "DELETE",
+      }),
+    createPathMapping: (mapping: SaveQbittorrentPathMappingRequest) =>
+      apiFetch<QbittorrentPathMapping>("/integrations/qbittorrent/path-mappings", {
+        method: "POST",
+        body: JSON.stringify(mapping),
+      }),
+    deletePathMapping: (id: number) =>
+      apiFetch<{ ok: true }>(`/integrations/qbittorrent/path-mappings/${id}`, {
         method: "DELETE",
       }),
   },

@@ -57,7 +57,13 @@ export interface SeasonVersionAnalysisResponse {
 
 export type SeasonDeletionOutcome =
   | 'plex_only'
-  | 'automatic_adoption';
+  | 'automatic_adoption'
+  | 'removed_and_unmonitored';
+
+export type SeasonSonarrMode =
+  | 'none'
+  | 'adopt_retained'
+  | 'remove_and_unmonitor';
 
 export interface SeasonDeletionSelection {
   episodeRatingKey: string;
@@ -66,7 +72,7 @@ export interface SeasonDeletionSelection {
 
 export interface SeasonDeletionIntent {
   selections: SeasonDeletionSelection[];
-  coordinateSonarr: boolean;
+  sonarrMode: SeasonSonarrMode;
   cleanupDownloads: boolean;
 }
 
@@ -97,13 +103,24 @@ export interface SeasonDeletionPreviewResponse {
   selectedVersionCount: number;
   plexOnlyCount: number;
   automaticAdoptionCount: number;
+  removedAndUnmonitoredCount?: number;
   blockers: string[];
   members: SeasonDeletionMemberPreview[];
   sonarrAvailable: boolean;
   sonarrConfigured: boolean;
+  sonarrInspectionWarning?: string | null;
+  sonarrAdoptionTargets?: Array<{
+    episodeRatingKey: string;
+    episodeTitle: string;
+    mediaId: number;
+    path: string;
+    fallbackCandidateCount: number;
+  }>;
   cleanupConfigured: boolean;
   cleanupEligibleVersionCount: number;
   cleanupReason: string | null;
+  adoptionUnavailableReason?: string | null;
+  breakGlassAvailable?: boolean;
   fingerprint: string;
   expiresAt: number;
 }

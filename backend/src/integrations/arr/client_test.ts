@@ -150,14 +150,14 @@ Deno.test('ArrClient reads one targeted Radarr movie and exact file visibility',
   ]);
 });
 
-Deno.test('ArrClient rejects malformed Radarr file visibility and extra ownership', async () => {
+Deno.test('ArrClient normalizes absent Radarr file visibility and rejects extra ownership', async () => {
   const visibility = new ArrClient(
     'radarr',
     'http://radarr:7878',
     'secret',
     (() => Promise.resolve(Response.json({ type: 'missing' }))) as typeof fetch,
   );
-  await assertRejects(() => visibility.fileVisibility('/movies/Movie/kept.mkv'), ArrApiError);
+  assertEquals(await visibility.fileVisibility('/movies/Movie/kept.mkv'), 'missing');
 
   const extras = new ArrClient(
     'radarr',
@@ -1213,8 +1213,16 @@ Deno.test('Radarr exact-ID absence distinguishes 404 from identity drift', async
   );
 });
 
-Deno.test('Sonarr season coordination rejects v3 and accepts the compatibility floor', async () => {
-  for (const [version, available] of [['3.0.10.1567', false], ['4.0.0.748', true]] as const) {
+Deno.test('Sonarr season coordination enforces the reviewed v4 baseline and future-major gate', async () => {
+  for (
+    const [version, available] of [
+      ['3.0.10.1567', false],
+      ['4.0.19.2978', false],
+      ['4.0.19.2979', true],
+      ['4.1.0.0', true],
+      ['5.0.0.0', false],
+    ] as const
+  ) {
     const client = new ArrClient(
       'sonarr',
       'http://sonarr',
@@ -1290,7 +1298,18 @@ Deno.test('Sonarr manual-import preflight preserves exact paths, associations, a
     assertEquals(body[0]?.seasonNumber, null);
     return Promise.resolve(Response.json([{
       path: '/tv/Show/retained.mkv',
+      size: 123,
+      seriesId: 7,
+      seasonNumber: 1,
       episodes: [{ id: 11 }],
+      quality: {
+        quality: { id: 6, name: 'WEB 1080p', source: 'web', resolution: 1080 },
+        revision: { version: 1, real: 0, isRepack: false },
+      },
+      languages: [{ id: 1, name: 'English' }],
+      releaseGroup: 'Group',
+      indexerFlags: 0,
+      releaseType: 'webRip',
       rejections: [],
     }]));
   });
@@ -1301,7 +1320,89 @@ Deno.test('Sonarr manual-import preflight preserves exact paths, associations, a
       seasonNumber: 1,
       episodeIds: [11],
     }]),
-    [{ path: '/tv/Show/retained.mkv', episodeIds: [11], rejectionReasons: [] }],
+    [{
+      path: '/tv/Show/retained.mkv',
+      size: 123,
+      seriesId: 7,
+      seasonNumber: 1,
+      episodeIds: [11],
+      quality: {
+        quality: { id: 6, name: 'WEB 1080p', source: 'web', resolution: 1080 },
+        revision: { version: 1, real: 0, isRepack: false },
+      },
+      languages: [{ id: 1, name: 'English' }],
+      releaseGroup: 'Group',
+      indexerFlags: 0,
+      releaseType: 'webRip',
+      rejectionReasons: [],
+    }],
+  );
+});
+
+Deno.test('Sonarr manual-import evidence rejects malformed rejections and duplicate owners', async () => {
+  const validCandidate = {
+    path: '/tv/Show/retained.mkv',
+    size: 123,
+    seriesId: 7,
+    seasonNumber: 1,
+    episodes: [{ id: 11 }],
+    quality: {
+      quality: { id: 6, name: 'WEB 1080p', source: 'web', resolution: 1080 },
+      revision: { version: 1, real: 0, isRepack: false },
+    },
+    languages: [{ id: 1, name: 'English' }],
+    releaseGroup: 'Group',
+    indexerFlags: 0,
+    releaseType: 'webRip',
+    rejections: [] as unknown[],
+  };
+  const preflight = (response: Record<string, unknown>) =>
+    new ArrClient(
+      'sonarr',
+      'http://sonarr',
+      'key',
+      () => Promise.resolve(Response.json([response])),
+    ).sonarrManualImportPreflight([{
+      path: '/tv/Show/retained.mkv',
+      seriesId: 7,
+      seasonNumber: 1,
+      episodeIds: [11],
+    }]);
+
+  const { rejections: _rejections, ...missingRejections } = validCandidate;
+  await assertRejects(
+    () => preflight(missingRejections),
+    ArrApiError,
+    'malformed manual-import rejection evidence',
+  );
+  await assertRejects(
+    () => preflight({ ...validCandidate, rejections: [{}] }),
+    ArrApiError,
+    'malformed manual-import rejection evidence',
+  );
+  await assertRejects(
+    () => preflight({ ...validCandidate, episodes: [{ id: 11 }, { id: 11 }] }),
+    ArrApiError,
+    'changed or malformed manual-import preflight identity',
+  );
+
+  const inventory = new ArrClient(
+    'sonarr',
+    'http://sonarr',
+    'key',
+    () =>
+      Promise.resolve(Response.json([{
+        path: '/tv/Show/retained.mkv',
+        size: 123,
+        seriesId: 7,
+        episodes: [{ id: 11 }, { id: 11 }],
+        rejections: [],
+      }])),
+  );
+  await assertRejects(
+    () => inventory.sonarrManualImportInventory(7, '/tv/Show'),
+    ArrApiError,
+    'conflicting manual-import inventory identity',
   );
 });
 

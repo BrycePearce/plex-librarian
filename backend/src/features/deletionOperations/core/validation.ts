@@ -49,12 +49,31 @@ export interface DurableTargetSnapshot {
   cleanupDownloads?: boolean;
   skipArrCoordination?: boolean;
   seasonCleanup?: boolean;
-  seasonCoordinationOutcome?: 'plex_only' | 'automatic_adoption';
+  seasonCoordinationOutcome?: 'plex_only' | 'automatic_adoption' | 'removed_and_unmonitored';
   seasonSonarrInspection?: {
     mappings: PersistedArrMappingIdentity[];
+    inspectedInstanceIds?: number[];
     managedSelectedMediaIds: number[];
   };
   seasonDownloadCleanup?: PersistedResolvedCleanupItem;
+  seasonSelectedCandidateMediaId?: number;
+  seasonSafeCandidateMediaIds?: number[];
+  seasonSonarrVersion?: string;
+  seasonPreDeletionPreflight?:
+    import('../../../integrations/arr/client.ts').SonarrManualImportCandidate;
+  seasonBreakGlass?: {
+    instanceId: number;
+    seriesId: number;
+    episodeId: number;
+    episodeFileId: number;
+    episodeFilePath: string;
+    episodeFileSize: number;
+    originalMonitored: boolean;
+    monitoringProtectedAt?: number;
+    fileRemovalAttemptedAt?: number;
+    fileRemovalConfirmedAt?: number;
+    recoveryAcceptedAt?: number;
+  };
   selectedRatingKeys?: string[];
   selectedMediaIds?: number[];
   operationMediaIds?: number[];
@@ -111,10 +130,21 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
   }
   if (snapshot.seasonSonarrInspection !== undefined) {
     const inspection = snapshot.seasonSonarrInspection;
+    const mappingInstanceIds = new Set(
+      Array.isArray(inspection.mappings)
+        ? inspection.mappings.map((mapping) => mapping?.instanceId)
+        : [],
+    );
+    const inspectedInstanceIds = inspection.inspectedInstanceIds ?? [];
     if (
       snapshot.seasonCleanup !== true || snapshot.skipArrCoordination !== true ||
       !inspection || typeof inspection !== 'object' ||
       !Array.isArray(inspection.mappings) ||
+      (inspection.inspectedInstanceIds !== undefined &&
+        (!Array.isArray(inspection.inspectedInstanceIds) ||
+          inspection.inspectedInstanceIds.some((id) => !Number.isSafeInteger(id) || id <= 0))) ||
+      new Set(inspectedInstanceIds).size !== inspectedInstanceIds.length ||
+      inspectedInstanceIds.some((id) => !mappingInstanceIds.has(id)) ||
       !Array.isArray(inspection.managedSelectedMediaIds) ||
       inspection.managedSelectedMediaIds.some((mediaId) => !Number.isSafeInteger(mediaId)) ||
       snapshot.arrReassignmentMappings !== undefined || snapshot.arrOwnerships !== undefined ||
@@ -132,11 +162,60 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
   }
   if (snapshot.seasonCoordinationOutcome !== undefined) {
     if (
-      !['plex_only', 'automatic_adoption'].includes(snapshot.seasonCoordinationOutcome) ||
+      !['plex_only', 'automatic_adoption', 'removed_and_unmonitored'].includes(
+        snapshot.seasonCoordinationOutcome,
+      ) ||
       snapshot.seasonCleanup !== true || snapshot.skipArrCoordination === true ||
+      (snapshot.seasonCoordinationOutcome !== 'plex_only' &&
+        (typeof snapshot.seasonSonarrVersion !== 'string' || !snapshot.seasonSonarrVersion)) ||
       !Array.isArray(snapshot.arrReassignmentMappings) || !Array.isArray(snapshot.arrOwnerships)
     ) {
       throw new DeletionValidationError('durable season coordination evidence is malformed');
+    }
+    if (
+      snapshot.seasonCoordinationOutcome === 'automatic_adoption' &&
+      (!Number.isSafeInteger(snapshot.seasonSelectedCandidateMediaId) ||
+        !Array.isArray(snapshot.seasonSafeCandidateMediaIds) ||
+        snapshot.seasonSafeCandidateMediaIds.length === 0 ||
+        snapshot.seasonSafeCandidateMediaIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        !snapshot.seasonSafeCandidateMediaIds.includes(snapshot.seasonSelectedCandidateMediaId!) ||
+        !snapshot.seasonPreDeletionPreflight ||
+        typeof snapshot.seasonPreDeletionPreflight.path !== 'string' ||
+        !Number.isSafeInteger(snapshot.seasonPreDeletionPreflight.size) ||
+        snapshot.seasonPreDeletionPreflight.size <= 0 ||
+        !Number.isSafeInteger(snapshot.seasonPreDeletionPreflight.seriesId) ||
+        snapshot.seasonPreDeletionPreflight.seriesId <= 0 ||
+        snapshot.seasonPreDeletionPreflight.seasonNumber !== snapshot.seasonIndex ||
+        !Array.isArray(snapshot.seasonPreDeletionPreflight.episodeIds) ||
+        snapshot.seasonPreDeletionPreflight.episodeIds.length !== 1 ||
+        snapshot.seasonPreDeletionPreflight.episodeIds.some((id) =>
+          !Number.isSafeInteger(id) || id <= 0
+        ) || !Array.isArray(snapshot.seasonPreDeletionPreflight.rejectionReasons) ||
+        snapshot.seasonPreDeletionPreflight.rejectionReasons.length > 0)
+    ) {
+      throw new DeletionValidationError('durable Sonarr adoption allowlist is malformed');
+    }
+    const breakGlass = snapshot.seasonBreakGlass;
+    if (
+      snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored' &&
+      (!breakGlass ||
+        [
+          breakGlass.instanceId,
+          breakGlass.seriesId,
+          breakGlass.episodeId,
+          breakGlass.episodeFileId,
+          breakGlass.episodeFileSize,
+        ].some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+        typeof breakGlass.episodeFilePath !== 'string' || !breakGlass.episodeFilePath ||
+        typeof breakGlass.originalMonitored !== 'boolean' ||
+        [
+          breakGlass.monitoringProtectedAt,
+          breakGlass.fileRemovalAttemptedAt,
+          breakGlass.fileRemovalConfirmedAt,
+          breakGlass.recoveryAcceptedAt,
+        ].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value <= 0)))
+    ) {
+      throw new DeletionValidationError('durable Sonarr break-glass evidence is malformed');
     }
   }
   if (snapshot.seasonDownloadCleanup !== undefined) {
@@ -199,6 +278,61 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
     }
     if (Object.hasOwn(entry, 'originalMonitored') && typeof entry.originalMonitored !== 'boolean') {
       throw new DeletionValidationError('durable Arr monitoring evidence is malformed');
+    }
+    const sonarrTransition = entry.sonarrTransition;
+    const selectedSonarrCandidate = sonarrTransition?.candidateAllowlist.find((candidate) =>
+      candidate.mediaId === entry.retainedMediaId
+    );
+    const preDeletionPreflight = sonarrTransition?.preDeletionPreflight;
+    const rescanAuthorizedChanges = sonarrTransition?.rescanAuthorizedChanges;
+    if (
+      sonarrTransition !== undefined &&
+      (entry.instanceType !== 'sonarr' || !Array.isArray(sonarrTransition.candidateAllowlist) ||
+        sonarrTransition.candidateAllowlist.length === 0 ||
+        sonarrTransition.candidateAllowlist.some((candidate) =>
+          !Number.isSafeInteger(candidate.mediaId) || candidate.mediaId <= 0 ||
+          typeof candidate.path !== 'string' || !candidate.path ||
+          !Number.isSafeInteger(candidate.size) || candidate.size <= 0
+        ) ||
+        [
+          sonarrTransition.payloadProtectionAt,
+          sonarrTransition.oldFileRemovalConfirmedAt,
+          sonarrTransition.manualImportAttemptedAt,
+          sonarrTransition.manualImportRejectedAt,
+          sonarrTransition.rescanAuthorizedAt,
+          sonarrTransition.rescanAttemptedAt,
+        ].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) ||
+        (rescanAuthorizedChanges !== undefined &&
+          (!Array.isArray(rescanAuthorizedChanges) || rescanAuthorizedChanges.length === 0 ||
+            new Set(rescanAuthorizedChanges.map((change) => change.targetId)).size !==
+              rescanAuthorizedChanges.length ||
+            new Set(rescanAuthorizedChanges.map((change) => change.episodeId)).size !==
+              rescanAuthorizedChanges.length ||
+            rescanAuthorizedChanges.some((change) =>
+              !Number.isSafeInteger(change.targetId) || change.targetId <= 0 ||
+              !Number.isSafeInteger(change.episodeId) || change.episodeId <= 0 ||
+              !Number.isSafeInteger(change.oldFileId) || change.oldFileId < 0 ||
+              (change.restoredMonitored !== undefined &&
+                typeof change.restoredMonitored !== 'boolean') ||
+              !Array.isArray(change.candidates) || change.candidates.length === 0 ||
+              change.candidates.some((candidate) =>
+                !Number.isSafeInteger(candidate.mediaId) || candidate.mediaId <= 0 ||
+                typeof candidate.path !== 'string' || !candidate.path ||
+                !Number.isSafeInteger(candidate.size) || candidate.size <= 0
+              )
+            ))) ||
+        (snapshot.seasonCoordinationOutcome === 'automatic_adoption' &&
+          (JSON.stringify(preDeletionPreflight) !==
+              JSON.stringify(snapshot.seasonPreDeletionPreflight) ||
+            !selectedSonarrCandidate || !preDeletionPreflight ||
+            preDeletionPreflight.path !== selectedSonarrCandidate.path ||
+            preDeletionPreflight.size !== selectedSonarrCandidate.size ||
+            preDeletionPreflight.seriesId !== entry.recordId ||
+            preDeletionPreflight.seasonNumber !== snapshot.seasonIndex ||
+            preDeletionPreflight.episodeIds.length !== 1 ||
+            preDeletionPreflight.episodeIds[0] !== entry.episodeId)))
+    ) {
+      throw new DeletionValidationError('durable Sonarr transition evidence is malformed');
     }
     const plan = entry.radarrPathPlan;
     if (plan === undefined) continue;

@@ -17,7 +17,7 @@ Deno.test("season cleanup serializes selections as episode media", async () => {
   try {
     const options = {
       previewFingerprint: "a".repeat(64),
-      coordinateSonarr: false,
+      sonarrMode: "none" as const,
       cleanupDownloads: false,
       // A structurally compatible caller may carry its own selection model. The API
       // boundary must never let extra properties replace the canonical wire selection.
@@ -41,7 +41,7 @@ Deno.test("season cleanup serializes selections as episode media", async () => {
       mediaIds: [11],
     }],
     previewFingerprint: "a".repeat(64),
-    coordinateSonarr: false,
+    sonarrMode: "none",
     cleanupDownloads: false,
   });
 });
@@ -64,7 +64,7 @@ Deno.test("season cleanup exposes rebuilt previews for explicit reconfirmation",
           [{ episodeRatingKey: "episode-1", mediaIds: [11] }],
           {
             previewFingerprint: "a".repeat(64),
-            coordinateSonarr: false,
+            sonarrMode: "none",
             cleanupDownloads: false,
           },
         ),

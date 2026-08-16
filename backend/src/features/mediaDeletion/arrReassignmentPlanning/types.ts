@@ -124,11 +124,39 @@ export interface PersistedArrReassignment extends PersistedArrMappingIdentity {
   episodeId: number | null;
   managedFileId: number;
   managedPath: string;
+  managedFileSize?: number | null;
   retainedMediaId: number;
   retainedPath: string;
   retainedRecordPath?: string;
   retainedFileSize?: number | null;
   originalMonitored: boolean;
+  sonarrTransition?: {
+    candidateAllowlist: Array<{ mediaId: number; path: string; size: number }>;
+    preDeletionPreflight?:
+      import('../../../integrations/arr/client.ts').SonarrManualImportCandidate;
+    payloadProtectionAt?: number;
+    oldFileRemovalConfirmedAt?: number;
+    postDeletionPreflight?:
+      import('../../../integrations/arr/client.ts').SonarrManualImportCandidate;
+    manualImportAttemptedAt?: number;
+    manualImportRejectedAt?: number;
+    manualImportCommandId?: number;
+    rescanAuthorizedAt?: number;
+    rescanPreSnapshot?: import('../../../integrations/arr/client.ts').SonarrSeriesSnapshot;
+    rescanInventory?: Array<
+      import('../../../integrations/arr/client.ts').SonarrUntrackedImportCandidate
+    >;
+    rescanAuthorizedChanges?: Array<{
+      targetId: number;
+      episodeId: number;
+      oldFileId: number;
+      restoredMonitored?: boolean;
+      candidates: Array<{ mediaId: number; path: string; size: number }>;
+    }>;
+    rescanAttemptedAt?: number;
+    rescanCommandId?: number;
+    adoptedMediaId?: number;
+  };
   radarrPathPlan?: PersistedRadarrPathPlan;
 }
 

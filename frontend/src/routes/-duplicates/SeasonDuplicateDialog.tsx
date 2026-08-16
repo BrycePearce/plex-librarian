@@ -8,6 +8,7 @@ import type { DuplicateDifferenceCode } from "@shared/mediaComparison";
 import type {
   DuplicateEpisodeGroup,
   DuplicateSeasonGroup,
+  SeasonDeletionPreviewResponse,
   SeasonVersionProfile,
   SmartDuplicateEpisodeCandidate,
 } from "../../lib/api.ts";
@@ -83,25 +84,45 @@ export function seasonSonarrVisible(
 
 export function seasonDestinationChoice(
   authorizationKey: string,
-  choice: { key: string; coordinateSonarr: boolean; cleanupDownloads: boolean },
-): { coordinateSonarr: boolean; cleanupDownloads: boolean } {
+  choice: {
+    key: string;
+    sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+    cleanupDownloads: boolean;
+  },
+): {
+  sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+  cleanupDownloads: boolean;
+} {
   return choice.key === authorizationKey
     ? {
-      coordinateSonarr: choice.coordinateSonarr,
+      sonarrMode: choice.sonarrMode,
       cleanupDownloads: choice.cleanupDownloads,
     }
-    : { coordinateSonarr: false, cleanupDownloads: false };
+    : { sonarrMode: "none", cleanupDownloads: false };
 }
 
 export function seasonChoiceWithoutSonarr(
   authorizationKey: string,
-  choice: { key: string; coordinateSonarr: boolean; cleanupDownloads: boolean },
-): { key: string; coordinateSonarr: false; cleanupDownloads: boolean } {
+  choice: {
+    key: string;
+    sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+    cleanupDownloads: boolean;
+  },
+): { key: string; sonarrMode: "none"; cleanupDownloads: boolean } {
   return {
     key: authorizationKey,
-    coordinateSonarr: false,
+    sonarrMode: "none",
     cleanupDownloads: choice.key === authorizationKey && choice.cleanupDownloads,
   };
+}
+
+export function seasonBreakGlassVisible(
+  preview: SeasonDeletionPreviewResponse | undefined,
+  sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor",
+): boolean {
+  return preview?.breakGlassAvailable === true ||
+    (sonarrMode === "remove_and_unmonitor" &&
+      (preview?.removedAndUnmonitoredCount ?? 0) > 0);
 }
 
 export function seasonDeletionConfirmationDisabled(input: {
@@ -471,7 +492,7 @@ export function SeasonDuplicateDialog({
   onConfirm: (request: {
     selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
     previewFingerprint: string;
-    coordinateSonarr: boolean;
+    sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
     cleanupDownloads: boolean;
   }) => void;
   onClose: () => void;
@@ -548,9 +569,13 @@ export function SeasonDuplicateDialog({
   const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirmationRefreshing, setConfirmationRefreshing] = useState(false);
-  const [destinationChoice, setDestinationChoice] = useState({
+  const [destinationChoice, setDestinationChoice] = useState<{
+    key: string;
+    sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+    cleanupDownloads: boolean;
+  }>({
     key: "",
-    coordinateSonarr: false,
+    sonarrMode: "none",
     cleanupDownloads: false,
   });
   const [filter, setFilter] = useState<EpisodeFilter>("all");
@@ -577,7 +602,7 @@ export function SeasonDuplicateDialog({
     setMode("profiles");
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
-    setDestinationChoice({ key: "", coordinateSonarr: false, cleanupDownloads: false });
+    setDestinationChoice({ key: "", sonarrMode: "none", cleanupDownloads: false });
     setFilter("all");
   }, [plans, seasonKey]);
 
@@ -648,7 +673,7 @@ export function SeasonDuplicateDialog({
     };
   });
   const authorizationKey = seasonDeletionAuthorizationKey(selections);
-  const { coordinateSonarr, cleanupDownloads } = seasonDestinationChoice(
+  const { sonarrMode, cleanupDownloads } = seasonDestinationChoice(
     authorizationKey,
     destinationChoice,
   );
@@ -677,12 +702,12 @@ export function SeasonDuplicateDialog({
       "season-deletion-preview",
       season?.seasonRatingKey ?? "none",
       selections,
-      coordinateSonarr,
+      sonarrMode,
       cleanupDownloads,
     ] as const, [
     season?.seasonRatingKey,
     authorizationKey,
-    coordinateSonarr,
+    sonarrMode,
     cleanupDownloads,
   ]);
   const deletionPreview = useQuery({
@@ -694,7 +719,7 @@ export function SeasonDuplicateDialog({
           episodeRatingKey: selection.ratingKey,
           mediaIds: selection.deleteMediaIds,
         })),
-        { coordinateSonarr, cleanupDownloads },
+        { sonarrMode, cleanupDownloads },
       ),
     enabled: season !== null && selections.length > 0,
     staleTime: 0,
@@ -704,7 +729,7 @@ export function SeasonDuplicateDialog({
   const submissionKey = JSON.stringify({
     seasonKey,
     authorizationKey,
-    coordinateSonarr,
+    sonarrMode,
     cleanupDownloads,
   });
   const submissionKeyRef = useRef(submissionKey);
@@ -730,18 +755,15 @@ export function SeasonDuplicateDialog({
   useEffect(() => {
     if (!deletionPreview.isError || deletionPreview.isFetching) return;
     setDestinationAvailability({ key: authorizationKey, sonarr: false });
-    setDestinationChoice({
-      key: authorizationKey,
-      coordinateSonarr: false,
-      cleanupDownloads: false,
-    });
+    setDestinationChoice((current) => seasonChoiceWithoutSonarr(authorizationKey, current));
   }, [authorizationKey, deletionPreview.isError, deletionPreview.isFetching]);
   const cleanupEligibleVersionCount = deletionPreview.data?.cleanupEligibleVersionCount ?? 0;
+  const breakGlassVisible = seasonBreakGlassVisible(deletionPreview.data, sonarrMode);
   useEffect(() => {
     if (deletionPreview.data && cleanupEligibleVersionCount === 0) {
       setDestinationChoice((current) => ({
         key: authorizationKey,
-        coordinateSonarr: current.key === authorizationKey && current.coordinateSonarr,
+        sonarrMode: current.key === authorizationKey ? current.sonarrMode : "none",
         cleanupDownloads: false,
       }));
     }
@@ -764,7 +786,7 @@ export function SeasonDuplicateDialog({
       onConfirm({
         selections,
         previewFingerprint: preview.fingerprint,
-        coordinateSonarr,
+        sonarrMode,
         cleanupDownloads,
       });
     } finally {
@@ -794,14 +816,49 @@ export function SeasonDuplicateDialog({
 
   const destinationPreview = selections.length > 0 &&
     (deletionPreview.isLoading ||
-      (deletionPreview.data?.automaticAdoptionCount ?? 0) > 0) &&
+      (deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 ||
+      breakGlassVisible) &&
     (
       <div className="season-profile-note" aria-live="polite">
         {deletionPreview.isLoading && "Verifying Plex and Sonarr destinations…"}
-        {coordinateSonarr && deletionPreview.data &&
+        {sonarrMode !== "none" && deletionPreview.data &&
           deletionPreview.data.automaticAdoptionCount > 0 && (
-          <span className="badge badge-info">
-            Sonarr adopts {deletionPreview.data.automaticAdoptionCount}
+          <div className="space-y-1">
+            <span className="badge badge-info">
+              Sonarr adopts {deletionPreview.data.automaticAdoptionCount}
+            </span>
+            {(deletionPreview.data.sonarrAdoptionTargets?.length ?? 0) > 0 && (
+              <details open={deletionPreview.data.sonarrAdoptionTargets?.length === 1}>
+                <summary className="cursor-pointer text-xs text-base-content/70">
+                  Review exact import{" "}
+                  {deletionPreview.data.sonarrAdoptionTargets?.length === 1 ? "target" : "targets"}
+                </summary>
+                <ul className="mt-1 space-y-1 text-xs text-base-content/65">
+                  {deletionPreview.data.sonarrAdoptionTargets?.map((target) => (
+                    <li key={target.episodeRatingKey} className="break-all">
+                      <span className="font-medium">{target.episodeTitle}:</span> {target.path}
+                      {target.fallbackCandidateCount > 0
+                        ? ` · ${target.fallbackCandidateCount} other verified retained ${
+                          target.fallbackCandidateCount === 1 ? "copy" : "copies"
+                        } available to the guarded rescan fallback`
+                        : " · guarded rescan remains available if exact import fails"}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+        {sonarrMode === "remove_and_unmonitor" && deletionPreview.data &&
+          (deletionPreview.data.removedAndUnmonitoredCount ?? 0) > 0 && (
+          <span className="badge badge-warning">
+            Sonarr removes and unmonitors {deletionPreview.data.removedAndUnmonitoredCount}
+          </span>
+        )}
+        {sonarrMode === "none" && deletionPreview.data?.breakGlassAvailable &&
+          deletionPreview.data.adoptionUnavailableReason && (
+          <span className="text-warning">
+            {deletionPreview.data.adoptionUnavailableReason}
           </span>
         )}
       </div>
@@ -810,21 +867,22 @@ export function SeasonDuplicateDialog({
   const destinationOptions = (
     <DestinationOptions
       options={[
-        ...(seasonSonarrVisible(authorizationKey, destinationAvailability)
+        ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
+            deletionPreview.data?.breakGlassAvailable !== true
           ? [{
             id: "arr" as const,
             service: "sonarr" as const,
             label: "Sonarr",
             info:
-              "For a Sonarr-managed episode file, Sonarr removes that file, rescans the existing series folder, and adopts the retained version already there. Versions Sonarr does not manage are removed through Plex. The series itself is never removed from Sonarr.",
-            checked: coordinateSonarr,
+              "For a Sonarr-managed episode file, Sonarr protects monitoring, removes only the old EpisodeFile, and first imports the exact retained path. A whole-series rescan is used only as a guarded fallback and may adopt another verified retained copy. Versions Sonarr does not manage are removed through Plex; the series itself is never removed.",
+            checked: sonarrMode === "adopt_retained",
             disabled: pending || deletionPreview.isFetching,
             warning: false,
             onChange: (checked: boolean) => {
               setDestinationChoice({
                 key: authorizationKey,
-                coordinateSonarr: checked,
-                cleanupDownloads: false,
+                sonarrMode: checked ? "adopt_retained" : "none",
+                cleanupDownloads,
               });
             },
           }]
@@ -844,9 +902,33 @@ export function SeasonDuplicateDialog({
             onChange: (checked: boolean) =>
               setDestinationChoice({
                 key: authorizationKey,
-                coordinateSonarr,
+                sonarrMode,
                 cleanupDownloads: checked,
               }),
+          }]
+          : []),
+        ...(breakGlassVisible
+          ? [{
+            id: "arr-break-glass" as const,
+            service: "sonarr" as const,
+            label: "Remove from Sonarr and unmonitor",
+            info:
+              "Break glass: episodes without an eligible retained path have only their exact managed EpisodeFile removed and remain permanently unmonitored. Eligible episodes still adopt a verified retained copy. The series is never removed.",
+            checked: sonarrMode === "remove_and_unmonitor",
+            disabled: pending || deletionPreview.isFetching,
+            warning: true,
+            onChange: (checked: boolean) => {
+              if (
+                checked && !globalThis.confirm(
+                  "Permanently unmonitor each affected Sonarr episode that has no eligible retained path after removing its managed file? Eligible episodes will still adopt a verified retained copy.",
+                )
+              ) return;
+              setDestinationChoice({
+                key: authorizationKey,
+                sonarrMode: checked ? "remove_and_unmonitor" : "none",
+                cleanupDownloads,
+              });
+            },
           }]
           : []),
       ]}
@@ -888,6 +970,11 @@ export function SeasonDuplicateDialog({
                 {blocker}
               </div>
             ))}
+            {deletionPreview.data?.sonarrInspectionWarning && (
+              <div className="alert alert-warning text-sm" role="alert">
+                {deletionPreview.data.sonarrInspectionWarning}
+              </div>
+            )}
             {error !== null && error !== undefined && (
               <div className="space-y-2">
                 <ErrorAlert

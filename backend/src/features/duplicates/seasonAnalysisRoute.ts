@@ -280,7 +280,7 @@ router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
       seasonRatingKey: intent.seasonRatingKey,
       selections: intent.selections,
       inspectSonarr: true,
-      coordinateSonarr: intent.coordinateSonarr,
+      sonarrMode: intent.sonarrMode,
       inspectDownloadCleanup: true,
       cleanupDownloads: intent.cleanupDownloads,
     });
