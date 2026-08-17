@@ -356,6 +356,25 @@ function DashboardInner() {
           initial="hidden"
           animate="show"
         >
+          {!isFirstRun && (
+            <AnimatePresence>
+              {(activeGlobalSyncId !== null || triggerSync.isPending) && (
+                <motion.div
+                  key="sync-progress"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                >
+                  <SyncProgressPanel
+                    progress={globalSyncProgress ?? undefined}
+                    done={globalSyncDone}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+
           {showArrOnboarding && (
             <motion.aside
               className="arr-onboarding-nudge"
@@ -449,30 +468,6 @@ function DashboardInner() {
               <AlertCircle className="w-4 h-4" />
               <span>{triggerSync.error.message}</span>
             </div>
-          )}
-
-          {
-            /* Suppressed during isFirstRun only — FirstRunHero already shows its own inline
-          progress, so showing this panel too would be a duplicate. It stays visible
-          while isCheckingFirstRun, since that state has no progress display of its own. */
-          }
-          {!isFirstRun && (
-            <AnimatePresence>
-              {(activeGlobalSyncId !== null || triggerSync.isPending) && (
-                <motion.div
-                  key="sync-progress"
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                >
-                  <SyncProgressPanel
-                    progress={globalSyncProgress ?? undefined}
-                    done={globalSyncDone}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
           )}
 
           {!libsLoading && (isCheckingFirstRun
