@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { Archive, Mail, Settings as SettingsIcon, Users } from "lucide-react";
+import { Archive, EyeOff, Mail, Settings as SettingsIcon, Users } from "lucide-react";
 import { PageHeader } from "../components/Workspace.tsx";
 import { ArrIntegrationTrigger } from "../features/arr/ArrIntegrationTrigger.tsx";
 import {
@@ -8,6 +8,7 @@ import {
   LoadingAutoSyncSettings,
 } from "../features/settings/AutoSyncSettings.tsx";
 import { DebouncedDaysInput } from "../features/settings/DebouncedDaysInput.tsx";
+import { IgnoredContentManager } from "../features/settings/IgnoredContentManager.tsx";
 import {
   LoadingDaysInput,
   SettingRow,
@@ -198,6 +199,27 @@ function SettingsPage() {
                 />
               )
               : <LoadingDaysInput label="Loading overdue invitation threshold" />}
+          </SettingRow>
+        </SettingsSection>
+
+        <SettingsSection
+          icon={EyeOff}
+          tone="primary"
+          title="Ignored content"
+          description="Exclude selected movies and shows from library insights and cleanup tools."
+        >
+          <SettingRow
+            title="Movies and shows to ignore"
+            description="Search your synced Plex libraries, add exclusions, or restore content to results at any time. Ignored titles remain untouched in Plex."
+            onClick={(event) => {
+              if (event.target instanceof Element && event.target.closest("dialog")) return;
+              const dialog = document.querySelector<HTMLDialogElement>(
+                "#ignored-content-manager",
+              );
+              if (!dialog?.open) dialog?.showModal();
+            }}
+          >
+            <IgnoredContentManager />
           </SettingRow>
         </SettingsSection>
       </div>

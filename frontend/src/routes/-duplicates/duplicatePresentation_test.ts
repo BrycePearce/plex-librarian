@@ -3,7 +3,9 @@ import type { DuplicateGroup, DuplicateSeasonGroup, MediaVersion } from "../../l
 import {
   duplicatePageSummary,
   reclaimableKilobytes,
+  seasonAffectedEpisodeLabel,
   seasonDifferenceChips,
+  seasonIsPartial,
   seasonSummaryAccessibleText,
   seasonVersionCountLabel,
   versionQualityLabels,
@@ -103,6 +105,24 @@ Deno.test("season version count includes a partial additional copy", () => {
   assertEquals(seasonVersionCountLabel(season), "3 versions");
   season.episodes[1]!.versions.pop();
   assertEquals(seasonVersionCountLabel(season), "2 versions");
+});
+
+Deno.test("season scope distinguishes partial duplicate coverage", () => {
+  const season = {
+    duplicateGroupCount: 1,
+    totalEpisodeCount: 8,
+  } as DuplicateSeasonGroup;
+  assertEquals(seasonAffectedEpisodeLabel(season), "1 of 8 episodes affected");
+  assertEquals(seasonIsPartial(season), true);
+
+  season.duplicateGroupCount = 8;
+  assertEquals(seasonAffectedEpisodeLabel(season), "8 of 8 episodes affected");
+  assertEquals(seasonIsPartial(season), false);
+
+  season.totalEpisodeCount = null;
+  season.duplicateGroupCount = 2;
+  assertEquals(seasonAffectedEpisodeLabel(season), "2 duplicate episodes");
+  assertEquals(seasonIsPartial(season), false);
 });
 
 Deno.test("comparison identifies a matching technical profile without claiming exactness", () => {

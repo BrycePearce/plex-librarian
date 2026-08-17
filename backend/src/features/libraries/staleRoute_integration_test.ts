@@ -1,6 +1,10 @@
 import { assertEquals } from '@std/assert';
 import { resolve } from '@std/path';
-import type { StaleResponse } from '@plex-librarian/shared/types.ts';
+import type {
+  IgnoredContentResponse,
+  LibrariesResponse,
+  StaleResponse,
+} from '@plex-librarian/shared/types.ts';
 
 const testDirectory = await Deno.makeTempDir();
 const testDbPath = resolve(testDirectory, 'stale-route.db');
@@ -81,4 +85,36 @@ Deno.test('stale route keeps an exact total for a past-end direct link', async (
   assertEquals(page.total, 3);
   assertEquals(page.hasMore, false);
   assertEquals(page.items, []);
+});
+
+Deno.test('ignored content API adds, searches, filters, and restores synced items', async () => {
+  const added = await app.request('/api/settings/ignored-content', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKey: 'one' }),
+  });
+  assertEquals(added.status, 201);
+
+  const ignored = await (await app.request('/api/settings/ignored-content'))
+    .json() as IgnoredContentResponse;
+  assertEquals(ignored.items.map((item) => item.ratingKey), ['one']);
+  const search = await (await app.request('/api/settings/ignored-content/search?q=One'))
+    .json() as IgnoredContentResponse;
+  assertEquals(search.items[0]?.ignored, true);
+
+  const page = await stale('limit=10');
+  assertEquals(page.total, 2);
+  assertEquals(page.items.map((item) => item.ratingKey), ['two', 'three']);
+  const libraries = await (await app.request('/api/libraries')).json() as LibrariesResponse;
+  assertEquals(libraries.libraries[0]?.itemCount, 2);
+  assertEquals(libraries.libraries[0]?.totalFileSize, 300);
+  assertEquals((await app.request('/api/libraries/movies/movies/one')).status, 404);
+
+  const removed = await app.request('/api/settings/ignored-content/one', { method: 'DELETE' });
+  assertEquals(removed.status, 204);
+  assertEquals(
+    (await app.request('/api/settings/ignored-content/one', { method: 'DELETE' })).status,
+    204,
+  );
+  assertEquals((await stale('limit=10')).total, 3);
 });

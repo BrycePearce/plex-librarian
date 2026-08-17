@@ -82,6 +82,27 @@ Deno.test('episode gaps API validates query controls and applies library/search 
   assertEquals((await app.request('/api/tools/episode-gaps?status=nope')).status, 400);
 });
 
+Deno.test('episode gaps exclude ignored parent shows from rows and summaries', async () => {
+  withTransaction((client) => {
+    client.prepare(
+      'INSERT INTO ignored_content (server_id, rating_key, created_at) VALUES (1, ?, 100)',
+    ).run('show-a');
+  });
+  try {
+    const gaps = await request();
+    assertEquals(gaps.total, 0);
+    assertEquals(gaps.rows, []);
+    assertEquals(gaps.summary.gapSeasonCount, 0);
+    assertEquals(gaps.summary.missingEpisodeCount, 0);
+  } finally {
+    withTransaction((client) => {
+      client.prepare('DELETE FROM ignored_content WHERE server_id = 1 AND rating_key = ?').run(
+        'show-a',
+      );
+    });
+  }
+});
+
 Deno.test('episode gap actions redirect only through active Plex and mapped Sonarr identities', async () => {
   const plex = await app.request('/api/tools/episode-gaps/open/plex/show-a');
   assertEquals(plex.status, 302);

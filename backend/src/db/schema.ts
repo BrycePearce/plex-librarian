@@ -96,6 +96,27 @@ export const items = sqliteTable(
   }),
 );
 
+// User-managed exclusions for analysis and cleanup surfaces. Ignored content remains in
+// `items` and continues to sync normally so removing an exclusion takes effect
+// immediately without requiring another Plex sync.
+export const ignoredContent = sqliteTable(
+  'ignored_content',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, {
+      onDelete: 'cascade',
+    }),
+    ratingKey: text('rating_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.ratingKey] }),
+    itemFk: foreignKey({
+      columns: [table.serverId, table.ratingKey],
+      foreignColumns: [items.serverId, items.ratingKey],
+    }).onDelete('cascade'),
+  }),
+);
+
 export const arrInstances = sqliteTable(
   'arr_instances',
   {

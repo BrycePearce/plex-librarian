@@ -1,6 +1,7 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQLWrapper } from 'drizzle-orm';
 import {
   episodeMediaVersions,
+  ignoredContent,
   itemMediaVersions,
   items,
   libraries,
@@ -25,6 +26,15 @@ export const itemByRatingKey = (serverId: number, ratingKey: string) =>
 
 export const itemsByLibrary = (serverId: number, libraryKey: string) =>
   and(eq(items.serverId, serverId), eq(items.libraryKey, libraryKey));
+
+// Use this at the root of every user-facing content query. The rating key may be an
+// item/movie key or a TV row's parent show key.
+export const contentIsNotIgnored = (serverId: number, ratingKey: SQLWrapper) =>
+  sql`not exists (
+    select 1 from ${ignoredContent}
+    where ${ignoredContent.serverId} = ${serverId}
+      and ${ignoredContent.ratingKey} = ${ratingKey}
+  )`;
 
 export const seasonsByShow = (serverId: number, showRatingKey: string) =>
   and(eq(seasons.serverId, serverId), eq(seasons.showRatingKey, showRatingKey));

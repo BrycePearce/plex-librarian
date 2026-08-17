@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
-import { settings } from '../../db/schema.ts';
+import { ignoredContent, items, libraries, settings } from '../../db/schema.ts';
 import type {
+  IgnoredContentItem,
+  IgnoredContentResponse,
   PlexPathMapping,
   SavePlexPathMappingRequest,
   Settings,
@@ -71,6 +73,34 @@ function publicPlexMapping(row: {
   validatedAt: number;
 }): PlexPathMapping {
   return { ...row, caseSensitive: row.caseSensitive === 1 };
+}
+
+const ignoredContentSelection = {
+  ratingKey: items.ratingKey,
+  libraryKey: items.libraryKey,
+  libraryTitle: libraries.title,
+  title: items.title,
+  type: items.type,
+  thumb: items.thumb,
+  year: items.year,
+  createdAt: ignoredContent.createdAt,
+};
+
+function publicIgnoredContent(row: {
+  ratingKey: string;
+  libraryKey: string;
+  libraryTitle: string;
+  title: string;
+  type: string;
+  thumb: string | null;
+  year: number | null;
+  createdAt: number | null;
+}, ignored: boolean): IgnoredContentItem {
+  return {
+    ...row,
+    type: row.type as 'movie' | 'show',
+    ignored,
+  };
 }
 
 // GET /api/settings
@@ -314,6 +344,112 @@ router.patch('/', async (c) => {
       ipHistoryRetentionDays: row!.ipHistoryRetentionDays,
     } satisfies Settings,
   );
+});
+
+router.get('/ignored-content', async (c) => {
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ items: [] } satisfies IgnoredContentResponse);
+  const rows = await db.select(ignoredContentSelection)
+    .from(ignoredContent)
+    .innerJoin(
+      items,
+      and(
+        eq(items.serverId, ignoredContent.serverId),
+        eq(items.ratingKey, ignoredContent.ratingKey),
+      ),
+    )
+    .innerJoin(
+      libraries,
+      and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
+    )
+    .where(eq(ignoredContent.serverId, active.serverId))
+    .orderBy(asc(items.title), asc(items.ratingKey));
+  return c.json({ items: rows.map((row) => publicIgnoredContent(row, true)) });
+});
+
+router.get('/ignored-content/search', async (c) => {
+  const query = (c.req.query('q') ?? '').trim();
+  if (query.length < 2) return c.json({ items: [] } satisfies IgnoredContentResponse);
+  if (query.length > 200) return c.json({ error: 'search must be 200 characters or fewer' }, 400);
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ items: [] } satisfies IgnoredContentResponse);
+  const rows = await db.select(ignoredContentSelection)
+    .from(items)
+    .innerJoin(
+      libraries,
+      and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
+    )
+    .leftJoin(
+      ignoredContent,
+      and(
+        eq(ignoredContent.serverId, items.serverId),
+        eq(ignoredContent.ratingKey, items.ratingKey),
+      ),
+    )
+    .where(and(
+      eq(items.serverId, active.serverId),
+      sql`${items.type} in ('movie', 'show')`,
+      sql`instr(lower(${items.title}), lower(${query})) > 0`,
+    ))
+    .orderBy(asc(items.title), asc(items.year), asc(items.ratingKey))
+    .limit(40);
+  return c.json(
+    {
+      items: rows.map((row) => publicIgnoredContent(row, row.createdAt !== null)),
+    } satisfies IgnoredContentResponse,
+  );
+});
+
+router.post('/ignored-content', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { ratingKey?: unknown };
+  if (typeof body.ratingKey !== 'string' || !body.ratingKey || body.ratingKey.length > 200) {
+    return c.json({ error: 'ratingKey is required' }, 400);
+  }
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ error: 'Plex is not configured' }, 404);
+  const [row] = await db.select(ignoredContentSelection)
+    .from(items)
+    .innerJoin(
+      libraries,
+      and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
+    )
+    .leftJoin(
+      ignoredContent,
+      and(
+        eq(ignoredContent.serverId, items.serverId),
+        eq(ignoredContent.ratingKey, items.ratingKey),
+      ),
+    )
+    .where(and(
+      eq(items.serverId, active.serverId),
+      eq(items.ratingKey, body.ratingKey),
+      sql`${items.type} in ('movie', 'show')`,
+    )).limit(1);
+  if (!row) return c.json({ error: 'movie or show not found' }, 404);
+  const createdAt = row.createdAt ?? Math.floor(Date.now() / 1000);
+  await db.insert(ignoredContent).values({
+    serverId: active.serverId,
+    ratingKey: body.ratingKey,
+    createdAt,
+  }).onConflictDoNothing();
+  return c.json(
+    publicIgnoredContent({ ...row, createdAt }, true),
+    row.createdAt === null ? 201 : 200,
+  );
+});
+
+router.delete('/ignored-content/:ratingKey', async (c) => {
+  const ratingKey = c.req.param('ratingKey');
+  if (!ratingKey || ratingKey.length > 200) return c.json({ error: 'content not found' }, 404);
+  const active = await resolveActiveServer().catch(() => null);
+  if (!active) return c.json({ error: 'content not found' }, 404);
+  await db.delete(ignoredContent).where(and(
+    eq(ignoredContent.serverId, active.serverId),
+    eq(ignoredContent.ratingKey, ratingKey),
+  ));
+  // Idempotent so a retried request or stale cached row cannot turn a successful
+  // removal into a misleading "not found" error.
+  return c.body(null, 204);
 });
 
 // App-managed Plex -> Plex Librarian namespace mappings. They intentionally live

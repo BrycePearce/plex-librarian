@@ -25,6 +25,12 @@ import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
 
+export function initialSeasonReviewMode(
+  season: Pick<DuplicateSeasonGroup, "duplicateGroupCount"> | null,
+): ReviewMode {
+  return season?.duplicateGroupCount === 1 ? "episodes" : "profiles";
+}
+
 export function seasonDeletionConflictOperationId(error: unknown): string | null {
   return error instanceof ApiError && error.code === "DELETION_CONFLICT" && error.operationId
     ? error.operationId
@@ -565,7 +571,10 @@ export function SeasonDuplicateDialog({
     values: new Map(plans.map((plan) => [planKey(plan), plan.candidate.keepMediaId])),
   });
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [mode, setMode] = useState<ReviewMode>("profiles");
+  const [modeState, setModeState] = useState<{ key: string; value: ReviewMode }>({
+    key: seasonKey,
+    value: initialSeasonReviewMode(season),
+  });
   const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set());
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirmationRefreshing, setConfirmationRefreshing] = useState(false);
@@ -581,6 +590,7 @@ export function SeasonDuplicateDialog({
   const [filter, setFilter] = useState<EpisodeFilter>("all");
   const allCheckboxRef = useRef<HTMLInputElement>(null);
   const initializedSeasonKeyRef = useRef<string | null>(null);
+  const mode = modeState.key === seasonKey ? modeState.value : initialSeasonReviewMode(season);
   const selected = selectedState.key === seasonKey ? selectedState.ids : initialSelection(plans);
   const keepers = keepersState.key === seasonKey
     ? keepersState.values
@@ -599,7 +609,7 @@ export function SeasonDuplicateDialog({
       values: new Map(plans.map((plan) => [planKey(plan), plan.candidate.keepMediaId])),
     });
     setExpanded(null);
-    setMode("profiles");
+    setModeState({ key: seasonKey, value: initialSeasonReviewMode(season) });
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
     setDestinationChoice({ key: "", sonarrMode: "none", cleanupDownloads: false });
@@ -622,7 +632,7 @@ export function SeasonDuplicateDialog({
   }
 
   function changeMode(nextMode: ReviewMode) {
-    setMode(nextMode);
+    setModeState({ key: seasonKey, value: nextMode });
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
     setSelectedState({ key: seasonKey, ids: new Set() });
@@ -1006,14 +1016,18 @@ export function SeasonDuplicateDialog({
               {season.showTitle}
             </div>
             <h2 className="mt-1 text-xl font-bold">
-              Delete a Season {season.seasonIndex} version
+              Review Season {season.seasonIndex} duplicates
             </h2>
             <p className="mt-1 text-sm text-base-content/55">
-              {analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount} duplicate{" "}
-              {(analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount) === 1
-                ? "episode"
-                : "episodes"}
-              {season.totalEpisodeCount !== null && ` · ${season.totalEpisodeCount} total`}
+              {season.totalEpisodeCount !== null
+                ? `${
+                  analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount
+                } of ${season.totalEpisodeCount} episodes affected`
+                : `${analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount} duplicate ${
+                  (analysis.data?.analyzedEpisodeCount ?? season.duplicateGroupCount) === 1
+                    ? "episode"
+                    : "episodes"
+                }`}
             </p>
             {comparisonSummary &&
               (comparisonSummary.sameProfileEpisodeCount > 0 ||
@@ -1021,7 +1035,10 @@ export function SeasonDuplicateDialog({
               (
                 <p className="season-batch-header-summary">
                   {comparisonSummary.sameProfileEpisodeCount > 0 && (
-                    <span>{comparisonSummary.sameProfileEpisodeCount} matching profiles</span>
+                    <span>
+                      {comparisonSummary.sameProfileEpisodeCount} technically matching{" "}
+                      {comparisonSummary.sameProfileEpisodeCount === 1 ? "episode" : "episodes"}
+                    </span>
                   )}
                   {comparisonSummary.needsReviewEpisodeCount > 0 && (
                     <span>{comparisonSummary.needsReviewEpisodeCount} need review</span>
@@ -1051,6 +1068,10 @@ export function SeasonDuplicateDialog({
                       : "bg-transparent text-base-content/45 shadow-none"
                   }`}
                   aria-pressed={mode === candidate}
+                  disabled={candidate === "profiles" && season.duplicateGroupCount < 2}
+                  title={candidate === "profiles" && season.duplicateGroupCount < 2
+                    ? "Season versions need duplicate files in at least two episodes"
+                    : undefined}
                   onClick={() => candidate !== mode && changeMode(candidate)}
                 >
                   {label}

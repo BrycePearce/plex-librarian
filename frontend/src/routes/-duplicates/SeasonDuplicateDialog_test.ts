@@ -4,6 +4,7 @@ import {
   episodeCoverageLabel,
   groupSeasonLanePaths,
   initialIndividualSelectionKeys,
+  initialSeasonReviewMode,
   initialSeasonSelectionKeys,
   MAX_SEASON_CLEANUP_EPISODES,
   refreshAuthorizedSeasonDeletionPreview,
@@ -100,6 +101,12 @@ Deno.test("season lane match basis uses explicit evidence explanations", () => {
   assertEquals(seasonLaneMatchBasisLabel("technical-only"), "Technical match");
   assertEquals(seasonLaneMatchBasisLabel("mixed"), "Mixed evidence");
   assertEquals(seasonLaneMatchBasisLabel("filename-family"), "Filename matched");
+});
+
+Deno.test("single-episode season duplicates open in individual review", () => {
+  assertEquals(initialSeasonReviewMode({ duplicateGroupCount: 1 }), "episodes");
+  assertEquals(initialSeasonReviewMode({ duplicateGroupCount: 2 }), "profiles");
+  assertEquals(initialSeasonReviewMode(null), "profiles");
 });
 
 Deno.test("selected break-glass remains visible after its authoritative preview rebuild", () => {

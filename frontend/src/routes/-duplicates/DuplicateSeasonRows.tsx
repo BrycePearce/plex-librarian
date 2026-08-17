@@ -4,6 +4,8 @@ import { formatKilobytes } from "../../lib/format.ts";
 import { PosterThumb } from "../../components/PosterThumb.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import {
+  seasonAffectedEpisodeLabel,
+  seasonIsPartial,
   seasonSummaryAccessibleText,
   seasonVersionCountLabel,
   versionQualityLabels,
@@ -25,6 +27,8 @@ export function DuplicateSeasonRows({
   const label = `${season.showTitle}, season ${season.seasonIndex}`;
   const summary = season.comparisonSummary;
   const versionCountLabel = seasonVersionCountLabel(season);
+  const affectedEpisodeLabel = seasonAffectedEpisodeLabel(season);
+  const partialSeason = seasonIsPartial(season);
   const maximumVersionCount = Math.max(
     0,
     ...season.episodes.map((episode) => episode.versions.length),
@@ -74,6 +78,9 @@ export function DuplicateSeasonRows({
             <div className="max-w-xs truncate text-xs text-base-content/45">
               Season {season.seasonIndex}
             </div>
+            {partialSeason && (
+              <span className="duplicates-partial-season-badge">Partial season</span>
+            )}
           </div>
         </div>
       </td>
@@ -82,10 +89,9 @@ export function DuplicateSeasonRows({
           openOnClick
           content={
             <div className="duplicates-season-popover">
-              <div className="font-semibold">{versionCountLabel} across this season</div>
+              <div className="font-semibold">{affectedEpisodeLabel}</div>
               <p className="mt-0.5 text-base-content/60">
-                {season.duplicateGroupCount} duplicate{" "}
-                {season.duplicateGroupCount === 1 ? "episode" : "episodes"}
+                Up to {versionCountLabel} per affected episode
                 {partialPass ? ` · details sampled from the first ${season.episodes.length}` : ""}
               </p>
               {versionProfiles.length > 0
@@ -138,7 +144,9 @@ export function DuplicateSeasonRows({
           <button
             type="button"
             className="duplicates-version-summary"
-            aria-label={`${versionCountLabel} in ${label}. ${seasonSummaryAccessibleText(summary)}`}
+            aria-label={`${affectedEpisodeLabel} in ${label}; ${versionCountLabel} per affected episode. ${
+              seasonSummaryAccessibleText(summary)
+            }`}
           >
             <span className="duplicates-version-stack" aria-hidden="true">
               {Array.from({ length: Math.min(3, maximumVersionCount) }).map((_, index) => (
@@ -146,7 +154,8 @@ export function DuplicateSeasonRows({
               ))}
             </span>
             <div>
-              <div className="duplicates-version-count">{versionCountLabel}</div>
+              <div className="duplicates-version-count">{affectedEpisodeLabel}</div>
+              <div className="duplicates-version-detail">{versionCountLabel}</div>
               {quality.labels.length > 0 && (
                 <div className="duplicates-quality" aria-hidden="true">
                   {quality.labels.map((qualityLabel) => (

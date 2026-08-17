@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 
 export function SettingsSection({
   icon: Icon,
@@ -37,13 +37,18 @@ export function SettingRow({
   title,
   description,
   children,
+  onClick,
 }: {
   title: string;
   description: string;
   children: ReactNode;
+  onClick?: MouseEventHandler<HTMLDivElement>;
 }) {
   return (
-    <div className="settings-field-row">
+    <div
+      className={`settings-field-row${onClick ? " settings-field-row-action" : ""}`}
+      onClick={onClick}
+    >
       <div>
         <h3>{title}</h3>
         <p>{description}</p>

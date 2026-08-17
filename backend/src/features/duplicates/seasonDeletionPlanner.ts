@@ -1,6 +1,7 @@
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, items, servers } from '../../db/schema.ts';
+import { contentIsNotIgnored } from '../../db/scope.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import type {
   PlexMediaTechnicalDetails,
@@ -344,6 +345,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
   }).from(episodeMediaVersions).where(and(
     eq(episodeMediaVersions.serverId, input.serverId),
     eq(episodeMediaVersions.seasonRatingKey, input.seasonRatingKey),
+    contentIsNotIgnored(input.serverId, episodeMediaVersions.showRatingKey),
     not(episodeRootIsWorkflowOwned(
       input.serverId,
       sql`${episodeMediaVersions.libraryKey}`,

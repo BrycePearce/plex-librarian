@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
 import type {
   RequestFollowThroughDetailItem,
@@ -14,6 +14,7 @@ import type {
   RequestFollowThroughHealth,
   RequestFollowThroughStats,
 } from './requestFollowThrough.ts';
+import { contentIsNotIgnored } from '../../db/scope.ts';
 
 export interface RequestFollowThroughQueryResult {
   statsByAccount: Map<number, RequestFollowThroughStats>;
@@ -125,6 +126,10 @@ export async function queryRequestFollowThrough(
         inArray(seerrRequests.accountId, accountIds),
         inArray(seerrRequests.requestStatus, acceptedRequestStatuses),
         sql`${seerrRequests.availableAt} IS NOT NULL`,
+        or(
+          isNull(seerrRequests.ratingKey),
+          contentIsNotIgnored(serverId, seerrRequests.ratingKey),
+        ),
       )).groupBy(seerrRequests.accountId)
       : Promise.resolve([]),
     database.select({
@@ -176,6 +181,7 @@ export async function queryRequestFollowThroughDetails(
     sql`${seerrRequests.ratingKey} IS NOT NULL`,
     sql`${seerrRequests.availableAt} BETWEEN ${windowStart} AND ${graceCutoff}`,
     knownScope,
+    contentIsNotIgnored(serverId, seerrRequests.ratingKey),
   );
   const itemJoin = and(
     eq(items.serverId, seerrRequests.serverId),

@@ -12,6 +12,8 @@ import type {
   EpisodeGapsParams,
   EpisodeGapsResponse,
   FinishRelocationResponse,
+  IgnoredContentItem,
+  IgnoredContentResponse,
   LibrariesResponse,
   Library,
   MediaRemovalSummary,
@@ -226,6 +228,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       preview: body.preview as SeasonDeletionPreviewResponse | undefined,
     });
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -605,6 +608,20 @@ export const api = {
       }),
     deletePlexPathMapping: (id: number) =>
       apiFetch<void>(`/settings/plex-path-mappings/${id}`, {
+        method: "DELETE",
+      }),
+    ignoredContent: () => apiFetch<IgnoredContentResponse>("/settings/ignored-content"),
+    searchIgnoredContent: (query: string) =>
+      apiFetch<IgnoredContentResponse>(
+        `/settings/ignored-content/search?q=${encodeURIComponent(query)}`,
+      ),
+    addIgnoredContent: (ratingKey: string) =>
+      apiFetch<IgnoredContentItem>("/settings/ignored-content", {
+        method: "POST",
+        body: JSON.stringify({ ratingKey }),
+      }),
+    removeIgnoredContent: (ratingKey: string) =>
+      apiFetch<void>(`/settings/ignored-content/${encodeURIComponent(ratingKey)}`, {
         method: "DELETE",
       }),
   },

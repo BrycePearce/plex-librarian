@@ -40,6 +40,12 @@ function createFixture() {
       year INTEGER,
       thumb TEXT
     );
+    CREATE TABLE ignored_content (
+      server_id INTEGER NOT NULL,
+      rating_key TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (server_id, rating_key)
+    );
     CREATE TABLE user_item_activity (
       server_id INTEGER NOT NULL,
       account_id INTEGER NOT NULL,

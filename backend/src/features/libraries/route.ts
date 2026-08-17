@@ -27,6 +27,7 @@ import {
   settings,
 } from '../../db/schema.ts';
 import {
+  contentIsNotIgnored,
   episodeVersionsByLibrary,
   HAS_DUPLICATE_VERSIONS,
   itemByRatingKey,
@@ -104,7 +105,10 @@ router.get('/', async (c) => {
       libraryKey: items.libraryKey,
       itemCount: count(),
       totalFileSize: sql<string | null>`cast(sum(${items.fileSize}) as text)`,
-    }).from(items).where(eq(items.serverId, serverId)).groupBy(items.libraryKey),
+    }).from(items).where(and(
+      eq(items.serverId, serverId),
+      contentIsNotIgnored(serverId, items.ratingKey),
+    )).groupBy(items.libraryKey),
   ]);
 
   const statsByKey = new Map(statsRows.map((r) => [r.libraryKey, r]));
@@ -285,6 +289,7 @@ router.get('/:key/stale', async (c) => {
 
   const staleWhere = and(
     itemsByLibrary(serverId, key),
+    contentIsNotIgnored(serverId, items.ratingKey),
     not(workflowOwnedCond),
     staleCond,
     duplicatesCond,
@@ -485,7 +490,11 @@ router.get('/:key/shows/:ratingKey', async (c) => {
   const [show] = await db
     .select()
     .from(items)
-    .where(and(itemByRatingKey(serverId, ratingKey), eq(items.libraryKey, key)))
+    .where(and(
+      itemByRatingKey(serverId, ratingKey),
+      eq(items.libraryKey, key),
+      contentIsNotIgnored(serverId, items.ratingKey),
+    ))
     .limit(1);
   if (!show) return c.json({ error: 'show not found' }, 404);
 
@@ -521,7 +530,11 @@ router.get('/:key/movies/:ratingKey', async (c) => {
     db
       .select()
       .from(items)
-      .where(and(itemByRatingKey(serverId, ratingKey), eq(items.libraryKey, key)))
+      .where(and(
+        itemByRatingKey(serverId, ratingKey),
+        eq(items.libraryKey, key),
+        contentIsNotIgnored(serverId, items.ratingKey),
+      ))
       .limit(1),
     db.select({ historySyncedAt: libraries.historySyncedAt })
       .from(libraries)

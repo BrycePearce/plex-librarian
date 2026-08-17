@@ -78,3 +78,13 @@ Deno.test("season cleanup exposes rebuilt previews for explicit reconfirmation",
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("no-content responses resolve successfully without JSON parsing", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.resolve(new Response(null, { status: 204 }));
+  try {
+    assertEquals(await api.settings.removeIgnoredContent("show-1"), undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

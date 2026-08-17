@@ -19,6 +19,7 @@ import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { resolveDownloadCleanup } from '../mediaDeletion/cleanup.ts';
 import { resolveArrPath } from '../mediaDeletion/arrPaths.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import { contentIsNotIgnored } from '../../db/scope.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 const MAX_EPISODES = 500;
@@ -131,6 +132,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
   const [first] = await db.select().from(episodeMediaVersions).where(and(
     eq(episodeMediaVersions.serverId, serverId),
     eq(episodeMediaVersions.seasonRatingKey, seasonRatingKey),
+    contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
   )).limit(1);
   if (!first) return c.json({ error: 'season not found' }, 404);
 

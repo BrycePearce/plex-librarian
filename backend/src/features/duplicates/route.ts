@@ -2,7 +2,12 @@ import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
-import { episodeVersionsByEpisode, itemByRatingKey, mediaVersionsByItem } from '../../db/scope.ts';
+import {
+  contentIsNotIgnored,
+  episodeVersionsByEpisode,
+  itemByRatingKey,
+  mediaVersionsByItem,
+} from '../../db/scope.ts';
 import { createPlexClient } from '../../integrations/plex/index.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
@@ -73,7 +78,10 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
       tmdbId: items.tmdbId,
       tvdbId: items.tvdbId,
       libraryKey: items.libraryKey,
-    }).from(items).where(itemByRatingKey(serverId, ratingKey)).limit(1),
+    }).from(items).where(and(
+      itemByRatingKey(serverId, ratingKey),
+      contentIsNotIgnored(serverId, items.ratingKey),
+    )).limit(1),
     db.select().from(itemMediaVersions).where(mediaVersionsByItem(serverId, ratingKey)),
   ]);
   if (!item || item.type !== 'movie') return c.json({ error: 'movie not found' }, 404);
@@ -175,7 +183,10 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
   if (serverId === null) return c.json({ error: 'episode not found' }, 404);
 
   const versions = await db.select().from(episodeMediaVersions)
-    .where(episodeVersionsByEpisode(serverId, ratingKey));
+    .where(and(
+      episodeVersionsByEpisode(serverId, ratingKey),
+      contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
+    ));
   if (
     versions.length === 0 ||
     mediaIds.some((mediaId) => !versions.some((version) => version.mediaId === mediaId))
@@ -233,7 +244,10 @@ router.post('/movies/:ratingKey/media/technical-refresh', async (c) => {
   if (serverId === null) return c.json({ error: 'movie not found' }, 404);
 
   const versions = await db.select().from(itemMediaVersions)
-    .where(mediaVersionsByItem(serverId, ratingKey));
+    .where(and(
+      mediaVersionsByItem(serverId, ratingKey),
+      contentIsNotIgnored(serverId, itemMediaVersions.itemRatingKey),
+    ));
   if (versions.length === 0) return c.json({ error: 'movie not found' }, 404);
 
   try {
@@ -271,7 +285,10 @@ router.post('/episodes/:ratingKey/media/technical-refresh', async (c) => {
   if (serverId === null) return c.json({ error: 'episode not found' }, 404);
 
   const versions = await db.select().from(episodeMediaVersions)
-    .where(episodeVersionsByEpisode(serverId, ratingKey));
+    .where(and(
+      episodeVersionsByEpisode(serverId, ratingKey),
+      contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
+    ));
   if (versions.length === 0) return c.json({ error: 'episode not found' }, 404);
 
   try {

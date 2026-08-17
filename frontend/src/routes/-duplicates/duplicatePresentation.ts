@@ -102,6 +102,19 @@ export function seasonVersionCountLabel(season: DuplicateSeasonGroup): string {
   return `${maximum} versions`;
 }
 
+export function seasonAffectedEpisodeLabel(season: DuplicateSeasonGroup): string {
+  const count = season.duplicateGroupCount;
+  if (season.totalEpisodeCount !== null) {
+    return `${count} of ${season.totalEpisodeCount} episodes affected`;
+  }
+  return `${count} duplicate ${count === 1 ? "episode" : "episodes"}`;
+}
+
+export function seasonIsPartial(season: DuplicateSeasonGroup): boolean {
+  return season.totalEpisodeCount !== null &&
+    season.duplicateGroupCount < season.totalEpisodeCount;
+}
+
 const SEASON_DIFFERENCE_SHORT_LABELS: Record<DuplicateDifferenceCode, string> = {
   resolution: "resolution",
   runtime: "runtime",

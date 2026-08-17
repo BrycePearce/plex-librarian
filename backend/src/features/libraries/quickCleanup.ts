@@ -57,6 +57,12 @@ const inactiveSql = `(
   OR i.last_viewed_at < ?
 )`;
 
+const notIgnoredSql = `NOT EXISTS (
+  SELECT 1 FROM ignored_content ignored
+  WHERE ignored.server_id = i.server_id
+    AND ignored.rating_key = i.rating_key
+)`;
+
 function libraryState(
   client: SqliteClient,
   serverId: number,
@@ -157,7 +163,7 @@ export function analyzeStaleQuickCleanup(
       : `i.rating_key NOT IN (${excludedRatingKeys.map(() => '?').join(', ')})
         AND NOT (${workflowOwned})`;
     const eligibleSql =
-      `${inactiveSql} AND NOT (${workflowOwned}) AND NOT (${duplicate}) AND NOT (${recentRequestSql})${excludedSql}`;
+      `${inactiveSql} AND ${notIgnoredSql} AND NOT (${workflowOwned}) AND NOT (${duplicate}) AND NOT (${recentRequestSql})${excludedSql}`;
     const eligibleParams = [...baseParams, cutoff, ...excludedRatingKeys] as const;
     const direction = order === 'asc' ? 'ASC' : 'DESC';
     const candidateOrder = sort === 'inactiveSince'
@@ -173,6 +179,7 @@ export function analyzeStaleQuickCleanup(
                 (${includedSql}) AS included
          FROM items i
          WHERE i.server_id = ? AND i.library_key = ?
+           AND ${notIgnoredSql}
            AND ${inactiveSql}
        )
        SELECT
@@ -249,6 +256,7 @@ export function validateStaleQuickCleanupSelection(
        FROM items i
        WHERE i.server_id = ? AND i.library_key = ?
          AND i.rating_key IN (${placeholders})
+         AND ${notIgnoredSql}
          AND ${inactiveSql}
          AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})
@@ -292,6 +300,7 @@ export function isStaleQuickCleanupCandidate(
     return client.prepare(
       `SELECT 1 FROM items i
        WHERE i.server_id = ? AND i.library_key = ? AND i.rating_key = ?
+         AND ${notIgnoredSql}
          AND ${inactiveSql}
          AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})
@@ -332,6 +341,7 @@ export function staleQuickCleanupActiveProtection(
        FROM items i
        WHERE i.server_id = ? AND i.library_key = ?
          AND i.rating_key IN (${placeholders})
+         AND ${notIgnoredSql}
          AND ${inactiveSql}
          AND NOT (${workflowOwned})
          AND NOT (${duplicateSql(library.type)})

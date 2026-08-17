@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, not, sql } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
-import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
+import { contentIsNotIgnored, HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexMediaTechnicalDetails } from '../../integrations/plex/types.ts';
 import { analyzeSmartDuplicateVersions } from '@plex-librarian/shared/smartDuplicateAnalysis.ts';
@@ -276,6 +276,7 @@ export async function buildSmartDuplicateAnalysis(
         .from(itemMediaVersions)
         .where(and(
           eq(itemMediaVersions.serverId, serverId),
+          contentIsNotIgnored(serverId, itemMediaVersions.itemRatingKey),
           not(movieRootIsWorkflowOwned(
             serverId,
             sql`${itemMediaVersions.libraryKey}`,
@@ -294,6 +295,7 @@ export async function buildSmartDuplicateAnalysis(
         .from(episodeMediaVersions)
         .where(and(
           eq(episodeMediaVersions.serverId, serverId),
+          contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
           not(episodeRootIsWorkflowOwned(
             serverId,
             sql`${episodeMediaVersions.libraryKey}`,

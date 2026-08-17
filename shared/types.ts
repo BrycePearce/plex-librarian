@@ -3,6 +3,7 @@
 
 export type * from './types/auth.ts';
 export type * from './types/settings.ts';
+export type * from './types/ignoredContent.ts';
 export type * from './types/libraries.ts';
 export type * from './types/users.ts';
 export type * from './types/sync.ts';

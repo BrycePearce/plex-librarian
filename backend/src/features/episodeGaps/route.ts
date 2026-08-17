@@ -17,6 +17,7 @@ import type {
   EpisodeGapsStatusFilter,
 } from '@plex-librarian/shared/types.ts';
 import { decodeEpisodeGapProjection } from './projection.ts';
+import { contentIsNotIgnored } from '../../db/scope.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -162,7 +163,10 @@ router.get('/', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json(emptyResponse(limit, offset));
 
-  const scope = [eq(seasons.serverId, serverId)];
+  const scope = [
+    eq(seasons.serverId, serverId),
+    contentIsNotIgnored(serverId, seasons.showRatingKey),
+  ];
   if (libraryKey) scope.push(eq(seasons.libraryKey, libraryKey));
   if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
   const statusCondition = status === 'gaps'

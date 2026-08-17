@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, desc, eq, inArray, not, or, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items, seasons } from '../../db/schema.ts';
-import { HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
+import { contentIsNotIgnored, HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
@@ -173,6 +173,7 @@ router.get('/', async (c) => {
     ),
   }).from(episodeMediaVersions).where(and(
     eq(episodeMediaVersions.serverId, serverId),
+    contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
     not(episodeRootIsWorkflowOwned(
       serverId,
       sql`${episodeMediaVersions.libraryKey}`,
@@ -203,6 +204,7 @@ router.get('/', async (c) => {
         .from(itemMediaVersions)
         .where(and(
           eq(itemMediaVersions.serverId, serverId),
+          contentIsNotIgnored(serverId, itemMediaVersions.itemRatingKey),
           not(movieRootIsWorkflowOwned(
             serverId,
             sql`${itemMediaVersions.libraryKey}`,

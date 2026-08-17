@@ -452,20 +452,35 @@ function validateLocalTarget(
     if (kind === 'whole_item') {
       return client
         .prepare(
-          'SELECT library_key, title, type, tmdb_id, tvdb_id, last_viewed_at, added_at FROM items WHERE server_id = ? AND rating_key = ?',
+          `SELECT library_key, title, type, tmdb_id, tvdb_id, last_viewed_at, added_at
+           FROM items i WHERE server_id = ? AND rating_key = ?
+             AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+               WHERE ignored.server_id = i.server_id AND ignored.rating_key = i.rating_key)`,
         )
         .value<unknown[]>(serverId, snapshot.ratingKey);
     }
     if (kind === 'movie_version') {
       return client
         .prepare(
-          'SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+          `SELECT v.library_key, i.title, i.type, i.tmdb_id, i.tvdb_id, v.file_size,
+                  v.video_resolution, v.height, v.bitrate, v.video_codec, v.container
+           FROM item_media_versions v
+           JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key
+           WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?
+             AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+               WHERE ignored.server_id = i.server_id AND ignored.rating_key = i.rating_key)`,
         )
         .value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
     }
     return client
       .prepare(
-        'SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key, v.season_index, v.episode_index, v.file_size, v.video_resolution, v.height, v.bitrate, v.video_codec, v.container FROM episode_media_versions v WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+        `SELECT v.library_key, v.episode_title, v.show_rating_key, v.season_rating_key,
+                v.season_index, v.episode_index, v.file_size, v.video_resolution, v.height,
+                v.bitrate, v.video_codec, v.container
+         FROM episode_media_versions v
+         WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?
+           AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+             WHERE ignored.server_id = v.server_id AND ignored.rating_key = v.show_rating_key)`,
       )
       .value<unknown[]>(serverId, snapshot.ratingKey, snapshot.mediaId!);
   });

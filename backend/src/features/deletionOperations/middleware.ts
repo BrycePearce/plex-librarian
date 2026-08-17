@@ -212,7 +212,10 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         return ratingKeys.map((ratingKey) => {
           const item = client
             .prepare(
-              'SELECT title, type, file_size, tmdb_id, tvdb_id FROM items WHERE server_id = ? AND library_key = ? AND rating_key = ?',
+              `SELECT title, type, file_size, tmdb_id, tvdb_id FROM items i
+               WHERE server_id = ? AND library_key = ? AND rating_key = ?
+                 AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+                   WHERE ignored.server_id = i.server_id AND ignored.rating_key = i.rating_key)`,
             )
             .value<[string, string, number | null, number | null, number | null]>(
               serverId,
@@ -364,7 +367,11 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         if (kind === 'movie_version') {
           const row = client
             .prepare(
-              'SELECT v.library_key, i.title, v.file_size FROM item_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?',
+              `SELECT v.library_key, i.title, v.file_size FROM item_media_versions v
+               JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.item_rating_key
+               WHERE v.server_id = ? AND v.item_rating_key = ? AND v.media_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+                   WHERE ignored.server_id = i.server_id AND ignored.rating_key = i.rating_key)`,
             )
             .value<[string, string, number | null]>(serverId, ratingKey, mediaId);
           return row
@@ -379,7 +386,12 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         }
         const row = client
           .prepare(
-            'SELECT v.library_key, i.title, v.episode_title, v.file_size FROM episode_media_versions v JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?',
+            `SELECT v.library_key, i.title, v.episode_title, v.file_size
+             FROM episode_media_versions v
+             JOIN items i ON i.server_id = v.server_id AND i.rating_key = v.show_rating_key
+             WHERE v.server_id = ? AND v.episode_rating_key = ? AND v.media_id = ?
+               AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+                 WHERE ignored.server_id = i.server_id AND ignored.rating_key = i.rating_key)`,
           )
           .value<[string, string, string, number | null]>(serverId, ratingKey, mediaId);
         if (!row) return null;

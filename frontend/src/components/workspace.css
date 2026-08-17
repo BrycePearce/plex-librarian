@@ -46,6 +46,7 @@
 .settings-field-row + .settings-field-row { border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
 .settings-field-row h3 { font-size: .84rem; font-weight: 700; letter-spacing: -.01em; }
 .settings-field-row p { max-width: 34rem; margin-top: .3rem; color: color-mix(in oklab, var(--color-base-content) 42%, transparent); font-size: .72rem; line-height: 1.5; }
+.settings-field-row-action { cursor: pointer; }
 .settings-field-control { min-width: 13rem; }
 .settings-section .input:focus-visible { border-color: color-mix(in oklab, var(--settings-color) 65%, transparent); outline-color: color-mix(in oklab, var(--settings-color) 24%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--settings-color) 10%, transparent); }
 .settings-save-status-visible { animation: settings-save-pop 260ms cubic-bezier(.2,.8,.2,1); }

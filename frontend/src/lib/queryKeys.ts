@@ -83,6 +83,9 @@ export const queryKeys = {
   settings: {
     all: [roots.settings] as const,
     plexPathMappings: [roots.settings, "plex-path-mappings"] as const,
+    ignoredContent: [roots.settings, "ignored-content"] as const,
+    ignoredContentSearch: (query: string) =>
+      [roots.settings, "ignored-content", "search", query] as const,
   },
   mediaRemovals: {
     all: [roots.mediaRemovals] as const,
