@@ -215,6 +215,13 @@ function UsersPage() {
             : <span className="skeleton inline-block h-3 w-40 align-middle" />}
         />
 
+        {isSyncing && (
+          <SyncDataNotice>
+            Sharing risk and request follow-through are hidden until the sync finishes. The
+            directory will refresh with the complete results automatically.
+          </SyncDataNotice>
+        )}
+
         <UsersFilters
           filter={search.filter}
           inactiveDays={search.inactiveDays}
@@ -230,13 +237,6 @@ function UsersPage() {
           insightsUpdating={isSyncing}
         />
       </div>
-
-      {isSyncing && (
-        <SyncDataNotice>
-          Sharing risk and request follow-through are hidden until the sync finishes. The directory
-          will refresh with the complete results automatically.
-        </SyncDataNotice>
-      )}
 
       {data && !isSyncing && (
         <HistorySyncWarning

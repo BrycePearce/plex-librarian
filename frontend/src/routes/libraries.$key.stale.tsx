@@ -422,6 +422,30 @@ function StalePage() {
           </div>
         </div>
 
+        {!isNotSyncedYet && !isStaleError && data && (
+          <HistorySyncWarning
+            historySyncedAt={data.historySyncedAt}
+            isSyncing={isSyncing}
+            isSyncStatusLoading={isSyncStatusLoading}
+            isDataRefreshing={isFetching || isPlaceholderData}
+            syncingMessage={
+              <>
+                Watch-history sync is running — "unknown" items may update once it finishes.
+              </>
+            }
+            warningMessage={
+              <>
+                Watch-history sync hasn't completed for this library yet, so items showing{" "}
+                <span className="badge badge-outline badge-sm align-middle">
+                  unknown
+                </span>{" "}
+                below may actually have been watched — the "never watched" data isn't reliable until
+                a sync finishes. Avoid deleting based on watch status until this clears.
+              </>
+            }
+          />
+        )}
+
         {showFilters && (
           <div className="library-filter-surface">
             <div className="library-filter-title">
@@ -493,30 +517,6 @@ function StalePage() {
         )
         : (
           <>
-            {data && (
-              <HistorySyncWarning
-                historySyncedAt={data.historySyncedAt}
-                isSyncing={isSyncing}
-                isSyncStatusLoading={isSyncStatusLoading}
-                isDataRefreshing={isFetching || isPlaceholderData}
-                syncingMessage={
-                  <>
-                    Watch-history sync is running — "unknown" items may update once it finishes.
-                  </>
-                }
-                warningMessage={
-                  <>
-                    Watch-history sync hasn't completed for this library yet, so items showing{" "}
-                    <span className="badge badge-outline badge-sm align-middle">
-                      unknown
-                    </span>{" "}
-                    below may actually have been watched — the "never watched" data isn't reliable
-                    until a sync finishes. Avoid deleting based on watch status until this clears.
-                  </>
-                }
-              />
-            )}
-
             <CollectionToolbar
               eyebrow="Content review"
               title="Stale items"

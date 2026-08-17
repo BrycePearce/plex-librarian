@@ -208,6 +208,13 @@ function EpisodeGapsPage() {
         }
       />
 
+      {isSyncing && (
+        <SyncDataNotice>
+          Episode audits are refreshing with the current Plex sync. Settled findings remain visible
+          until the full library audit completes.
+        </SyncDataNotice>
+      )}
+
       <Summary data={data} loading={isLoading} />
       <div role="note">
         <DataSurface className="episode-gaps-scope">
@@ -232,12 +239,6 @@ function EpisodeGapsPage() {
           </div>
         </DataSurface>
       </div>
-      {isSyncing && (
-        <SyncDataNotice>
-          Episode audits are refreshing with the current Plex sync. Settled findings remain visible
-          until the full library audit completes.
-        </SyncDataNotice>
-      )}
       {data?.libraryAudits.some((audit) => audit.episodeAuditSyncedAt === null) && !unaudited && (
         <div className="episode-gaps-stale">
           <AlertTriangle />{" "}
