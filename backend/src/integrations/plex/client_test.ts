@@ -638,6 +638,26 @@ Deno.test('episode duplicate qualification ignores pathless and missing Media', 
   );
 });
 
+Deno.test('episode sync preserves missing raw indexes for audit classification', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: 'episode-no-index',
+          title: 'Unknown number',
+          type: 'episode',
+          parentRatingKey: 'season-1',
+          grandparentRatingKey: 'show-1',
+          parentIndex: 1,
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  const page = await client.libraryEpisodes('7').next();
+  assertEquals(page.value?.episodes[0]?.episodeIndex, null);
+});
+
 Deno.test('episode sync removes a duplicate retained only by bulk metadata', async () => {
   const bulkEpisode = {
     ratingKey: 'episode-1',

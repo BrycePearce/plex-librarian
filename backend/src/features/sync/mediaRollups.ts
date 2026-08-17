@@ -8,6 +8,7 @@ import type {
   PlexEpisodeMediaVersion,
   PlexLibrary,
 } from '../../integrations/plex/index.ts';
+import { EpisodeRangeSet } from './episodeRanges.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 
@@ -32,6 +33,7 @@ export async function syncShowSizes(
     duration: number;
     leafCount: number;
     viewCount: number;
+    episodeRanges: EpisodeRangeSet;
   };
   // The map accumulates across all episode pages before any upsert. This is intentional:
   // a season's episodes are not guaranteed to arrive contiguously across pages, so we
@@ -52,11 +54,18 @@ export async function syncShowSizes(
     for (const ep of page.episodes) {
       const agg = seasonMap.get(ep.seasonRatingKey);
       if (agg) {
+        if (agg.showRatingKey !== ep.showRatingKey || agg.seasonIndex !== ep.seasonIndex) {
+          agg.episodeRanges.invalidate('conflicting_season_identity');
+        } else {
+          agg.episodeRanges.insert(ep.episodeIndex);
+        }
         agg.fileSize += ep.fileSize ?? 0;
         agg.duration += ep.duration ?? 0;
         agg.leafCount += 1;
         agg.viewCount += ep.viewCount;
       } else {
+        const episodeRanges = new EpisodeRangeSet();
+        episodeRanges.insert(ep.episodeIndex);
         seasonMap.set(ep.seasonRatingKey, {
           showRatingKey: ep.showRatingKey,
           seasonIndex: ep.seasonIndex,
@@ -65,6 +74,7 @@ export async function syncShowSizes(
           duration: ep.duration ?? 0,
           leafCount: 1,
           viewCount: ep.viewCount,
+          episodeRanges,
         });
       }
     }
@@ -81,19 +91,29 @@ export async function syncShowSizes(
     await db
       .insert(seasons)
       .values(
-        batch.map(([ratingKey, agg]) => ({
-          serverId,
-          ratingKey,
-          showRatingKey: agg.showRatingKey,
-          libraryKey: lib.key,
-          seasonIndex: agg.seasonIndex,
-          title: agg.title,
-          fileSize: agg.fileSize > 0 ? agg.fileSize : null,
-          duration: agg.duration > 0 ? agg.duration : null,
-          leafCount: agg.leafCount,
-          viewCount: agg.viewCount,
-          updatedAt: now,
-        })),
+        batch.map(([ratingKey, agg]) => {
+          const audit = agg.episodeRanges.finish(agg.seasonIndex);
+          return ({
+            serverId,
+            ratingKey,
+            showRatingKey: agg.showRatingKey,
+            libraryKey: lib.key,
+            seasonIndex: agg.seasonIndex,
+            title: agg.title,
+            fileSize: agg.fileSize > 0 ? agg.fileSize : null,
+            duration: agg.duration > 0 ? agg.duration : null,
+            leafCount: agg.leafCount,
+            viewCount: agg.viewCount,
+            episodeFirstIndex: audit.firstIndex,
+            episodeLastIndex: audit.lastIndex,
+            episodePresentCount: audit.presentCount,
+            episodeGapCount: audit.gapCount,
+            episodeGapRangesJson: audit.gapRanges ? JSON.stringify(audit.gapRanges) : null,
+            episodeAuditStatus: audit.status,
+            episodeAuditReason: audit.reason,
+            updatedAt: now,
+          });
+        }),
       )
       .onConflictDoUpdate({
         target: [seasons.serverId, seasons.ratingKey],
@@ -106,6 +126,13 @@ export async function syncShowSizes(
           duration: excl(seasons.duration),
           leafCount: excl(seasons.leafCount),
           viewCount: excl(seasons.viewCount),
+          episodeFirstIndex: excl(seasons.episodeFirstIndex),
+          episodeLastIndex: excl(seasons.episodeLastIndex),
+          episodePresentCount: excl(seasons.episodePresentCount),
+          episodeGapCount: excl(seasons.episodeGapCount),
+          episodeGapRangesJson: excl(seasons.episodeGapRangesJson),
+          episodeAuditStatus: excl(seasons.episodeAuditStatus),
+          episodeAuditReason: excl(seasons.episodeAuditReason),
           updatedAt: excl(seasons.updatedAt),
         },
       });

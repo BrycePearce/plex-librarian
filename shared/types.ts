@@ -7,6 +7,7 @@ export type * from './types/libraries.ts';
 export type * from './types/users.ts';
 export type * from './types/sync.ts';
 export type * from './types/activity.ts';
+export type * from './types/episodeGaps.ts';
 
 export type * from './types/integrations/arr.ts';
 export type * from './types/integrations/qbittorrent.ts';

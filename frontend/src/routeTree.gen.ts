@@ -19,6 +19,7 @@ import { Route as SetupRouteImport } from './routes/setup.tsx'
 import { Route as UsersRouteImport } from './routes/users.tsx'
 import { Route as DeletionOperationsIdRouteImport } from './routes/deletion-operations.$id.tsx'
 import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr.tsx'
+import { Route as ToolsEpisodeGapsRouteImport } from './routes/tools.episode-gaps.tsx'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale.tsx'
 import { Route as LibrariesKeyMoviesRatingKeyRouteImport } from './routes/libraries.$key.movies.$ratingKey.tsx'
 import { Route as LibrariesKeyShowsRatingKeyRouteImport } from './routes/libraries.$key.shows.$ratingKey.tsx'
@@ -73,6 +74,11 @@ const SettingsSonarrRadarrRoute = SettingsSonarrRadarrRouteImport.update({
   path: '/sonarr-radarr',
   getParentRoute: () => SettingsRoute,
 } as any)
+const ToolsEpisodeGapsRoute = ToolsEpisodeGapsRouteImport.update({
+  id: '/tools/episode-gaps',
+  path: '/tools/episode-gaps',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   id: '/libraries/$key/stale',
   path: '/libraries/$key/stale',
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/users': typeof UsersRoute
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
+  '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/users': typeof UsersRoute
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
+  '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/users': typeof UsersRoute
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
+  '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
   '/libraries/$key/movies/$ratingKey': typeof LibrariesKeyMoviesRatingKeyRoute
   '/libraries/$key/shows/$ratingKey': typeof LibrariesKeyShowsRatingKeyRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
+    | '/tools/episode-gaps'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
+    | '/tools/episode-gaps'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -180,6 +191,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
+    | '/tools/episode-gaps'
     | '/libraries/$key/stale'
     | '/libraries/$key/movies/$ratingKey'
     | '/libraries/$key/shows/$ratingKey'
@@ -195,6 +207,7 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   UsersRoute: typeof UsersRoute
   DeletionOperationsIdRoute: typeof DeletionOperationsIdRoute
+  ToolsEpisodeGapsRoute: typeof ToolsEpisodeGapsRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
   LibrariesKeyMoviesRatingKeyRoute: typeof LibrariesKeyMoviesRatingKeyRoute
   LibrariesKeyShowsRatingKeyRoute: typeof LibrariesKeyShowsRatingKeyRoute
@@ -272,6 +285,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSonarrRadarrRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/tools/episode-gaps': {
+      id: '/tools/episode-gaps'
+      path: '/tools/episode-gaps'
+      fullPath: '/tools/episode-gaps'
+      preLoaderRoute: typeof ToolsEpisodeGapsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/libraries/$key/stale': {
       id: '/libraries/$key/stale'
       path: '/libraries/$key/stale'
@@ -318,6 +338,7 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   UsersRoute: UsersRoute,
   DeletionOperationsIdRoute: DeletionOperationsIdRoute,
+  ToolsEpisodeGapsRoute: ToolsEpisodeGapsRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
   LibrariesKeyMoviesRatingKeyRoute: LibrariesKeyMoviesRatingKeyRoute,
   LibrariesKeyShowsRatingKeyRoute: LibrariesKeyShowsRatingKeyRoute,

@@ -9,6 +9,8 @@ import type {
   DeletionOperationsResponse,
   DownloadCleanupPreviewResponse,
   DuplicatesResponse,
+  EpisodeGapsParams,
+  EpisodeGapsResponse,
   FinishRelocationResponse,
   LibrariesResponse,
   Library,
@@ -81,6 +83,9 @@ export type {
   DuplicateMovieGroup,
   DuplicateSeasonGroup,
   DuplicatesResponse,
+  EpisodeGapSeason,
+  EpisodeGapsParams,
+  EpisodeGapsResponse,
   EventType,
   LibrariesResponse,
   Library,
@@ -327,6 +332,15 @@ export const api = {
         `/libraries/${encodeURIComponent(key)}/items/download-cleanup-preview`,
         { method: "POST", body: JSON.stringify({ ratingKeys }) },
       ),
+  },
+  tools: {
+    episodeGaps: (params: EpisodeGapsParams = {}) => {
+      const q = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") q.set(key, String(value));
+      }
+      return apiFetch<EpisodeGapsResponse>(`/tools/episode-gaps?${q}`);
+    },
   },
   duplicates: {
     list: (

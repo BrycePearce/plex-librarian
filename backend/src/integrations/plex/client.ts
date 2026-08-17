@@ -309,6 +309,7 @@ function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
       seasonRatingKey: item.parentRatingKey!,
       showRatingKey: item.grandparentRatingKey!,
       seasonIndex: item.parentIndex!,
+      episodeIndex: item.index ?? null,
       seasonTitle: item.parentTitle ?? `Season ${item.parentIndex}`,
       fileSize: extractFileSize(item),
       duration: item.duration ?? null,

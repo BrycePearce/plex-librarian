@@ -86,6 +86,7 @@ async function stageLibraryHistoryCoverage(
         type: lib.type,
         syncedAt: now,
         historySyncedAt: null,
+        episodeAuditSyncedAt: lib.type === 'show' ? null : undefined,
       })))
       .onConflictDoUpdate({
         target: [libraries.serverId, libraries.key],
@@ -94,6 +95,7 @@ async function stageLibraryHistoryCoverage(
           type: excl(libraries.type),
           syncedAt: excl(libraries.syncedAt),
           historySyncedAt: null,
+          episodeAuditSyncedAt: null,
         },
       });
   }
@@ -120,10 +122,17 @@ async function syncLibrary(
       type: lib.type,
       syncedAt: now,
       historySyncedAt: null,
+      episodeAuditSyncedAt: lib.type === 'show' ? null : undefined,
     })
     .onConflictDoUpdate({
       target: [libraries.serverId, libraries.key],
-      set: { title: lib.title, type: lib.type, syncedAt: now, historySyncedAt: null },
+      set: {
+        title: lib.title,
+        type: lib.type,
+        syncedAt: now,
+        historySyncedAt: null,
+        ...(lib.type === 'show' ? { episodeAuditSyncedAt: null } : {}),
+      },
     });
 
   const typeFilter = lib.type === 'show'
@@ -323,6 +332,11 @@ async function syncLibrary(
     itemProjectionPruneCompleted,
     showProjectionPruneCompleted,
   );
+  if (lib.type === 'show' && pruneCompleted) {
+    await db.update(libraries).set({ episodeAuditSyncedAt: now }).where(
+      libraryByKey(serverId, lib.key),
+    );
+  }
 
   callbacks?.onPhase('history');
   await syncLibraryHistory(plex, lib, serverId);
@@ -353,6 +367,10 @@ export async function runSync(
     db.update(libraries).set({ historySyncedAt: null }).where(and(
       eq(libraries.serverId, serverId),
       sql`${libraries.type} <> 'artist'`,
+    )),
+    db.update(libraries).set({ episodeAuditSyncedAt: null }).where(and(
+      eq(libraries.serverId, serverId),
+      eq(libraries.type, 'show'),
     )),
   ]);
   const plexLibraries = await plex.libraries();
@@ -438,7 +456,10 @@ export async function runLibrarySync(
   if (!lib) throw new Error(`Library ${libraryKey} not found`);
 
   if (lib.type !== 'artist') {
-    await db.update(libraries).set({ historySyncedAt: null }).where(
+    await db.update(libraries).set({
+      historySyncedAt: null,
+      ...(lib.type === 'show' ? { episodeAuditSyncedAt: null } : {}),
+    }).where(
       libraryByKey(serverId, libraryKey),
     );
   }

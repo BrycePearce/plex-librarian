@@ -164,6 +164,7 @@ export interface PlexEpisode {
   seasonRatingKey: string;
   showRatingKey: string;
   seasonIndex: number;
+  episodeIndex: number | null;
   seasonTitle: string;
   fileSize: number | null;
   duration: number | null;

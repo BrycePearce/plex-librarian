@@ -19,6 +19,7 @@ const roots = {
   downloadCleanupPreview: "download-cleanup-preview",
   versionDeletionPreview: "version-deletion-preview",
   deletionOperations: "deletion-operations",
+  episodeGaps: "episode-gaps",
 } as const;
 
 export const queryKeys = {
@@ -119,6 +120,10 @@ export const queryKeys = {
     list: <TParams>(params: TParams) => [roots.deletionOperations, "list", params] as const,
     detail: (id: string) => [roots.deletionOperations, id] as const,
   },
+  episodeGaps: {
+    all: [roots.episodeGaps] as const,
+    list: <TParams>(params: TParams) => [roots.episodeGaps, params] as const,
+  },
 } as const;
 
 type QueryRootName = keyof typeof roots;
@@ -149,6 +154,7 @@ const rootPolicies = {
   downloadCleanupPreview: { serverScoped: true, syncDerived: true },
   versionDeletionPreview: { serverScoped: true, syncDerived: true },
   deletionOperations: { serverScoped: true, syncDerived: false },
+  episodeGaps: { serverScoped: true, syncDerived: true },
 } satisfies Record<QueryRootName, QueryRootPolicy>;
 
 const rootNames = Object.keys(roots) as QueryRootName[];

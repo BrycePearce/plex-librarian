@@ -543,12 +543,12 @@ Deno.test('ArrClient uses Sonarr TVDB lookup and list exclusion parameter', asyn
     urls.push(String(input));
     return Promise.resolve(
       String(input).includes('/series?')
-        ? Response.json([{ id: 7, title: 'Example' }])
+        ? Response.json([{ id: 7, title: 'Example', titleSlug: 'example' }])
         : Response.json({}),
     );
   }) as typeof fetch;
   const client = new ArrClient('sonarr', 'http://sonarr:8989', 'secret', mockFetch);
-  await client.lookup(123);
+  assertEquals((await client.lookup(123))?.titleSlug, 'example');
   await client.deleteMedia(7, false);
   assertEquals(urls, [
     'http://sonarr:8989/api/v3/series?tvdbId=123',

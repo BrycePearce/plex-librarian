@@ -3,6 +3,7 @@ import type { ArrType } from '@plex-librarian/shared/types.ts';
 export interface ArrMediaRecord {
   id: number;
   title: string;
+  titleSlug?: string | null;
   path: string | null;
   seasons: ArrSeasonSummary[] | null;
   tmdbId?: number | null;
@@ -452,6 +453,7 @@ export class ArrClient {
       Array<{
         id: number;
         title?: string;
+        titleSlug?: string;
         path?: string;
         tmdbId?: number;
         year?: number;
@@ -490,6 +492,7 @@ export class ArrClient {
     return {
       id: record.id,
       title: record.title ?? String(record.id),
+      ...(record.titleSlug?.trim() ? { titleSlug: record.titleSlug.trim() } : {}),
       path: record.path?.trim() || null,
       tmdbId: Number.isSafeInteger(record.tmdbId) ? record.tmdbId! : null,
       year: Number.isSafeInteger(record.year) ? record.year! : null,

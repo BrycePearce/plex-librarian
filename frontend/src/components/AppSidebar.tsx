@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Library,
   Menu,
+  ScanLine,
   Settings,
   Users,
   X,
@@ -31,6 +32,15 @@ const navGroups = [
       { label: "Users", to: "/users", icon: Users, search: { filter: "all" } },
       { label: "Activity", to: "/activity", icon: Activity },
     ],
+  },
+  {
+    label: "Tools",
+    items: [{
+      label: "Episode Gaps",
+      to: "/tools/episode-gaps",
+      icon: ScanLine,
+      search: { status: "gaps", sort: "missingCount", order: "desc", offset: 0 },
+    }],
   },
   {
     label: "Manage",

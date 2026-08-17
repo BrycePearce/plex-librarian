@@ -41,6 +41,9 @@ export const libraries = sqliteTable(
     // lastViewedAt for this library's items cannot yet be trusted to mean "never watched";
     // it may just mean "history hasn't finished syncing." See CLAUDE.md.
     historySyncedAt: integer('history_synced_at'),
+    // Confidence marker for the season-level episode-gap projection. Findings remain
+    // persisted when null so interrupted refreshes can be shown honestly as stale.
+    episodeAuditSyncedAt: integer('episode_audit_synced_at'),
     staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
   },
   (table) => ({
@@ -669,6 +672,13 @@ export const seasons = sqliteTable(
     duration: integer('duration'),
     leafCount: integer('leaf_count'),
     viewCount: integer('view_count').default(0),
+    episodeFirstIndex: integer('episode_first_index'),
+    episodeLastIndex: integer('episode_last_index'),
+    episodePresentCount: integer('episode_present_count'),
+    episodeGapCount: integer('episode_gap_count'),
+    episodeGapRangesJson: text('episode_gap_ranges_json'),
+    episodeAuditStatus: text('episode_audit_status'),
+    episodeAuditReason: text('episode_audit_reason'),
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
@@ -683,6 +693,12 @@ export const seasons = sqliteTable(
     }).onDelete('cascade'),
     showIdx: index('seasons_show_idx').on(table.serverId, table.showRatingKey),
     libraryIdx: index('seasons_library_idx').on(table.serverId, table.libraryKey),
+    gapIdx: index('seasons_episode_gaps_idx')
+      .on(table.serverId, table.episodeGapCount)
+      .where(sql`${table.episodeAuditStatus} = 'gaps'`),
+    libraryGapIdx: index('seasons_episode_gaps_library_idx')
+      .on(table.serverId, table.libraryKey, table.episodeGapCount)
+      .where(sql`${table.episodeAuditStatus} = 'gaps'`),
   }),
 );
 
