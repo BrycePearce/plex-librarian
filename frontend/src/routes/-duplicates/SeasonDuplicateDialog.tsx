@@ -804,7 +804,7 @@ export function SeasonDuplicateDialog({
   function setAll(checked: boolean) {
     setSelectedState({
       key: seasonKey,
-      ids: checked ? initialSelection(plans) : new Set(),
+      ids: checked ? initialSeasonSelectionKeys(plans.map(planKey)) : new Set(),
     });
   }
 
@@ -1107,7 +1107,24 @@ export function SeasonDuplicateDialog({
                       return (
                         <div
                           key={profile.id}
-                          className={`season-profile-card ${active ? "is-selected" : ""}`}
+                          className={`season-profile-card ${active ? "is-selected" : ""} ${
+                            unsafe ? "is-disabled" : ""
+                          }`}
+                          title={unsafe
+                            ? "Selecting this lane would remove every version from at least one episode"
+                            : undefined}
+                          onClick={(event) => {
+                            const target = event.target;
+                            if (
+                              target instanceof Element &&
+                              target.closest(
+                                "button, a, input, select, textarea, [role='button'], [role='link'], [role='img'], [tabindex]",
+                              )
+                            ) {
+                              return;
+                            }
+                            if (!unsafe) toggleProfile(profile);
+                          }}
                         >
                           <button
                             type="button"

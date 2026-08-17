@@ -355,6 +355,14 @@
     box-shadow 140ms ease;
 }
 
+.season-profile-card:not(.is-disabled) {
+  cursor: pointer;
+}
+
+.season-profile-card.is-disabled {
+  cursor: not-allowed;
+}
+
 .season-profile-card:hover,
 .season-profile-card:focus-within {
   border-color: color-mix(in oklab, var(--color-primary) 24%, var(--color-base-300));
