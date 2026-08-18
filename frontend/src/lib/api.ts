@@ -463,6 +463,7 @@ export const api = {
       mediaIds: number[],
       cleanupMediaIds: number[],
       radarrDecision?: {
+        radarrMode?: "coordinate" | "none";
         planFingerprint?: string;
         allowRadarrRetainedPathManagement?: boolean;
         allowRadarrMovieRemoval?: boolean;

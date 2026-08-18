@@ -1,6 +1,33 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { api, ApiError } from "./api.ts";
 
+Deno.test("movie version deletion serializes explicit Plex-only intent", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };
+  globalThis.fetch = (input, init) => {
+    captured.input = input;
+    captured.init = init;
+    return Promise.resolve(Response.json({ operationId: "operation-1", status: "queued" }, {
+      status: 202,
+    }));
+  };
+
+  try {
+    await api.duplicates.deleteMovieMediaVersions("movie-1", [11], [], {
+      radarrMode: "none",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(captured.input, "/api/duplicates/movies/movie-1/media");
+  const body = JSON.parse(String(captured.init?.body));
+  assertEquals(body.mediaIds, [11]);
+  assertEquals(body.cleanupMediaIds, []);
+  assertEquals(body.radarrMode, "none");
+  assertEquals(typeof body.clientRequestId, "string");
+});
+
 Deno.test("season cleanup serializes selections as episode media", async () => {
   const originalFetch = globalThis.fetch;
   const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };

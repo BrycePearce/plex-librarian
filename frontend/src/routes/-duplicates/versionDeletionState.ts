@@ -75,8 +75,8 @@ export function versionDestinationOptionVisibility(
 ) {
   const destinations = versionDestinationState(preview);
   return {
-    // Reassignment is automatic and cannot be disabled, but it still needs to be visible
-    // so the controls agree with the service marks on the selected version.
+    // A verified reassignment is selected by default, but remains an explicit destination
+    // choice so the user can opt into Plex-only deletion.
     arr: destinations.arrVisible,
     // Keep verified cleanup visible during reassignment too; the dialog explains why that
     // destination is temporarily locked instead of making a known association disappear.
@@ -116,24 +116,44 @@ export function versionArrDestinationCopy(
   preview: VersionDeletionPreviewResponse | undefined,
   arrLabel: string,
   arrReassignAvailable: boolean,
+  canDisable = true,
+  selected = true,
+  remainingVersionCount = 1,
 ): { label: string; info: string } {
+  const plexOnlyInfo = `${arrLabel} will not be changed. Plex will delete the selected file ` +
+    `directly, and ${arrLabel} may download it again if the title remains monitored.`;
+  const remainingVersionLabel = remainingVersionCount === 1
+    ? "remaining version"
+    : "best remaining version";
   if (preview?.radarrPathAdoption.mode === "remove_from_radarr") {
     return {
-      label: arrLabel,
-      info:
-        `Required to complete this deletion safely: ${arrLabel} will stop managing the movie without being asked to delete any files.`,
+      label: `Remove movie from ${arrLabel}`,
+      info: selected
+        ? `${arrLabel} cannot safely adopt any remaining Plex version. Plex Librarian will ` +
+          `unmonitor the movie, create an import exclusion, and remove its ${arrLabel} record ` +
+          `without asking ${arrLabel} to delete files. Plex then deletes the selected version.`
+        : plexOnlyInfo,
     };
   }
   return arrReassignAvailable
     ? {
-      label: arrLabel,
-      info:
-        `Required to keep the ${arrLabel} record: ${arrLabel} will adopt an unselected Plex version before removing its currently managed file.`,
+      label: `Switch ${arrLabel} to ${remainingVersionLabel}`,
+      info: selected
+        ? `${canDisable ? "" : "Required to keep the record: "}${arrLabel} currently manages ` +
+          `the selected file. Before Plex deletes it, Plex Librarian will make ${arrLabel} adopt ` +
+          `the ${remainingVersionLabel} and preserve the existing monitoring state.${
+            remainingVersionCount > 1
+              ? ` ${arrLabel} switches to only the highest-ranked eligible survivor; other ` +
+                `remaining Plex versions stay unchanged.`
+              : ""
+          }`
+        : plexOnlyInfo,
     }
     : {
-      label: arrLabel,
-      info:
-        `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`,
+      label: `Remove from ${arrLabel}`,
+      info: selected
+        ? `Removes only the ${arrLabel} record whose managed paths match the selected Plex versions.`
+        : plexOnlyInfo,
     };
 }
 

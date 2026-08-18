@@ -142,6 +142,7 @@ function DuplicatesPage() {
       group,
       mediaIds,
       cleanupMediaIds,
+      deleteFromArr,
       planFingerprint,
       allowRadarrRetainedPathManagement,
       allowRadarrMovieRemoval,
@@ -149,6 +150,7 @@ function DuplicatesPage() {
       group: DuplicateGroup;
       mediaIds: number[];
       cleanupMediaIds: number[];
+      deleteFromArr: boolean;
       planFingerprint?: string;
       allowRadarrRetainedPathManagement?: boolean;
       allowRadarrMovieRemoval?: boolean;
@@ -159,6 +161,7 @@ function DuplicatesPage() {
           mediaIds,
           cleanupMediaIds,
           {
+            radarrMode: deleteFromArr ? "coordinate" : "none",
             ...(planFingerprint ? { planFingerprint } : {}),
             ...(allowRadarrRetainedPathManagement
               ? { allowRadarrRetainedPathManagement: true }
@@ -257,6 +260,7 @@ function DuplicatesPage() {
       group,
       mediaIds: plan.mediaIds,
       cleanupMediaIds: plan.cleanupMediaIds,
+      deleteFromArr: plan.deleteFromArr,
       planFingerprint: plan.planFingerprint,
       allowRadarrRetainedPathManagement: plan.allowRadarrRetainedPathManagement,
       allowRadarrMovieRemoval: plan.allowRadarrMovieRemoval,

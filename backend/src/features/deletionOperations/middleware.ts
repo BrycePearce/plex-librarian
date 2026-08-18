@@ -299,6 +299,15 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         400,
       );
     }
+    if (
+      body.radarrMode !== undefined &&
+      (kind !== 'movie_version' || !['coordinate', 'none'].includes(String(body.radarrMode)))
+    ) {
+      return c.json({ error: 'radarrMode must be coordinate or none for movie versions' }, 400);
+    }
+    const radarrMode = kind === 'movie_version'
+      ? body.radarrMode === 'none' ? 'none' as const : 'coordinate' as const
+      : null;
     const cleanupMediaIds = new Set(
       Array.isArray(body.cleanupMediaIds)
         ? body.cleanupMediaIds.filter((id): id is number => Number.isSafeInteger(id) && id >= 0)
@@ -332,6 +341,13 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     if (body.unmonitorFromArr === true) {
       return c.json({ error: 'unmonitorFromArr is no longer supported for media versions' }, 400);
     }
+    if (
+      radarrMode === 'none' &&
+      (cleanupMediaIds.size > 0 || requestedPlanFingerprint !== null ||
+        allowRadarrRetainedPathManagement || allowRadarrMovieRemoval)
+    ) {
+      return c.json({ error: 'Plex-only deletion cannot include Radarr coordination' }, 400);
+    }
     if ([...cleanupMediaIds].some((id) => !mediaIds.includes(id))) {
       return c.json({ error: 'invalid deletion destinations' }, 400);
     }
@@ -339,6 +355,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       path,
       mediaIds,
       cleanupMediaIds: [...cleanupMediaIds].sort((a, b) => a - b),
+      ...(radarrMode ? { radarrMode } : {}),
       ...(requestedPlanFingerprint ? { planFingerprint: requestedPlanFingerprint } : {}),
       ...(allowRadarrRetainedPathManagement ? { allowRadarrRetainedPathManagement: true } : {}),
       ...(allowRadarrMovieRemoval ? { allowRadarrMovieRemoval: true } : {}),
@@ -536,122 +553,124 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       const pathPreview = acceptedPlan.preview.radarrPathAdoption;
       const pathOverride = acceptedPlan.preview.radarrPathOverride;
       const selectedPathDecision = allowRadarrRetainedPathManagement ? pathOverride : pathPreview;
-      if (allowRadarrRetainedPathManagement) {
-        if (
-          pathOverride?.mode !== 'adopt_path_with_consent' ||
-          !pathOverride.planFingerprint ||
-          requestedPlanFingerprint !== pathOverride.planFingerprint
-        ) {
-          return c.json(
-            {
-              error: 'the Radarr retained-folder override changed; preview the deletion again',
-            },
-            409,
-          );
-        }
-      }
-      const outsideMode = pathPreview.mode === 'adopt_safe_path';
-      if (allowRadarrRetainedPathManagement) {
-        // The exact override fingerprint was accepted above. Execution revalidates
-        // the path boundary, physical identity, Radarr behavior, and active jobs.
-      } else if (outsideMode) {
-        if (
-          !pathPreview.planFingerprint ||
-          requestedPlanFingerprint !== pathPreview.planFingerprint
-        ) {
-          return c.json(
-            {
-              error: 'the Radarr retained-path plan changed; preview the deletion again',
-            },
-            409,
-          );
-        }
-        if (allowRadarrMovieRemoval) {
-          return c.json({ error: 'Radarr movie-removal authorization is not valid here' }, 400);
-        }
-      } else if (pathPreview.mode === 'remove_from_radarr') {
-        if (
-          !pathPreview.planFingerprint ||
-          requestedPlanFingerprint !== pathPreview.planFingerprint
-        ) {
-          return c.json(
-            {
-              error: 'the Radarr movie-removal plan changed; preview the deletion again',
-            },
-            409,
-          );
-        }
-        if (!allowRadarrMovieRemoval) {
-          return c.json({ error: 'Radarr movie removal must be explicitly authorized' }, 400);
-        }
-      } else if (requestedPlanFingerprint || allowRadarrMovieRemoval) {
-        return c.json({ error: 'Radarr path-adoption authorization is not valid here' }, 400);
-      }
-      if (
-        acceptedPlan.arrManagedMediaIds.some((mediaId) => mediaIds.includes(mediaId)) &&
-        acceptedPlan.preview.arrReassignStatus !== 'resolved' &&
-        pathPreview.mode !== 'remove_from_radarr' &&
-        !allowRadarrRetainedPathManagement
-      ) {
-        return c.json(
-          {
-            error: acceptedPlan.preview.arrReassignReason ??
-              'Radarr cannot safely adopt the retained Plex version',
-          },
-          409,
-        );
-      }
-      const retainedMediaId = selectedPathDecision?.retainedMediaId;
-      if (
-        retainedMediaId !== undefined &&
-        selectedPathDecision?.mode !== 'remove_from_radarr'
-      ) {
-        acceptedReassignments = acceptedPlan.eligibleArrReassignments.map((entry) => {
-          const retainedPath = entry.candidatePaths.get(retainedMediaId);
-          const retainedRecordPath = entry.candidateRecordPaths.get(retainedMediaId);
+      if (radarrMode === 'coordinate') {
+        if (allowRadarrRetainedPathManagement) {
           if (
-            !retainedPath ||
-            !retainedRecordPath ||
-            entry.managedFileId === null ||
-            entry.managedPath === null
+            pathOverride?.mode !== 'adopt_path_with_consent' ||
+            !pathOverride.planFingerprint ||
+            requestedPlanFingerprint !== pathOverride.planFingerprint
           ) {
-            throw new Error('The accepted Radarr reassignment identity is incomplete');
+            return c.json(
+              {
+                error: 'the Radarr retained-folder override changed; preview the deletion again',
+              },
+              409,
+            );
           }
-          return {
-            instanceId: entry.target.instanceId,
-            instanceType: entry.target.instanceType,
-            instanceUrl: entry.target.instanceUrl,
-            configurationUpdatedAt: entry.target.configurationUpdatedAt,
-            mappingIdentity: entry.target.mappingIdentity,
-            recordId: entry.recordId,
-            recordPath: entry.recordPath,
-            episodeId: entry.episodeId,
-            managedFileId: entry.managedFileId,
-            managedPath: entry.managedPath,
-            retainedMediaId,
-            retainedPath,
-            retainedRecordPath,
-            retainedFileSize: entry.candidateFileSizes.get(retainedMediaId) ?? null,
-            originalMonitored: entry.monitored,
-            ...(entry.radarrPathPlan
-              ? {
-                radarrPathPlan: allowRadarrRetainedPathManagement
-                  ? { ...entry.radarrPathPlan, userAuthorizedPathManagement: true }
-                  : entry.radarrPathPlan,
-              }
-              : {}),
-          } satisfies PersistedArrReassignment;
-        });
+        }
+        const outsideMode = pathPreview.mode === 'adopt_safe_path';
+        if (allowRadarrRetainedPathManagement) {
+          // The exact override fingerprint was accepted above. Execution revalidates
+          // the path boundary, physical identity, Radarr behavior, and active jobs.
+        } else if (outsideMode) {
+          if (
+            !pathPreview.planFingerprint ||
+            requestedPlanFingerprint !== pathPreview.planFingerprint
+          ) {
+            return c.json(
+              {
+                error: 'the Radarr retained-path plan changed; preview the deletion again',
+              },
+              409,
+            );
+          }
+          if (allowRadarrMovieRemoval) {
+            return c.json({ error: 'Radarr movie-removal authorization is not valid here' }, 400);
+          }
+        } else if (pathPreview.mode === 'remove_from_radarr') {
+          if (
+            !pathPreview.planFingerprint ||
+            requestedPlanFingerprint !== pathPreview.planFingerprint
+          ) {
+            return c.json(
+              {
+                error: 'the Radarr movie-removal plan changed; preview the deletion again',
+              },
+              409,
+            );
+          }
+          if (!allowRadarrMovieRemoval) {
+            return c.json({ error: 'Radarr movie removal must be explicitly authorized' }, 400);
+          }
+        } else if (requestedPlanFingerprint || allowRadarrMovieRemoval) {
+          return c.json({ error: 'Radarr path-adoption authorization is not valid here' }, 400);
+        }
         if (
-          allowRadarrRetainedPathManagement &&
-          (acceptedReassignments.length !== 1 ||
-            acceptedReassignments[0]?.radarrPathPlan?.mode !== 'adopt_path_with_consent' ||
-            acceptedReassignments[0].radarrPathPlan.userAuthorizedPathManagement !== true)
+          acceptedPlan.arrManagedMediaIds.some((mediaId) => mediaIds.includes(mediaId)) &&
+          acceptedPlan.preview.arrReassignStatus !== 'resolved' &&
+          pathPreview.mode !== 'remove_from_radarr' &&
+          !allowRadarrRetainedPathManagement
         ) {
           return c.json(
-            { error: 'the authorized Radarr retained-folder override is incomplete' },
+            {
+              error: acceptedPlan.preview.arrReassignReason ??
+                'Radarr cannot safely adopt the retained Plex version',
+            },
             409,
           );
+        }
+        const retainedMediaId = selectedPathDecision?.retainedMediaId;
+        if (
+          retainedMediaId !== undefined &&
+          selectedPathDecision?.mode !== 'remove_from_radarr'
+        ) {
+          acceptedReassignments = acceptedPlan.eligibleArrReassignments.map((entry) => {
+            const retainedPath = entry.candidatePaths.get(retainedMediaId);
+            const retainedRecordPath = entry.candidateRecordPaths.get(retainedMediaId);
+            if (
+              !retainedPath ||
+              !retainedRecordPath ||
+              entry.managedFileId === null ||
+              entry.managedPath === null
+            ) {
+              throw new Error('The accepted Radarr reassignment identity is incomplete');
+            }
+            return {
+              instanceId: entry.target.instanceId,
+              instanceType: entry.target.instanceType,
+              instanceUrl: entry.target.instanceUrl,
+              configurationUpdatedAt: entry.target.configurationUpdatedAt,
+              mappingIdentity: entry.target.mappingIdentity,
+              recordId: entry.recordId,
+              recordPath: entry.recordPath,
+              episodeId: entry.episodeId,
+              managedFileId: entry.managedFileId,
+              managedPath: entry.managedPath,
+              retainedMediaId,
+              retainedPath,
+              retainedRecordPath,
+              retainedFileSize: entry.candidateFileSizes.get(retainedMediaId) ?? null,
+              originalMonitored: entry.monitored,
+              ...(entry.radarrPathPlan
+                ? {
+                  radarrPathPlan: allowRadarrRetainedPathManagement
+                    ? { ...entry.radarrPathPlan, userAuthorizedPathManagement: true }
+                    : entry.radarrPathPlan,
+                }
+                : {}),
+            } satisfies PersistedArrReassignment;
+          });
+          if (
+            allowRadarrRetainedPathManagement &&
+            (acceptedReassignments.length !== 1 ||
+              acceptedReassignments[0]?.radarrPathPlan?.mode !== 'adopt_path_with_consent' ||
+              acceptedReassignments[0].radarrPathPlan.userAuthorizedPathManagement !== true)
+          ) {
+            return c.json(
+              { error: 'the authorized Radarr retained-folder override is incomplete' },
+              409,
+            );
+          }
         }
       }
     } else if (
@@ -665,7 +684,8 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         (entry) =>
           acceptedPlan?.arrManagedMediaIds.includes(target.mediaId) && entry.managedFileId !== null,
       );
-      const removalFallback = !allowRadarrRetainedPathManagement &&
+      const removalFallback = radarrMode === 'coordinate' &&
+          !allowRadarrRetainedPathManagement &&
           acceptedPlan?.radarrRemovalFallback?.selectedMediaId === target.mediaId
         ? {
           ...acceptedPlan.radarrRemovalFallback,
@@ -704,6 +724,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           seasonIndex: target.seasonIndex,
           episodeIndex: target.episodeIndex,
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
+          ...(radarrMode === 'none' ? { skipArrCoordination: true } : {}),
           selectedMediaIds: [target.mediaId],
           operationMediaIds: mediaIds,
           ...(reassignment && acceptedPlan

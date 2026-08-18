@@ -914,6 +914,18 @@ async function ensureVersionDeleted(
   }
 
   if (snapshot.skipArrCoordination === true) {
+    if (target.targetKind === 'movie_version') {
+      if (!(await directPlexDeletionStillSafe(target, snapshot, excludedReassignIds))) {
+        throw new PlexReconciliationError(
+          'at least one unselected live Plex version must remain',
+          true,
+          false,
+        );
+      }
+      advancePhase(target, 'plex_reconciliation');
+      await reconcilePlexTarget(target, snapshot);
+      return;
+    }
     const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     assertAcceptedArrMappingsUnchanged(
       target.targetKind,

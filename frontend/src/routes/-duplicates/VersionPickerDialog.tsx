@@ -205,17 +205,23 @@ export function VersionPickerDialog({
   );
   const comparison = compareDuplicateVersions(displayVersions);
   const ComparisonIcon = comparisonIcon(comparison.kind);
-  const showFallbackWarning = versionPlexFallbackWarning(preview.data);
-  // Arr reassignment is a backend-enforced safety step when the selected file is the
-  // managed copy. Keep the UI checked even during the render before the preview-driven
-  // state effect catches up.
-  const effectiveDeleteFromArr = arrReassignAvailable || deleteFromArr;
+  // This opt-out is intentionally movie-only. Single-episode deletion keeps its
+  // existing automatic Sonarr safety path; the season workflow owns explicit modes.
+  const effectiveDeleteFromArr = item.mediaType === "movie"
+    ? deleteFromArr
+    : arrReassignAvailable || deleteFromArr;
+  const showFallbackWarning = effectiveDeleteFromArr
+    ? versionPlexFallbackWarning(preview.data)
+    : preview.data?.arrSelectionMatched === true || arrReassignAvailable;
   const reassignActive = preview.data?.arrReassignStatus === "resolved";
   const pathReassignmentActive = reassignActive || useRadarrPathOverride;
   const arrDestinationCopy = versionArrDestinationCopy(
     preview.data,
     arrLabel,
     arrReassignAvailable,
+    item.mediaType === "movie",
+    effectiveDeleteFromArr && !useRadarrPathOverride,
+    item.versions.length - selectedVersions.length,
   );
   const cleanupMediaIds = cleanupDownloads && cleanupAvailable && !pathReassignmentActive
     ? (preview.data?.versions
@@ -359,7 +365,9 @@ export function VersionPickerDialog({
                   label: arrDestinationCopy.label,
                   info: arrDestinationCopy.info,
                   checked: effectiveDeleteFromArr && !useRadarrPathOverride,
-                  disabled: pending || (arrReassignAvailable && !useRadarrPathOverride),
+                  disabled: pending ||
+                    (item.mediaType === "episode" && arrReassignAvailable &&
+                      !useRadarrPathOverride),
                   warning: false,
                   onChange: (checked: boolean) => {
                     if (checked && useRadarrPathOverride) {
@@ -413,7 +421,7 @@ export function VersionPickerDialog({
         />
       )}
 
-      {pathAdoption && pathAdoption.mode === "adopt_safe_path" && (
+      {effectiveDeleteFromArr && pathAdoption && pathAdoption.mode === "adopt_safe_path" && (
         <div className="alert alert-warning mt-2 items-start text-sm">
           <div className="min-w-0 flex-1">
             <div className="font-semibold">Radarr will adopt the retained folder</div>
@@ -437,9 +445,12 @@ export function VersionPickerDialog({
         retrying={preview.isFetching}
         warnings={showFallbackWarning
           ? [
-            `This version will be deleted from Plex only. ${
-              preview.data?.arrReason ?? `No verified ${arrLabel} destination is available.`
-            } It may be downloaded again if it remains monitored.`,
+            effectiveDeleteFromArr
+              ? `This version will be deleted from Plex only. ${
+                preview.data?.arrReason ?? `No verified ${arrLabel} destination is available.`
+              } It may be downloaded again if it remains monitored.`
+              : `${arrLabel} will not be updated. Plex will delete the selected file directly, ` +
+                `and it may be downloaded again if it remains monitored.`,
           ]
           : []}
       />
@@ -489,15 +500,16 @@ export function VersionPickerDialog({
             deleteFromArr: effectiveDeleteFromArr && arrAvailable,
             cleanupDownloads: effectiveDeleteFromArr && arrAvailable && cleanupDownloads,
             cleanupMediaIds,
-            ...((useRadarrPathOverride ? pathOverride : pathAdoption)?.planFingerprint
+            ...(effectiveDeleteFromArr &&
+                (useRadarrPathOverride ? pathOverride : pathAdoption)?.planFingerprint
               ? {
                 planFingerprint: (useRadarrPathOverride ? pathOverride : pathAdoption)!
                   .planFingerprint,
               }
               : {}),
-            ...(useRadarrPathOverride
+            ...(effectiveDeleteFromArr && useRadarrPathOverride
               ? { allowRadarrRetainedPathManagement: true }
-              : pathConsentRequired
+              : effectiveDeleteFromArr && pathConsentRequired
               ? { allowRadarrMovieRemoval: true }
               : {}),
           })}

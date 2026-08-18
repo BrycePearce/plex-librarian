@@ -254,7 +254,7 @@ deno task fmt       # apply the repository formatting rules
 deno task verify    # formatting, lint, type-checking, tests, and production build
 ```
 
-The project uses Deno `2.9.3`, matching the Docker image and CI. To catch
+The project uses Deno `2.9.5`, matching the Docker image and CI. To catch
 problems automatically before commits and pushes, install the repository's Git
 hooks once after cloning:
 

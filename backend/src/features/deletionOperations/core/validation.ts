@@ -123,6 +123,17 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
   if (
+    snapshot.skipArrCoordination === true && snapshot.seasonCleanup !== true &&
+    (snapshot.type !== 'movie' || snapshot.cleanupDownloads === true ||
+      snapshot.arrReassignmentMappings !== undefined || snapshot.arrOwnerships !== undefined ||
+      snapshot.arrReassignments !== undefined || snapshot.radarrRemovalFallback !== undefined ||
+      snapshot.radarrRemovalDownloadCleanup !== undefined ||
+      snapshot.seasonSonarrInspection !== undefined ||
+      snapshot.seasonCoordinationOutcome !== undefined)
+  ) {
+    throw new DeletionValidationError('durable Plex-only movie intent is malformed');
+  }
+  if (
     snapshot.seasonCleanup === true && snapshot.skipArrCoordination === true &&
     snapshot.seasonSonarrInspection === undefined
   ) {

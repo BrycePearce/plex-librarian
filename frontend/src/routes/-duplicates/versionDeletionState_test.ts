@@ -314,7 +314,7 @@ Deno.test("no-path previews terminate as Plex-only presentation", () => {
   assertEquals(selected.arrTargets, []);
 });
 
-Deno.test("Radarr destination label stays stable during removal fallback", () => {
+Deno.test("Radarr removal fallback names and explains its exact action", () => {
   const removal = preview({
     arrConfigured: true,
     radarrPathAdoption: {
@@ -323,21 +323,36 @@ Deno.test("Radarr destination label stays stable during removal fallback", () =>
     } as VersionDeletionPreviewResponse["radarrPathAdoption"],
   });
   assertEquals(versionArrDestinationCopy(removal, "Radarr", true), {
-    label: "Radarr",
+    label: "Remove movie from Radarr",
     info:
-      "Required to complete this deletion safely: Radarr will stop managing the movie without being asked to delete any files.",
+      "Radarr cannot safely adopt any remaining Plex version. Plex Librarian will unmonitor the movie, create an import exclusion, and remove its Radarr record without asking Radarr to delete files. Plex then deletes the selected version.",
+  });
+  assertEquals(versionArrDestinationCopy(removal, "Radarr", true, true, false), {
+    label: "Remove movie from Radarr",
+    info:
+      "Radarr will not be changed. Plex will delete the selected file directly, and Radarr may download it again if the title remains monitored.",
   });
 });
 
-Deno.test("Arr destination labels stay service-based across deletion strategies", () => {
+Deno.test("Arr destination labels and explanations match their strategy", () => {
   assertEquals(versionArrDestinationCopy(preview({}), "Radarr", false), {
-    label: "Radarr",
+    label: "Remove from Radarr",
     info: "Removes only the Radarr record whose managed paths match the selected Plex versions.",
   });
-  assertEquals(versionArrDestinationCopy(preview({}), "Sonarr", true), {
-    label: "Sonarr",
+  assertEquals(versionArrDestinationCopy(preview({}), "Sonarr", true, false), {
+    label: "Switch Sonarr to remaining version",
     info:
-      "Required to keep the Sonarr record: Sonarr will adopt an unselected Plex version before removing its currently managed file.",
+      "Required to keep the record: Sonarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Sonarr adopt the remaining version and preserve the existing monitoring state.",
+  });
+  assertEquals(versionArrDestinationCopy(preview({}), "Radarr", true, true, false), {
+    label: "Switch Radarr to remaining version",
+    info:
+      "Radarr will not be changed. Plex will delete the selected file directly, and Radarr may download it again if the title remains monitored.",
+  });
+  assertEquals(versionArrDestinationCopy(preview({}), "Radarr", true, true, true, 4), {
+    label: "Switch Radarr to best remaining version",
+    info:
+      "Radarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Radarr adopt the best remaining version and preserve the existing monitoring state. Radarr switches to only the highest-ranked eligible survivor; other remaining Plex versions stay unchanged.",
   });
 });
 

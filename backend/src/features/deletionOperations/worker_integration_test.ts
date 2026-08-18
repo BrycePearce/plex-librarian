@@ -6034,6 +6034,76 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
   );
 });
 
+Deno.test('Plex-only movie version deletion leaves a matched Radarr record unchanged', async () => {
+  reset();
+  configureRadarr();
+  addMovie('plex-only-radarr-version', [11, 12], 10);
+  coordinatedRatingKey = 'plex-only-radarr-version';
+  arrPresent = true;
+  arrManagedMediaId = 11;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrRescanTargetPath = '/library/Coordinated/retained.mkv';
+  live.get('plex-only-radarr-version')!.Media = [
+    { id: 11, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 12, Part: [{ file: arrRescanTargetPath, size: 50_000 }] },
+  ];
+
+  const response = await app.request(
+    '/api/duplicates/movies/plex-only-radarr-version/media',
+    {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: 'plex-only-radarr-version-request',
+        mediaIds: [11],
+        cleanupMediaIds: [],
+        radarrMode: 'none',
+      }),
+    },
+  );
+  assertEquals(response.status, 202, await response.clone().text());
+  const result = await response.json();
+  const durable = withTransaction((client) =>
+    client.prepare(
+      'SELECT snapshot FROM deletion_targets WHERE operation_id = ?',
+    ).value<[string]>(result.operationId)
+  );
+  const snapshot = JSON.parse(durable![0]);
+  assertEquals({
+    type: snapshot.type,
+    cleanupDownloads: snapshot.cleanupDownloads,
+    skipArrCoordination: snapshot.skipArrCoordination,
+    arrReassignmentMappings: snapshot.arrReassignmentMappings,
+    arrOwnerships: snapshot.arrOwnerships,
+    arrReassignments: snapshot.arrReassignments,
+    radarrRemovalFallback: snapshot.radarrRemovalFallback,
+    radarrRemovalDownloadCleanup: snapshot.radarrRemovalDownloadCleanup,
+    seasonSonarrInspection: snapshot.seasonSonarrInspection,
+    seasonCoordinationOutcome: snapshot.seasonCoordinationOutcome,
+  }, {
+    type: 'movie',
+    cleanupDownloads: false,
+    skipArrCoordination: true,
+    arrReassignmentMappings: undefined,
+    arrOwnerships: undefined,
+    arrReassignments: undefined,
+    radarrRemovalFallback: undefined,
+    radarrRemovalDownloadCleanup: undefined,
+    seasonSonarrInspection: undefined,
+    seasonCoordinationOutcome: undefined,
+  });
+
+  await settle();
+
+  const operation = getDeletionOperation(result.operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(arrPresent, true);
+  assertEquals(arrManagedMediaId, 11);
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(arrMonitorMutationCount, 0);
+  assertEquals(live.get('plex-only-radarr-version')?.Media?.map((media) => media.id), [12]);
+});
+
 Deno.test('Radarr removal fallback protects replacement before exact Plex deletion', async () => {
   reset();
   configureRadarr();

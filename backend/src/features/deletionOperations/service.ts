@@ -570,10 +570,7 @@ export async function enqueueDeletionOperations(
       throw new DeletionConflictError('no deletion targets were found', 404);
     }
     for (const target of input.targets) {
-      if (
-        target.snapshot.seasonCleanup === true &&
-        target.snapshot.skipArrCoordination === true
-      ) {
+      if (target.snapshot.skipArrCoordination === true) {
         validateArrMonitoringEvidence(target.snapshot as unknown as DurableTargetSnapshot);
       }
     }
@@ -703,7 +700,8 @@ export async function enqueueDeletionOperations(
         if (
           acceptedCoordinatedMappings === undefined &&
           acceptedInspectionMappings === undefined &&
-          target.snapshot.seasonCleanup !== true
+          target.snapshot.seasonCleanup !== true &&
+          target.snapshot.skipArrCoordination !== true
         ) {
           target.snapshot.arrReassignmentMappings = currentMappings;
         }
