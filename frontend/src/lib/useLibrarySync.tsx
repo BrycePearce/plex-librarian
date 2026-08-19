@@ -10,7 +10,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { api } from "./api.ts";
+import { api, ApiError } from "./api.ts";
 import { queryKeys } from "./queryKeys.ts";
 import { useSyncStream } from "./useSyncStream.ts";
 
@@ -48,7 +48,34 @@ export function useSyncHistory() {
   return useQuery({
     queryKey: queryKeys.sync.history,
     queryFn: () => api.sync.history(10),
+    // Startup, scheduled, and deletion-follow-up syncs are initiated outside the
+    // currently mounted page. Polling closes the race where the first history request
+    // lands just before one of those syncs is registered server-side, which otherwise
+    // leaves sync controls enabled until the user clicks and receives a 409.
+    refetchInterval: (query) =>
+      query.state.data?.some((sync) => sync.status === "pending") ? 1_000 : 3_000,
   });
+}
+
+// A trigger can race an automatic or page-external sync between the latest history
+// response and the POST. The backend includes the authoritative active sync id in its
+// 409, so adopt that run as if this caller had started it instead of surfacing a false
+// failure banner.
+async function triggerOrAttach(
+  trigger: () => Promise<{ syncId: number; status: "pending" }>,
+) {
+  try {
+    return { ...await trigger(), attachedToExisting: false };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && error.syncId !== undefined) {
+      return {
+        syncId: error.syncId,
+        status: "pending" as const,
+        attachedToExisting: true,
+      };
+    }
+    throw error;
+  }
 }
 
 // Page-wide derived views (Users, Duplicates) care about any active sync, regardless
@@ -210,9 +237,22 @@ export function useLibrarySync(libraryKey: string) {
   }, [isThisLibraryDone, isDone, syncError, attached, libraryKey, qc]);
 
   const mutation = useMutation({
-    mutationFn: () => api.sync.triggerLibrary(libraryKey),
+    mutationFn: async () => {
+      const result = await triggerOrAttach(() => api.sync.triggerLibrary(libraryKey));
+      if (!result.attachedToExisting) {
+        return { ...result, scope: "library" as const };
+      }
+      // A conflict can point at either a targeted run or a global startup/scheduled run.
+      // Read the authoritative row before attaching so per-library completion uses the
+      // correct phase semantics for whichever kind of run won the race.
+      const sync = await api.sync.poll(result.syncId);
+      return {
+        ...result,
+        scope: sync.libraryKey === null ? "global" as const : "library" as const,
+      };
+    },
     onSuccess: (data) => {
-      setAttached({ id: data.syncId, scope: "library" });
+      setAttached({ id: data.syncId, scope: data.scope });
       void qc.invalidateQueries({ queryKey: queryKeys.sync.history });
     },
   });

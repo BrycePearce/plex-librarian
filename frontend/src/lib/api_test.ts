@@ -115,3 +115,23 @@ Deno.test("no-content responses resolve successfully without JSON parsing", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("sync conflicts expose the active sync id", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({ error: "sync already in progress", syncId: 42 }, {
+      status: 409,
+    }));
+  try {
+    await assertRejects(
+      () => api.sync.trigger(),
+      ApiError,
+      "Sync already in progress",
+    ).then((error) => {
+      assertEquals(error.status, 409);
+      assertEquals(error.syncId, 42);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

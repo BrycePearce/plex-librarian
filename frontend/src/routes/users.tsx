@@ -135,6 +135,32 @@ function UsersPage() {
     refetchInterval: isSyncing ? false : 30_000,
   });
 
+  // Sync history can report completion one render before the invalidated Users query
+  // enters its fetching state. During that handoff `data` is still the deliberately
+  // retained mid-sync snapshot (historyComplete=false), which used to flash the yellow
+  // incomplete-history warning for a frame. Treat the falling sync edge as refreshing
+  // immediately, then keep that guard up until an authoritative Users response settles.
+  const syncWasRunning = useRef(isSyncing);
+  const syncJustFinished = syncWasRunning.current && !isSyncing;
+  const [isSyncRefreshSettling, setIsSyncRefreshSettling] = useState(false);
+  useEffect(() => {
+    if (isSyncing) {
+      syncWasRunning.current = true;
+      return;
+    }
+    if (!syncWasRunning.current) return;
+
+    syncWasRunning.current = false;
+    setIsSyncRefreshSettling(true);
+    let cancelled = false;
+    void refetch().finally(() => {
+      if (!cancelled) setIsSyncRefreshSettling(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSyncing, refetch]);
+
   const [reviewUser, setReviewUser] = useState<PlexUser | null>(null);
   const [riskDetailsUser, setRiskDetailsUser] = useState<PlexUser | null>(null);
   const [followThroughUser, setFollowThroughUser] = useState<PlexUser | null>(null);
@@ -242,6 +268,7 @@ function UsersPage() {
         <HistorySyncWarning
           historySyncedAt={data.historyComplete ? data.usersSyncedAt : null}
           isSyncStatusLoading={isSyncStatusLoading}
+          isDataRefreshing={isFetching || syncJustFinished || isSyncRefreshSettling}
           warningMessage={data.usersSyncedAt === null
             ? "The user roster hasn't synced yet — this list may be incomplete or stale. Run a sync to populate it."
             : (

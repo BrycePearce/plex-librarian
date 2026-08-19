@@ -174,6 +174,7 @@ const BASE = "/api";
 export class ApiError extends Error {
   status: number;
   operationId?: string;
+  syncId?: number;
   code?: string;
   preview?: SeasonDeletionPreviewResponse;
 
@@ -182,6 +183,7 @@ export class ApiError extends Error {
     message: string,
     options?: {
       operationId?: string;
+      syncId?: number;
       code?: string;
       preview?: SeasonDeletionPreviewResponse;
     },
@@ -189,6 +191,7 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.operationId = options?.operationId;
+    this.syncId = options?.syncId;
     this.code = options?.code;
     this.preview = options?.preview;
   }
@@ -215,6 +218,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await res.json().catch(() => ({ error: res.statusText }))) as {
       error?: string;
       operationId?: unknown;
+      syncId?: unknown;
       code?: unknown;
       preview?: unknown;
     };
@@ -224,6 +228,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       : undefined;
     throw new ApiError(res.status, message.charAt(0).toUpperCase() + message.slice(1), {
       operationId,
+      syncId: typeof body.syncId === "number" ? body.syncId : undefined,
       code: typeof body.code === "string" ? body.code : undefined,
       preview: body.preview as SeasonDeletionPreviewResponse | undefined,
     });

@@ -25,7 +25,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api } from "../lib/api.ts";
+import { api, ApiError } from "../lib/api.ts";
 import { invalidateSyncDerivedQueries } from "../lib/queryCache.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import type { Library, LibraryPhase, LibrarySyncProgress, SyncLog } from "../lib/api.ts";
@@ -86,6 +86,17 @@ const ARR_ONBOARDING_STORAGE = {
   serialize: (value: boolean) => value ? "1" : "0",
   deserialize: (value: string) => value === "1",
 };
+
+async function triggerGlobalSyncOrAttach() {
+  try {
+    return await api.sync.trigger();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && error.syncId !== undefined) {
+      return { syncId: error.syncId, status: "pending" as const };
+    }
+    throw error;
+  }
+}
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -157,7 +168,7 @@ function DashboardInner() {
   });
 
   const triggerSync = useMutation({
-    mutationFn: () => api.sync.trigger(),
+    mutationFn: triggerGlobalSyncOrAttach,
     onSuccess: (data) => {
       setActiveGlobalSyncId(data.syncId);
       void qc.invalidateQueries({ queryKey: queryKeys.sync.history });
@@ -356,6 +367,19 @@ function DashboardInner() {
           initial="hidden"
           animate="show"
         >
+          {globalSyncError !== null && (
+            <div className="alert alert-error">
+              <AlertCircle className="w-4 h-4" />
+              <span>Sync failed: {globalSyncError}</span>
+            </div>
+          )}
+          {triggerSync.isError && (
+            <div className="alert alert-warning">
+              <AlertCircle className="w-4 h-4" />
+              <span>{triggerSync.error.message}</span>
+            </div>
+          )}
+
           {!isFirstRun && (
             <AnimatePresence>
               {(activeGlobalSyncId !== null || triggerSync.isPending) && (
@@ -455,19 +479,6 @@ function DashboardInner() {
           {!libsLoading && librariesData &&
             librariesData.libraries.length > 0 && (
             <HomeDirectory libraries={librariesData.libraries} />
-          )}
-
-          {globalSyncError !== null && (
-            <div className="alert alert-error">
-              <AlertCircle className="w-4 h-4" />
-              <span>Sync failed: {globalSyncError}</span>
-            </div>
-          )}
-          {triggerSync.isError && (
-            <div className="alert alert-warning">
-              <AlertCircle className="w-4 h-4" />
-              <span>{triggerSync.error.message}</span>
-            </div>
           )}
 
           {!libsLoading && (isCheckingFirstRun
