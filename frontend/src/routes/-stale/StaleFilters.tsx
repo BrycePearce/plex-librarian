@@ -16,8 +16,6 @@ export function StaleFilters({
   libraryType,
   duplicatesOnly,
   onDuplicatesOnlyChange,
-  scope,
-  onScopeChange,
 }: {
   days: number;
   filter: StaleParams["filter"];
@@ -29,8 +27,6 @@ export function StaleFilters({
   libraryType: string;
   duplicatesOnly: boolean;
   onDuplicatesOnlyChange: (value: boolean) => void;
-  scope: "show" | "season";
-  onScopeChange: (value: "show" | "season") => void;
 }) {
   const [customDays, setCustomDays] = useState(
     !INACTIVITY_PRESETS.includes(days),
@@ -44,29 +40,6 @@ export function StaleFilters({
 
   return (
     <div className="stale-filter-controls flex flex-wrap items-end gap-x-3 gap-y-2">
-      {libraryType === "show" && (
-        <div className="form-control gap-1">
-          <span className="label-text text-xs">Browse by</span>
-          <div className="join" role="group" aria-label="Browse stale TV content by">
-            <button
-              type="button"
-              className={`btn btn-sm join-item ${scope === "show" ? "btn-active" : ""}`}
-              aria-pressed={scope === "show"}
-              onClick={() => onScopeChange("show")}
-            >
-              Shows
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm join-item ${scope === "season" ? "btn-active" : ""}`}
-              aria-pressed={scope === "season"}
-              onClick={() => onScopeChange("season")}
-            >
-              Seasons
-            </button>
-          </div>
-        </div>
-      )}
       <label className="form-control gap-1">
         <span className="label-text text-xs">Watch status</span>
         <select
@@ -151,11 +124,7 @@ export function StaleFilters({
               id="duplicates-only"
             />
             <label htmlFor="duplicates-only" className="text-sm cursor-pointer">
-              {libraryType === "movie"
-                ? "Multiple versions"
-                : scope === "season"
-                ? "Duplicate episodes in season"
-                : "Duplicate episodes"}
+              {libraryType === "movie" ? "Multiple versions" : "Duplicate episodes"}
             </label>
           </div>
         </div>

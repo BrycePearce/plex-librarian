@@ -427,6 +427,44 @@ function StalePage() {
             <div className="library-title-line">
               <h1>{thisLibrary?.title ?? "Stale Items"}</h1>
               <span>Stale analysis</span>
+              {thisLibrary?.type === "show" && (
+                <div
+                  className="library-scope-switch"
+                  role="tablist"
+                  aria-label="Browse stale TV content by"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    className={!seasonScope ? "is-active" : ""}
+                    aria-selected={!seasonScope}
+                    onClick={() =>
+                      setParams((p) => ({
+                        ...p,
+                        scope: "show",
+                        duplicatesOnly: false,
+                        offset: 0,
+                      }))}
+                  >
+                    Shows
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    className={seasonScope ? "is-active" : ""}
+                    aria-selected={seasonScope}
+                    onClick={() =>
+                      setParams((p) => ({
+                        ...p,
+                        scope: "season",
+                        duplicatesOnly: false,
+                        offset: 0,
+                      }))}
+                  >
+                    Seasons
+                  </button>
+                </div>
+              )}
             </div>
             <p className="text-base-content/50 text-sm">
               {data
@@ -506,9 +544,6 @@ function StalePage() {
               <SlidersHorizontal className="size-4" /> Analysis controls
             </div>
             <StaleFilters
-              scope={seasonScope ? "season" : "show"}
-              onScopeChange={(scope) =>
-                setParams((p) => ({ ...p, scope, duplicatesOnly: false, offset: 0 }))}
               days={params.days ?? staleSearchDefaults.days}
               filter={params.filter ?? staleSearchDefaults.filter}
               onDaysChange={(days) => setParams((p) => ({ ...p, days, offset: 0 }))}
