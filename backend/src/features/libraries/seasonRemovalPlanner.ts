@@ -147,6 +147,14 @@ export function sonarrSeasonCoverageContainsPlex(
   return plexNumbers.every((number) => sonarrNumberSet.has(number));
 }
 
+export function hasSeasonSonarrAction(
+  resolved: boolean,
+  monitoredEpisodeCount: number,
+  managedFileCount: number,
+): boolean {
+  return resolved && (monitoredEpisodeCount > 0 || managedFileCount > 0);
+}
+
 export interface WholeSeasonRemovalPlan {
   preview: SeasonRemovalPreviewResponse;
   snapshot: Record<string, unknown>;
@@ -281,8 +289,9 @@ export async function buildWholeSeasonRemovalPlan(input: {
     fallbackWarning: 'Plex-only season deletion remains available.',
   });
   const blockers: string[] = [];
-  if (input.coordinated && inspection.targetPlans.length !== 1) {
-    blockers.push(
+  const sonarrBlockers: string[] = [];
+  if (inspection.targetPlans.length !== 1) {
+    sonarrBlockers.push(
       inspection.targetPlans.length === 0
         ? 'No exact Sonarr series was found for this season.'
         : 'More than one Sonarr instance manages this series; season ownership is ambiguous.',
@@ -294,26 +303,28 @@ export async function buildWholeSeasonRemovalPlan(input: {
     const selectedEpisodes = plan.snapshot.episodes.filter((episode) =>
       episode.seasonNumber === row.seasonIndex
     );
-    if (input.coordinated && selectedEpisodes.length === 0) {
-      blockers.push('Sonarr has no exact episodes for the selected season.');
+    if (selectedEpisodes.length === 0) {
+      sonarrBlockers.push('Sonarr has no exact episodes for the selected season.');
     }
-    if (input.coordinated && !sonarrSeasonCoverageContainsPlex(episodes, selectedEpisodes)) {
-      blockers.push('Sonarr does not contain every episode in the selected Plex season.');
+    if (!sonarrSeasonCoverageContainsPlex(episodes, selectedEpisodes)) {
+      sonarrBlockers.push('Sonarr does not contain every episode in the selected Plex season.');
     }
     const selectedIds = new Set(selectedEpisodes.map((episode) => episode.id));
     const files = plan.snapshot.files.filter((file) =>
       file.episodeIds.some((id) => selectedIds.has(id))
     );
     if (
-      input.coordinated && files.some((file) => file.episodeIds.some((id) => !selectedIds.has(id)))
+      files.some((file) => file.episodeIds.some((id) => !selectedIds.has(id)))
     ) {
-      blockers.push('Sonarr reports an EpisodeFile shared with an episode outside this season.');
+      sonarrBlockers.push(
+        'Sonarr reports an EpisodeFile shared with an episode outside this season.',
+      );
     }
     for (const file of files) {
       const mapped = resolveArrPath(file.path, 'library', plan.target.pathMappings) ?? file.path;
       const normalized = normalizeRemoteAbsolute(mapped)?.comparison;
-      if (input.coordinated && (!normalized || !plexPaths.has(normalized))) {
-        blockers.push(`Sonarr EpisodeFile is not an exact Plex season path: ${file.path}`);
+      if (!normalized || !plexPaths.has(normalized)) {
+        sonarrBlockers.push(`Sonarr EpisodeFile is not an exact Plex season path: ${file.path}`);
       }
     }
     sonarrTargets.push({
@@ -341,7 +352,27 @@ export async function buildWholeSeasonRemovalPlan(input: {
     });
   }
 
-  const sonarrResolved = input.coordinated && sonarrTargets.length === 1 && blockers.length === 0;
+  const managedEpisodeCount = sonarrTargets.reduce(
+    (total, target) => total + target.episodes.length,
+    0,
+  );
+  const monitoredEpisodeCount = sonarrTargets.reduce(
+    (total, target) =>
+      total + target.episodes.filter((episode) => episode.originalMonitored).length,
+    0,
+  );
+  const managedFileCount = sonarrTargets.reduce(
+    (total, target) => total + target.files.length,
+    0,
+  );
+  const sonarrResolved = sonarrTargets.length === 1 && sonarrBlockers.length === 0 &&
+    inspection.warnings.length === 0;
+  const sonarrActionAvailable = hasSeasonSonarrAction(
+    sonarrResolved,
+    monitoredEpisodeCount,
+    managedFileCount,
+  );
+  if (input.coordinated) blockers.push(...sonarrBlockers);
   const selectedPaths = new Set(plexPaths.keys());
   const rawCleanup = await resolveSeasonDownloadCleanup({
     serverId: input.serverId,
@@ -355,11 +386,12 @@ export async function buildWholeSeasonRemovalPlan(input: {
       size: part.byteSize,
     })),
     retained: [],
-    inspect: input.cleanupDownloads,
+    // Discovery is read-only and powers the preview. The accepted durable plan below
+    // still includes cleanup evidence only when the user explicitly opts in.
+    inspect: true,
   });
-  const cleanup = input.cleanupDownloads
-    ? selectVersionDownloadCleanup(rawCleanup, selectedPaths, false)
-    : null;
+  const availableCleanup = selectVersionDownloadCleanup(rawCleanup, selectedPaths, false);
+  const cleanup = input.cleanupDownloads ? availableCleanup : null;
   if (input.cleanupDownloads && !cleanup) {
     blockers.push(rawCleanup?.reason ?? 'No exact qBittorrent cleanup owns every selected path.');
   }
@@ -382,9 +414,7 @@ export async function buildWholeSeasonRemovalPlan(input: {
     seasonDownloadCleanup: persistedCleanup,
   };
   const planFingerprint = await fingerprint(accepted);
-  const cleanupStatus = !input.cleanupDownloads
-    ? 'unavailable' as const
-    : cleanup
+  const cleanupStatus = availableCleanup
     ? 'resolved' as const
     : rawCleanup?.status === 'error'
     ? 'error' as const
@@ -407,12 +437,27 @@ export async function buildWholeSeasonRemovalPlan(input: {
       ? 'error'
       : 'unavailable',
     ...(inspection.warnings.length > 0 ? { sonarrReason: inspection.warnings.join(' ') } : {}),
-    managedEpisodeCount: sonarrTargets.reduce((total, target) => total + target.episodes.length, 0),
-    managedFileCount: sonarrTargets.reduce((total, target) => total + target.files.length, 0),
+    managedEpisodeCount,
+    monitoredEpisodeCount,
+    managedFileCount,
+    sonarrActionAvailable,
+    plexFiles: [...plexPaths.values()].map((file) => ({
+      path: file.path,
+      size: file.byteSize,
+    })).sort((left, right) => left.path.localeCompare(right.path)),
+    sonarrFiles: sonarrTargets.flatMap((target) =>
+      target.files.map((file) => ({
+        instanceName: target.instanceName,
+        path: file.path,
+        size: file.size,
+      }))
+    ).sort((left, right) =>
+      left.instanceName.localeCompare(right.instanceName) || left.path.localeCompare(right.path)
+    ),
     cleanupConfigured: downloadTargets.length > 0,
     cleanupStatus,
-    ...(!cleanup && rawCleanup?.reason ? { cleanupReason: rawCleanup.reason } : {}),
-    downloadJobs: cleanup?.downloadJobs.map(publicDownloadJob) ?? [],
+    ...(!availableCleanup && rawCleanup?.reason ? { cleanupReason: rawCleanup.reason } : {}),
+    downloadJobs: availableCleanup?.downloadJobs.map(publicDownloadJob) ?? [],
     blockers,
   };
   return {

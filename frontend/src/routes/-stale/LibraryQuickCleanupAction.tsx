@@ -6,11 +6,13 @@ import "../../features/quickCleanup/quickCleanup.css";
 export function LibraryQuickCleanupAction({
   libraryKey,
   libraryItemCount,
+  automaticThresholdDays,
   isSyncing,
   isSyncStatusLoading,
 }: {
   libraryKey: string;
   libraryItemCount: number;
+  automaticThresholdDays: number;
   isSyncing: boolean;
   isSyncStatusLoading: boolean;
 }) {
@@ -94,6 +96,7 @@ export function LibraryQuickCleanupAction({
               <QuickCleanupPanel
                 libraryKey={libraryKey}
                 libraryItemCount={libraryItemCount}
+                automaticThresholdDays={automaticThresholdDays}
                 isSyncing={isSyncing}
                 isSyncStatusLoading={isSyncStatusLoading}
                 dialogRef={dialogRef}

@@ -36,6 +36,7 @@ function formatCustomYears(days: number): string {
 export function QuickCleanupPanel({
   libraryKey,
   libraryItemCount,
+  automaticThresholdDays,
   isSyncing,
   isSyncStatusLoading,
   dialogRef,
@@ -46,6 +47,7 @@ export function QuickCleanupPanel({
 }: {
   libraryKey: string;
   libraryItemCount: number;
+  automaticThresholdDays: number;
   isSyncing: boolean;
   isSyncStatusLoading: boolean;
   dialogRef: RefObject<HTMLDialogElement | null>;
@@ -54,7 +56,8 @@ export function QuickCleanupPanel({
   onReviewPendingChange: (pending: boolean) => void;
   onClose: () => void;
 }) {
-  const [thresholdDays, setThresholdDays] = useState(1_095);
+  const [thresholdDays, setThresholdDays] = useState(automaticThresholdDays);
+  const [automaticThreshold, setAutomaticThreshold] = useState(true);
   const [customThreshold, setCustomThreshold] = useState(false);
   const [customYears, setCustomYears] = useState("3");
   const [sort, setSort] = useState<StaleQuickCleanupSort>("fileSize");
@@ -68,6 +71,10 @@ export function QuickCleanupPanel({
     parsedCustomYears >= MIN_CUSTOM_YEARS &&
     parsedCustomYears <= MAX_CUSTOM_YEARS &&
     Number.isInteger(parsedCustomYears * 2);
+
+  useEffect(() => {
+    if (automaticThreshold) setThresholdDays(automaticThresholdDays);
+  }, [automaticThreshold, automaticThresholdDays]);
   const quickKey = queryKeys.staleQuickCleanup.analysis(
     libraryKey,
     thresholdDays,
@@ -233,18 +240,29 @@ export function QuickCleanupPanel({
         <span>Inactive at least</span>
         <select
           className="select select-bordered select-sm"
-          value={customThreshold ? "custom" : thresholdDays}
+          value={automaticThreshold ? "automatic" : customThreshold ? "custom" : thresholdDays}
           onChange={(event) => {
             setExpandedRatingKey(null);
+            if (event.target.value === "automatic") {
+              setCustomThreshold(false);
+              setAutomaticThreshold(true);
+              setThresholdDays(automaticThresholdDays);
+              return;
+            }
             if (event.target.value === "custom") {
               setCustomYears(formatCustomYears(thresholdDays));
+              setAutomaticThreshold(false);
               setCustomThreshold(true);
               return;
             }
+            setAutomaticThreshold(false);
             setCustomThreshold(false);
             setThresholdDays(Number(event.target.value));
           }}
         >
+          <option value="automatic">
+            Automatic ({formatCustomYears(automaticThresholdDays)} years)
+          </option>
           {THRESHOLDS.map((threshold) => (
             <option key={threshold.days} value={threshold.days}>{threshold.label}</option>
           ))}

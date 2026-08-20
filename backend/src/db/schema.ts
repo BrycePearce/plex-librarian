@@ -44,6 +44,10 @@ export const libraries = sqliteTable(
     // Confidence marker for the season-level episode-gap projection. Findings remain
     // persisted when null so interrupted refreshes can be shown honestly as stale.
     episodeAuditSyncedAt: integer('episode_audit_synced_at'),
+    // Earliest plausible item.addedAt ever observed for this library. This is a
+    // monotonic watermark (it may move earlier, never later), so removing old media
+    // cannot make the library appear younger and lower its automatic stale threshold.
+    oldestItemAddedAt: integer('oldest_item_added_at'),
     staleMinAgeDays: integer('stale_min_age_days'), // null = use settings.staleMinAgeDays
   },
   (table) => ({

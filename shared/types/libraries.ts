@@ -8,6 +8,8 @@ export interface Library {
   // Null until the cross-user play-history backfill completes for the current sync.
   historySyncedAt: number | null;
   staleMinAgeDays: number | null;
+  automaticStaleDays: number;
+  automaticQuickCleanupDays: number;
   itemCount: number;
   // Decimal KB, matching StaleItem.fileSize.
   totalFileSize: number;
@@ -50,6 +52,7 @@ export interface StaleResponse {
   maxDays: number | null;
   minAgeDays: number;
   libraryStaleMinAgeDays: number | null;
+  automaticStaleDays: number;
   historySyncedAt: number | null;
   search: string;
   filter: string;

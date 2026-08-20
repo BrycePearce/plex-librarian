@@ -37,6 +37,11 @@ withTransaction((client) => {
   insertLibrary.run(1);
   insertLibrary.run(2);
   client.prepare(
+    `UPDATE libraries
+     SET oldest_item_added_at = CAST(strftime('%s', 'now') AS INTEGER) - (9 * 365 * 86400)
+     WHERE server_id = 1 AND key = 'movies'`,
+  ).run();
+  client.prepare(
     `INSERT INTO libraries
       (server_id, key, title, type, synced_at, history_synced_at)
      VALUES (1, 'shows', 'Shows', 'show', 1, 1)`,
@@ -89,6 +94,19 @@ Deno.test('stale route counts by default and returns bounded look-ahead metadata
   // Only the literal lowercase value disables counting; older or malformed clients keep
   // the backward-compatible exact total.
   assertEquals((await stale('limit=2&count=FALSE')).total, 3);
+});
+
+Deno.test('bare stale requests use and disclose the library-age recommendation', async () => {
+  const response = await app.request('/api/libraries/movies/stale?limit=2');
+  assertEquals(response.status, 200);
+  const page = await response.json() as StaleResponse;
+  assertEquals(page.days, 1_095);
+  assertEquals(page.automaticStaleDays, 1_095);
+
+  const libraries = await (await app.request('/api/libraries')).json() as LibrariesResponse;
+  const movies = libraries.libraries.find((library) => library.key === 'movies');
+  assertEquals(movies?.automaticStaleDays, 1_095);
+  assertEquals(movies?.automaticQuickCleanupDays, 1_095);
 });
 
 Deno.test('TV stale route can return conservative season-scoped results', async () => {

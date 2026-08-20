@@ -7,10 +7,18 @@ Deno.env.set('DB_PATH', resolve(testDirectory, 'season-removal-planner.db'));
 const {
   canonicalSeasonEpisodeEvidence,
   canonicalSeasonMembershipEvidence,
+  hasSeasonSonarrAction,
   seasonPlexPathEvidence,
   seasonEpisodeEvidenceOnlyDisappeared,
   sonarrSeasonCoverageContainsPlex,
 } = await import('./seasonRemovalPlanner.ts');
+
+Deno.test('Sonarr season action requires a safe monitored or file change', () => {
+  assertEquals(hasSeasonSonarrAction(true, 1, 0), true);
+  assertEquals(hasSeasonSonarrAction(true, 0, 1), true);
+  assertEquals(hasSeasonSonarrAction(true, 0, 0), false);
+  assertEquals(hasSeasonSonarrAction(false, 1, 1), false);
+});
 
 function episode(
   ratingKey: string,

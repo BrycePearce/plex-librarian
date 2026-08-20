@@ -52,7 +52,6 @@ import { mediaVersionFromRow } from '../duplicates/mediaVersion.ts';
 import {
   analyzeStaleQuickCleanup,
   parseStaleQuickCleanupDays,
-  STALE_QUICK_CLEANUP_DEFAULT_DAYS,
   staleQuickCleanupActiveProtection,
 } from './quickCleanup.ts';
 import { staleCutoffs } from './staleFilters.ts';
@@ -65,6 +64,10 @@ import {
   assertRelocationWorkflowClear,
   RelocationConflictError,
 } from '../deletionOperations/relocation/relocation.ts';
+import {
+  automaticQuickCleanupThresholdDays,
+  automaticStaleThresholdDays,
+} from './automaticStaleThreshold.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -123,10 +126,16 @@ router.get('/', async (c) => {
   ]);
 
   const statsByKey = new Map(statsRows.map((r) => [r.libraryKey, r]));
+  const now = Math.floor(Date.now() / 1000);
   const librariesWithStats = rows.map((lib) => {
     const stats = statsByKey.get(lib.key);
     return {
       ...lib,
+      automaticStaleDays: automaticStaleThresholdDays(lib.oldestItemAddedAt, now),
+      automaticQuickCleanupDays: automaticQuickCleanupThresholdDays(
+        lib.oldestItemAddedAt,
+        now,
+      ),
       itemCount: stats?.itemCount ?? 0,
       totalFileSize: stats ? Number(stats.totalFileSize ?? '0') : 0,
     };
@@ -148,6 +157,7 @@ router.get('/:key/stale', async (c) => {
     type: libraries.type,
     staleMinAgeDays: libraries.staleMinAgeDays,
     historySyncedAt: libraries.historySyncedAt,
+    oldestItemAddedAt: libraries.oldestItemAddedAt,
   })
     .from(libraries)
     .where(libraryByKey(serverId, key))
@@ -158,9 +168,13 @@ router.get('/:key/stale', async (c) => {
   // otherwise valid page into a 400 response.
   const scope = c.req.query('scope') === 'season' && library.type === 'show' ? 'season' : 'show';
 
+  const now = Math.floor(Date.now() / 1000);
+  const automaticStaleDays = automaticStaleThresholdDays(library.oldestItemAddedAt, now);
+
   // Minimum inactivity: time since last view for watched items, or time since added for
-  // never-watched items (default 365).
-  const rawDays = Number(c.req.query('days') ?? '365');
+  // never-watched items. An explicit query remains bookmarkable; a bare request uses
+  // the inexpensive library-age recommendation.
+  const rawDays = Number(c.req.query('days') ?? automaticStaleDays);
   if (!Number.isInteger(rawDays) || rawDays < 0) {
     return c.json({
       error: 'days must be a non-negative integer',
@@ -231,7 +245,6 @@ router.get('/:key/stale', async (c) => {
     ? sql`instr(lower(${items.title}), lower(${search})) > 0`
     : undefined;
 
-  const now = Math.floor(Date.now() / 1000);
   const {
     viewedBefore,
     viewedOnOrAfter,
@@ -348,6 +361,7 @@ router.get('/:key/stale', async (c) => {
         maxDays,
         minAgeDays,
         libraryStaleMinAgeDays: library.staleMinAgeDays,
+        automaticStaleDays,
         historySyncedAt: library.historySyncedAt,
         search,
         filter,
@@ -491,6 +505,7 @@ router.get('/:key/stale', async (c) => {
       maxDays,
       minAgeDays,
       libraryStaleMinAgeDays: library.staleMinAgeDays,
+      automaticStaleDays,
       historySyncedAt: library.historySyncedAt,
       search,
       filter,
@@ -525,7 +540,14 @@ router.get('/:key/stale/quick-cleanup', async (c) => {
     if (error instanceof RelocationConflictError) return c.json({ error: error.message }, 409);
     throw error;
   }
-  const rawDays = c.req.query('days') ?? String(STALE_QUICK_CLEANUP_DEFAULT_DAYS);
+  const [library] = await db.select({ oldestItemAddedAt: libraries.oldestItemAddedAt })
+    .from(libraries)
+    .where(libraryByKey(serverId, key))
+    .limit(1);
+  if (!library) return c.json({ error: 'library not found' }, 404);
+  const now = Math.floor(Date.now() / 1000);
+  const rawDays = c.req.query('days') ??
+    String(automaticQuickCleanupThresholdDays(library.oldestItemAddedAt, now));
   const thresholdDays = parseStaleQuickCleanupDays(rawDays);
   if (thresholdDays === null) {
     return c.json({ error: 'days must be an integer between 180 and 3650' }, 400);
@@ -540,7 +562,6 @@ router.get('/:key/stale/quick-cleanup', async (c) => {
     return c.json({ error: 'order must be asc or desc' }, 400);
   }
   const order: StaleQuickCleanupOrder = rawOrder;
-  const now = Math.floor(Date.now() / 1000);
   const analysis = analyzeStaleQuickCleanup(serverId, key, thresholdDays, now, [], sort, order);
   if (!analysis) return c.json({ error: 'library not found' }, 404);
   if (!analysis.eligible || analysis.candidates.length === 0) {

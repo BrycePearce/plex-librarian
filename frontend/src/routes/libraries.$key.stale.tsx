@@ -55,12 +55,11 @@ const FILTERS = ["all", "watched", "unwatched"] as const;
 
 // Applied both as the useState-style initializer for a fresh visit and as the set of keys
 // `stripSearchParams` omits from the URL when the current value matches — so a default view
-// stays at the bare `/stale` path instead of accumulating `?days=365&filter=all&...` on every
-// load, while any control the user actually changes shows up in the URL (and survives a
-// refresh or the browser Back button).
+// stays at the bare `/stale` path instead of accumulating default filters on every load,
+// while any control the user actually changes shows up in the URL (and survives a refresh
+// or the browser Back button). `days` is intentionally absent: a bare URL means Automatic.
 const staleSearchDefaults = {
   scope: "show",
-  days: 365,
   filter: "all",
   search: "",
   duplicatesOnly: false,
@@ -79,7 +78,7 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
   const minAgeDays = Number(search.minAgeDays);
   return {
     scope: search.scope === "season" ? "season" : staleSearchDefaults.scope,
-    days: Number.isInteger(days) && days >= 0 ? days : staleSearchDefaults.days,
+    ...(Number.isInteger(days) && days >= 0 ? { days } : {}),
     filter: (FILTERS as readonly string[]).includes(search.filter as string)
       ? (search.filter as StaleParams["filter"])
       : staleSearchDefaults.filter,
@@ -283,7 +282,7 @@ function StalePage() {
   const selectionScope = JSON.stringify([
     key,
     params.scope,
-    params.days,
+    params.days ?? data?.days ?? "",
     params.minAgeDays ?? "",
     params.filter,
     params.duplicatesOnly ? "duplicates" : "all",
@@ -490,6 +489,7 @@ function StalePage() {
                   <LibraryQuickCleanupAction
                     libraryKey={key}
                     libraryItemCount={thisLibraryItemCount}
+                    automaticThresholdDays={thisLibrary?.automaticQuickCleanupDays ?? 1_095}
                     isSyncing={isSyncing}
                     isSyncStatusLoading={isSyncStatusLoading}
                   />
@@ -546,7 +546,9 @@ function StalePage() {
               <SlidersHorizontal className="size-4" /> Analysis controls
             </div>
             <StaleFilters
-              days={params.days ?? staleSearchDefaults.days}
+              days={data?.days ?? 365}
+              automaticDays={data?.automaticStaleDays ?? 365}
+              automatic={params.days === undefined}
               filter={params.filter ?? staleSearchDefaults.filter}
               onDaysChange={(days) => setParams((p) => ({ ...p, days, offset: 0 }))}
               onFilterChange={(filter) => setParams((p) => ({ ...p, filter, offset: 0 }))}

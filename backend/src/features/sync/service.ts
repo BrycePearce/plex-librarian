@@ -16,6 +16,7 @@ import { syncUsers } from './userSync.ts';
 import { withLibraryOperation } from '../../services/libraryOperations.ts';
 import { syncSeerrRequests } from '../seerr/sync.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
+import { plausibleItemAddedAt } from '../libraries/automaticStaleThreshold.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
 // a rename in schema.ts + migration automatically updates the upsert set clause.
@@ -142,9 +143,19 @@ async function syncLibrary(
     : undefined;
 
   let itemCount = 0;
+  let oldestItemAddedAt: number | null = null;
 
   for await (const page of plex.libraryItems(lib.key, typeFilter)) {
     if (page.items.length === 0) continue;
+    for (const item of page.items) {
+      const addedAt = item.addedAt;
+      if (
+        addedAt !== null && plausibleItemAddedAt(addedAt, now) &&
+        (oldestItemAddedAt === null || addedAt < oldestItemAddedAt)
+      ) {
+        oldestItemAddedAt = addedAt;
+      }
+    }
     for (const batch of sqliteWriteBatches(page.items)) {
       await db
         .insert(items)
@@ -265,6 +276,17 @@ async function syncLibrary(
           },
         });
     }
+  }
+
+  if (oldestItemAddedAt !== null) {
+    await db.update(libraries).set({
+      oldestItemAddedAt: sql`CASE
+        WHEN ${libraries.oldestItemAddedAt} IS NULL
+          OR ${libraries.oldestItemAddedAt} > ${oldestItemAddedAt}
+        THEN ${oldestItemAddedAt}
+        ELSE ${libraries.oldestItemAddedAt}
+      END`,
+    }).where(libraryByKey(serverId, lib.key));
   }
 
   // A needs-attention deletion is terminal for worker scheduling but still owns its

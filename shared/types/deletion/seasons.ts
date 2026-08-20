@@ -16,7 +16,11 @@ export interface SeasonRemovalPreviewResponse {
   sonarrStatus: 'resolved' | 'unavailable' | 'error';
   sonarrReason?: string;
   managedEpisodeCount: number;
+  monitoredEpisodeCount: number;
   managedFileCount: number;
+  sonarrActionAvailable: boolean;
+  plexFiles: Array<{ path: string; size: number }>;
+  sonarrFiles: Array<{ instanceName: string; path: string; size: number }>;
   cleanupConfigured: boolean;
   cleanupStatus: 'resolved' | 'unavailable' | 'error';
   cleanupReason?: string;

@@ -7,6 +7,8 @@ const INACTIVITY_PRESETS = [0, 90, 180, 365, 730, 1_095];
 
 export function StaleFilters({
   days,
+  automaticDays,
+  automatic,
   filter,
   onDaysChange,
   onFilterChange,
@@ -18,8 +20,10 @@ export function StaleFilters({
   onDuplicatesOnlyChange,
 }: {
   days: number;
+  automaticDays: number;
+  automatic: boolean;
   filter: StaleParams["filter"];
-  onDaysChange: (days: number) => void;
+  onDaysChange: (days: number | undefined) => void;
   onFilterChange: (filter: StaleParams["filter"]) => void;
   gracePeriodValue: string;
   defaultGraceDays?: number;
@@ -29,12 +33,12 @@ export function StaleFilters({
   onDuplicatesOnlyChange: (value: boolean) => void;
 }) {
   const [customDays, setCustomDays] = useState(
-    !INACTIVITY_PRESETS.includes(days),
+    !automatic && !INACTIVITY_PRESETS.includes(days),
   );
 
   useEffect(() => {
-    setCustomDays(!INACTIVITY_PRESETS.includes(days));
-  }, [days]);
+    setCustomDays(!automatic && !INACTIVITY_PRESETS.includes(days));
+  }, [automatic, days]);
 
   const ageFloorDisabled = filter === "watched" || days === 0;
 
@@ -56,8 +60,13 @@ export function StaleFilters({
         <span className="label-text text-xs">Inactive at least</span>
         <select
           className="select select-bordered select-sm"
-          value={customDays ? "custom" : String(days)}
+          value={automatic ? "automatic" : customDays ? "custom" : String(days)}
           onChange={(event) => {
+            if (event.target.value === "automatic") {
+              setCustomDays(false);
+              onDaysChange(undefined);
+              return;
+            }
             if (event.target.value === "custom") {
               setCustomDays(true);
               return;
@@ -66,6 +75,9 @@ export function StaleFilters({
             onDaysChange(Number(event.target.value));
           }}
         >
+          <option value="automatic">
+            Automatic ({automaticDays / 365} {automaticDays === 365 ? "year" : "years"})
+          </option>
           <option value={0}>Everything</option>
           <option value={90}>3 months</option>
           <option value={180}>6 months</option>

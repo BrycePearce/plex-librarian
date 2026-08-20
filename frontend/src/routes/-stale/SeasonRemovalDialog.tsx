@@ -1,16 +1,160 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
-import { AlertTriangle, LoaderCircle, Trash2 } from "lucide-react";
+import { AlertTriangle, HardDrive, ListVideo, LoaderCircle, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api.ts";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import {
+  ActiveServiceMark,
+  downloadJobFiles,
+  downloadJobInfo,
+  downloadJobRoot,
+  PathTreeRoot,
+} from "../../features/mediaDeletion/DeletionTree.tsx";
+import { InfoTip } from "../../features/mediaDeletion/InfoTip.tsx";
+import type { SeasonRemovalPreviewResponse } from "@shared/types";
 
 export interface SeasonRemovalChoice {
   previewFingerprint: string;
   coordinated: boolean;
   cleanupDownloads: boolean;
+}
+
+export function seasonCleanupAvailable(
+  preview: Pick<SeasonRemovalPreviewResponse, "downloadJobs"> | undefined,
+): boolean {
+  return (preview?.downloadJobs.length ?? 0) > 0;
+}
+
+export function seasonSonarrActionAvailable(
+  preview: Pick<SeasonRemovalPreviewResponse, "sonarrActionAvailable"> | undefined,
+): boolean {
+  return preview?.sonarrActionAvailable === true;
+}
+
+interface PreviewFile {
+  source: string;
+  service: "plex" | "sonarr";
+  path: string;
+  size: number;
+}
+
+function groupedPreviewFiles(files: PreviewFile[]) {
+  const groups = new Map<
+    string,
+    {
+      source: string;
+      service: "plex" | "sonarr";
+      root: string;
+      files: Array<{ path: string; size: number }>;
+    }
+  >();
+  for (const file of files) {
+    const separator = Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"));
+    const root = separator > 0 ? file.path.slice(0, separator) : file.path;
+    const name = separator > 0 ? file.path.slice(separator + 1) : file.path;
+    const key = `${file.service}\0${file.source}\0${root}`;
+    const group = groups.get(key) ?? {
+      source: file.source,
+      service: file.service,
+      root,
+      files: [],
+    };
+    group.files.push({ path: name, size: file.size });
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function SeasonRemovalDeletionTree({
+  preview,
+  coordinated,
+  cleanupDownloads,
+  loading,
+}: {
+  preview: SeasonRemovalPreviewResponse | undefined;
+  coordinated: boolean;
+  cleanupDownloads: boolean;
+  loading: boolean;
+}) {
+  const fileGroups = groupedPreviewFiles([
+    ...(preview?.plexFiles.map((file) => ({
+      ...file,
+      source: "Plex",
+      service: "plex" as const,
+    })) ?? []),
+    ...(coordinated
+      ? preview?.sonarrFiles.map((file) => ({
+        path: file.path,
+        size: file.size,
+        source: file.instanceName,
+        service: "sonarr" as const,
+      })) ?? []
+      : []),
+  ]);
+  const downloadJobs = cleanupDownloads ? preview?.downloadJobs ?? [] : [];
+  const pathCount = (preview?.plexFiles.length ?? 0) +
+    (coordinated ? preview?.sonarrFiles.length ?? 0 : 0) +
+    downloadJobs.reduce((total, job) => total + job.fileCount, 0);
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40">
+      <div className="flex h-7 items-center gap-1.5 border-b border-base-300/70 px-2.5 text-[11px] text-base-content/45">
+        <span className="font-medium text-base-content/60">Deletion preview</span>
+        <InfoTip text="Shows every file path reported by Plex and each selected cleanup service. The services revalidate these exact targets before deletion." />
+        {loading
+          ? <span className="loading loading-spinner loading-xs ml-auto" />
+          : (
+            <span className="ml-auto font-mono">
+              {pathCount} {pathCount === 1 ? "path" : "paths"}
+            </span>
+          )}
+      </div>
+      <div className="max-h-64 overflow-y-auto px-2.5 py-1">
+        {fileGroups.map((group) => (
+          <PathTreeRoot
+            key={`${group.source}:${group.root}`}
+            path={group.root}
+            source={group.source}
+            marks={
+              <ActiveServiceMark
+                service={group.service}
+                label={group.service === "plex" ? "Plex deletion" : "Sonarr update"}
+              />
+            }
+            files={group.files}
+            totalFiles={group.files.length}
+          />
+        ))}
+        {downloadJobs.map((job) => (
+          <PathTreeRoot
+            key={`job:${job.instanceKey}:${job.jobId}`}
+            path={downloadJobRoot(job) || job.name}
+            source={job.instanceName}
+            marks={
+              <ActiveServiceMark
+                service="qbittorrent"
+                label="qBittorrent download cleanup"
+              />
+            }
+            files={downloadJobFiles(job)}
+            totalFiles={job.fileCount}
+            info={downloadJobInfo(job)}
+          />
+        ))}
+        {loading && (
+          <p className="flex items-center gap-2 py-2 text-[11px] text-base-content/40">
+            <span className="loading loading-spinner loading-xs" /> Loading files…
+          </p>
+        )}
+        {!loading && pathCount === 0 && (
+          <p className="py-1 text-[10px] text-base-content/35">No file paths reported</p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function SeasonRemovalDialog({
@@ -50,27 +194,50 @@ export function SeasonRemovalDialog({
         cleanupDownloads,
       }),
     enabled: item !== null,
+    placeholderData: (previous) =>
+      previous?.seasonRatingKey === item?.ratingKey ? previous : undefined,
     staleTime: 0,
     retry: false,
   });
   const value = preview.data;
+  const sonarrActionAvailable = seasonSonarrActionAvailable(value);
   useEffect(() => {
-    if (value?.coordinatedConfigured === false && coordinated) setCoordinated(false);
-  }, [coordinated, value?.coordinatedConfigured]);
-  const blocked = !value || value.blockers.length > 0 || preview.isFetching;
+    if (value && !sonarrActionAvailable && coordinated) setCoordinated(false);
+  }, [coordinated, sonarrActionAvailable, value]);
+  const cleanupAvailable = seasonCleanupAvailable(value);
+  useEffect(() => {
+    if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
+  }, [cleanupAvailable, cleanupDownloads, value]);
+  const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
+    (coordinated && !sonarrActionAvailable);
 
   return (
     <dialog ref={dialogRef} className="modal" onCancel={onCancel}>
-      <div className="modal-box max-w-2xl">
+      <div className="modal-box max-w-3xl">
         <h3 className="font-bold text-lg">Remove this season?</h3>
         <p className="mt-2 text-sm text-base-content/70">
           {item ? `${item.title} · Season ${item.seasonIndex ?? "?"}` : "Selected season"}
         </p>
         {item && (
           <div className="mt-4 rounded-box border border-base-300 bg-base-200/50 p-4 text-sm">
-            <div className="flex justify-between gap-4">
-              <span>{item.leafCount ?? 0} episodes</span>
-              <strong>{formatKilobytes(item.fileSize ?? 0)}</strong>
+            <div className="flex items-center justify-between gap-4 text-base-content/70">
+              <span className="inline-flex items-center gap-2">
+                <span className="inline-flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <ListVideo className="size-4" />
+                </span>
+                <span>
+                  <strong className="font-semibold text-base-content">
+                    {item.leafCount ?? 0}
+                  </strong>{" "}
+                  episodes
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <HardDrive className="size-4 text-base-content/40" />
+                <strong className="font-semibold text-base-content">
+                  {formatKilobytes(item.fileSize ?? 0)}
+                </strong>
+              </span>
             </div>
             {preview.isFetching && (
               <div className="mt-3 flex items-center gap-2 text-base-content/60">
@@ -88,43 +255,47 @@ export function SeasonRemovalDialog({
                 <AlertTriangle className="size-4" /> {blocker}
               </div>
             ))}
-            {value && !coordinated && (
-              <div className="alert alert-warning mt-3 text-sm">
-                Plex-only removal leaves Sonarr unchanged. A monitored season may be downloaded
-                again.
-              </div>
-            )}
             {value && coordinated && value.sonarrStatus === "resolved" && (
               <p className="mt-3 text-success">
-                Sonarr will keep the series, unmonitor {value.managedEpisodeCount}{" "}
+                Sonarr will keep the series, unmonitor {value.monitoredEpisodeCount}{" "}
                 season episodes, and remove {value.managedFileCount} exact EpisodeFiles.
               </p>
             )}
             <DestinationOptions
               options={[
-                {
-                  id: "arr",
-                  service: "sonarr",
-                  label: "Update Sonarr",
-                  info:
-                    "Keep the series, unmonitor this season's episodes, and delete only their exact EpisodeFiles.",
-                  checked: coordinated,
-                  disabled: value?.coordinatedConfigured === false,
-                  warning: value?.coordinatedConfigured === false,
-                  onChange: setCoordinated,
-                },
-                {
-                  id: "cleanup",
-                  service: "qbittorrent",
-                  label: "Clean downloads",
-                  info:
-                    "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
-                  checked: cleanupDownloads,
-                  disabled: value?.cleanupConfigured === false,
-                  warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
-                  onChange: setCleanupDownloads,
-                },
+                ...(sonarrActionAvailable
+                  ? [{
+                    id: "arr" as const,
+                    service: "sonarr" as const,
+                    label: "Update Sonarr",
+                    info:
+                      "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
+                    checked: coordinated,
+                    disabled: value?.sonarrStatus !== "resolved",
+                    warning: coordinated && value?.sonarrStatus !== "resolved",
+                    onChange: setCoordinated,
+                  }]
+                  : []),
+                ...(cleanupAvailable
+                  ? [{
+                    id: "cleanup" as const,
+                    service: "qbittorrent" as const,
+                    label: "Clean downloads",
+                    info:
+                      "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
+                    checked: cleanupDownloads,
+                    disabled: value?.cleanupStatus !== "resolved",
+                    warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
+                    onChange: setCleanupDownloads,
+                  }]
+                  : []),
               ]}
+            />
+            <SeasonRemovalDeletionTree
+              preview={value}
+              coordinated={coordinated}
+              cleanupDownloads={cleanupDownloads}
+              loading={preview.isFetching}
             />
           </div>
         )}

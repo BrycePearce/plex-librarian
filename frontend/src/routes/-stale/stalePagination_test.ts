@@ -16,6 +16,7 @@ function response(total: number | null): StaleResponse {
     maxDays: null,
     minAgeDays: 90,
     libraryStaleMinAgeDays: null,
+    automaticStaleDays: 365,
     historySyncedAt: 1,
     search: "",
     filter: "all",
