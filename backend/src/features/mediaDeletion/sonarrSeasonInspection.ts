@@ -18,6 +18,15 @@ export interface SonarrSeasonInspection {
   warnings: string[];
 }
 
+export function sonarrActivityConflictMessage(names: readonly string[]): string {
+  const refreshing = names.length > 0 &&
+    names.every((name) => /^(refresh|rescan)/i.test(name));
+  const activity = refreshing
+    ? 'refreshing this series'
+    : 'updating or importing files for this series';
+  return `Sonarr is currently ${activity}. Plex Librarian waits for it to finish so the file list cannot change during removal. Try again in a moment.`;
+}
+
 /**
  * Collects the stable Sonarr evidence shared by redundant-version cleanup and whole-season
  * deletion. It performs all reads before callers interpret ownership or choose a mutation.
@@ -68,11 +77,9 @@ export async function inspectSonarrSeason(input: {
           target.client.sonarrSeriesActivity(series.id),
         ]);
         if (!activity.quiet) {
-          throw new Error(
-            `Sonarr has conflicting series activity: ${
-              activity.blocking.map((entry) => entry.name).join(', ')
-            }`,
-          );
+          throw new Error(sonarrActivityConflictMessage(
+            activity.blocking.map((entry) => entry.name),
+          ));
         }
         targetPlans.push({
           target,

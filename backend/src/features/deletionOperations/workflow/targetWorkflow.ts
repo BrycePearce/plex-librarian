@@ -32,6 +32,7 @@ import {
   normalizeRemoteAbsolute,
   orphanRootIdentity,
 } from '../../mediaDeletion/hardlinks.ts';
+import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarrSeasonInspection.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
@@ -807,11 +808,9 @@ async function assertWholeSeasonSonarrPostcondition(
     }
     const activity = await sonarr.client.sonarrSeriesActivity(series.id);
     if (!activity.quiet) {
-      throw new Error(
-        `Sonarr has conflicting series activity: ${
-          activity.blocking.map((entry) => entry.name).join(', ')
-        }`,
-      );
+      throw new Error(sonarrActivityConflictMessage(
+        activity.blocking.map((entry) => entry.name),
+      ));
     }
     let current = await sonarr.client.sonarrSeriesSnapshot(series.id);
     const expectedEpisodeIds = new Set(expected.episodes.map((episode) => episode.episodeId));

@@ -34,6 +34,10 @@ export function seasonSonarrActionAvailable(
   return preview?.sonarrActionAvailable === true;
 }
 
+export function usableSeasonRemovalPreview<T>(data: T | undefined, error: unknown): T | undefined {
+  return error == null ? data : undefined;
+}
+
 interface PreviewFile {
   source: string;
   service: "plex" | "sonarr";
@@ -199,7 +203,9 @@ export function SeasonRemovalDialog({
     staleTime: 0,
     retry: false,
   });
-  const value = preview.data;
+  // A failed refetch can retain placeholder data from the previous destination choice.
+  // Never present or submit that stale plan alongside the new verification error.
+  const value = usableSeasonRemovalPreview(preview.data, preview.error);
   const sonarrActionAvailable = seasonSonarrActionAvailable(value);
   useEffect(() => {
     if (value && !sonarrActionAvailable && coordinated) setCoordinated(false);
@@ -218,6 +224,39 @@ export function SeasonRemovalDialog({
         <p className="mt-2 text-sm text-base-content/70">
           {item ? `${item.title} · Season ${item.seasonIndex ?? "?"}` : "Selected season"}
         </p>
+        {preview.error && (
+          <div className="alert alert-error mt-4 items-start text-sm" role="alert">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold">Couldn’t verify this removal</div>
+              <p className="mt-1 text-error-content/80">
+                {preview.error instanceof Error
+                  ? preview.error.message
+                  : "The deletion preview could not be verified. Try again in a moment."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm shrink-0"
+              disabled={preview.isFetching}
+              onClick={() => void preview.refetch()}
+            >
+              {preview.isFetching && <LoaderCircle className="size-4 animate-spin" />}
+              Try again
+            </button>
+          </div>
+        )}
+        {error != null && (
+          <div className="alert alert-error mt-4 items-start text-sm" role="alert">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <div className="font-semibold">Couldn’t start the removal</div>
+              <p className="mt-1 text-error-content/80">
+                {error instanceof Error ? error.message : "Could not start season removal"}
+              </p>
+            </div>
+          </div>
+        )}
         {item && (
           <div className="mt-4 rounded-box border border-base-300 bg-base-200/50 p-4 text-sm">
             <div className="flex items-center justify-between gap-4 text-base-content/70">
@@ -245,11 +284,6 @@ export function SeasonRemovalDialog({
                 Verifying Plex, Sonarr, and download ownership…
               </div>
             )}
-            {preview.error && (
-              <div className="alert alert-error mt-3 text-sm">
-                {preview.error instanceof Error ? preview.error.message : "Preview failed"}
-              </div>
-            )}
             {value?.blockers.map((blocker) => (
               <div key={blocker} className="alert alert-error mt-3 text-sm">
                 <AlertTriangle className="size-4" /> {blocker}
@@ -261,47 +295,46 @@ export function SeasonRemovalDialog({
                 season episodes, and remove {value.managedFileCount} exact EpisodeFiles.
               </p>
             )}
-            <DestinationOptions
-              options={[
-                ...(sonarrActionAvailable
-                  ? [{
-                    id: "arr" as const,
-                    service: "sonarr" as const,
-                    label: "Update Sonarr",
-                    info:
-                      "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
-                    checked: coordinated,
-                    disabled: value?.sonarrStatus !== "resolved",
-                    warning: coordinated && value?.sonarrStatus !== "resolved",
-                    onChange: setCoordinated,
-                  }]
-                  : []),
-                ...(cleanupAvailable
-                  ? [{
-                    id: "cleanup" as const,
-                    service: "qbittorrent" as const,
-                    label: "Clean downloads",
-                    info:
-                      "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
-                    checked: cleanupDownloads,
-                    disabled: value?.cleanupStatus !== "resolved",
-                    warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
-                    onChange: setCleanupDownloads,
-                  }]
-                  : []),
-              ]}
-            />
-            <SeasonRemovalDeletionTree
-              preview={value}
-              coordinated={coordinated}
-              cleanupDownloads={cleanupDownloads}
-              loading={preview.isFetching}
-            />
-          </div>
-        )}
-        {error != null && (
-          <div className="alert alert-error mt-4 text-sm">
-            {error instanceof Error ? error.message : "Could not start season removal"}
+            {!preview.error && (
+              <>
+                <DestinationOptions
+                  options={[
+                    ...(sonarrActionAvailable
+                      ? [{
+                        id: "arr" as const,
+                        service: "sonarr" as const,
+                        label: "Update Sonarr",
+                        info:
+                          "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
+                        checked: coordinated,
+                        disabled: value?.sonarrStatus !== "resolved",
+                        warning: coordinated && value?.sonarrStatus !== "resolved",
+                        onChange: setCoordinated,
+                      }]
+                      : []),
+                    ...(cleanupAvailable
+                      ? [{
+                        id: "cleanup" as const,
+                        service: "qbittorrent" as const,
+                        label: "Clean downloads",
+                        info:
+                          "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
+                        checked: cleanupDownloads,
+                        disabled: value?.cleanupStatus !== "resolved",
+                        warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
+                        onChange: setCleanupDownloads,
+                      }]
+                      : []),
+                  ]}
+                />
+                <SeasonRemovalDeletionTree
+                  preview={value}
+                  coordinated={coordinated}
+                  cleanupDownloads={cleanupDownloads}
+                  loading={preview.isFetching}
+                />
+              </>
+            )}
           </div>
         )}
         <div className="modal-action">
