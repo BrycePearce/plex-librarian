@@ -22,6 +22,7 @@ export type * from './types/media/seasonProfiles.ts';
 export type * from './types/deletion/cleanup.ts';
 export type * from './types/deletion/operations.ts';
 export type * from './types/deletion/previews.ts';
+export type * from './types/deletion/seasons.ts';
 export type * from './types/deletion/relocation.ts';
 export {
   hasCompletedRelocationSyncBarrier,

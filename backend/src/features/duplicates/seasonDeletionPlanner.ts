@@ -27,8 +27,6 @@ import { SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
 import {
   type PersistedResolvedCleanupItem,
   persistResolvedCleanupIdentity,
-  type ResolvedCleanupItem,
-  resolveDownloadCleanup,
 } from '../mediaDeletion/cleanup.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import {
@@ -39,7 +37,14 @@ import {
 import type { NewDeletionTarget } from '../deletionOperations/service.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import { bestMediaVersionCandidate } from '@plex-librarian/shared/mediaVersionRanking.ts';
-import { resolveDirectQbittorrentCleanup } from '../qbittorrent/directDiscovery.ts';
+import {
+  resolveSeasonDownloadCleanup,
+  seasonDownloadJobAssignments,
+} from '../mediaDeletion/seasonDownloadCleanup.ts';
+import {
+  type InspectedSonarrSeasonTarget,
+  inspectSonarrSeason,
+} from '../mediaDeletion/sonarrSeasonInspection.ts';
 import {
   type SonarrManualImportCandidate,
   supportedSonarrSeasonMutationVersion,
@@ -139,77 +144,6 @@ export interface AuthoritativeSeasonPlan {
   preview: SeasonDeletionPreviewResponse;
 }
 
-function cleanupJobAuthorization(cleanup: ResolvedCleanupItem): string[] {
-  return cleanup.downloadJobs.map((job) =>
-    canonical({
-      instanceKey: job.instanceKey,
-      jobId: job.jobId,
-      authorizedSourcePaths: [...job.authorizedSourcePaths].sort(),
-    })
-  ).sort();
-}
-
-export function downloadCleanupEvidenceAgrees(
-  arrHistory: ResolvedCleanupItem,
-  direct: ResolvedCleanupItem,
-): boolean {
-  return canonical(cleanupJobAuthorization(arrHistory)) ===
-    canonical(cleanupJobAuthorization(direct));
-}
-
-export function seasonDownloadJobAssignments(
-  selectedEntries: readonly {
-    episodeRatingKey: string;
-    episodeNumber: number;
-    mediaId: number;
-    path: string;
-    automaticAdoption?: boolean;
-  }[],
-  sources: readonly { downloadId: string; importedPath: string | null }[],
-  allowCrossTarget: boolean,
-): { owners: Map<string, string>; coveredTargetKeys: Set<string> } {
-  const targetKeysByPath = new Map<string, Set<string>>();
-  const targetOrder = new Map<string, readonly [number, string, number, number]>();
-  for (const entry of selectedEntries) {
-    const targetKey = `${entry.episodeRatingKey}:${entry.mediaId}`;
-    const keys = targetKeysByPath.get(entry.path) ?? new Set<string>();
-    keys.add(targetKey);
-    targetKeysByPath.set(entry.path, keys);
-    targetOrder.set(targetKey, [
-      entry.episodeNumber,
-      entry.episodeRatingKey,
-      Number(entry.automaticAdoption === true),
-      entry.mediaId,
-    ]);
-  }
-  const jobTargetKeys = new Map<string, Set<string>>();
-  for (const source of sources) {
-    const path = source.importedPath === null
-      ? null
-      : normalizeRemoteAbsolute(source.importedPath)?.comparison ?? null;
-    if (!path) continue;
-    const targetsForPath = targetKeysByPath.get(path);
-    if (!targetsForPath) continue;
-    const keys = jobTargetKeys.get(source.downloadId) ?? new Set<string>();
-    for (const targetKey of targetsForPath) keys.add(targetKey);
-    jobTargetKeys.set(source.downloadId, keys);
-  }
-  const owners = new Map<string, string>();
-  const coveredTargetKeys = new Set<string>();
-  for (const [jobId, targetKeys] of jobTargetKeys) {
-    if (targetKeys.size !== 1 && !allowCrossTarget) continue;
-    const ordered = [...targetKeys].sort((left, right) => {
-      const a = targetOrder.get(left)!;
-      const b = targetOrder.get(right)!;
-      return a[0] - b[0] || a[1].localeCompare(b[1]) || a[2] - b[2] || a[3] - b[3];
-    });
-    if (ordered.length === 0) continue;
-    owners.set(jobId, ordered[0]!);
-    for (const key of ordered) coveredTargetKeys.add(key);
-  }
-  return { owners, coveredTargetKeys };
-}
-
 export function managedEpisodesNeedBreakGlass(
   managedEpisodeKeys: ReadonlySet<string>,
   adoptableEpisodeKeys: ReadonlySet<string>,
@@ -218,13 +152,7 @@ export function managedEpisodesNeedBreakGlass(
     [...managedEpisodeKeys].some((key) => !adoptableEpisodeKeys.has(key));
 }
 
-type PreparedTargetPlan = {
-  target: ArrDeleteTarget;
-  seriesId: number;
-  seriesPath: string;
-  version: string;
-  snapshot: Awaited<ReturnType<ArrDeleteTarget['client']['sonarrSeriesSnapshot']>>;
-};
+type PreparedTargetPlan = InspectedSonarrSeasonTarget;
 
 type PreparedSeasonSelection =
   | {
@@ -440,88 +368,29 @@ export async function buildAuthoritativeSeasonPlan(input: {
     entry.instanceType === 'sonarr'
   );
   const sonarrMutationRequested = input.sonarrMode !== undefined && input.sonarrMode !== 'none';
-  const inspectedTargets = input.inspectSonarr === true || sonarrMutationRequested ? targets : [];
-  const sonarrInspectionWarnings: string[] = [];
-  if (
-    inspectedTargets.length > 0 &&
-    (!Number.isSafeInteger(show.tvdbId) || show.tvdbId! <= 0)
-  ) {
-    if (sonarrMutationRequested) {
-      throw new Error('the Plex show has no exact TVDB identity for Sonarr inspection');
-    }
-    sonarrInspectionWarnings.push(
-      'Sonarr ownership could not be inspected because the Plex show has no exact TVDB identity. Plex-only cleanup remains available, but Sonarr may report a removed file as missing or download a replacement.',
-    );
-  }
+  const sonarrInspection = await inspectSonarrSeason({
+    targets,
+    tvdbId: show.tvdbId,
+    inspect: input.inspectSonarr === true,
+    mutationRequested: sonarrMutationRequested,
+    fallbackWarning:
+      'Plex-only cleanup remains available, but Sonarr may report a removed file as missing or download a replacement.',
+  });
+  const sonarrInspectionWarnings = sonarrInspection.warnings;
   const missingRecordOwnerships: PersistedArrOwnership[] = [];
-  const targetPlans: PreparedTargetPlan[] = [];
-  const successfullyInspectedTargets: ArrDeleteTarget[] = [];
-  if (Number.isSafeInteger(show.tvdbId) && show.tvdbId! > 0) {
-    for (const target of inspectedTargets) {
-      try {
-        const capabilities = await target.client.sonarrSeasonCoordinationCapabilities();
-        if (sonarrMutationRequested && (!capabilities.available || !capabilities.version)) {
-          throw new Error(capabilities.reason ?? 'Sonarr v4 coordination is unavailable');
-        }
-        if (!sonarrMutationRequested && !capabilities.available) {
-          sonarrInspectionWarnings.push(
-            `${target.instanceName}: ${
-              capabilities.reason ?? 'automatic Sonarr coordination is unavailable'
-            }. Read-only ownership was still inspected; Plex-only cleanup remains available, but Sonarr may report a removed file as missing or download a replacement.`,
-          );
-        }
-        const series = await target.client.lookup(show.tvdbId!);
-        if (!series) {
-          successfullyInspectedTargets.push(target);
-          missingRecordOwnerships.push({
-            instanceId: target.instanceId,
-            recordId: null,
-            episodeId: null,
-            managedFileId: null,
-            managedPath: null,
-            managedMediaId: null,
-          });
-          continue;
-        }
-        if (!series.path) throw new Error('Sonarr series path is unavailable');
-        const [snapshot, activity] = await Promise.all([
-          target.client.sonarrSeriesSnapshot(series.id),
-          target.client.sonarrSeriesActivity(series.id),
-        ]);
-        if (!activity.quiet) {
-          throw new Error(
-            `Sonarr has conflicting series activity: ${
-              activity.blocking.map((entry) => entry.name).join(', ')
-            }`,
-          );
-        }
-        targetPlans.push({
-          target,
-          seriesId: series.id,
-          seriesPath: series.path,
-          version: capabilities.version ?? 'unverified',
-          snapshot,
-        });
-        successfullyInspectedTargets.push(target);
-      } catch (error) {
-        if (sonarrMutationRequested) throw error;
-        sonarrInspectionWarnings.push(
-          `${target.instanceName}: ${
-            error instanceof Error ? error.message : 'Sonarr inspection failed'
-          }. Plex-only cleanup remains available, but Sonarr may report a removed file as missing or download a replacement.`,
-        );
-      }
-    }
+  for (const target of sonarrInspection.missingRecordTargets) {
+    missingRecordOwnerships.push({
+      instanceId: target.instanceId,
+      recordId: null,
+      episodeId: null,
+      managedFileId: null,
+      managedPath: null,
+      managedMediaId: null,
+    });
   }
-  const arrMappingIdentities = inspectedTargets.map((target) => ({
-    instanceId: target.instanceId,
-    instanceType: target.instanceType,
-    instanceUrl: target.instanceUrl,
-    configurationUpdatedAt: target.configurationUpdatedAt,
-    mappingIdentity: target.mappingIdentity,
-  } satisfies PersistedArrMappingIdentity)).sort((left, right) =>
-    left.instanceId - right.instanceId
-  );
+  const targetPlans: PreparedTargetPlan[] = sonarrInspection.targetPlans;
+  const successfullyInspectedTargets = sonarrInspection.successfulTargets;
+  const arrMappingIdentities = sonarrInspection.mappingIdentities;
   const plexOnlyChildren: AuthoritativeSeasonPlan['plexOnlyChildren'] = [];
   const managedGroups = new Map<string, PlannedManagedSeasonGroup>();
   const members: SeasonDeletionMemberPreview[] = [];
@@ -936,71 +805,23 @@ export async function buildAuthoritativeSeasonPlan(input: {
         : [];
     });
   });
-  let seriesCleanup = input.inspectDownloadCleanup === true
-    ? await resolveDownloadCleanup(
-      first.showRatingKey,
-      { ...show, type: 'show' },
-      targets,
-      downloadTargets,
-    )
-    : null;
-  if (input.inspectDownloadCleanup === true && downloadTargets.length > 0) {
-    try {
-      const direct = await resolveDirectQbittorrentCleanup(
-        input.serverId,
-        first.libraryKey,
-        first.showRatingKey,
-        selectedEntries.map((entry) => ({
-          plexPath: entry.media.path,
-          size: entry.media.byteSize,
-        })),
-        preparedSelections.flatMap((prepared) =>
-          (prepared.kind === 'plex_only' ? prepared.child.retainedMedia : prepared.retainedMedia)
-            .map((media) => ({ plexPath: media.path, size: media.byteSize }))
-        ),
-        downloadTargets,
-      );
-      if (direct.status === 'resolved') {
-        if (seriesCleanup?.status === 'resolved') {
-          if (!downloadCleanupEvidenceAgrees(seriesCleanup, direct)) {
-            seriesCleanup = {
-              ...seriesCleanup,
-              status: 'error',
-              downloadJobs: [],
-              reason: 'Arr history and direct qBittorrent ownership evidence disagree',
-            };
-          } else {
-            // Keep Arr's read-only inspection context for presentation, but persist
-            // direct manifest evidence as the execution authority. That proof can be
-            // revalidated without making a later Sonarr outage block qBittorrent.
-            seriesCleanup = {
-              ...direct,
-              arrStatus: seriesCleanup.arrStatus,
-              arrReason: seriesCleanup.arrReason,
-              arrTargets: seriesCleanup.arrTargets,
-            };
-          }
-        } else {
-          seriesCleanup = direct;
-        }
-      }
-    } catch (error) {
-      if (!seriesCleanup || seriesCleanup.status !== 'resolved') {
-        seriesCleanup = {
-          ratingKey: first.showRatingKey,
-          status: 'unavailable',
-          downloadJobs: [],
-          reason: error instanceof Error ? error.message : 'Direct qBittorrent discovery failed',
-          arrStatus: seriesCleanup?.arrStatus ?? 'unavailable',
-          arrReason: seriesCleanup?.arrReason,
-          arrTargets: seriesCleanup?.arrTargets ?? [],
-          sources: [],
-          orphanFiles: [],
-          retainedPaths: [],
-        };
-      }
-    }
-  }
+  const seriesCleanup = await resolveSeasonDownloadCleanup({
+    serverId: input.serverId,
+    libraryKey: first.libraryKey,
+    showRatingKey: first.showRatingKey,
+    show: { ...show, type: 'show' },
+    arrTargets: targets,
+    downloadTargets,
+    selected: selectedEntries.map((entry) => ({
+      plexPath: entry.media.path,
+      size: entry.media.byteSize,
+    })),
+    retained: preparedSelections.flatMap((prepared) =>
+      (prepared.kind === 'plex_only' ? prepared.child.retainedMedia : prepared.retainedMedia)
+        .map((media) => ({ plexPath: media.path, size: media.byteSize }))
+    ),
+    inspect: input.inspectDownloadCleanup === true,
+  });
   const cleanupEligibleMedia: AuthoritativeSeasonPlan['cleanupEligibleMedia'] = [];
   const cleanupPlans: AuthoritativeSeasonPlan['cleanupPlans'] = [];
   if (seriesCleanup) {
@@ -1013,6 +834,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
       const selectedJobIds = new Set(selectedCleanup.downloadJobs.map((job) => job.jobId));
       const assignments = seasonDownloadJobAssignments(
         selectedEntries.map((entry) => ({
+          targetKey: `${entry.episodeRatingKey}:${entry.media.mediaId}`,
           episodeRatingKey: entry.episodeRatingKey,
           episodeNumber: entry.episodeNumber,
           mediaId: entry.media.mediaId,

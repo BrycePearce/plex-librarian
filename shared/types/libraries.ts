@@ -37,9 +37,15 @@ export interface StaleItem {
   versions?: MediaVersion[];
   // Present when at least one episode in a stale show has multiple versions.
   hasDuplicateEpisodes?: boolean;
+  // Season-only ancestry and episode-count context. Season rows retain the same base
+  // shape so pagination, selection, and storage summaries can stay shared.
+  showRatingKey?: string;
+  seasonIndex?: number;
+  leafCount?: number | null;
 }
 
 export interface StaleResponse {
+  scope: 'show' | 'season';
   days: number;
   maxDays: number | null;
   minAgeDays: number;
@@ -89,6 +95,8 @@ export interface Season {
   libraryKey: string;
   seasonIndex: number;
   title: string;
+  addedAt: number | null;
+  lastViewedAt: number | null;
   fileSize: number | null;
   duration: number | null;
   leafCount: number | null;

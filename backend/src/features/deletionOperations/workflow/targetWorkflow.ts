@@ -74,7 +74,13 @@ import {
   type DeletionWorkTarget,
   PlexReconciliationError,
 } from '../core/types.ts';
-import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
+import {
+  assertWholeSeasonPlexEvidence,
+  assertWholeSeasonPlexMembership,
+  type DurableTargetSnapshot,
+  validateDeletionTarget,
+} from '../core/validation.ts';
+import { ArrApiError } from '../../../integrations/arr/client.ts';
 
 function persistRadarrRemovalDownloadCleanup(
   target: DeletionWorkTarget,
@@ -767,6 +773,148 @@ async function ensureWholeItemDeleted(
       result.failures.map((failure) => failure.error).join('; ') || 'Arr deletion failed',
     );
   }
+  advancePhase(target, 'plex_reconciliation');
+  await reconcilePlexTarget(target, snapshot);
+}
+
+async function assertWholeSeasonSonarrPostcondition(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  mutate: boolean,
+): Promise<void> {
+  const plan = snapshot.wholeSeasonRemoval;
+  if (!plan) throw new Error('durable whole-season evidence is missing');
+  if (snapshot.mode !== 'coordinated') return;
+  const configured = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+  for (const expected of plan.sonarrTargets) {
+    const matches = configured.filter((candidate) =>
+      candidate.instanceType === 'sonarr' && candidate.instanceId === expected.instanceId &&
+      candidate.instanceUrl === expected.instanceUrl &&
+      candidate.configurationUpdatedAt === expected.configurationUpdatedAt &&
+      candidate.mappingIdentity === expected.mappingIdentity
+    );
+    if (matches.length !== 1) {
+      throw new Error('The accepted Sonarr connection or path mapping changed');
+    }
+    const sonarr = matches[0]!;
+    const capabilities = await sonarr.client.sonarrSeasonCoordinationCapabilities();
+    if (!capabilities.available || capabilities.version !== expected.version) {
+      throw new Error(capabilities.reason ?? 'The accepted Sonarr version changed');
+    }
+    const series = await sonarr.client.lookup(snapshot.tvdbId!);
+    if (!series || series.id !== expected.seriesId || series.path !== expected.seriesPath) {
+      throw new Error('The accepted Sonarr series identity changed');
+    }
+    const activity = await sonarr.client.sonarrSeriesActivity(series.id);
+    if (!activity.quiet) {
+      throw new Error(
+        `Sonarr has conflicting series activity: ${
+          activity.blocking.map((entry) => entry.name).join(', ')
+        }`,
+      );
+    }
+    let current = await sonarr.client.sonarrSeriesSnapshot(series.id);
+    const expectedEpisodeIds = new Set(expected.episodes.map((episode) => episode.episodeId));
+    for (const episode of expected.episodes) {
+      const live = current.episodes.find((candidate) => candidate.id === episode.episodeId);
+      if (
+        !live || live.seriesId !== expected.seriesId ||
+        live.seasonNumber !== episode.seasonNumber ||
+        live.episodeNumber !== episode.episodeNumber ||
+        (live.episodeFileId !== episode.episodeFileId && live.episodeFileId !== 0)
+      ) throw new Error('The accepted Sonarr season episode identity changed');
+    }
+    for (const file of expected.files) {
+      if (file.episodeIds.some((id) => !expectedEpisodeIds.has(id))) {
+        throw new Error('The accepted Sonarr file crosses the season boundary');
+      }
+      const live = current.files.find((candidate) => candidate.id === file.id);
+      if (
+        live && (live.seriesId !== expected.seriesId || live.path !== file.path ||
+          live.size !== file.size || JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
+            JSON.stringify(file.episodeIds))
+      ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
+    }
+    if (mutate) {
+      for (const episode of expected.episodes) {
+        const live = current.episodes.find((candidate) => candidate.id === episode.episodeId)!;
+        if (live.monitored) {
+          await sonarr.client.setSonarrEpisodeMonitored({
+            episodeId: episode.episodeId,
+            seriesId: expected.seriesId,
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+          }, false);
+        }
+      }
+      current = await sonarr.client.sonarrSeriesSnapshot(series.id);
+      for (const file of expected.files) {
+        if (!current.files.some((candidate) => candidate.id === file.id)) continue;
+        try {
+          await sonarr.client.deleteManagedFile(file.id);
+        } catch (error) {
+          if (!(error instanceof ArrApiError && error.status === 404)) throw error;
+        }
+      }
+      current = await sonarr.client.sonarrSeriesSnapshot(series.id);
+    }
+    if (
+      expected.episodes.some((episode) => {
+        const live = current.episodes.find((candidate) => candidate.id === episode.episodeId);
+        return !live || live.monitored !== false || live.episodeFileId !== 0;
+      }) || expected.files.some((file) =>
+        current.files.some((candidate) => candidate.id === file.id)
+      )
+    ) {
+      throw new DeletionConvergenceError(
+        'Sonarr season removal did not reach its safe final state',
+      );
+    }
+  }
+}
+
+async function ensureWholeSeasonDeleted(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
+  liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
+): Promise<void> {
+  if (!snapshot.wholeSeasonRemoval) throw new Error('durable whole-season evidence is missing');
+  // A 404 from exact season metadata is already authoritative absence. Preserve the
+  // ordinary whole-item recovery path instead of requiring children from a root Plex
+  // no longer exposes; live seasons still require byte-for-byte accepted evidence.
+  if (target.phase === 'validating' && liveAtStart) {
+    await assertWholeSeasonPlexEvidence(client, snapshot);
+  }
+  if (liveAtStart) {
+    const sessions = await client.activeSessions();
+    if (
+      activeWholeItemRatingKeys(
+        new Set(snapshot.wholeSeasonRemoval.episodeRatingKeys),
+        sessions,
+      ).size > 0
+    ) throw new Error('cannot delete a season with active episode playback');
+  }
+  if (
+    snapshot.cleanupDownloads && snapshot.seasonDownloadCleanup &&
+    (target.phase === 'validating' || target.phase === 'download_cleanup')
+  ) {
+    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
+    const cleanup = rehydrateResolvedCleanup(
+      snapshot.seasonDownloadCleanup,
+      await getDownloadClientTargets(target.serverId),
+    );
+    await executeCleanup(
+      target.serverId,
+      new Map([[snapshot.showRatingKey!, cleanup]]),
+      cleanup,
+      snapshot.showRatingKey!,
+      true,
+    );
+    await assertWholeSeasonPlexMembership(client, snapshot);
+  }
+  if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
+  await assertWholeSeasonSonarrPostcondition(target, snapshot, true);
   advancePhase(target, 'plex_reconciliation');
   await reconcilePlexTarget(target, snapshot);
 }
@@ -1470,6 +1618,9 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   try {
     const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
     if (target.phase === 'plex_reconciliation') {
+      if (snapshot.type === 'season') {
+        await assertWholeSeasonSonarrPostcondition(target, snapshot, false);
+      }
       if ((snapshot.arrReassignments?.length ?? 0) > 0) {
         const validation = await validateDeletionTarget(target.serverId, target);
         await reconcileArrReassignmentFinalState(target, snapshot, validation.client);
@@ -1480,7 +1631,21 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
     if (await tryRecoverRadarrWithoutSelectedProjection(target, snapshot)) return;
     const validation = await validateDeletionTarget(target.serverId, target);
     if (target.targetKind === 'whole_item') {
-      await ensureWholeItemDeleted(target, validation.snapshot, validation.client, validation.live);
+      if (validation.snapshot.type === 'season') {
+        await ensureWholeSeasonDeleted(
+          target,
+          validation.snapshot,
+          validation.client,
+          validation.live,
+        );
+      } else {
+        await ensureWholeItemDeleted(
+          target,
+          validation.snapshot,
+          validation.client,
+          validation.live,
+        );
+      }
     } else {
       await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
     }

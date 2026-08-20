@@ -59,6 +59,8 @@ export function StaleItemRow({
 }) {
   const versionCount = item.versions?.length ?? 0;
   const hasDuplicates = versionCount >= 2 || item.hasDuplicateEpisodes === true;
+  const isSeason = item.type === "season" && item.showRatingKey !== undefined &&
+    item.seasonIndex !== undefined;
 
   const titleEl = (
     <div className="min-w-0">
@@ -76,7 +78,14 @@ export function StaleItemRow({
           </span>
         )}
       </div>
-      {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
+      {isSeason
+        ? (
+          <div className="text-xs text-base-content/40">
+            Season {item.seasonIndex}
+            {item.leafCount != null ? ` · ${item.leafCount} episodes` : ""}
+          </div>
+        )
+        : item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
     </div>
   );
 
@@ -112,13 +121,16 @@ export function StaleItemRow({
         />
       </td>
       <td>
-        {item.type === "show" || item.type === "movie"
+        {item.type === "show" || item.type === "movie" || isSeason
           ? (
             <Link
-              to={item.type === "show"
+              to={item.type === "show" || isSeason
                 ? "/libraries/$key/shows/$ratingKey"
                 : "/libraries/$key/movies/$ratingKey"}
-              params={{ key: item.libraryKey, ratingKey: item.ratingKey }}
+              params={{
+                key: item.libraryKey,
+                ratingKey: isSeason ? item.showRatingKey! : item.ratingKey,
+              }}
               onClick={(e) => e.stopPropagation()}
               className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
             >

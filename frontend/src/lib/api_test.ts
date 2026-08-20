@@ -73,6 +73,87 @@ Deno.test("season cleanup serializes selections as episode media", async () => {
   });
 });
 
+Deno.test("stale season removal binds its accepted preview and destinations", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };
+  globalThis.fetch = (input, init) => {
+    captured.input = input;
+    captured.init = init;
+    return Promise.resolve(
+      Response.json({ operationId: "operation-1", status: "queued", targetCount: 1 }, {
+        status: 202,
+      }),
+    );
+  };
+
+  try {
+    await api.libraries.deleteSeason("tv library", "season/1", {
+      previewFingerprint: "a".repeat(64),
+      coordinated: true,
+      cleanupDownloads: false,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(
+    captured.input,
+    "/api/libraries/tv%20library/seasons/season%2F1/deletion",
+  );
+  const body = JSON.parse(String(captured.init?.body));
+  assertEquals(body.previewFingerprint, "a".repeat(64));
+  assertEquals(body.coordinated, true);
+  assertEquals(body.cleanupDownloads, false);
+  assertEquals(typeof body.clientRequestId, "string");
+});
+
+Deno.test("stale season removal exposes a rebuilt preview for reconfirmation", async () => {
+  const originalFetch = globalThis.fetch;
+  const preview = {
+    fingerprint: "b".repeat(64),
+    expiresAt: 1234,
+    libraryKey: "shows",
+    seasonRatingKey: "season-1",
+    showRatingKey: "show-1",
+    showTitle: "Example Show",
+    seasonTitle: "Season 1",
+    seasonIndex: 1,
+    episodeCount: 10,
+    fileSize: 1024,
+    coordinatedConfigured: true,
+    sonarrStatus: "resolved" as const,
+    managedEpisodeCount: 10,
+    managedFileCount: 10,
+    cleanupConfigured: false,
+    cleanupStatus: "unavailable" as const,
+    downloadJobs: [],
+    blockers: [],
+  };
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({
+      error: "season deletion preview changed",
+      code: "PREVIEW_CHANGED",
+      preview,
+    }, { status: 409 }));
+  try {
+    await assertRejects(
+      () =>
+        api.libraries.deleteSeason("shows", "season-1", {
+          previewFingerprint: "a".repeat(64),
+          coordinated: true,
+          cleanupDownloads: false,
+        }),
+      ApiError,
+      "preview changed",
+    ).then((error) => {
+      assertEquals(error.code, "PREVIEW_CHANGED");
+      assertEquals(error.preview, preview);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("season cleanup exposes rebuilt previews for explicit reconfirmation", async () => {
   const originalFetch = globalThis.fetch;
   const preview = { seasonRatingKey: "season-1", fingerprint: "b".repeat(64) };

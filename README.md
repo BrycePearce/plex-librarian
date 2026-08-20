@@ -29,7 +29,7 @@ terabytes of storage in as few clicks as possible, using sensible defaults.
 
 |     | Capability                       | What you get                                                                                                                                                                                             |
 | --- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, and music; filter and sort by age, size, play count, and more.                                                                                           |
+| 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, TV seasons, and music; filter and sort by age, size, play count, and more.                                                                               |
 | 💾  | **Duplicate detection**          | Surface duplicate movie and episode versions and see how much space each copy consumes.                                                                                                                  |
 | 🔎  | **Episode Gaps**                 | Audit TV seasons for missing numbers between the first and last episode already present in Plex, with irregular metadata called out separately.                                                          |
 | 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing.                                                                                                               |
@@ -109,6 +109,26 @@ library under **Library mappings**.
 Use a URL reachable from inside the Plex Librarian container, such as
 `http://192.168.1.20:8989` or `http://sonarr:8989` on a shared Docker network.
 Do not use `localhost`, which points back at Plex Librarian itself.
+
+### Remove a stale TV season
+
+Open a TV library's **Stale analysis** page and switch **Shows** to **Seasons**.
+Season age is conservative: the newest episode addition determines the added
+date, and the most recent play of any episode determines the last-watched date.
+This keeps one recently added or watched episode from making the whole season
+look older than it is.
+
+Whole-season removal accepts one season at a time. The confirmation preview
+re-reads its exact Plex episode membership. When Sonarr coordination is
+selected, Plex Librarian keeps the series, unmonitors that season's episodes,
+and deletes only EpisodeFiles proven to belong entirely to the selected
+season. A file shared with another season, ambiguous multi-instance ownership,
+or changed path mapping blocks the operation. **Plex only** is an explicit
+fallback and may allow Sonarr to download a monitored season again.
+
+Optional qBittorrent cleanup uses the same fail-closed ownership checks as
+duplicate-season cleanup. It is offered only when every selected payload path
+and the complete download job manifest can be attributed to this season.
 
 ### Optional qBittorrent cleanup
 

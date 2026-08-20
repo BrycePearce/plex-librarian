@@ -19,6 +19,13 @@ export function reuseStaleTotal(
   return { ...response, total: response.total ?? knownTotal };
 }
 
+export function staleScopesMatch(
+  responseScope: StaleResponse["scope"],
+  requestedScope: "show" | "season" | undefined,
+): boolean {
+  return responseScope === (requestedScope ?? "show");
+}
+
 export function lastStalePageOffset(total: number, pageSize: number): number {
   if (total <= 0) return 0;
   return Math.floor((total - 1) / pageSize) * pageSize;

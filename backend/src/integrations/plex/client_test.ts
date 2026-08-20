@@ -836,6 +836,120 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
   ]);
 });
 
+Deno.test('season deletion evidence binds every episode and file to one season', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 2,
+        Metadata: [
+          {
+            ratingKey: 'episode-1',
+            title: 'One',
+            type: 'episode',
+            grandparentRatingKey: 'show-1',
+            parentRatingKey: 'season-1',
+            parentIndex: 1,
+            index: 1,
+            Media: [{ id: 11, Part: [{ file: '/tv/Show/S01E01.mkv', size: 1000 }] }],
+          },
+          {
+            ratingKey: 'episode-2',
+            title: 'Two',
+            type: 'episode',
+            grandparentRatingKey: 'show-1',
+            parentRatingKey: 'season-1',
+            parentIndex: 1,
+            index: 2,
+            Media: [{ id: 12, Part: [{ file: '/tv/Show/S01E02.mkv', size: 2000 }] }],
+          },
+        ],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  assertEquals(await client.seasonDeletionEpisodes('season-1'), [
+    {
+      ratingKey: 'episode-1',
+      title: 'One',
+      showRatingKey: 'show-1',
+      seasonRatingKey: 'season-1',
+      seasonIndex: 1,
+      episodeIndex: 1,
+      media: [{ mediaId: 11, paths: [{ path: '/tv/Show/S01E01.mkv', byteSize: 1000 }] }],
+    },
+    {
+      ratingKey: 'episode-2',
+      title: 'Two',
+      showRatingKey: 'show-1',
+      seasonRatingKey: 'season-1',
+      seasonIndex: 1,
+      episodeIndex: 2,
+      media: [{ mediaId: 12, paths: [{ path: '/tv/Show/S01E02.mkv', byteSize: 2000 }] }],
+    },
+  ]);
+});
+
+Deno.test('season deletion evidence rejects an episode outside the requested season', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: 'episode-1',
+          title: 'One',
+          type: 'episode',
+          grandparentRatingKey: 'show-1',
+          parentRatingKey: 'season-2',
+          parentIndex: 2,
+          index: 1,
+          Media: [{ id: 11, Part: [{ file: '/tv/Show/S02E01.mkv', size: 1000 }] }],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  await assertRejects(
+    () => client.seasonDeletionEpisodes('season-1'),
+    Error,
+    'conflicting season episode ancestry',
+  );
+});
+
+Deno.test('season membership survives missing Part evidence for durable reconciliation', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: 'episode-1',
+          title: 'One',
+          type: 'episode',
+          grandparentRatingKey: 'show-1',
+          parentRatingKey: 'season-1',
+          parentIndex: 1,
+          index: 1,
+          Media: [{ id: 11, Part: [{ file: '/tv/Show/S01E01.mkv', size: 1000, exists: false }] }],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  assertEquals(await client.seasonEpisodeMembership('season-1'), [{
+    ratingKey: 'episode-1',
+    title: 'One',
+    showRatingKey: 'show-1',
+    seasonRatingKey: 'season-1',
+    seasonIndex: 1,
+    episodeIndex: 1,
+    media: [],
+  }]);
+  await assertRejects(
+    () => client.seasonDeletionEpisodes('season-1'),
+    Error,
+    'no exact file evidence',
+  );
+});
+
 Deno.test('exact media path validation rejects a Part Plex marks missing', async () => {
   const mockFetch = (() =>
     Promise.resolve(Response.json({

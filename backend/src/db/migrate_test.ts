@@ -41,6 +41,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'qbittorrent_instances_server_url_unique',
         'radarr_movie_reservations',
         'radarr_movie_reservations_operation_idx',
+        'seasons_library_file_size_idx',
+        'seasons_library_stale_idx',
         'seerr_instances',
         'seerr_instances_server_url_unique',
         'seerr_request_season_sync_stage',
@@ -76,6 +78,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'qbittorrent_instances_server_url_unique',
         'radarr_movie_reservations',
         'radarr_movie_reservations_operation_idx',
+        'seasons_library_file_size_idx',
+        'seasons_library_stale_idx',
         'seerr_instances',
         'seerr_instances_server_url_unique',
         'seerr_request_season_sync_stage',
@@ -126,12 +130,47 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       ['media_type', 'availability_observed_at', 'availability_observed_sync_at'],
     );
     requestColumns.finalize();
+    const seasonColumns = sqlite.prepare("PRAGMA table_info('seasons')");
+    assertEquals(
+      seasonColumns.values().map((column) => column[1]).filter((name) =>
+        name === 'added_at' || name === 'last_viewed_at'
+      ),
+      ['added_at', 'last_viewed_at'],
+    );
+    seasonColumns.finalize();
     sqlite.close();
   } finally {
     // @db/sqlite's native Windows handle can outlive close() briefly; the OS temp
     // directory will clean that disposable fixture without making the test flaky.
     if (Deno.build.os !== 'windows') await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test('0052 invalidates existing TV history confidence until season dates are synced', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE libraries (
+      key TEXT PRIMARY KEY, type TEXT NOT NULL, history_synced_at INTEGER
+    );
+    CREATE TABLE seasons (
+      server_id INTEGER NOT NULL, library_key TEXT NOT NULL, file_size INTEGER
+    );
+    INSERT INTO libraries VALUES
+      ('shows', 'show', 100),
+      ('movies', 'movie', 200);
+  `);
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0052_wide_mockingbird.sql')),
+  );
+  assertEquals(
+    sqlite.prepare('SELECT key, history_synced_at FROM libraries ORDER BY key').values(),
+    [
+      ['movies', 200],
+      ['shows', null],
+    ],
+  );
+  sqlite.close();
 });
 
 Deno.test('0046 backfills legacy deletion milestones and preserves recovery evidence', async () => {

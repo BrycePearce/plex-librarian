@@ -812,6 +812,16 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 200 }));
     }
   }
+  const seasonChildren = url.pathname.match(/^\/library\/metadata\/([^/]+)\/children$/);
+  if (seasonChildren) {
+    const seasonRatingKey = decodeURIComponent(seasonChildren[1]);
+    const metadata = [...live.values()].filter((item) =>
+      item.type === 'episode' && item.parentRatingKey === seasonRatingKey
+    );
+    return Promise.resolve(Response.json({
+      MediaContainer: { Metadata: metadata, totalSize: metadata.length },
+    }));
+  }
   const allLeaves = url.pathname.match(/^\/library\/metadata\/([^/]+)\/allLeaves$/);
   if (allLeaves) {
     const showRatingKey = decodeURIComponent(allLeaves[1]);
@@ -2267,6 +2277,416 @@ Deno.test('whole-item deletion keeps its projection until Plex absence is confir
     ),
     0,
   );
+});
+
+Deno.test('Plex-only whole-season deletion preserves the show and finalizes season rollups', async () => {
+  reset();
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO items (server_id, rating_key, library_key, title, type, file_size, duration, tvdb_id, updated_at) VALUES (1, 'season-show', 'shows', 'Season Show', 'show', 100, 60, 42, 1)",
+    ).run();
+    client.prepare(
+      "INSERT INTO seasons (server_id, rating_key, show_rating_key, library_key, season_index, title, file_size, duration, leaf_count, updated_at) VALUES (1, 'whole-season', 'season-show', 'shows', 1, 'Season 1', 100, 60, 1, 1)",
+    ).run();
+  });
+  live.set('season-show', {
+    ratingKey: 'season-show',
+    title: 'Season Show',
+    type: 'show',
+    librarySectionID: 'shows',
+    Guid: [{ id: 'tvdb://42' }],
+  });
+  live.set('whole-season', {
+    ratingKey: 'whole-season',
+    title: 'Season 1',
+    type: 'season',
+    librarySectionID: 'shows',
+    parentRatingKey: 'season-show',
+    index: 1,
+  });
+  live.set('whole-season-episode', {
+    ratingKey: 'whole-season-episode',
+    title: 'Pilot',
+    type: 'episode',
+    librarySectionID: 'shows',
+    grandparentRatingKey: 'season-show',
+    parentRatingKey: 'whole-season',
+    parentIndex: 1,
+    index: 1,
+    Media: [{
+      id: 1,
+      Part: [{ file: '/tv/whole-season-episode.mkv', size: 100_000 }],
+    }],
+  });
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'shows',
+    kind: 'whole_item',
+    payload: { seasonRatingKey: 'whole-season', coordinated: false },
+    targets: [{
+      kind: 'whole_item',
+      key: 'whole-season',
+      title: 'Season Show — Season 1',
+      logicalSize: 100,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'shows',
+        ratingKey: 'whole-season',
+        title: 'Season 1',
+        type: 'season',
+        tmdbId: null,
+        tvdbId: 42,
+        mode: 'plex-only',
+        cleanupDownloads: false,
+        seasonCleanup: true,
+        showTitle: 'Season Show',
+        showRatingKey: 'season-show',
+        seasonRatingKey: 'whole-season',
+        seasonIndex: 1,
+        fileSize: 100,
+        wholeSeasonDuration: 60,
+        wholeSeasonRemoval: {
+          episodeRatingKeys: ['whole-season-episode'],
+          plexEpisodes: [{
+            ratingKey: 'whole-season-episode',
+            title: 'Pilot',
+            showRatingKey: 'season-show',
+            seasonRatingKey: 'whole-season',
+            seasonIndex: 1,
+            episodeIndex: 1,
+            media: [{
+              mediaId: 1,
+              paths: [{ path: '/tv/whole-season-episode.mkv', byteSize: 100_000 }],
+            }],
+          }],
+          sonarrTargets: [],
+        },
+      },
+    }],
+  });
+
+  await settle();
+  assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'completed');
+  assertEquals(live.has('season-show'), true);
+  assertEquals(live.has('whole-season'), false);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT file_size, duration FROM items WHERE server_id = 1 AND rating_key = 'season-show'",
+      ).value<[number, number]>()
+    ),
+    [0, 0],
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT COUNT(*) FROM seasons WHERE server_id = 1 AND rating_key = 'whole-season'",
+      ).value<[number]>()?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('whole-season replay finalizes when Plex already confirms season absence', async () => {
+  reset();
+  addEpisode();
+  live.set('season-1', {
+    ratingKey: 'season-1',
+    title: 'Season 1',
+    type: 'season',
+    librarySectionID: 'shows',
+    parentRatingKey: 'show-1',
+    index: 1,
+  });
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'shows',
+    kind: 'whole_item',
+    payload: { seasonRatingKey: 'season-1', coordinated: false },
+    targets: [{
+      kind: 'whole_item',
+      key: 'season-1',
+      title: 'Example Show — Season 1',
+      logicalSize: 100,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'shows',
+        ratingKey: 'season-1',
+        title: 'Season 1',
+        type: 'season',
+        tmdbId: null,
+        tvdbId: 20,
+        mode: 'plex-only',
+        cleanupDownloads: false,
+        seasonCleanup: true,
+        showTitle: 'Example Show',
+        showRatingKey: 'show-1',
+        seasonRatingKey: 'season-1',
+        seasonIndex: 1,
+        fileSize: 100,
+        wholeSeasonDuration: null,
+        wholeSeasonRemoval: {
+          episodeRatingKeys: ['episode-1'],
+          plexEpisodes: [{
+            ratingKey: 'episode-1',
+            title: 'Pilot',
+            showRatingKey: 'show-1',
+            seasonRatingKey: 'season-1',
+            seasonIndex: 1,
+            episodeIndex: 1,
+            media: [21, 22].map((mediaId) => ({
+              mediaId,
+              paths: [{ path: `/tv/show-1-${mediaId}.mkv`, byteSize: 40_000 }],
+            })),
+          }],
+          sonarrTargets: [],
+        },
+      },
+    }],
+  });
+  live.delete('season-1');
+  live.delete('episode-1');
+
+  await settle();
+
+  const operation = getDeletionOperation(result.operationId, 1)!;
+  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
+  assertEquals(live.has('show-1'), true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare(
+        "SELECT COUNT(*) FROM seasons WHERE server_id = 1 AND rating_key = 'season-1'",
+      ).value<[number]>()?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('whole-season deletion rejects Plex membership and media drift', async () => {
+  for (const drift of ['membership', 'path', 'replacement_after_cleanup'] as const) {
+    reset();
+    withTransaction((client) => {
+      client.prepare(
+        "INSERT INTO items (server_id, rating_key, library_key, title, type, file_size, duration, tvdb_id, updated_at) VALUES (1, 'drift-show', 'shows', 'Drift Show', 'show', 100, 60, 43, 1)",
+      ).run();
+      client.prepare(
+        "INSERT INTO seasons (server_id, rating_key, show_rating_key, library_key, season_index, title, file_size, duration, leaf_count, updated_at) VALUES (1, 'drift-season', 'drift-show', 'shows', 1, 'Season 1', 100, 60, 1, 1)",
+      ).run();
+    });
+    live.set('drift-show', {
+      ratingKey: 'drift-show',
+      title: 'Drift Show',
+      type: 'show',
+      librarySectionID: 'shows',
+      Guid: [{ id: 'tvdb://43' }],
+    });
+    live.set('drift-season', {
+      ratingKey: 'drift-season',
+      title: 'Season 1',
+      type: 'season',
+      librarySectionID: 'shows',
+      parentRatingKey: 'drift-show',
+      index: 1,
+    });
+    live.set('drift-episode-1', {
+      ratingKey: 'drift-episode-1',
+      title: 'Pilot',
+      type: 'episode',
+      librarySectionID: 'shows',
+      grandparentRatingKey: 'drift-show',
+      parentRatingKey: 'drift-season',
+      parentIndex: 1,
+      index: 1,
+      Media: [{
+        id: 1,
+        Part: [{ file: '/tv/drift-episode-1.mkv', size: 100_000 }],
+      }],
+    });
+    const result = await enqueueDeletionOperation({
+      clientRequestId: crypto.randomUUID(),
+      serverId: 1,
+      libraryKey: 'shows',
+      kind: 'whole_item',
+      payload: { seasonRatingKey: 'drift-season', coordinated: false },
+      targets: [{
+        kind: 'whole_item',
+        key: 'drift-season',
+        title: 'Drift Show — Season 1',
+        logicalSize: 100,
+        snapshot: {
+          machineIdentifier: 'machine-1',
+          serverUrl: 'http://plex',
+          libraryKey: 'shows',
+          ratingKey: 'drift-season',
+          title: 'Season 1',
+          type: 'season',
+          tmdbId: null,
+          tvdbId: 43,
+          mode: 'plex-only',
+          cleanupDownloads: false,
+          seasonCleanup: true,
+          showTitle: 'Drift Show',
+          showRatingKey: 'drift-show',
+          seasonRatingKey: 'drift-season',
+          seasonIndex: 1,
+          fileSize: 100,
+          wholeSeasonDuration: 60,
+          wholeSeasonRemoval: {
+            episodeRatingKeys: ['drift-episode-1'],
+            plexEpisodes: [{
+              ratingKey: 'drift-episode-1',
+              title: 'Pilot',
+              showRatingKey: 'drift-show',
+              seasonRatingKey: 'drift-season',
+              seasonIndex: 1,
+              episodeIndex: 1,
+              media: [{
+                mediaId: 1,
+                paths: [{ path: '/tv/drift-episode-1.mkv', byteSize: 100_000 }],
+              }],
+            }],
+            sonarrTargets: [],
+          },
+        },
+      }],
+    });
+
+    if (drift === 'membership') {
+      live.set('drift-episode-2', {
+        ratingKey: 'drift-episode-2',
+        title: 'Second',
+        type: 'episode',
+        librarySectionID: 'shows',
+        grandparentRatingKey: 'drift-show',
+        parentRatingKey: 'drift-season',
+        parentIndex: 1,
+        index: 2,
+        Media: [{
+          id: 2,
+          Part: [{ file: '/tv/drift-episode-2.mkv', size: 100_000 }],
+        }],
+      });
+    } else {
+      live.get('drift-episode-1')!.Media![0]!.Part = [{
+        file: '/tv/drift-episode-1-replaced.mkv',
+        size: 100_000,
+      }];
+      if (drift === 'replacement_after_cleanup') {
+        withTransaction((client) => {
+          client.prepare(
+            "UPDATE deletion_targets SET phase = 'arr_coordination' WHERE operation_id = ?",
+          ).run(result.operationId);
+        });
+      }
+    }
+
+    await settle();
+    assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'needs_attention');
+    assertEquals(live.has('drift-season'), true);
+    assertEquals(
+      withTransaction((client) =>
+        client.prepare(
+          "SELECT COUNT(*) FROM seasons WHERE server_id = 1 AND rating_key = 'drift-season'",
+        ).value<[number]>()?.[0]
+      ),
+      1,
+    );
+  }
+});
+
+Deno.test('coordinated whole-season deletion unmonitors exact Sonarr episodes and files', async () => {
+  reset();
+  configureSonarr();
+  addEpisode();
+  live.set('season-1', {
+    ratingKey: 'season-1',
+    title: 'Season 1',
+    type: 'season',
+    librarySectionID: 'shows',
+    parentRatingKey: 'show-1',
+    index: 1,
+  });
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'shows',
+    kind: 'whole_item',
+    payload: { seasonRatingKey: 'season-1', coordinated: true },
+    targets: [{
+      kind: 'whole_item',
+      key: 'season-1',
+      title: 'Example Show — Season 1',
+      logicalSize: 100,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'shows',
+        ratingKey: 'season-1',
+        title: 'Season 1',
+        type: 'season',
+        tmdbId: null,
+        tvdbId: 20,
+        mode: 'coordinated',
+        cleanupDownloads: false,
+        seasonCleanup: true,
+        showTitle: 'Example Show',
+        showRatingKey: 'show-1',
+        seasonRatingKey: 'season-1',
+        seasonIndex: 1,
+        fileSize: 100,
+        wholeSeasonDuration: null,
+        wholeSeasonRemoval: {
+          episodeRatingKeys: ['episode-1'],
+          plexEpisodes: [{
+            ratingKey: 'episode-1',
+            title: 'Pilot',
+            showRatingKey: 'show-1',
+            seasonRatingKey: 'season-1',
+            seasonIndex: 1,
+            episodeIndex: 1,
+            media: [21, 22].map((mediaId) => ({
+              mediaId,
+              paths: [{ path: `/tv/show-1-${mediaId}.mkv`, byteSize: 40_000 }],
+            })),
+          }],
+          sonarrTargets: [{
+            instanceId: 2,
+            instanceName: 'Sonarr',
+            instanceUrl: 'http://sonarr',
+            configurationUpdatedAt: 1,
+            mappingIdentity: '{"addImportExclusion":false,"pathMappings":[]}',
+            seriesId: 8,
+            seriesPath: '/tv/Show',
+            version: '4.0.19.2979',
+            episodes: [{
+              episodeId: 9,
+              seasonNumber: 1,
+              episodeNumber: 1,
+              originalMonitored: true,
+              episodeFileId: 10,
+            }],
+            files: [{
+              id: 10,
+              path: '/tv/Show/Season 01/old.mkv',
+              size: 40_000,
+              episodeIds: [9],
+            }],
+          }],
+        },
+      },
+    }],
+  });
+
+  await settle();
+  assertEquals(getDeletionOperation(result.operationId, 1)?.status, 'completed');
+  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrManagedFilePresent, false);
+  assertEquals(live.has('show-1'), true);
+  assertEquals(live.has('season-1'), false);
 });
 
 Deno.test('target finalization atomically finalizes its parent operation', async () => {

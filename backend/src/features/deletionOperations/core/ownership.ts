@@ -88,6 +88,30 @@ export function showRootIsWorkflowOwned(
   );
 }
 
+export function seasonRootIsWorkflowOwned(
+  serverId: number | SQL,
+  libraryKey: string | SQL,
+  seasonRatingKey: string | SQL,
+  showRatingKey: string | SQL,
+): SQL {
+  return ownedTargetExists(
+    serverId,
+    libraryKey,
+    sql`(
+      (${deletionTargets.targetKind} = 'whole_item'
+        and (
+          json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${showRatingKey}
+          or (
+            json_extract(${deletionTargets.snapshot}, '$.type') = 'season'
+            and json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${seasonRatingKey}
+          )
+        ))
+      or (${deletionTargets.targetKind} = 'episode_version'
+        and json_extract(${deletionTargets.snapshot}, '$.seasonRatingKey') = ${seasonRatingKey})
+    )`,
+  );
+}
+
 // Raw-SQL counterpart for the bounded stale quick-cleanup queries, whose item alias is
 // intentionally fixed as `i`. It shares the lifecycle fragment above instead of
 // inventing a second status list.

@@ -166,9 +166,24 @@ export interface PlexEpisode {
   seasonIndex: number;
   episodeIndex: number | null;
   seasonTitle: string;
+  addedAt: number | null;
+  lastViewedAt: number | null;
   fileSize: number | null;
   duration: number | null;
   viewCount: number;
+}
+
+export interface PlexSeasonDeletionEpisode {
+  ratingKey: string;
+  title: string;
+  showRatingKey: string;
+  seasonRatingKey: string;
+  seasonIndex: number;
+  episodeIndex: number;
+  media: Array<{
+    mediaId: number;
+    paths: Array<{ path: string; byteSize: number }>;
+  }>;
 }
 
 // Minimal track shape used by syncArtistSizes to aggregate artist file sizes.

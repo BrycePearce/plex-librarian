@@ -6,11 +6,11 @@ import {
   SeasonCleanupRequestError,
 } from './seasonCleanupRoute.ts';
 import { DeletionConflictError } from '../deletionOperations/service.ts';
+import { managedEpisodesNeedBreakGlass } from './seasonDeletionPlanner.ts';
 import {
   downloadCleanupEvidenceAgrees,
-  managedEpisodesNeedBreakGlass,
   seasonDownloadJobAssignments,
-} from './seasonDeletionPlanner.ts';
+} from '../mediaDeletion/seasonDownloadCleanup.ts';
 import type { ResolvedCleanupItem } from '../mediaDeletion/cleanup.ts';
 
 const fingerprint = 'a'.repeat(64);
@@ -45,8 +45,20 @@ Deno.test('Arr and direct cleanup evidence must authorize the same payload', () 
 
 Deno.test('season download jobs have one deterministic durable owner', () => {
   const entries = [
-    { episodeRatingKey: 'episode-z', episodeNumber: 1, mediaId: 11, path: '/shows/e1.mkv' },
-    { episodeRatingKey: 'episode-a', episodeNumber: 2, mediaId: 21, path: '/shows/e2.mkv' },
+    {
+      targetKey: 'episode-z:11',
+      episodeRatingKey: 'episode-z',
+      episodeNumber: 1,
+      mediaId: 11,
+      path: '/shows/e1.mkv',
+    },
+    {
+      targetKey: 'episode-a:21',
+      episodeRatingKey: 'episode-a',
+      episodeNumber: 2,
+      mediaId: 21,
+      path: '/shows/e2.mkv',
+    },
   ];
   assertEquals(
     seasonDownloadJobAssignments(entries, [
@@ -75,6 +87,7 @@ Deno.test('shared download jobs use the same ordering as durable season targets'
   const entries = [
     {
       episodeRatingKey: 'episode-1',
+      targetKey: 'episode-1:10',
       episodeNumber: 1,
       mediaId: 10,
       path: '/shows/managed.mkv',
@@ -82,6 +95,7 @@ Deno.test('shared download jobs use the same ordering as durable season targets'
     },
     {
       episodeRatingKey: 'episode-1',
+      targetKey: 'episode-1:20',
       episodeNumber: 1,
       mediaId: 20,
       path: '/shows/plex-only.mkv',

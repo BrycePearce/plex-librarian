@@ -17,6 +17,7 @@ import type {
   PlexMediaVersionPathPreview,
   PlexMetadataIdentity,
   PlexRawMetadata,
+  PlexSeasonDeletionEpisode,
   PlexTrack,
 } from './types.ts';
 import { plexProjectedKilobytes } from '../../features/mediaDeletion/radarrSize.ts';
@@ -311,6 +312,8 @@ function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
       seasonIndex: item.parentIndex!,
       episodeIndex: item.index ?? null,
       seasonTitle: item.parentTitle ?? `Season ${item.parentIndex}`,
+      addedAt: item.addedAt ?? null,
+      lastViewedAt: item.lastViewedAt ?? null,
       fileSize: extractFileSize(item),
       duration: item.duration ?? null,
       viewCount: item.viewCount ?? 0,
@@ -666,6 +669,90 @@ export class PlexClient {
         }]
       ),
     };
+  }
+
+  private async seasonEpisodes(
+    seasonRatingKey: string,
+    limit: number,
+    requireFileEvidence: boolean,
+  ): Promise<PlexSeasonDeletionEpisode[]> {
+    const basePath = `/library/metadata/${encodeURIComponent(seasonRatingKey)}/children`;
+    const episodes: PlexSeasonDeletionEpisode[] = [];
+    let start = 0;
+    let expectedTotal: number | null = null;
+    while (true) {
+      const data = await this.get<{
+        MediaContainer: { Metadata?: PlexRawMetadata[]; totalSize?: number };
+      }>(basePath, {
+        'X-Plex-Container-Start': String(start),
+        'X-Plex-Container-Size': String(Math.min(ITEMS_PAGE_SIZE, limit + 1 - start)),
+      });
+      const page = data.MediaContainer.Metadata ?? [];
+      const total = data.MediaContainer.totalSize;
+      if (!Number.isSafeInteger(total) || total! < 0) {
+        throw new Error('Plex omitted the exact season episode count');
+      }
+      if (expectedTotal === null) expectedTotal = total!;
+      else if (expectedTotal !== total) {
+        throw new Error('Plex season membership changed while reading');
+      }
+      if (expectedTotal > limit) {
+        throw new Error(`this season exceeds the supported safety limit of ${limit} episodes`);
+      }
+      for (const item of page) {
+        if (
+          item.type !== 'episode' || item.parentRatingKey !== seasonRatingKey ||
+          !item.grandparentRatingKey || !Number.isSafeInteger(item.parentIndex) ||
+          !Number.isSafeInteger(item.index) || item.index! <= 0
+        ) throw new Error('Plex returned conflicting season episode ancestry');
+        const media = (item.Media ?? []).flatMap((entry) => {
+          if (!Number.isSafeInteger(entry.id) || entry.id! < 0) return [];
+          const paths = existingFileParts(entry).flatMap((part) =>
+            typeof part.file === 'string' && part.file.trim() &&
+              Number.isSafeInteger(part.size) && part.size! > 0
+              ? [{ path: part.file, byteSize: part.size! }]
+              : []
+          );
+          return paths.length > 0 ? [{ mediaId: entry.id!, paths }] : [];
+        });
+        if (requireFileEvidence && media.length === 0) {
+          throw new Error('Plex season episode has no exact file evidence');
+        }
+        episodes.push({
+          ratingKey: item.ratingKey,
+          title: item.title,
+          showRatingKey: item.grandparentRatingKey,
+          seasonRatingKey,
+          seasonIndex: item.parentIndex!,
+          episodeIndex: item.index!,
+          media,
+        });
+      }
+      start += page.length;
+      if (start >= expectedTotal) break;
+      if (page.length === 0) throw new Error('Plex returned an incomplete season episode list');
+    }
+    if (episodes.length !== expectedTotal) {
+      throw new Error('Plex returned incomplete season evidence');
+    }
+    return episodes;
+  }
+
+  async seasonDeletionEpisodes(
+    seasonRatingKey: string,
+    limit = 500,
+  ): Promise<PlexSeasonDeletionEpisode[]> {
+    return await this.seasonEpisodes(seasonRatingKey, limit, true);
+  }
+
+  // Membership remains readable after an authorized qBittorrent/Sonarr mutation has
+  // removed the underlying file. This keeps retries bound to the accepted episode set
+  // without incorrectly requiring already-deleted Part evidence to reappear.
+  async seasonEpisodeMembership(
+    seasonRatingKey: string,
+    limit = 500,
+  ): Promise<PlexSeasonDeletionEpisode[]> {
+    return await this.seasonEpisodes(seasonRatingKey, limit, false);
   }
 
   // Shows do not expose episode Media entries on their own metadata response, and this

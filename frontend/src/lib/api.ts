@@ -35,6 +35,8 @@ import type {
   SaveSeerrInstanceRequest,
   SeasonCleanupResponse,
   SeasonDeletionPreviewResponse,
+  SeasonRemovalCreated,
+  SeasonRemovalPreviewResponse,
   SeasonVersionAnalysisResponse,
   SeerrInstance,
   SeerrIntegrationSettings,
@@ -141,6 +143,7 @@ export type {
 export type SortKey = "fileSize" | "lastViewedAt" | "addedAt" | "title" | "year" | "viewCount";
 
 export interface StaleParams {
+  scope?: "show" | "season";
   days?: number;
   maxDays?: number;
   minAgeDays?: number;
@@ -176,7 +179,7 @@ export class ApiError extends Error {
   operationId?: string;
   syncId?: number;
   code?: string;
-  preview?: SeasonDeletionPreviewResponse;
+  preview?: SeasonDeletionPreviewResponse | SeasonRemovalPreviewResponse;
 
   constructor(
     status: number,
@@ -185,7 +188,7 @@ export class ApiError extends Error {
       operationId?: string;
       syncId?: number;
       code?: string;
-      preview?: SeasonDeletionPreviewResponse;
+      preview?: SeasonDeletionPreviewResponse | SeasonRemovalPreviewResponse;
     },
   ) {
     super(message);
@@ -230,7 +233,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       operationId,
       syncId: typeof body.syncId === "number" ? body.syncId : undefined,
       code: typeof body.code === "string" ? body.code : undefined,
-      preview: body.preview as SeasonDeletionPreviewResponse | undefined,
+      preview: body.preview as
+        | SeasonDeletionPreviewResponse
+        | SeasonRemovalPreviewResponse
+        | undefined,
     });
   }
   if (res.status === 204) return undefined as T;
@@ -335,6 +341,35 @@ export const api = {
           quickCleanupThresholdDays,
         }),
       }),
+    seasonRemovalPreview: (
+      key: string,
+      seasonRatingKey: string,
+      options: { coordinated: boolean; cleanupDownloads: boolean },
+    ) =>
+      apiFetch<SeasonRemovalPreviewResponse>(
+        `/libraries/${encodeURIComponent(key)}/seasons/${
+          encodeURIComponent(seasonRatingKey)
+        }/deletion-preview`,
+        { method: "POST", body: JSON.stringify(options) },
+      ),
+    deleteSeason: (
+      key: string,
+      seasonRatingKey: string,
+      options: {
+        previewFingerprint: string;
+        coordinated: boolean;
+        cleanupDownloads: boolean;
+      },
+    ) =>
+      apiFetch<SeasonRemovalCreated>(
+        `/libraries/${encodeURIComponent(key)}/seasons/${
+          encodeURIComponent(seasonRatingKey)
+        }/deletion`,
+        {
+          method: "POST",
+          body: JSON.stringify({ clientRequestId: uuidv4(), ...options }),
+        },
+      ),
     downloadCleanupPreview: (key: string, ratingKeys: string[]) =>
       apiFetch<DownloadCleanupPreviewResponse>(
         `/libraries/${encodeURIComponent(key)}/items/download-cleanup-preview`,

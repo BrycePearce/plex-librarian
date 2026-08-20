@@ -34,6 +34,7 @@ import {
   itemsByLibrary,
   libraryByKey,
   mediaVersionsByLibrary,
+  seasonsByLibrary,
   seasonsByShow,
 } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -57,6 +58,7 @@ import {
 import { staleCutoffs } from './staleFilters.ts';
 import {
   movieRootIsWorkflowOwned,
+  seasonRootIsWorkflowOwned,
   showRootIsWorkflowOwned,
 } from '../deletionOperations/core/ownership.ts';
 import {
@@ -74,6 +76,15 @@ const SORT_COLUMNS = {
   title: items.title,
   year: items.year,
   viewCount: items.viewCount,
+} as const;
+
+const SEASON_SORT_COLUMNS = {
+  fileSize: seasons.fileSize,
+  lastViewedAt: seasons.lastViewedAt,
+  addedAt: seasons.addedAt,
+  title: items.title,
+  year: items.year,
+  viewCount: seasons.viewCount,
 } as const;
 
 type SortKey = keyof typeof SORT_COLUMNS;
@@ -142,6 +153,10 @@ router.get('/:key/stale', async (c) => {
     .where(libraryByKey(serverId, key))
     .limit(1);
   if (!library) return c.json({ error: 'library not found' }, 404);
+  // Search params are bookmarkable and can outlive a library switch. Treat a stale
+  // season scope on a non-TV library as the ordinary item scope instead of turning an
+  // otherwise valid page into a 400 response.
+  const scope = c.req.query('scope') === 'season' && library.type === 'show' ? 'season' : 'show';
 
   // Minimum inactivity: time since last view for watched items, or time since added for
   // never-watched items (default 365).
@@ -228,6 +243,130 @@ router.get('/:key/stale', async (c) => {
     maxDays,
     minAgeDays,
   );
+
+  if (scope === 'season') {
+    const showEverything = days === 0 && maxDays === null;
+    const watchedStaleCond = showEverything ? isNotNull(seasons.lastViewedAt) : and(
+      isNotNull(seasons.lastViewedAt),
+      viewedOnOrAfter !== null
+        ? and(lt(seasons.lastViewedAt, viewedBefore), gte(seasons.lastViewedAt, viewedOnOrAfter))
+        : lt(seasons.lastViewedAt, viewedBefore),
+    );
+    const unwatchedCond = showEverything ? isNull(seasons.lastViewedAt) : and(
+      isNull(seasons.lastViewedAt),
+      isNotNull(seasons.addedAt),
+      unwatchedAddedOnOrAfter !== null
+        ? and(
+          lt(seasons.addedAt, unwatchedAddedBefore),
+          gte(
+            seasons.addedAt,
+            unwatchedAddedOnOrAfter,
+          ),
+        )
+        : lt(seasons.addedAt, unwatchedAddedBefore),
+    );
+    const staleCond = filter === 'unwatched'
+      ? unwatchedCond
+      : filter === 'watched'
+      ? watchedStaleCond
+      : or(unwatchedCond, watchedStaleCond);
+    const requestedDuplicatesOnly = c.req.query('duplicatesOnly') === 'true';
+    const duplicatesCond = requestedDuplicatesOnly
+      ? sql`exists (
+          select 1 from ${episodeMediaVersions}
+          where ${episodeMediaVersions.serverId} = ${serverId}
+            and ${episodeMediaVersions.libraryKey} = ${key}
+            and ${episodeMediaVersions.seasonRatingKey} = ${seasons.ratingKey}
+        )`
+      : undefined;
+    const seasonSearchCond = search.length >= 2
+      ? sql`instr(lower(${items.title} || ' ' || ${seasons.title}), lower(${search})) > 0`
+      : undefined;
+    const staleWhere = and(
+      seasonsByLibrary(serverId, key),
+      eq(items.serverId, serverId),
+      eq(items.ratingKey, seasons.showRatingKey),
+      contentIsNotIgnored(serverId, items.ratingKey),
+      not(seasonRootIsWorkflowOwned(
+        serverId,
+        key,
+        sql`${seasons.ratingKey}`,
+        sql`${seasons.showRatingKey}`,
+      )),
+      staleCond,
+      duplicatesCond,
+      seasonSearchCond,
+    );
+    const rowSelection = {
+      ratingKey: seasons.ratingKey,
+      libraryKey: seasons.libraryKey,
+      title: items.title,
+      type: sql<string>`'season'`,
+      thumb: items.thumb,
+      addedAt: seasons.addedAt,
+      lastViewedAt: seasons.lastViewedAt,
+      viewCount: seasons.viewCount,
+      fileSize: seasons.fileSize,
+      duration: seasons.duration,
+      year: items.year,
+      updatedAt: seasons.updatedAt,
+      showRatingKey: seasons.showRatingKey,
+      seasonIndex: seasons.seasonIndex,
+      leafCount: seasons.leafCount,
+    };
+    const [countRows, pageRows] = await Promise.all([
+      includeTotal
+        ? db.select({ total: count() }).from(seasons).innerJoin(
+          items,
+          and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
+        ).where(staleWhere)
+        : null,
+      db.select(rowSelection).from(seasons).innerJoin(
+        items,
+        and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
+      ).where(staleWhere).orderBy(
+        order(SEASON_SORT_COLUMNS[sort]),
+        asc(seasons.seasonIndex),
+      ).limit(limit + 1).offset(offset),
+    ]);
+    const total = countRows?.[0]?.total ?? null;
+    const hasMore = pageRows.length > limit;
+    const staleSeasons = hasMore ? pageRows.slice(0, limit) : pageRows;
+    const seasonKeys = staleSeasons.map((season) => season.ratingKey);
+    const duplicateRows = seasonKeys.length === 0 ? [] : await db.selectDistinct({
+      seasonRatingKey: episodeMediaVersions.seasonRatingKey,
+    }).from(episodeMediaVersions).where(and(
+      eq(episodeMediaVersions.serverId, serverId),
+      eq(episodeMediaVersions.libraryKey, key),
+      inArray(episodeMediaVersions.seasonRatingKey, seasonKeys),
+    ));
+    const duplicateSeasonKeys = new Set(duplicateRows.map((row) => row.seasonRatingKey));
+    return c.json(
+      {
+        scope,
+        days,
+        maxDays,
+        minAgeDays,
+        libraryStaleMinAgeDays: library.staleMinAgeDays,
+        historySyncedAt: library.historySyncedAt,
+        search,
+        filter,
+        sort,
+        order: orderStr,
+        duplicatesOnly: requestedDuplicatesOnly,
+        limit,
+        offset,
+        total,
+        hasMore,
+        items: staleSeasons.map((season) => ({
+          ...season,
+          ...(duplicateSeasonKeys.has(season.ratingKey)
+            ? { hasDuplicateEpisodes: true as const }
+            : {}),
+        })),
+      } satisfies StaleResponse,
+    );
+  }
 
   // Watched but stale: viewed before the minimum boundary and, for range queries,
   // on or after the maximum boundary.
@@ -347,6 +486,7 @@ router.get('/:key/stale', async (c) => {
 
   return c.json(
     {
+      scope,
       days,
       maxDays,
       minAgeDays,

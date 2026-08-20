@@ -52,9 +52,28 @@ function finalizeTarget(
   if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
   let removed = 0;
   if (target.targetKind === 'whole_item') {
-    removed = client
-      .prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?')
-      .run(target.serverId, snapshot.ratingKey);
+    if (snapshot.type === 'season') {
+      removed = client
+        .prepare('DELETE FROM seasons WHERE server_id = ? AND rating_key = ?')
+        .run(target.serverId, snapshot.ratingKey);
+      if (removed > 0) {
+        client.prepare(
+          `UPDATE items SET
+             file_size = MAX(0, COALESCE(file_size, 0) - ?),
+             duration = MAX(0, COALESCE(duration, 0) - ?)
+           WHERE server_id = ? AND rating_key = ? AND type = 'show'`,
+        ).run(
+          snapshot.fileSize ?? 0,
+          snapshot.wholeSeasonDuration ?? 0,
+          target.serverId,
+          snapshot.showRatingKey!,
+        );
+      }
+    } else {
+      removed = client
+        .prepare('DELETE FROM items WHERE server_id = ? AND rating_key = ?')
+        .run(target.serverId, snapshot.ratingKey);
+    }
   } else if (target.targetKind === 'movie_version') {
     removed = client
       .prepare(
@@ -142,7 +161,7 @@ async function assertWholeItemArrPostcondition(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
 ): Promise<void> {
-  if (snapshot.mode === 'coordinated') {
+  if (snapshot.mode === 'coordinated' && snapshot.type !== 'season') {
     const id = externalId(snapshot);
     if (id === null) {
       throw new PlexReconciliationError('the target has no Arr external ID', true, false);
@@ -298,7 +317,10 @@ export async function deleteExactPlexTarget(
   explicitDeleteSuccess: boolean;
 }> {
   const sessions = await client.activeSessions();
-  if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
+  const activeRatingKeys = snapshot.type === 'season' && snapshot.wholeSeasonRemoval
+    ? new Set(snapshot.wholeSeasonRemoval.episodeRatingKeys)
+    : new Set([snapshot.ratingKey]);
+  if (activeWholeItemRatingKeys(activeRatingKeys, sessions).size > 0) {
     throw new PlexReconciliationError('cannot delete media with active playback', true);
   }
   const attemptStartedAt = Math.floor(Date.now() / 1000);

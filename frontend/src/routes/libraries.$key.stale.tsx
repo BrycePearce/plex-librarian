@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowLeft, Database, Gauge, HardDrive, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { api, isNotFoundError } from "../lib/api.ts";
+import { api, ApiError, isNotFoundError } from "../lib/api.ts";
 import type { SortKey, StaleItem, StaleParams } from "../lib/api.ts";
 import { formatKilobytes } from "../lib/format.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
@@ -22,17 +22,20 @@ import {
   lastStalePageOffset,
   requireStaleTotal,
   reuseStaleTotal,
+  staleScopesMatch,
 } from "./-stale/stalePagination.ts";
 import { StaleFilters } from "./-stale/StaleFilters.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 import { StaleItemsTable } from "./-stale/StaleItemsTable.tsx";
 import { SelectionActionBar } from "./-stale/SelectionActionBar.tsx";
+import { type SeasonRemovalChoice, SeasonRemovalDialog } from "./-stale/SeasonRemovalDialog.tsx";
 import { LibraryQuickCleanupAction } from "./-stale/LibraryQuickCleanupAction.tsx";
 import { DeleteConfirmDialog } from "../features/mediaDeletion/DeleteConfirmDialog.tsx";
 import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import { CollectionToolbar } from "../components/Workspace.tsx";
 import "./libraries.$key.stale.css";
+import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
 
 const PAGE_SIZE = 50;
 
@@ -52,6 +55,7 @@ const FILTERS = ["all", "watched", "unwatched"] as const;
 // load, while any control the user actually changes shows up in the URL (and survives a
 // refresh or the browser Back button).
 const staleSearchDefaults = {
+  scope: "show",
   days: 365,
   filter: "all",
   search: "",
@@ -70,6 +74,7 @@ function validateStaleSearch(search: Record<string, unknown>): StaleParams {
   const offset = Number(search.offset);
   const minAgeDays = Number(search.minAgeDays);
   return {
+    scope: search.scope === "season" ? "season" : staleSearchDefaults.scope,
     days: Number.isInteger(days) && days >= 0 ? days : staleSearchDefaults.days,
     filter: (FILTERS as readonly string[]).includes(search.filter as string)
       ? (search.filter as StaleParams["filter"])
@@ -151,8 +156,10 @@ function StalePage() {
   });
   const thisLibrary = librariesData?.libraries.find((l) => l.key === key);
   const thisLibraryItemCount = thisLibrary?.itemCount ?? 0;
-  const supportsQuickCleanup = thisLibrary?.type === "movie" || thisLibrary?.type === "show";
   const params = Route.useSearch();
+  const seasonScope = thisLibrary?.type === "show" && params.scope === "season";
+  const supportsQuickCleanup = thisLibrary?.type === "movie" ||
+    (thisLibrary?.type === "show" && !seasonScope);
   const navigate = Route.useNavigate();
 
   function setParams(updater: (prev: StaleParams) => StaleParams) {
@@ -175,7 +182,10 @@ function StalePage() {
       requireStaleTotal(
         await api.libraries.stale(key, { ...params, limit: PAGE_SIZE, count: true }),
       ),
-    placeholderData: (prev) => prev,
+    // Show and season rows share a transport shape but have different destructive
+    // semantics. Never paint rows from the other scope while the new request settles.
+    placeholderData: (prev) =>
+      prev && staleScopesMatch(prev.scope, params.scope) ? prev : undefined,
     // A 404 here means this library hasn't been synced even once yet (still queued
     // behind others in the current sync) — retrying won't make the row appear any
     // faster, and `useLibrarySync` below already invalidates this query once the
@@ -268,6 +278,7 @@ function StalePage() {
   // selections across pagination, filtering, searching, or sorting.
   const selectionScope = JSON.stringify([
     key,
+    params.scope,
     params.days,
     params.minAgeDays ?? "",
     params.filter,
@@ -281,12 +292,46 @@ function StalePage() {
 
   const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const seasonDialogRef = useRef<HTMLDialogElement>(null);
+  const [confirmSeason, setConfirmSeason] = useState<StaleItem | null>(null);
+  const { trackDeletionOperation } = useDeletionOperationTracker();
 
   const deleteMutation = useDeleteItems([
     queryKeys.stale.library(key),
     queryKeys.events.all,
     queryKeys.mediaRemovals.all,
   ]);
+  const seasonDeleteMutation = useMutation({
+    mutationFn: ({ item, choice }: { item: StaleItem; choice: SeasonRemovalChoice }) =>
+      api.libraries.deleteSeason(key, item.ratingKey, choice),
+    onError: (error, { item, choice }) => {
+      if (
+        !(error instanceof ApiError) || !error.preview ||
+        !("coordinatedConfigured" in error.preview)
+      ) return;
+      qc.setQueryData(
+        [
+          "stale-season-removal-preview",
+          key,
+          item.ratingKey,
+          choice.coordinated,
+          choice.cleanupDownloads,
+        ],
+        error.preview,
+      );
+    },
+    onSuccess: (created) => {
+      trackDeletionOperation(created.operationId, [
+        queryKeys.stale.library(key),
+        queryKeys.events.all,
+        queryKeys.mediaRemovals.all,
+        queryKeys.libraries.all,
+      ]);
+      selection.clear();
+      seasonDialogRef.current?.close();
+      setConfirmSeason(null);
+    },
+  });
 
   const goToOffset = useScrollToOffset(
     params.offset ?? 0,
@@ -307,12 +352,21 @@ function StalePage() {
   }, [data, isFetching, isPlaceholderData, navigate, params.offset]);
 
   function openConfirm(items: StaleItem[]) {
+    if (seasonScope) {
+      if (items.length !== 1) return;
+      setConfirmSeason(items[0]!);
+      seasonDeleteMutation.reset();
+      seasonDialogRef.current?.showModal();
+      return;
+    }
     setConfirmItems(items);
     dialogRef.current?.showModal();
   }
 
   function closeConfirm() {
     dialogRef.current?.close();
+    seasonDialogRef.current?.close();
+    setConfirmSeason(null);
   }
 
   function setGracePeriod(value: string) {
@@ -378,7 +432,7 @@ function StalePage() {
               {data
                 ? (
                   <>
-                    {data.total.toLocaleString()} items ·{" "}
+                    {data.total.toLocaleString()} {seasonScope ? "seasons" : "items"} ·{" "}
                     {formatKilobytes(pageFileSize(data.items))} on this page
                   </>
                 )
@@ -452,6 +506,9 @@ function StalePage() {
               <SlidersHorizontal className="size-4" /> Analysis controls
             </div>
             <StaleFilters
+              scope={seasonScope ? "season" : "show"}
+              onScopeChange={(scope) =>
+                setParams((p) => ({ ...p, scope, duplicatesOnly: false, offset: 0 }))}
               days={params.days ?? staleSearchDefaults.days}
               filter={params.filter ?? staleSearchDefaults.filter}
               onDaysChange={(days) => setParams((p) => ({ ...p, days, offset: 0 }))}
@@ -486,16 +543,18 @@ function StalePage() {
             label="Library size"
             value={thisLibrary ? formatKilobytes(thisLibrary.totalFileSize) : "—"}
           />
-          <LibraryInsight
-            icon={<Gauge />}
-            label={
-              <span className="library-insight-label">
-                Library match
-                <InfoTip text="Percentage of all titles in this library that match the current filters." />
-              </span>
-            }
-            value={formatLibraryMatch(data.total, thisLibraryItemCount)}
-          />
+          {!seasonScope && (
+            <LibraryInsight
+              icon={<Gauge />}
+              label={
+                <span className="library-insight-label">
+                  Library match
+                  <InfoTip text="Percentage of all titles in this library that match the current filters." />
+                </span>
+              }
+              value={formatLibraryMatch(data.total, thisLibraryItemCount)}
+            />
+          )}
         </div>
       )}
 
@@ -519,13 +578,15 @@ function StalePage() {
           <>
             <CollectionToolbar
               eyebrow="Content review"
-              title="Stale items"
+              title={seasonScope ? "Stale seasons" : "Stale items"}
               actions={
                 <ExpandableSearch
                   search={params.search ?? staleSearchDefaults.search}
                   pending={isFetching}
-                  label="Search stale titles"
-                  placeholder="Search all matching titles..."
+                  label={seasonScope ? "Search stale shows and seasons" : "Search stale titles"}
+                  placeholder={seasonScope
+                    ? "Search matching shows or seasons..."
+                    : "Search all matching titles..."}
                   onSearchChange={(search) => setParams((p) => ({ ...p, search, offset: 0 }))}
                 />
               }
@@ -541,6 +602,11 @@ function StalePage() {
               totalSize={selection.selectedTotalSize}
               onClear={selection.clear}
               onDelete={() => openConfirm(selection.selectedItems)}
+              deleteDisabled={seasonScope && selection.selected.size !== 1}
+              deleteTitle={seasonScope && selection.selected.size !== 1
+                ? "Whole-season removal currently accepts one season at a time"
+                : undefined}
+              noun={seasonScope ? "season" : "item"}
             />
 
             {isLoading ? <StaleTableSkeleton /> : (
@@ -589,6 +655,16 @@ function StalePage() {
               },
             },
           )}
+        onCancel={closeConfirm}
+      />
+      <SeasonRemovalDialog
+        dialogRef={seasonDialogRef}
+        libraryKey={key}
+        item={confirmSeason}
+        pending={seasonDeleteMutation.isPending}
+        error={seasonDeleteMutation.error}
+        onConfirm={(choice) =>
+          confirmSeason && seasonDeleteMutation.mutate({ item: confirmSeason, choice })}
         onCancel={closeConfirm}
       />
     </div>

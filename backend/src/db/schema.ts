@@ -689,6 +689,10 @@ export const seasons = sqliteTable(
     libraryKey: text('library_key').notNull(),
     seasonIndex: integer('season_index').notNull(),
     title: text('title').notNull(),
+    // Conservative season-level inactivity evidence. addedAt is the newest episode
+    // addition; lastViewedAt is the latest episode play, including history backfill.
+    addedAt: integer('added_at'),
+    lastViewedAt: integer('last_viewed_at'),
     fileSize: integer('file_size'),
     duration: integer('duration'),
     leafCount: integer('leaf_count'),
@@ -714,6 +718,16 @@ export const seasons = sqliteTable(
     }).onDelete('cascade'),
     showIdx: index('seasons_show_idx').on(table.serverId, table.showRatingKey),
     libraryIdx: index('seasons_library_idx').on(table.serverId, table.libraryKey),
+    libraryStaleIdx: index('seasons_library_stale_idx').on(
+      table.serverId,
+      table.libraryKey,
+      table.lastViewedAt,
+    ),
+    libraryFileSizeIdx: index('seasons_library_file_size_idx').on(
+      table.serverId,
+      table.libraryKey,
+      table.fileSize,
+    ),
     gapIdx: index('seasons_episode_gaps_idx')
       .on(table.serverId, table.episodeGapCount)
       .where(sql`${table.episodeAuditStatus} = 'gaps'`),

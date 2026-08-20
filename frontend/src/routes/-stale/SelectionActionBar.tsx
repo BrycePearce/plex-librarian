@@ -7,11 +7,17 @@ export function SelectionActionBar({
   totalSize,
   onClear,
   onDelete,
+  deleteDisabled = false,
+  deleteTitle,
+  noun = "item",
 }: {
   count: number;
   totalSize: number;
   onClear: () => void;
   onDelete: () => void;
+  deleteDisabled?: boolean;
+  deleteTitle?: string;
+  noun?: string;
 }) {
   return (
     <AnimatePresence>
@@ -24,7 +30,8 @@ export function SelectionActionBar({
           className="selection-command-bar fixed bottom-6 left-0 right-0 mx-auto w-fit z-20 alert bg-base-200 shadow-xl border border-base-300 flex items-center justify-between gap-6"
         >
           <span>
-            {count} item{count === 1 ? "" : "s"} selected · {formatKilobytes(totalSize)}
+            {count} {noun}
+            {count === 1 ? "" : "s"} selected · {formatKilobytes(totalSize)}
           </span>
           <div className="flex gap-2">
             <button
@@ -38,6 +45,8 @@ export function SelectionActionBar({
               type="button"
               className="btn btn-sm btn-error gap-2"
               onClick={onDelete}
+              disabled={deleteDisabled}
+              title={deleteTitle}
             >
               <Trash2 className="w-4 h-4" /> Delete selected
             </button>

@@ -36,6 +36,11 @@ withTransaction((client) => {
   );
   insertLibrary.run(1);
   insertLibrary.run(2);
+  client.prepare(
+    `INSERT INTO libraries
+      (server_id, key, title, type, synced_at, history_synced_at)
+     VALUES (1, 'shows', 'Shows', 'show', 1, 1)`,
+  ).run();
   const insertItem = client.prepare(
     `INSERT INTO items
       (server_id, rating_key, library_key, title, type, added_at, last_viewed_at,
@@ -46,6 +51,23 @@ withTransaction((client) => {
   insertItem.run(1, 'two', 'Two', 200);
   insertItem.run(1, 'three', 'Three', 100);
   insertItem.run(2, 'foreign', 'Foreign', 1_000);
+  client.prepare(
+    `INSERT INTO items
+      (server_id, rating_key, library_key, title, type, thumb, added_at,
+       last_viewed_at, file_size, year, updated_at)
+     VALUES (1, 'show-one', 'shows', 'Example Show', 'show', '/show.jpg', 1,
+       null, 1000, 2020, 1)`,
+  ).run();
+  const insertSeason = client.prepare(
+    `INSERT INTO seasons
+      (server_id, rating_key, show_rating_key, library_key, season_index, title,
+       added_at, last_viewed_at, file_size, duration, leaf_count, view_count, updated_at)
+     VALUES (1, ?, 'show-one', 'shows', ?, ?, ?, ?, ?, 100, 10, ?, 1)`,
+  );
+  const now = Math.floor(Date.now() / 1000);
+  insertSeason.run('season-1', 1, 'Season 1', 1, null, 600, 0);
+  insertSeason.run('season-2', 2, 'Season 2', 1, now, 300, 12);
+  insertSeason.run('season-3', 3, 'Season 3', now, null, 100, 0);
 });
 
 const { createApp } = await import('../../app.ts');
@@ -59,6 +81,7 @@ async function stale(query: string): Promise<StaleResponse> {
 
 Deno.test('stale route counts by default and returns bounded look-ahead metadata', async () => {
   const page = await stale('limit=2');
+  assertEquals(page.scope, 'show');
   assertEquals(page.total, 3);
   assertEquals(page.hasMore, true);
   assertEquals(page.items.map((item) => item.ratingKey), ['one', 'two']);
@@ -66,6 +89,44 @@ Deno.test('stale route counts by default and returns bounded look-ahead metadata
   // Only the literal lowercase value disables counting; older or malformed clients keep
   // the backward-compatible exact total.
   assertEquals((await stale('limit=2&count=FALSE')).total, 3);
+});
+
+Deno.test('TV stale route can return conservative season-scoped results', async () => {
+  const response = await app.request(
+    '/api/libraries/shows/stale?scope=season&days=365&limit=10',
+  );
+  assertEquals(response.status, 200);
+  const page = await response.json() as StaleResponse;
+  assertEquals(page.scope, 'season');
+  assertEquals(page.total, 1);
+  assertEquals(
+    page.items.map((item) => ({
+      ratingKey: item.ratingKey,
+      title: item.title,
+      type: item.type,
+      showRatingKey: item.showRatingKey,
+      seasonIndex: item.seasonIndex,
+    })),
+    [{
+      ratingKey: 'season-1',
+      title: 'Example Show',
+      type: 'season',
+      showRatingKey: 'show-one',
+      seasonIndex: 1,
+    }],
+  );
+});
+
+Deno.test('season scope searches show and season titles and degrades safely for movies', async () => {
+  const response = await app.request(
+    '/api/libraries/shows/stale?scope=season&days=0&search=Season%202',
+  );
+  assertEquals(response.status, 200);
+  const page = await response.json() as StaleResponse;
+  assertEquals(page.items.map((item) => item.ratingKey), ['season-2']);
+  const movieResponse = await app.request('/api/libraries/movies/stale?scope=season&days=0');
+  assertEquals(movieResponse.status, 200);
+  assertEquals(((await movieResponse.json()) as StaleResponse).scope, 'show');
 });
 
 Deno.test('stale route can omit the count without losing hasMore', async () => {

@@ -15,6 +15,11 @@ import type {
 import type { PersistedResolvedCleanupItem } from '../../mediaDeletion/cleanup.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
+import {
+  canonicalSeasonEpisodeEvidence,
+  type DurableWholeSeasonRemoval,
+  seasonEpisodeEvidenceOnlyDisappeared,
+} from '../../libraries/seasonRemovalPlanner.ts';
 
 export interface DurableTargetRecord {
   id: number;
@@ -109,9 +114,43 @@ export interface DurableTargetSnapshot {
     lastViewedAt: number | null;
     addedAt: number | null;
   };
+  wholeSeasonDuration?: number | null;
+  wholeSeasonRemoval?: DurableWholeSeasonRemoval;
+  planFingerprint?: string;
 }
 
 export class DeletionValidationError extends Error {}
+
+export async function assertWholeSeasonPlexEvidence(
+  client: PlexClient,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  const accepted = snapshot.wholeSeasonRemoval;
+  if (!accepted || snapshot.type !== 'season') {
+    throw new DeletionValidationError('durable whole-season evidence is missing');
+  }
+  const current = await client.seasonDeletionEpisodes(snapshot.ratingKey);
+  if (
+    canonicalSeasonEpisodeEvidence(current) !==
+      canonicalSeasonEpisodeEvidence(accepted.plexEpisodes)
+  ) {
+    mismatch('Plex season episode membership');
+  }
+}
+
+export async function assertWholeSeasonPlexMembership(
+  client: PlexClient,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  const accepted = snapshot.wholeSeasonRemoval;
+  if (!accepted || snapshot.type !== 'season') {
+    throw new DeletionValidationError('durable whole-season evidence is missing');
+  }
+  const current = await client.seasonEpisodeMembership(snapshot.ratingKey);
+  if (!seasonEpisodeEvidenceOnlyDisappeared(accepted.plexEpisodes, current)) {
+    mismatch('Plex season episode or media evidence');
+  }
+}
 
 function mismatch(label: string): never {
   throw new DeletionValidationError(`${label} changed after deletion was accepted`);
@@ -445,7 +484,7 @@ function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIde
   if (live.librarySectionId !== null && live.librarySectionId !== snapshot.libraryKey) {
     mismatch('Plex library ownership');
   }
-  if (snapshot.type !== 'episode') {
+  if (snapshot.type === 'movie' || snapshot.type === 'show') {
     equalNullable(snapshot.tmdbId, live.tmdbId, 'TMDB identity');
     equalNullable(snapshot.tvdbId, live.tvdbId, 'TVDB identity');
   }
@@ -460,6 +499,19 @@ function validateLocalTarget(
   snapshot: DurableTargetSnapshot,
 ): void {
   const row = withTransaction((client) => {
+    if (kind === 'whole_item' && snapshot.type === 'season') {
+      return client
+        .prepare(
+          `SELECT s.library_key, s.title, 'season', i.tmdb_id, i.tvdb_id,
+                  s.show_rating_key, s.season_index, s.file_size, s.duration
+           FROM seasons s
+           JOIN items i ON i.server_id = s.server_id AND i.rating_key = s.show_rating_key
+           WHERE s.server_id = ? AND s.rating_key = ?
+             AND NOT EXISTS (SELECT 1 FROM ignored_content ignored
+               WHERE ignored.server_id = s.server_id AND ignored.rating_key = s.show_rating_key)`,
+        )
+        .value<unknown[]>(serverId, snapshot.ratingKey);
+    }
     if (kind === 'whole_item') {
       return client
         .prepare(
@@ -501,6 +553,21 @@ function validateLocalTarget(
     if (row[1] !== snapshot.title || row[2] !== snapshot.type) mismatch('local item identity');
     equalNullable(snapshot.tmdbId, row[3], 'local TMDB identity');
     equalNullable(snapshot.tvdbId, row[4], 'local TVDB identity');
+    if (snapshot.type === 'season') {
+      equalNullable(snapshot.showRatingKey, row[5], 'local season show identity');
+      equalNullable(snapshot.seasonIndex, row[6], 'local season number');
+      equalNullable(snapshot.fileSize, row[7], 'local season size');
+      equalNullable(snapshot.wholeSeasonDuration, row[8], 'local season duration');
+      if (
+        !snapshot.wholeSeasonRemoval ||
+        !Array.isArray(snapshot.wholeSeasonRemoval.plexEpisodes) ||
+        snapshot.wholeSeasonRemoval.plexEpisodes.length === 0 ||
+        snapshot.seasonRatingKey !== snapshot.ratingKey
+      ) {
+        throw new DeletionValidationError('durable whole-season evidence is missing');
+      }
+      return;
+    }
     const evidence = snapshot.quickCleanupEvidence;
     if (evidence) {
       if (row[5] !== evidence.lastViewedAt) mismatch('quick cleanup watch history');
@@ -700,5 +767,16 @@ export async function validateLiveDeletionIdentity(
     const show = await client.metadataIdentity(snapshot.showRatingKey!);
     if (!show || show.title !== snapshot.showTitle) mismatch('Plex show identity');
     equalNullable(snapshot.tvdbId, show.tvdbId, 'Plex show TVDB identity');
+  } else if (targetKind === 'whole_item' && snapshot.type === 'season') {
+    if (
+      live.parentRatingKey !== snapshot.showRatingKey ||
+      live.index !== snapshot.seasonIndex
+    ) mismatch('Plex season ancestry');
+    const show = await client.metadataIdentity(snapshot.showRatingKey!);
+    if (!show || show.type !== 'show' || show.title !== snapshot.showTitle) {
+      mismatch('Plex show identity');
+    }
+    equalNullable(snapshot.tvdbId, show.tvdbId, 'Plex show TVDB identity');
+    await assertWholeSeasonPlexMembership(client, snapshot);
   }
 }

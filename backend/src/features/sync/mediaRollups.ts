@@ -12,6 +12,16 @@ import { EpisodeRangeSet } from './episodeRanges.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 
+// A whole season is safe to classify by age only when every member contributes an
+// addition timestamp. Ignoring an unknown episode would let an older known sibling
+// make the entire season look stale.
+export function conservativeSeasonAddedAt(
+  current: number | null,
+  next: number | null,
+): number | null {
+  return current === null || next === null ? null : Math.max(current, next);
+}
+
 // Streams all episodes for a TV library, aggregates file sizes by season in a
 // bounded map (entries ≈ shows × avg-seasons, not episode count), then upserts
 // into the seasons table and rolls totals up to the show-level items row.
@@ -29,6 +39,8 @@ export async function syncShowSizes(
     showRatingKey: string;
     seasonIndex: number;
     title: string;
+    addedAt: number | null;
+    lastViewedAt: number | null;
     fileSize: number;
     duration: number;
     leafCount: number;
@@ -63,6 +75,10 @@ export async function syncShowSizes(
         agg.duration += ep.duration ?? 0;
         agg.leafCount += 1;
         agg.viewCount += ep.viewCount;
+        agg.addedAt = conservativeSeasonAddedAt(agg.addedAt, ep.addedAt);
+        if (ep.lastViewedAt !== null) {
+          agg.lastViewedAt = Math.max(agg.lastViewedAt ?? ep.lastViewedAt, ep.lastViewedAt);
+        }
       } else {
         const episodeRanges = new EpisodeRangeSet();
         episodeRanges.insert(ep.episodeIndex);
@@ -70,6 +86,8 @@ export async function syncShowSizes(
           showRatingKey: ep.showRatingKey,
           seasonIndex: ep.seasonIndex,
           title: ep.seasonTitle,
+          addedAt: ep.addedAt,
+          lastViewedAt: ep.lastViewedAt,
           fileSize: ep.fileSize ?? 0,
           duration: ep.duration ?? 0,
           leafCount: 1,
@@ -100,6 +118,8 @@ export async function syncShowSizes(
             libraryKey: lib.key,
             seasonIndex: agg.seasonIndex,
             title: agg.title,
+            addedAt: agg.addedAt,
+            lastViewedAt: agg.lastViewedAt,
             fileSize: agg.fileSize > 0 ? agg.fileSize : null,
             duration: agg.duration > 0 ? agg.duration : null,
             leafCount: agg.leafCount,
@@ -122,6 +142,12 @@ export async function syncShowSizes(
           libraryKey: excl(seasons.libraryKey),
           seasonIndex: excl(seasons.seasonIndex),
           title: excl(seasons.title),
+          addedAt: excl(seasons.addedAt),
+          lastViewedAt: sql`CASE
+            WHEN ${seasons.lastViewedAt} IS NULL THEN ${excl(seasons.lastViewedAt)}
+            WHEN ${excl(seasons.lastViewedAt)} IS NULL THEN ${seasons.lastViewedAt}
+            ELSE MAX(${seasons.lastViewedAt}, ${excl(seasons.lastViewedAt)})
+          END`,
           fileSize: excl(seasons.fileSize),
           duration: excl(seasons.duration),
           leafCount: excl(seasons.leafCount),

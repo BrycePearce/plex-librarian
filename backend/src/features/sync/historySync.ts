@@ -83,6 +83,11 @@ export async function syncLibraryHistory(
 
   for await (const page of plex.libraryHistory(lib.key)) {
     const pageMaxViewedAt = new Map<string, number>();
+    const pageSeasonMaxViewedAt = new Map<string, {
+      showRatingKey: string;
+      seasonNumber: number;
+      viewedAt: number;
+    }>();
     const pageActivity = new Map<string, {
       accountId: number;
       localAccountId: number;
@@ -109,6 +114,18 @@ export async function syncLibraryHistory(
       if (key) {
         const cur = pageMaxViewedAt.get(key);
         if (!cur || entry.viewedAt > cur) pageMaxViewedAt.set(key, entry.viewedAt);
+      }
+      const seasonNumber = historySeasonNumber(entry);
+      if (key && seasonNumber !== null) {
+        const seasonKey = `${key}:${seasonNumber}`;
+        const currentSeasonMaximum = pageSeasonMaxViewedAt.get(seasonKey);
+        if (!currentSeasonMaximum || entry.viewedAt > currentSeasonMaximum.viewedAt) {
+          pageSeasonMaxViewedAt.set(seasonKey, {
+            showRatingKey: key,
+            seasonNumber,
+            viewedAt: entry.viewedAt,
+          });
+        }
       }
       if (entry.accountID != null) {
         const accountId = localToGlobal.get(entry.accountID);
@@ -141,7 +158,6 @@ export async function syncLibraryHistory(
           // Season-scoped request attribution cannot safely fall back to show-wide
           // activity. Abort the library history sync if Plex omits this field for a
           // currently matched user; service.ts will leave historySyncedAt null.
-          const seasonNumber = historySeasonNumber(entry);
           if (seasonNumber !== null) {
             const seasonPairKey = `${accountId}:${key}:${seasonNumber}`;
             const currentSeason = pageSeasonActivity.get(seasonPairKey);
@@ -171,7 +187,10 @@ export async function syncLibraryHistory(
 
     // Write each history page immediately. Replaying a full sync is idempotent because
     // first/last timestamps use min/max rather than accumulating play counts.
-    if (pageMaxViewedAt.size > 0 || pageActivity.size > 0 || pageSeasonActivity.size > 0) {
+    if (
+      pageMaxViewedAt.size > 0 || pageSeasonMaxViewedAt.size > 0 || pageActivity.size > 0 ||
+      pageSeasonActivity.size > 0
+    ) {
       withTransaction((client) => {
         // A different library sync can reconcile identities while this long history
         // walk is in flight. Re-check the exact mapping inside the write transaction:
@@ -190,6 +209,23 @@ export async function syncLibraryHistory(
           itemViewStmt.run(viewedAt, serverId, ratingKey, lib.key, viewedAt);
         }
         itemViewStmt.finalize();
+
+        const seasonViewStmt = client.prepare(
+          `UPDATE seasons SET last_viewed_at = ?
+           WHERE server_id = ? AND show_rating_key = ? AND season_index = ? AND library_key = ?
+             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
+        );
+        for (const activity of pageSeasonMaxViewedAt.values()) {
+          seasonViewStmt.run(
+            activity.viewedAt,
+            serverId,
+            activity.showRatingKey,
+            activity.seasonNumber,
+            lib.key,
+            activity.viewedAt,
+          );
+        }
+        seasonViewStmt.finalize();
 
         const itemStmt = client.prepare(
           `INSERT INTO user_item_activity

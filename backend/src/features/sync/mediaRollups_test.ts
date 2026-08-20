@@ -1,6 +1,6 @@
 import { assertEquals } from '@std/assert';
 import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
-import { syncShowSizes } from './mediaRollups.ts';
+import { conservativeSeasonAddedAt, syncShowSizes } from './mediaRollups.ts';
 import { completeProjectionPrune } from './service.ts';
 
 Deno.test('empty episode stream explicitly reports show projection prune incomplete', async () => {
@@ -25,4 +25,11 @@ Deno.test('library prune receipts require every projection applicable to that ty
   assertEquals(completeProjectionPrune('show', false, true), false);
   assertEquals(completeProjectionPrune('show', true, true), true);
   assertEquals(completeProjectionPrune('artist', true, true), false);
+});
+
+Deno.test('season addition age remains unknown when any episode timestamp is unknown', () => {
+  assertEquals(conservativeSeasonAddedAt(100, 200), 200);
+  assertEquals(conservativeSeasonAddedAt(200, 100), 200);
+  assertEquals(conservativeSeasonAddedAt(null, 200), null);
+  assertEquals(conservativeSeasonAddedAt(200, null), null);
 });
