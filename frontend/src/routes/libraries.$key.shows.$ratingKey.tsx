@@ -12,7 +12,7 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { DetailStat } from "../components/DetailStat.tsx";
 import { useSyncedDetail } from "../lib/useSyncedDetail.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
-import { DataSurface } from "../components/Workspace.tsx";
+import { DataSurface, workspaceToneClass } from "../components/Workspace.tsx";
 
 export const Route = createFileRoute("/libraries/$key/shows/$ratingKey")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -43,7 +43,9 @@ function ShowDetailPage() {
   const show = data?.show;
 
   return (
-    <div className="workspace-page workspace-tone-secondary media-detail-page space-y-6">
+    <div
+      className={`workspace-page ${workspaceToneClass("secondary")} media-detail-page space-y-6`}
+    >
       <div className="media-detail-header flex items-center gap-4">
         {canGoBack
           ? (

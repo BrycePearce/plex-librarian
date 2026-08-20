@@ -1,10 +1,10 @@
 .episode-gaps-page {
   width: 100%;
   min-width: 0;
-  --audit-tone: var(--color-accent);
+  --audit-tone: var(--workspace-color);
   --gap-tone: oklch(72% 0.13 76);
-  --irregular-tone: var(--color-secondary);
-  --present-tone: color-mix(in oklab, var(--color-accent) 48%, var(--color-base-content));
+  --irregular-tone: var(--color-error);
+  --present-tone: color-mix(in oklab, var(--workspace-color) 48%, var(--color-base-content));
   --episode-palette-base: black;
   --episode-palette-hover-opacity: 0.72;
   --episode-palette-opacity: 0.58;
@@ -14,7 +14,7 @@
 :root[data-theme="light"] .episode-gaps-page,
 :root[data-theme="nord"] .episode-gaps-page {
   --gap-tone: oklch(58% 0.12 70);
-  --present-tone: oklch(56% 0.07 190);
+  --present-tone: color-mix(in oklab, var(--workspace-color) 54%, var(--color-base-content));
   --episode-palette-base: transparent;
   --episode-palette-hover-opacity: 0.2;
   --episode-palette-opacity: 0.14;

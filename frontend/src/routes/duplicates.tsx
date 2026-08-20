@@ -18,7 +18,12 @@ import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionSta
 import { DuplicatesTableSkeleton } from "../components/Skeletons.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { requireAuth } from "../lib/requireAuth.ts";
-import { CollectionToolbar, DataSurface, PageHeader } from "../components/Workspace.tsx";
+import {
+  CollectionToolbar,
+  DataSurface,
+  PageHeader,
+  workspaceToneClass,
+} from "../components/Workspace.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import { normalizeSearchQuery } from "@shared/search";
@@ -291,13 +296,12 @@ function DuplicatesPage() {
   const summary = duplicatePageSummary(data?.groups ?? []);
 
   return (
-    <div className="duplicates-page workspace-page workspace-tone-accent space-y-6">
+    <div className={`duplicates-page workspace-page ${workspaceToneClass("accent")} space-y-6`}>
       <div className="workspace-sticky-header sticky top-0 z-20">
         <PageHeader
           eyebrow="Storage intelligence"
           title="Duplicate versions"
           icon={Copy}
-          tone="accent"
           description={data
             ? (
               `${data.duplicateGroupTotal.toLocaleString()} movies or episodes with multiple synced versions`
@@ -349,7 +353,8 @@ function DuplicatesPage() {
                     <select
                       className="select select-bordered select-sm w-44 max-w-full"
                       value={comparison}
-                      onChange={(e) => setComparison(e.target.value as DuplicateComparisonFilter)}
+                      onChange={(e) =>
+                        setComparison(e.target.value as DuplicateComparisonFilter)}
                       aria-label="Filter by technical comparison"
                     >
                       <option value="all">All comparisons</option>

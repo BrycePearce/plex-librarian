@@ -224,23 +224,23 @@ function UsersPage() {
 
   return (
     <div className="workspace-page space-y-6">
-      <div className="workspace-sticky-header sticky top-0 z-20 space-y-4">
-        <PageHeader
-          eyebrow="Plex access"
-          title="Users"
-          icon={Users}
-          description={data
-            ? (
-              `${data.total.toLocaleString()} ${
-                search.filter === "all" && search.risk === "all" &&
-                  !search.search
-                  ? "with access to this server"
-                  : "matching users"
-              }`
-            )
-            : <span className="skeleton inline-block h-3 w-40 align-middle" />}
-        />
+      <PageHeader
+        eyebrow="Plex access"
+        title="Users"
+        icon={Users}
+        description={data
+          ? (
+            `${data.total.toLocaleString()} ${
+              search.filter === "all" && search.risk === "all" &&
+                !search.search
+                ? "with access to this server"
+                : "matching users"
+            }`
+          )
+          : <span className="skeleton inline-block h-3 w-40 align-middle" />}
+      />
 
+      <div className="workspace-sticky-header sticky top-0 z-20 space-y-4">
         {isSyncing && (
           <SyncDataNotice>
             Sharing risk and request follow-through are hidden until the sync finishes. The

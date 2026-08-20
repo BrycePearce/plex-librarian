@@ -21,10 +21,73 @@
 }
 
 .app-shell {
+  --ambient-primary-color: var(--color-primary);
+  --ambient-primary-strength: 10%;
+  --ambient-texture-strength: 5%;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+  background-color: var(--color-base-100);
+  background-image:
+    radial-gradient(
+      ellipse 56rem 34rem at 38% -5%,
+      color-mix(
+        in oklab,
+        var(--ambient-primary-color) var(--ambient-primary-strength),
+        transparent
+      ),
+      transparent 69%
+    ),
+    radial-gradient(
+      circle,
+      color-mix(
+        in oklab,
+        var(--color-base-content) var(--ambient-texture-strength),
+        transparent
+      ) .65px,
+      transparent .85px
+    );
+  background-position: center, 0 0;
+  background-size: auto, 32px 32px;
+}
+
+/* The rendered page tone is authoritative when a page declares one. This keeps
+   dynamic library pages (movie, show, and music) in sync with their own UI theme. */
+.app-shell:has(.workspace-page.workspace-tone-primary),
+.app-shell:has(.stale-page.workspace-tone-primary) {
+  --ambient-primary-color: var(--color-primary);
+}
+
+.app-shell:has(.workspace-page.workspace-tone-secondary),
+.app-shell:has(.stale-page.workspace-tone-secondary) {
+  --ambient-primary-color: var(--color-secondary);
+}
+
+.app-shell:has(.workspace-page.workspace-tone-accent),
+.app-shell:has(.stale-page.workspace-tone-accent) {
+  --ambient-primary-color: var(--color-accent);
+}
+
+.app-shell:has(.workspace-page.workspace-tone-success),
+.app-shell:has(.stale-page.workspace-tone-success) {
+  --ambient-primary-color: var(--color-success);
+}
+
+.app-shell:has(.workspace-page.workspace-tone-cobalt),
+.app-shell:has(.stale-page.workspace-tone-cobalt) {
+  --ambient-primary-color: var(--workspace-cobalt);
+}
+
+html[data-theme="dark"] .app-shell,
+html[data-theme="night"] .app-shell {
+  --ambient-primary-strength: 9%;
+}
+
+html[data-theme="light"] .app-shell,
+html[data-theme="nord"] .app-shell {
+  --ambient-primary-strength: 15%;
+  --ambient-texture-strength: 8%;
 }
 
 .app-main {

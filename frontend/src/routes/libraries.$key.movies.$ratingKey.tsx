@@ -11,7 +11,7 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { DetailStat } from "../components/DetailStat.tsx";
 import { useSyncedDetail } from "../lib/useSyncedDetail.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
-import { DataSurface } from "../components/Workspace.tsx";
+import { DataSurface, workspaceToneClass } from "../components/Workspace.tsx";
 
 export const Route = createFileRoute("/libraries/$key/movies/$ratingKey")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -34,7 +34,7 @@ function MovieDetailPage() {
   const movie = data?.movie;
 
   return (
-    <div className="workspace-page workspace-tone-primary media-detail-page space-y-6">
+    <div className={`workspace-page ${workspaceToneClass("primary")} media-detail-page space-y-6`}>
       <div className="media-detail-header flex items-center gap-4">
         {canGoBack
           ? (

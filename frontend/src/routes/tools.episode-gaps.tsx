@@ -25,7 +25,12 @@ import { api } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import { requireAuth } from "../lib/requireAuth.ts";
 import { useAnySyncStatus } from "../lib/useLibrarySync.tsx";
-import { CollectionToolbar, DataSurface, PageHeader } from "../components/Workspace.tsx";
+import {
+  CollectionToolbar,
+  DataSurface,
+  PageHeader,
+  workspaceToneClass,
+} from "../components/Workspace.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { PosterThumb } from "../components/PosterThumb.tsx";
 import { ServiceIcon } from "../components/ServiceIcons.tsx";
@@ -187,12 +192,11 @@ function EpisodeGapsPage() {
   }
 
   return (
-    <div className="episode-gaps-page workspace-page space-y-6">
+    <div className={`episode-gaps-page workspace-page ${workspaceToneClass("cobalt")} space-y-6`}>
       <PageHeader
         eyebrow="Library health tool"
         title="Episode Gaps"
         icon={ScanLine}
-        tone="accent"
         description="Find the holes hiding between episodes already in your TV library."
         actions={
           <div className="episode-gaps-refresh">
@@ -239,7 +243,9 @@ function EpisodeGapsPage() {
           </div>
         </DataSurface>
       </div>
-      {data?.libraryAudits.some((audit) => audit.episodeAuditSyncedAt === null) && !unaudited && (
+      {data?.libraryAudits.some((audit) =>
+        audit.episodeAuditSyncedAt === null
+      ) && !unaudited && (
         <div className="episode-gaps-stale">
           <AlertTriangle />{" "}
           Some TV libraries have stale or unfinished audits. Their retained findings may change

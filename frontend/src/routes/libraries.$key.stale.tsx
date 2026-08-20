@@ -33,7 +33,11 @@ import { type SeasonRemovalChoice, SeasonRemovalDialog } from "./-stale/SeasonRe
 import { LibraryQuickCleanupAction } from "./-stale/LibraryQuickCleanupAction.tsx";
 import { DeleteConfirmDialog } from "../features/mediaDeletion/DeleteConfirmDialog.tsx";
 import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
-import { CollectionToolbar } from "../components/Workspace.tsx";
+import {
+  CollectionToolbar,
+  type WorkspaceTone,
+  workspaceToneClass,
+} from "../components/Workspace.tsx";
 import "./libraries.$key.stale.css";
 import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
 
@@ -109,7 +113,7 @@ function pageFileSize(items: StaleItem[]): number {
   return items.reduce((sum, i) => sum + (i.fileSize ?? 0), 0);
 }
 
-function libraryTone(type?: string): "primary" | "secondary" | "accent" {
+function libraryTone(type?: string): WorkspaceTone {
   if (type === "show") return "secondary";
   if (type === "artist") return "accent";
   return "primary";
@@ -401,11 +405,9 @@ function StalePage() {
 
   return (
     <div
-      className={`stale-page workspace-tone-${
-        libraryTone(
-          thisLibrary?.type,
-        )
-      } space-y-6 ${selection.selected.size > 0 ? "pb-20" : ""}`}
+      className={`stale-page ${workspaceToneClass(libraryTone(thisLibrary?.type))} space-y-6 ${
+        selection.selected.size > 0 ? "pb-20" : ""
+      }`}
     >
       {
         /* Sticky (not the table) per explicit preference: the back/title/sync row and the

@@ -4,12 +4,25 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import "./workspace.css";
 
+export const WORKSPACE_TONE_CLASS = {
+  primary: "workspace-tone-primary",
+  secondary: "workspace-tone-secondary",
+  accent: "workspace-tone-accent",
+  success: "workspace-tone-success",
+  cobalt: "workspace-tone-cobalt",
+} as const;
+
+export type WorkspaceTone = keyof typeof WORKSPACE_TONE_CLASS;
+
+export function workspaceToneClass(tone: WorkspaceTone): string {
+  return WORKSPACE_TONE_CLASS[tone];
+}
+
 export function PageHeader({
   eyebrow,
   title,
   description,
   icon: Icon,
-  tone = "primary",
   backTo = "/dashboard",
   actions,
 }: {
@@ -17,12 +30,11 @@ export function PageHeader({
   title: ReactNode;
   description?: ReactNode;
   icon?: LucideIcon;
-  tone?: "primary" | "secondary" | "accent";
   backTo?: "/dashboard";
   actions?: ReactNode;
 }) {
   return (
-    <header className={`workspace-page-header workspace-tone-${tone}`}>
+    <header className="workspace-page-header">
       <div className="workspace-page-heading">
         <Link
           to={backTo}
