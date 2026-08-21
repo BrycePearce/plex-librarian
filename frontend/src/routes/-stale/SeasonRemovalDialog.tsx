@@ -319,9 +319,9 @@ export function SeasonRemovalDialog({
               </div>
             ))}
             {value && coordinated && value.sonarrStatus === "resolved" && (
-              <p className="mt-3 text-success">
-                Sonarr will keep the series, unmonitor {value.monitoredEpisodeCount}{" "}
-                season episodes, and remove {value.managedFileCount} exact EpisodeFiles.
+              <p className="mt-3 text-base-content/70">
+                Sonarr will keep the series and unmonitor {value.monitoredEpisodeCount}{" "}
+                season episode{value.monitoredEpisodeCount === 1 ? "" : "s"}.
               </p>
             )}
             {!preview.error && (

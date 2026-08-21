@@ -130,8 +130,9 @@ export function ArrDeletionWarning({
 }) {
   if (impacts.length === 0) return null;
   const label = service === "sonarr" ? "Sonarr" : "Radarr";
-  const counts = impacts.map((impact) => impact.fileCount);
-  const sizes = impacts.map((impact) => impact.sizeBytes);
+  const uniqueImpacts = [...new Map(impacts.map((impact) => [impact.key, impact])).values()];
+  const counts = uniqueImpacts.map((impact) => impact.fileCount);
+  const sizes = uniqueImpacts.map((impact) => impact.sizeBytes);
   const fileCount = counts.every((count) => count !== null && count !== undefined)
     ? counts.reduce((total, count) => total + count!, 0)
     : null;
@@ -143,9 +144,11 @@ export function ArrDeletionWarning({
     <div className="alert alert-error mt-3 items-start text-sm" role="alert">
       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
-        <div className="font-semibold">{label} will permanently delete managed files</div>
+        <div className="font-semibold">
+          {label} will permanently delete the managed files below
+        </div>
         <div className="mt-1 space-y-1 text-error-content/85">
-          {impacts.map((impact) => (
+          {uniqueImpacts.map((impact) => (
             <div key={impact.key}>
               <span>{impact.title}</span>
               {impact.path && <span className="break-all font-semibold">— {impact.path}</span>}
@@ -160,6 +163,9 @@ export function ArrDeletionWarning({
               : ""}
           </div>
         )}
+        <div className="mt-1 text-xs text-error-content/75">
+          Plex Librarian cannot undo this {label} action.
+        </div>
       </div>
     </div>
   );

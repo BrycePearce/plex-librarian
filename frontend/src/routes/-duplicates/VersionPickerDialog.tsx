@@ -322,11 +322,13 @@ export function VersionPickerDialog({
       );
       if (entry?.arrStatus !== "resolved") return [];
       return entry.arrPaths.map((path) => ({
-        key: `${version.mediaId}:${path}`,
+        key: `${ratingKey}:${path}`,
         title: `${item.showTitle} — S${item.seasonIndex}E${item.episodeIndex}`,
         path,
         fileCount: 1,
-        sizeBytes: version.fileSize === null ? null : version.fileSize * 1000,
+        sizeBytes: entry.arrPaths.length === 1 && version.fileSize !== null
+          ? version.fileSize * 1000
+          : null,
       }));
     })
     : [];
