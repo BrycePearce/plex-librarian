@@ -11,8 +11,9 @@ import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
-  resolveDownloadCleanupBatch,
+  resolveWholeItemDownloadCleanupBatch,
 } from './planning.ts';
+import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { loadPlexPathPreviews } from './plexPathPreview.ts';
 import { getDownloadClientTargets } from './targets.ts';
 import {
@@ -60,10 +61,14 @@ export function createDownloadCleanupPreviewRouter(
     // resolution. Plex paths are confirmation text only and never flow into hardlink,
     // download-payload, or local-filesystem authorization.
     const plexPathsPromise = loadPlexPathPreviews(owned);
-    const [arrTargets, downloadTargets] = await Promise.all([
+    const [arrTargets, downloadTargets, activeServer] = await Promise.all([
       getArrDeleteTargets(serverId, key),
       getDownloadClientTargets(serverId),
+      resolveActiveServer(),
     ]);
+    if (activeServer.serverId !== serverId) {
+      return c.json({ error: 'the active Plex server changed during preview' }, 409);
+    }
     const [attemptedKeys, attemptedOrphans, attemptedArrInstances] = await Promise.all([
       loadAttemptedDownloadJobKeysByItem(serverId, owned.map((item) => item.ratingKey)),
       loadAttemptedOrphanFilesByItem(serverId, owned.map((item) => item.ratingKey)),
@@ -87,10 +92,13 @@ export function createDownloadCleanupPreviewRouter(
     }
     const plexPaths = await plexPathsPromise;
     const previews = reconcileSharedDownloadCleanups(
-      await resolveDownloadCleanupBatch(
+      await resolveWholeItemDownloadCleanupBatch(
+        serverId,
+        key,
         owned,
         arrTargets,
         downloadTargets,
+        activeServer.client,
         attemptedKeys,
         attemptedOrphans,
         attemptedArrInstances,

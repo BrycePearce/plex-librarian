@@ -34,6 +34,7 @@ import {
 } from '../../mediaDeletion/hardlinks.ts';
 import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarrSeasonInspection.ts';
 import {
+  assertDownloadJobSelectionConsistent,
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
@@ -663,23 +664,89 @@ async function ensureWholeItemDeleted(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
   client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
-  liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
+  _liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
 ): Promise<void> {
-  if (!liveAtStart) {
-    advancePhase(target, 'plex_reconciliation');
-    await reconcilePlexTarget(target, snapshot);
-    return;
-  }
   const sessions = await client.activeSessions();
   if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
     throw new Error('cannot delete media with active playback');
   }
+  const item: CoordinatedDeleteItem = snapshot;
+  const needsArr = snapshot.mode === 'coordinated' || snapshot.unmonitorFromArr === true ||
+    snapshot.cleanupDownloads === true;
+  const arrTargets = needsArr
+    ? await getArrDeleteTargets(target.serverId, snapshot.libraryKey)
+    : [];
+
+  if (
+    snapshot.cleanupDownloads &&
+    (target.phase === 'validating' || target.phase === 'download_cleanup')
+  ) {
+    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
+    const selectedKeys = snapshot.selectedRatingKeys ?? [snapshot.ratingKey];
+    const cleanupSelectedKeys = new Set(
+      snapshot.cleanupDownloadRatingKeys ?? [snapshot.ratingKey],
+    );
+    const selected = await db
+      .select({
+        ratingKey: items.ratingKey,
+        title: items.title,
+        type: items.type,
+        tmdbId: items.tmdbId,
+        tvdbId: items.tvdbId,
+      })
+      .from(items)
+      .where(and(eq(items.serverId, target.serverId), inArray(items.ratingKey, selectedKeys)));
+    const downloadTargets = await getDownloadClientTargets(target.serverId);
+    const attemptedJobs = await loadAttemptedDownloadJobKeysByItem(target.serverId, selectedKeys);
+    const attemptedOrphans = await loadAttemptedOrphanFilesByItem(target.serverId, selectedKeys);
+    const attemptedByItem = await loadAttemptedArrInstancesByItem(
+      target.serverId,
+      selected,
+      arrTargets.map((entry) => entry.instanceId),
+    );
+    const rawCleanups = await resolveDownloadCleanupBatch(
+      selected,
+      arrTargets,
+      downloadTargets,
+      attemptedJobs,
+      attemptedOrphans,
+      attemptedByItem,
+    );
+    if (snapshot.wholeItemDownloadCleanup) {
+      const accepted = rehydrateResolvedCleanup(
+        snapshot.wholeItemDownloadCleanup,
+        downloadTargets,
+      );
+      const index = rawCleanups.findIndex((cleanup) => cleanup.ratingKey === snapshot.ratingKey);
+      if (index >= 0) rawCleanups[index] = accepted;
+      else rawCleanups.push(accepted);
+    }
+    assertDownloadJobSelectionConsistent(rawCleanups, cleanupSelectedKeys);
+    const cleanups = selectVerifiedDownloadCleanups(
+      reconcileSharedDownloadCleanups(rawCleanups),
+    );
+    const cleanup = cleanups.get(snapshot.ratingKey);
+    if (
+      !cleanup ||
+      (cleanup.downloadJobs.length === 0 &&
+        !cleanup.reason?.includes('previously started'))
+    ) {
+      throw new Error(cleanup?.reason ?? 'no verified qBittorrent job is available');
+    }
+    await executeCleanup(
+      target.serverId,
+      cleanups,
+      cleanup,
+      undefined,
+      snapshot.wholeItemDownloadCleanup !== undefined,
+    );
+  }
+
   if (snapshot.unmonitorFromArr) {
     advancePhase(target, 'arr_coordination');
     if (snapshot.type !== 'movie' || snapshot.tmdbId === null) {
       throw new Error('Radarr movie identity is required before unmonitoring');
     }
-    const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
     let matched = false;
     for (const entry of arrTargets) {
       const record = await entry.client.lookup(snapshot.tmdbId);
@@ -703,8 +770,6 @@ async function ensureWholeItemDeleted(
     return;
   }
 
-  const item: CoordinatedDeleteItem = snapshot;
-  const arrTargets = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
   if (arrTargets.length === 0) throw new Error('this library is not mapped to Sonarr or Radarr');
   const id = externalId(item);
   if (id === null) throw new Error('the target has no Arr external ID');
@@ -719,47 +784,6 @@ async function ensureWholeItemDeleted(
     [{ ...item, ratingKey: snapshot.ratingKey }],
     arrTargets.map((entry) => entry.instanceId),
   );
-
-  if (
-    snapshot.cleanupDownloads &&
-    (target.phase === 'validating' || target.phase === 'download_cleanup')
-  ) {
-    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
-    const selectedKeys = snapshot.selectedRatingKeys ?? [snapshot.ratingKey];
-    const selected = await db
-      .select({
-        ratingKey: items.ratingKey,
-        title: items.title,
-        type: items.type,
-        tmdbId: items.tmdbId,
-        tvdbId: items.tvdbId,
-      })
-      .from(items)
-      .where(and(eq(items.serverId, target.serverId), inArray(items.ratingKey, selectedKeys)));
-    const downloadTargets = await getDownloadClientTargets(target.serverId);
-    const attemptedJobs = await loadAttemptedDownloadJobKeysByItem(target.serverId, selectedKeys);
-    const attemptedOrphans = await loadAttemptedOrphanFilesByItem(target.serverId, selectedKeys);
-    const attemptedByItem = await loadAttemptedArrInstancesByItem(
-      target.serverId,
-      selected,
-      arrTargets.map((entry) => entry.instanceId),
-    );
-    const cleanups = selectVerifiedDownloadCleanups(
-      reconcileSharedDownloadCleanups(
-        await resolveDownloadCleanupBatch(
-          selected,
-          arrTargets,
-          downloadTargets,
-          attemptedJobs,
-          attemptedOrphans,
-          attemptedByItem,
-        ),
-      ),
-    );
-    const cleanup = cleanups.get(snapshot.ratingKey);
-    if (!cleanup) throw new Error('no verified downloaded-file cleanup is available');
-    await executeCleanup(target.serverId, cleanups, cleanup);
-  }
 
   if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
 

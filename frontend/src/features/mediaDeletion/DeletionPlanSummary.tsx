@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
-import { Folder, X } from "lucide-react";
+import { AlertTriangle, Folder, X } from "lucide-react";
+import type { ArrCleanupTarget } from "@shared/types";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
+import { formatKilobytes } from "../../lib/format.ts";
 import { InfoTip } from "./InfoTip.tsx";
 
 export interface DeletionDestinationOption {
-  id: "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
+  id: "plex" | "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
   service?: ServiceIconName;
   label: string;
   info: string;
@@ -76,6 +78,89 @@ export function DestinationOptions({
           onChange={option.onChange}
         />
       ))}
+    </div>
+  );
+}
+
+export interface ArrDeletionImpact {
+  key: string;
+  title: string;
+  path?: string | null;
+  fileCount?: number | null;
+  sizeBytes?: number | null;
+}
+
+export function arrCleanupTargetImpact(target: ArrCleanupTarget): ArrDeletionImpact {
+  if (target.type === "sonarr") {
+    const seasons = target.seasons ?? [];
+    const counts = seasons.map((season) => season.episodeFileCount);
+    const sizes = seasons.map((season) => season.size);
+    return {
+      key: `${target.instanceName}:${target.path ?? target.title}`,
+      title: target.title,
+      path: target.path,
+      fileCount: seasons.length > 0 && counts.every((count) => count !== null)
+        ? counts.reduce((total, count) => total + count!, 0)
+        : null,
+      sizeBytes: seasons.length > 0 && sizes.every((size) => size !== null)
+        ? sizes.reduce((total, size) => total + size!, 0)
+        : null,
+    };
+  }
+  const completeFiles = target.mediaFiles !== null && target.extraFiles !== null;
+  const sizes = target.mediaFiles?.map((file) => file.size) ?? [];
+  return {
+    key: `${target.instanceName}:${target.path ?? target.title}`,
+    title: target.title,
+    path: target.path,
+    fileCount: completeFiles ? target.mediaFiles!.length + target.extraFiles!.length : null,
+    sizeBytes: completeFiles && target.extraFiles!.length === 0 &&
+        sizes.every((size) => size !== null)
+      ? sizes.reduce((total, size) => total + size!, 0)
+      : null,
+  };
+}
+
+export function ArrDeletionWarning({
+  service,
+  impacts,
+}: {
+  service: "sonarr" | "radarr";
+  impacts: ArrDeletionImpact[];
+}) {
+  if (impacts.length === 0) return null;
+  const label = service === "sonarr" ? "Sonarr" : "Radarr";
+  const counts = impacts.map((impact) => impact.fileCount);
+  const sizes = impacts.map((impact) => impact.sizeBytes);
+  const fileCount = counts.every((count) => count !== null && count !== undefined)
+    ? counts.reduce((total, count) => total + count!, 0)
+    : null;
+  const sizeBytes = sizes.every((size) => size !== null && size !== undefined)
+    ? sizes.reduce((total, size) => total + size!, 0)
+    : null;
+
+  return (
+    <div className="alert alert-error mt-3 items-start text-sm" role="alert">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+      <div className="min-w-0">
+        <div className="font-semibold">{label} will permanently delete managed files</div>
+        <div className="mt-1 space-y-1 text-error-content/85">
+          {impacts.map((impact) => (
+            <div key={impact.key}>
+              <span>{impact.title}</span>
+              {impact.path && <span className="break-all font-semibold">— {impact.path}</span>}
+            </div>
+          ))}
+        </div>
+        {fileCount !== null && fileCount > 0 && (
+          <div className="mt-1 font-semibold text-error-content">
+            {fileCount} managed file{fileCount === 1 ? "" : "s"}
+            {sizeBytes !== null && sizeBytes > 0
+              ? ` totaling ${formatKilobytes(sizeBytes / 1000)}`
+              : ""}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

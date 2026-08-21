@@ -14,6 +14,7 @@ import {
   executeDownloadedFileCleanup,
   persistResolvedCleanup,
   persistResolvedCleanupIdentity,
+  publicCleanupItem,
   reconcileSharedDownloadCleanups,
   rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
@@ -22,6 +23,7 @@ import {
   selectVerifiedDownloadCleanups,
 } from './cleanup.ts';
 import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './ownership.ts';
+import { assertDownloadJobSelectionConsistent } from './planning.ts';
 
 const hash = 'a'.repeat(40);
 
@@ -144,6 +146,107 @@ Deno.test('resolved cleanup survives Radarr-removal replay only with the exact c
     Error,
     'configured download client changed',
   );
+});
+
+Deno.test('whole-item direct cleanup rehydrates with an empty retained-path evidence set', () => {
+  const target = {
+    provider: 'qbittorrent',
+    instanceKey: 'qbittorrent:7',
+    configurationIdentity: 'db:7:100:https://downloads.example',
+    instanceId: 7,
+    instanceName: 'Downloads',
+    pathMappings: [],
+    client: { findJob: () => Promise.resolve(null), deleteJob: () => Promise.resolve() },
+  };
+  const cleanup = {
+    ratingKey: 'movie',
+    status: 'resolved',
+    downloadJobs: [{
+      provider: target.provider,
+      instanceKey: target.instanceKey,
+      instanceName: target.instanceName,
+      jobId: hash,
+      name: 'Movie',
+      state: 'pausedUP',
+      size: 100,
+      uploaded: 0,
+      completedAt: null,
+      ratio: null,
+      seedingTime: 0,
+      contentPath: '/downloads/movie.mkv',
+      savePath: '/downloads',
+      trackerHost: null,
+      fileCount: 1,
+      files: [{ path: 'movie.mkv', size: 100 }],
+      filesTruncated: false,
+      manifestFiles: [{ path: 'movie.mkv', size: 100 }],
+      authorizedSourcePaths: ['/downloads/movie.mkv'],
+      directPathEvidence: [{
+        remotePath: '/downloads/movie.mkv',
+        localPath: '/downloads/movie.mkv',
+        size: 100,
+        device: '1',
+        inode: '2',
+        canonicalPath: '/downloads/movie.mkv',
+      }],
+      directPlexPathEvidence: [{
+        serverId: 1,
+        libraryKey: 'movies',
+        plexPath: '/movies/movie.mkv',
+        localPath: '/downloads/movie.mkv',
+        mappingId: 1,
+        mappingRevision: 1,
+        mappingPlexPath: '/movies',
+        mappingLocalPath: '/downloads',
+        mappingCaseSensitive: true,
+      }],
+      directRetainedPathEvidence: [],
+      provenance: 'direct_manifest',
+      discoverySummaryFingerprint: 'a'.repeat(64),
+      ownershipSummaryFingerprint: 'b'.repeat(64),
+      manifestFingerprint: 'c'.repeat(64),
+      directDiscoveryCandidates: [{ path: '/downloads/movie.mkv', caseSensitive: true }],
+      directPathMappings: [],
+      target,
+    }],
+    arrStatus: 'unavailable',
+    arrTargets: [],
+    sources: [],
+    orphanFiles: [],
+    retainedPaths: [],
+  } as unknown as ResolvedCleanupItem;
+
+  const persisted = persistResolvedCleanupIdentity(cleanup);
+  assertEquals(persisted.downloadJobs[0]!.directRetainedPathEvidence, []);
+  assertEquals(rehydrateResolvedCleanup(persisted, [target]).downloadJobs.length, 1);
+  const publicJob = publicCleanupItem(cleanup).downloadJobs[0]! as unknown as Record<
+    string,
+    unknown
+  >;
+  assertEquals(Object.hasOwn(publicJob, 'directPathEvidence'), false);
+  assertEquals(Object.hasOwn(publicJob, 'discoverySummaryFingerprint'), false);
+});
+
+Deno.test('qBittorrent selection cannot split one associated job across a requested batch', () => {
+  const job = { instanceKey: 'qb:1', jobId: hash };
+  const cleanups = [
+    {
+      ratingKey: 'selected',
+      downloadJobs: [job],
+      observedDownloadJobKeys: new Set(['qb:1:' + hash]),
+    },
+    {
+      ratingKey: 'unselected',
+      downloadJobs: [],
+      observedDownloadJobKeys: new Set(['qb:1:' + hash]),
+    },
+  ] as unknown as ResolvedCleanupItem[];
+  assertThrows(
+    () => assertDownloadJobSelectionConsistent(cleanups, new Set(['selected'])),
+    Error,
+    'shared by cleanup-selected and cleanup-unselected',
+  );
+  assertDownloadJobSelectionConsistent(cleanups, new Set(['selected', 'unselected']));
 });
 
 Deno.test('live torrent ownership requires an exact manifest path, not only the hash', () => {

@@ -814,6 +814,7 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
   assertEquals(await client.mediaVersionPathPreviews('10'), [
     {
       mediaId: 11,
+      allMediaEntriesRepresented: true,
       paths: ['/movies/Example-1080p.mkv'],
       truncated: false,
       fileSize: 100_000,
@@ -821,6 +822,7 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
     },
     {
       mediaId: 12,
+      allMediaEntriesRepresented: true,
       paths: ['/movies/Example-4k.mkv'],
       truncated: false,
       fileSize: null,
@@ -828,12 +830,32 @@ Deno.test('media version path preview preserves Media id boundaries', async () =
     },
     {
       mediaId: 13,
+      allMediaEntriesRepresented: true,
       paths: [],
       truncated: false,
       fileSize: null,
       projectedFileSize: null,
     },
   ]);
+});
+
+Deno.test('media version path preview reports an omitted unidentified Media entry', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        Metadata: [{
+          Media: [
+            { id: 11, Part: [{ file: '/movies/identified.mkv', size: 100 }] },
+            { Part: [{ file: '/movies/unidentified.mkv', size: 200 }] },
+          ],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+
+  const previews = await client.mediaVersionPathPreviews('10');
+  assertEquals(previews.length, 1);
+  assertEquals(previews[0]!.allMediaEntriesRepresented, false);
 });
 
 Deno.test('season deletion evidence binds every episode and file to one season', async () => {

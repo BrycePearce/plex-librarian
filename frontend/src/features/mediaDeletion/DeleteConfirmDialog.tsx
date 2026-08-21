@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -7,7 +7,11 @@ import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
 import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { formatKilobytes } from "../../lib/format.ts";
-import { DestinationOptions } from "./DeletionPlanSummary.tsx";
+import {
+  arrCleanupTargetImpact,
+  ArrDeletionWarning,
+  DestinationOptions,
+} from "./DeletionPlanSummary.tsx";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
 import {
   arrDestinationState,
@@ -47,13 +51,14 @@ export function DeleteConfirmDialog({
   error: unknown;
   onConfirm: (plan: {
     coordinatedRatingKeys: string[];
-    cleanupDownloads: boolean;
+    cleanupDownloadRatingKeys: string[];
   }) => void;
   onCancel: () => void;
 }) {
   const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
+  const cleanupDefaultsKeyRef = useRef<string | null>(null);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
     [items],
@@ -78,8 +83,10 @@ export function DeleteConfirmDialog({
     () => new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
   );
-  const cleanupEligibleItems = preview.data?.items.filter((item) => item.status === "resolved") ??
-    [];
+  const cleanupEligibleItems =
+    preview.data?.items.filter((item) =>
+      item.status === "resolved" && item.downloadJobs.length > 0
+    ) ?? [];
   const downloadJobs = [...new Map(
     cleanupEligibleItems.flatMap((item) => item.downloadJobs).map((job) => [
       `${job.instanceKey}:${job.jobId}`,
@@ -94,25 +101,28 @@ export function DeleteConfirmDialog({
     : [];
   const arrDestination = arrDestinationState(preview.data);
   const arrProblems = arrDestination.problems;
-  const cleanupVerificationErrors =
+  const cleanupProblems =
     preview.data?.items.filter((item) =>
-      item.arrStatus === "resolved" && item.status === "error"
+      item.status !== "resolved" || item.downloadJobs.length === 0
     ) ?? [];
   const arrService: ServiceIconName = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
-  const arrOptionVisible = arrDestination.visible;
   // Query results and effects commit in separate renders. Suppress an obsolete Arr
   // selection immediately when no coordinated destination exists so the displayed
   // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
-  const cleanupOptionVisible = arrOptionVisible &&
-    (cleanupEligibleCount > 0 || cleanupVerificationErrors.length > 0);
+  const arrDeletionImpacts = effectiveDeleteFromArr
+    ? preview.data?.items.flatMap((item) =>
+      item.arrStatus === "resolved" ? item.arrTargets.map(arrCleanupTargetImpact) : []
+    ) ?? []
+    : [];
   const cleanupUsesQbittorrent = downloadJobs.length > 0;
   useEffect(() => {
+    cleanupDefaultsKeyRef.current = null;
     setDeleteFromArr(true);
     setCleanupDownloads(false);
     setPreviewMode("basic");
-  }, [libraryKey, ratingKeys.join("|")]);
+  }, [selectionKey]);
   useEffect(() => {
     // When Arr is configured but no selected title can be resolved, keep the Arr
     // destination selected so the explicit Plex-fallback acknowledgement below is
@@ -123,11 +133,19 @@ export function DeleteConfirmDialog({
     }
   }, [preview.data]);
   useEffect(() => {
+    if (!preview.data) return;
+    if (cleanupDefaultsKeyRef.current !== selectionKey) {
+      cleanupDefaultsKeyRef.current = selectionKey;
+      setCleanupDownloads(cleanupEligibleCount > 0);
+      return;
+    }
+    // A refetch may invalidate a destination, but must not silently reverse a
+    // user's explicit choice while that destination remains available.
     if (cleanupEligibleCount === 0) setCleanupDownloads(false);
-  }, [cleanupEligibleCount]);
+  }, [preview.data, cleanupEligibleCount, selectionKey]);
   const cancel = () => {
     setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
-    setCleanupDownloads(false);
+    setCleanupDownloads(cleanupEligibleCount > 0);
     onCancel();
   };
   const { totalSize, unknownSizeCount } = deletionImpact(items);
@@ -241,45 +259,50 @@ export function DeleteConfirmDialog({
           {error instanceof Error ? error.message : "Delete failed"}
         </p>
       )}
-      {(arrOptionVisible || cleanupOptionVisible) && (
-        <DestinationOptions
-          options={[
-            ...(arrOptionVisible
-              ? [{
-                id: "arr" as const,
-                service: arrService,
-                label: arrLabel,
-                info: arrProblems[0]?.arrReason ??
-                  `Deletes the managed title and its files through ${arrLabel}.`,
-                checked: effectiveDeleteFromArr,
-                disabled: pending || preview.isLoading ||
-                  coordinatedRatingKeys.length === 0,
-                warning: arrProblems.length > 0,
-                onChange: (checked: boolean) => {
-                  setDeleteFromArr(checked);
-                  if (!checked) setCleanupDownloads(false);
-                },
-              }]
-              : []),
-            ...(cleanupOptionVisible
-              ? [{
-                id: "cleanup" as const,
-                service: cleanupUsesQbittorrent ? "qbittorrent" as const : undefined,
-                label: cleanupUsesQbittorrent ? "qBittorrent" : "Downloaded files",
-                info: cleanupVerificationErrors[0]?.reason ??
-                  (cleanupUsesQbittorrent
-                    ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
-                    : "Removes downloaded files whose hardlink identity has been verified safely."),
-                checked: cleanupDownloads,
-                disabled: pending || preview.isLoading || !effectiveDeleteFromArr ||
-                  cleanupEligibleCount === 0,
-                warning: cleanupVerificationErrors.length > 0,
-                onChange: setCleanupDownloads,
-              }]
-              : []),
-          ]}
-        />
-      )}
+      <DestinationOptions
+        options={[
+          {
+            id: "plex" as const,
+            service: "plex" as const,
+            label: "Plex",
+            info: "Plex removal and reconciliation is required for every deletion.",
+            checked: true,
+            disabled: true,
+            warning: false,
+            onChange: () => {},
+          },
+          {
+            id: "arr" as const,
+            service: arrService,
+            label: arrLabel,
+            info: arrProblems[0]?.arrReason ??
+              (coordinatedRatingKeys.length > 0
+                ? `Deletes the managed title and its files through ${arrLabel}.`
+                : `No verified ${arrLabel} destination is available`),
+            checked: effectiveDeleteFromArr,
+            disabled: pending || preview.isLoading ||
+              coordinatedRatingKeys.length === 0,
+            warning: arrProblems.length > 0,
+            onChange: (checked: boolean) => {
+              setDeleteFromArr(checked);
+            },
+          },
+          {
+            id: "cleanup" as const,
+            service: "qbittorrent" as const,
+            label: "qBittorrent",
+            info: cleanupProblems[0]?.reason ??
+              (cleanupUsesQbittorrent
+                ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
+                : "No verified qBittorrent job is available"),
+            checked: cleanupDownloads,
+            disabled: pending || preview.isLoading || cleanupEligibleCount === 0,
+            warning: cleanupProblems.length > 0,
+            onChange: setCleanupDownloads,
+          },
+        ]}
+      />
+      <ArrDeletionWarning service={arrService} impacts={arrDeletionImpacts} />
 
       <DeletionPreviewStatus
         error={preview.isError ? preview.error.message : null}
@@ -290,21 +313,18 @@ export function DeleteConfirmDialog({
             ? [
               `${arrProblems.length} ${
                 arrProblems.length === 1 ? "item has" : "items have"
-              } no verified Arr destination and will use Plex only. ${
+              } no verified Arr destination. Plex and any independently selected qBittorrent cleanup will still run. ${
                 arrProblems.length === 1 ? "It" : "They"
               } may be downloaded again if ${
                 arrProblems.length === 1 ? "it remains" : "they remain"
               } monitored.`,
             ]
             : []),
-          ...(cleanupVerificationErrors.length > 0
+          ...(cleanupProblems.length > 0
             ? [
-              `Downloaded-file cleanup could not be verified for ${cleanupVerificationErrors.length} ${
-                cleanupVerificationErrors.length === 1 ? "item" : "items"
-              }: ${
-                cleanupVerificationErrors[0]?.reason ??
-                  "downloaded-file cleanup could not be verified"
-              }`,
+              `qBittorrent cleanup could not be verified for ${cleanupProblems.length} ${
+                cleanupProblems.length === 1 ? "item" : "items"
+              }: ${cleanupProblems[0]?.reason ?? "No verified qBittorrent job is available"}`,
             ]
             : []),
         ]}
@@ -320,7 +340,9 @@ export function DeleteConfirmDialog({
         onConfirm={() =>
           onConfirm({
             coordinatedRatingKeys: effectiveDeleteFromArr ? coordinatedRatingKeys : [],
-            cleanupDownloads: effectiveDeleteFromArr && cleanupDownloads,
+            cleanupDownloadRatingKeys: cleanupDownloads
+              ? cleanupEligibleItems.map((item) => item.ratingKey)
+              : [],
           })}
       />
     </DeletionModalShell>

@@ -181,7 +181,6 @@ export function rehydrateResolvedCleanup(
         (job.provenance !== 'direct_manifest' ||
           !Array.isArray(job.directPlexPathEvidence) || job.directPlexPathEvidence.length === 0 ||
           !Array.isArray(job.directRetainedPathEvidence) ||
-          job.directRetainedPathEvidence.length === 0 ||
           !/^[a-f0-9]{64}$/.test(job.discoverySummaryFingerprint ?? '') ||
           !/^[a-f0-9]{64}$/.test(job.ownershipSummaryFingerprint ?? '') ||
           !/^[a-f0-9]{64}$/.test(job.manifestFingerprint ?? '') ||
@@ -421,7 +420,9 @@ export async function executeDownloadedFileCleanup(
           throw new Error('Direct download manifest changed since preview');
         }
         await assertDirectPlexMappingsUnchanged(job.directPlexPathEvidence ?? []);
-        await assertDirectPlexMappingsUnchanged(job.directRetainedPathEvidence ?? []);
+        if ((job.directRetainedPathEvidence?.length ?? 0) > 0) {
+          await assertDirectPlexMappingsUnchanged(job.directRetainedPathEvidence!);
+        }
         await assertDirectRetainedPathsUnchanged(job.directRetainedPathEvidence ?? []);
       }
       if (
@@ -881,6 +882,15 @@ export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithout
       target: _target,
       manifestFiles: _manifestFiles,
       authorizedSourcePaths: _authorizedSourcePaths,
+      directPathEvidence: _directPathEvidence,
+      directPlexPathEvidence: _directPlexPathEvidence,
+      directRetainedPathEvidence: _directRetainedPathEvidence,
+      provenance: _provenance,
+      discoverySummaryFingerprint: _discoverySummaryFingerprint,
+      ownershipSummaryFingerprint: _ownershipSummaryFingerprint,
+      manifestFingerprint: _manifestFingerprint,
+      directDiscoveryCandidates: _directDiscoveryCandidates,
+      directPathMappings: _directPathMappings,
       ...job
     }) => job),
     arrStatus: item.arrStatus,

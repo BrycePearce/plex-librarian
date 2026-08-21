@@ -80,6 +80,8 @@ export interface DurableTargetSnapshot {
     recoveryAcceptedAt?: number;
   };
   selectedRatingKeys?: string[];
+  cleanupDownloadRatingKeys?: string[];
+  wholeItemDownloadCleanup?: PersistedResolvedCleanupItem;
   selectedMediaIds?: number[];
   operationMediaIds?: number[];
   classificationTechnicalDetails?: DurableVersionTechnicalSnapshot;
@@ -161,6 +163,43 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  const wholeItemCleanup = snapshot.wholeItemDownloadCleanup;
+  const hasWholeItemIntent = snapshot.cleanupDownloadRatingKeys !== undefined ||
+    wholeItemCleanup !== undefined;
+  if (hasWholeItemIntent) {
+    const selected = snapshot.selectedRatingKeys;
+    const cleanupSelected = snapshot.cleanupDownloadRatingKeys;
+    if (
+      !Array.isArray(selected) || !Array.isArray(cleanupSelected) ||
+      cleanupSelected.some((key) => typeof key !== 'string' || !selected.includes(key)) ||
+      JSON.stringify(cleanupSelected) !== JSON.stringify([...new Set(cleanupSelected)].sort()) ||
+      cleanupSelected.includes(snapshot.ratingKey) !== (snapshot.cleanupDownloads === true)
+    ) {
+      throw new DeletionValidationError('durable whole-item cleanup selection is malformed');
+    }
+  } else if (
+    snapshot.cleanupDownloads === true && snapshot.seasonCleanup !== true &&
+    snapshot.mediaId === undefined
+  ) {
+    throw new DeletionValidationError('durable whole-item cleanup selection is missing');
+  }
+  if (wholeItemCleanup !== undefined) {
+    if (
+      snapshot.mediaId !== undefined || snapshot.seasonCleanup === true ||
+      snapshot.cleanupDownloads !== true || wholeItemCleanup.status !== 'resolved' ||
+      wholeItemCleanup.ratingKey !== snapshot.ratingKey ||
+      !Array.isArray(wholeItemCleanup.downloadJobs) ||
+      wholeItemCleanup.downloadJobs.length === 0 ||
+      wholeItemCleanup.downloadJobs.some((job) => job.provenance !== 'direct_manifest')
+    ) {
+      throw new DeletionValidationError('durable whole-item download cleanup is malformed');
+    }
+  } else if (
+    snapshot.mediaId === undefined && snapshot.seasonCleanup !== true &&
+    snapshot.cleanupDownloads === true
+  ) {
+    // Arr-history cleanup is intentionally re-resolved at execution time.
+  }
   if (
     snapshot.skipArrCoordination === true && snapshot.seasonCleanup !== true &&
     (snapshot.type !== 'movie' || snapshot.cleanupDownloads === true ||

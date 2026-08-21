@@ -322,8 +322,9 @@ export function DeletionServiceMarks({
   const arrService = item.type === "show" ? "sonarr" : "radarr";
   const arrActive = deleteFromArr && preview?.arrStatus === "resolved" &&
     preview.arrTargets.length > 0;
-  const qbitActive = deleteFromArr && cleanupDownloads &&
-    preview?.status === "resolved" && preview.downloadJobs.length > 0;
+  const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
+    preview.downloadJobs.length > 0;
+  const qbitActive = itemCleanupSelected;
   return (
     <span className="flex shrink-0 items-center gap-1">
       <ActiveServiceMark service="plex" label="Plex deletion" />
@@ -344,18 +345,14 @@ export function DeletionServiceMarks({
         arrService={arrService}
         arrStatus={preview?.arrStatus}
         arrReason={preview?.arrReason}
-        downloadJobCount={cleanupDownloads && preview?.status === "resolved"
-          ? preview.downloadJobs.length
-          : 0}
-        hardlinkFileCount={cleanupDownloads && preview?.status === "resolved"
-          ? preview.orphanFiles.length
-          : 0}
+        downloadJobCount={itemCleanupSelected ? preview.downloadJobs.length : 0}
+        hardlinkFileCount={itemCleanupSelected ? preview.orphanFiles.length : 0}
         downloadCleanupResuming={Boolean(
-          cleanupDownloads && preview?.status === "resolved" &&
+          itemCleanupSelected &&
             preview.downloadJobs.length === 0 &&
             preview.orphanFiles.length === 0,
         )}
-        cleanupDownloads={cleanupDownloads}
+        cleanupDownloads={itemCleanupSelected}
         cleanupStatus={preview?.status}
         cleanupReason={preview?.reason}
       />
@@ -378,22 +375,31 @@ export function AdvancedDeletionTree({
 }) {
   const plans = items.map((item) => {
     const preview = plexPreviews.get(item.ratingKey);
+    const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
+      preview.downloadJobs.length > 0;
     const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
     const plexEntries = arrTargets.length === 0 ? plexPreviewPathEntries([item], plexPreviews) : [];
-    const downloadJobs = deleteFromArr && cleanupDownloads &&
-        preview?.status === "resolved"
+    const downloadJobs = itemCleanupSelected ? preview.downloadJobs : [];
+    const orphanFiles = itemCleanupSelected ? preview.orphanFiles : [];
+    const retainedPaths = preview?.retainedPaths ?? [];
+    const retainedJobs = !itemCleanupSelected && preview?.status === "resolved"
       ? preview.downloadJobs
       : [];
-    const orphanFiles = deleteFromArr && cleanupDownloads &&
-        preview?.status === "resolved"
-      ? preview.orphanFiles
-      : [];
-    return { item, arrTargets, plexEntries, downloadJobs, orphanFiles };
+    return {
+      item,
+      arrTargets,
+      plexEntries,
+      downloadJobs,
+      orphanFiles,
+      retainedPaths,
+      retainedJobs,
+    };
   });
   const pathCount = plans.reduce(
     (count, plan) =>
       count + plan.arrTargets.length + plan.plexEntries.length +
-      plan.downloadJobs.length + plan.orphanFiles.length,
+      plan.downloadJobs.length + plan.orphanFiles.length + plan.retainedPaths.length +
+      plan.retainedJobs.length,
     0,
   );
 
@@ -414,7 +420,8 @@ export function AdvancedDeletionTree({
         {plans.map((plan) => {
           const hasPaths = plan.arrTargets.length > 0 ||
             plan.plexEntries.length > 0 || plan.downloadJobs.length > 0 ||
-            plan.orphanFiles.length > 0;
+            plan.orphanFiles.length > 0 || plan.retainedPaths.length > 0 ||
+            plan.retainedJobs.length > 0;
           return (
             <section
               key={plan.item.ratingKey}
@@ -488,6 +495,27 @@ export function AdvancedDeletionTree({
                       size: file.size,
                     }]}
                     note="Reverified before removal"
+                  />
+                ))}
+                {plan.retainedJobs.map((job) => (
+                  <PathTreeRoot
+                    key={`retained-job:${job.instanceKey}:${job.jobId}`}
+                    path={downloadJobRoot(job) || job.name}
+                    source={job.instanceName}
+                    files={downloadJobFiles(job)}
+                    totalFiles={job.fileCount}
+                    note="Retained — qBittorrent is not selected"
+                    info={downloadJobInfo(job)}
+                    warning
+                  />
+                ))}
+                {plan.retainedPaths.map((entry) => (
+                  <PathTreeRoot
+                    key={`retained:${entry.path}`}
+                    path={entry.path}
+                    source="Retained"
+                    note={entry.reason}
+                    warning
                   />
                 ))}
                 {!loading && !hasPaths && (

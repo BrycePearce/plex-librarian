@@ -679,13 +679,13 @@ function StalePage() {
         items={confirmItems}
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
-        onConfirm={({ coordinatedRatingKeys, cleanupDownloads }) =>
+        onConfirm={({ coordinatedRatingKeys, cleanupDownloadRatingKeys }) =>
           deleteMutation.mutate(
             {
               libraryKey: key,
               ratingKeys: confirmItems.map((i) => i.ratingKey),
               coordinatedRatingKeys,
-              cleanupDownloads,
+              cleanupDownloadRatingKeys,
             },
             {
               onSuccess: () => {

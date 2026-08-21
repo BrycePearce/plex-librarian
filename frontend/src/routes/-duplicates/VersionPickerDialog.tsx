@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -11,11 +11,20 @@ import { VersionTechnicalInfo } from "../../features/mediaDeletion/VersionTechni
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
-import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import {
+  arrCleanupTargetImpact,
+  ArrDeletionWarning,
+  DestinationOptions,
+} from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import {
   AdvancedVersionDeletionTree,
   VersionDeletionServiceMarks,
 } from "./VersionDeletionTree.tsx";
+import {
+  AdvancedDeletionTree,
+  DeletionServiceMarks,
+} from "../../features/mediaDeletion/DeletionTree.tsx";
+import { duplicateMovieDeletionCandidate } from "../../features/mediaDeletion/types.ts";
 import {
   BasicDeletionList,
   BasicDeletionRow,
@@ -85,6 +94,7 @@ export function VersionPickerDialog({
   const [deleteFromArr, setDeleteFromArr] = useState(false);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const [useRadarrPathOverride, setUseRadarrPathOverride] = useState(false);
+  const wholeItemDefaultsKeyRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
 
   useLayoutEffect(() => {
@@ -97,6 +107,8 @@ export function VersionPickerDialog({
   }, [defaultChecked, itemKey]);
 
   const mediaIds = useMemo(() => [...checked].sort((a, b) => a - b), [checked]);
+  const deletingWholeMovie = item?.mediaType === "movie" &&
+    mediaIds.length === item.versions.length;
   const ratingKey = item?.mediaType === "movie" ? item.ratingKey : (item?.episodeRatingKey ?? "");
   const cancelButtonRef = useDeletionDialogCancelFocus(
     dialogRef,
@@ -154,8 +166,10 @@ export function VersionPickerDialog({
 
   useEffect(() => {
     const destination = versionDestinationState(preview.data);
-    setDeleteFromArr(destination.arrSelectedByDefault);
-    setCleanupDownloads(false);
+    if (!deletingWholeMovie) {
+      setDeleteFromArr(destination.arrSelectedByDefault);
+      setCleanupDownloads(false);
+    }
     setUseRadarrPathOverride(false);
   }, [
     item,
@@ -164,6 +178,44 @@ export function VersionPickerDialog({
     preview.data?.arrStatus,
     preview.data?.arrReassignStatus,
     preview.data?.radarrPathOverride?.planFingerprint,
+    deletingWholeMovie,
+  ]);
+
+  const wholeItemPreview = useQuery({
+    queryKey: queryKeys.downloadCleanupPreview.forItems(item?.libraryKey ?? "", [ratingKey]),
+    queryFn: () => api.libraries.downloadCleanupPreview(item!.libraryKey, [ratingKey]),
+    enabled: deletingWholeMovie,
+    retry: false,
+    staleTime: 15_000,
+  });
+  const wholeItemPreviewEntry = wholeItemPreview.data?.items[0];
+  const wholeItemCleanupAvailable = wholeItemPreviewEntry?.status === "resolved" &&
+    wholeItemPreviewEntry.downloadJobs.length > 0;
+  const wholeItemArrAvailable = wholeItemPreviewEntry?.arrStatus === "resolved" &&
+    wholeItemPreviewEntry.arrTargets.length > 0;
+  const showWholeItemPreviewLoading = useDelayedFlag(wholeItemPreview.isLoading, 250);
+  const wholeItemDefaultsKey = deletingWholeMovie ? `${itemKey}:${mediaIds.join("|")}` : null;
+  useEffect(() => {
+    if (!wholeItemDefaultsKey) {
+      wholeItemDefaultsKeyRef.current = null;
+      return;
+    }
+    if (!wholeItemPreview.data) return;
+    if (wholeItemDefaultsKeyRef.current !== wholeItemDefaultsKey) {
+      wholeItemDefaultsKeyRef.current = wholeItemDefaultsKey;
+      setCleanupDownloads(wholeItemCleanupAvailable);
+      setDeleteFromArr(wholeItemArrAvailable);
+      return;
+    }
+    // Preserve explicit unchecks across refetches, while still failing closed if
+    // current evidence makes a previously selected destination unavailable.
+    if (!wholeItemCleanupAvailable) setCleanupDownloads(false);
+    if (!wholeItemArrAvailable) setDeleteFromArr(false);
+  }, [
+    wholeItemDefaultsKey,
+    wholeItemPreview.data,
+    wholeItemCleanupAvailable,
+    wholeItemArrAvailable,
   ]);
 
   if (!item) {
@@ -178,6 +230,9 @@ export function VersionPickerDialog({
   }
 
   const selection = versionSelectionSemantics(item.mediaType, item.versions, checked);
+  const wholeItemCandidate = item.mediaType === "movie"
+    ? duplicateMovieDeletionCandidate(item)
+    : null;
   const selectedVersions = selection.selectedVersions;
   const checkedCount = checked.size;
   const wouldDeleteAll = selection.wouldDeleteAll;
@@ -186,13 +241,16 @@ export function VersionPickerDialog({
   const arrService = item.mediaType === "movie" ? ("radarr" as const) : ("sonarr" as const);
   const destinations = versionDestinationState(preview.data);
   const arrAvailable = destinations.arrAvailable;
+  const effectiveArrAvailable = selection.deleteWholeItem ? wholeItemArrAvailable : arrAvailable;
   const arrReassignAvailable = destinations.arrReassignAvailable;
-  const cleanupAvailable = destinations.cleanupAvailable;
+  const cleanupAvailable = selection.deleteWholeItem
+    ? wholeItemCleanupAvailable
+    : destinations.cleanupAvailable;
   const pathAdoption = preview.data?.radarrPathAdoption;
   const pathOverride = versionRadarrPathOverride(preview.data) ?? undefined;
   const pathConsentRequired = pathAdoption?.mode === "remove_from_radarr";
   const destinationOptionVisibility = versionDestinationOptionVisibility(preview.data);
-  const destinationOptionsVisible = destinationOptionVisibility.arr ||
+  const destinationOptionsVisible = selection.deleteWholeItem || destinationOptionVisibility.arr ||
     destinationOptionVisibility.cleanup;
   // Merge in refreshed technical detail by mediaId where available — selection state,
   // fileSize, and everything else stays keyed off item.versions; only the fields the
@@ -223,7 +281,8 @@ export function VersionPickerDialog({
     effectiveDeleteFromArr && !useRadarrPathOverride,
     item.versions.length - selectedVersions.length,
   );
-  const cleanupMediaIds = cleanupDownloads && cleanupAvailable && !pathReassignmentActive
+  const cleanupMediaIds = !selection.deleteWholeItem && cleanupDownloads && cleanupAvailable &&
+      !pathReassignmentActive
     ? (preview.data?.versions
       .filter(
         (version) =>
@@ -236,12 +295,41 @@ export function VersionPickerDialog({
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: checkedCount > 0,
-    preview: preview.isError ? "error" : preview.isLoading || !preview.data ? "loading" : "ready",
+    preview: selection.deleteWholeItem
+      ? wholeItemPreview.isError
+        ? "error"
+        : wholeItemPreview.isLoading || !wholeItemPreview.data
+        ? "loading"
+        : "ready"
+      : preview.isError
+      ? "error"
+      : preview.isLoading || !preview.data
+      ? "loading"
+      : "ready",
     semanticBlock: selection.blocked,
   }) ||
     (cleanupDownloads && !cleanupAvailable);
-  const blockingOperationId = deletionOperationIdFromError(preview.error) ??
+  const activePreviewError = selection.deleteWholeItem ? wholeItemPreview.error : preview.error;
+  const blockingOperationId = deletionOperationIdFromError(activePreviewError) ??
     deletionOperationIdFromError(error);
+  const arrDeletionImpacts = selection.deleteWholeItem && effectiveDeleteFromArr &&
+      wholeItemPreviewEntry?.arrStatus === "resolved"
+    ? wholeItemPreviewEntry.arrTargets.map(arrCleanupTargetImpact)
+    : item.mediaType === "episode" && effectiveDeleteFromArr
+    ? selectedVersions.flatMap((version) => {
+      const entry = preview.data?.versions.find((candidate) =>
+        candidate.mediaId === version.mediaId
+      );
+      if (entry?.arrStatus !== "resolved") return [];
+      return entry.arrPaths.map((path) => ({
+        key: `${version.mediaId}:${path}`,
+        title: `${item.showTitle} — S${item.seasonIndex}E${item.episodeIndex}`,
+        path,
+        fileCount: 1,
+        sizeBytes: version.fileSize === null ? null : version.fileSize * 1000,
+      }));
+    })
+    : [];
   return (
     <DeletionModalShell
       dialogRef={dialogRef}
@@ -312,12 +400,23 @@ export function VersionPickerDialog({
                   badges={<VersionTechnicalInfo version={version} />}
                   marks={selected
                     ? (
-                      <VersionDeletionServiceMarks
-                        preview={preview.data}
-                        mediaId={version.mediaId}
-                        deleteFromArr={effectiveDeleteFromArr}
-                        cleanupDownloads={cleanupDownloads}
-                      />
+                      selection.deleteWholeItem && wholeItemCandidate
+                        ? (
+                          <DeletionServiceMarks
+                            item={wholeItemCandidate}
+                            preview={wholeItemPreviewEntry}
+                            deleteFromArr={effectiveDeleteFromArr}
+                            cleanupDownloads={cleanupDownloads}
+                          />
+                        )
+                        : (
+                          <VersionDeletionServiceMarks
+                            preview={preview.data}
+                            mediaId={version.mediaId}
+                            deleteFromArr={effectiveDeleteFromArr}
+                            cleanupDownloads={cleanupDownloads}
+                          />
+                        )
                     )
                     : undefined}
                   size={version.fileSize != null ? formatKilobytes(version.fileSize) : "—"}
@@ -326,99 +425,144 @@ export function VersionPickerDialog({
             })}
           </BasicDeletionList>
         }
-        advanced={
-          <AdvancedVersionDeletionTree
-            title={item.mediaType === "movie"
-              ? item.title
-              : `E${String(item.episodeIndex).padStart(2, "0")} — ${item.episodeTitle}`}
-            ancestors={item.mediaType === "episode"
-              ? [item.showTitle, `Season ${item.seasonIndex}`]
-              : undefined}
-            versions={item.versions.map((version) => {
-              const displayVersion = refreshedByMediaId.get(version.mediaId) ?? version;
-              return {
-                mediaId: version.mediaId,
-                label: versionLabel(displayVersion),
-                fileSize: version.fileSize,
-                technicalInfo: <VersionTechnicalInfo version={displayVersion} />,
-                selected: checked.has(version.mediaId),
-              };
-            })}
-            preview={preview.data}
-            availableVersions={availableVersionPaths}
-            deleteFromArr={effectiveDeleteFromArr}
-            cleanupDownloads={cleanupDownloads}
-            loading={preview.isLoading}
-            onToggleVersion={toggle}
-          />
-        }
+        advanced={selection.deleteWholeItem && wholeItemCandidate
+          ? (
+            <AdvancedDeletionTree
+              items={[wholeItemCandidate]}
+              plexPreviews={new Map(
+                wholeItemPreviewEntry ? [[ratingKey, wholeItemPreviewEntry]] : [],
+              )}
+              deleteFromArr={effectiveDeleteFromArr}
+              cleanupDownloads={cleanupDownloads}
+              loading={wholeItemPreview.isLoading}
+            />
+          )
+          : (
+            <AdvancedVersionDeletionTree
+              title={item.mediaType === "movie"
+                ? item.title
+                : `E${String(item.episodeIndex).padStart(2, "0")} — ${item.episodeTitle}`}
+              ancestors={item.mediaType === "episode"
+                ? [item.showTitle, `Season ${item.seasonIndex}`]
+                : undefined}
+              versions={item.versions.map((version) => {
+                const displayVersion = refreshedByMediaId.get(version.mediaId) ?? version;
+                return {
+                  mediaId: version.mediaId,
+                  label: versionLabel(displayVersion),
+                  fileSize: version.fileSize,
+                  technicalInfo: <VersionTechnicalInfo version={displayVersion} />,
+                  selected: checked.has(version.mediaId),
+                };
+              })}
+              preview={preview.data}
+              availableVersions={availableVersionPaths}
+              deleteFromArr={effectiveDeleteFromArr}
+              cleanupDownloads={cleanupDownloads}
+              loading={preview.isLoading}
+              onToggleVersion={toggle}
+            />
+          )}
       />
 
-      {preview.data && destinationOptionsVisible && (
-        <DestinationOptions
-          options={[
-            ...(destinationOptionVisibility.arr
-              ? [
-                {
-                  id: "arr" as const,
-                  service: arrService,
-                  label: arrDestinationCopy.label,
-                  info: arrDestinationCopy.info,
-                  checked: effectiveDeleteFromArr && !useRadarrPathOverride,
-                  disabled: pending ||
-                    (item.mediaType === "episode" && arrReassignAvailable &&
-                      !useRadarrPathOverride),
+      {(selection.deleteWholeItem ? wholeItemPreview.data : preview.data) &&
+        destinationOptionsVisible && (
+        <>
+          <DestinationOptions
+            options={[
+              ...(selection.deleteWholeItem
+                ? [{
+                  id: "plex" as const,
+                  service: "plex" as const,
+                  label: "Plex",
+                  info: "Plex removal and reconciliation is required for whole-item deletion.",
+                  checked: true,
+                  disabled: true,
                   warning: false,
-                  onChange: (checked: boolean) => {
-                    if (checked && useRadarrPathOverride) {
-                      setUseRadarrPathOverride(false);
-                      return;
-                    }
-                    setDeleteFromArr(checked);
-                    if (!checked) setCleanupDownloads(false);
+                  onChange: () => {},
+                }]
+                : []),
+              ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
+                ? [
+                  {
+                    id: "arr" as const,
+                    service: arrService,
+                    label: arrDestinationCopy.label,
+                    info: selection.deleteWholeItem
+                      ? (wholeItemPreviewEntry?.arrReason ??
+                        (wholeItemArrAvailable
+                          ? `Deletes the managed title and its files through ${arrLabel}.`
+                          : `No verified ${arrLabel} destination is available`))
+                      : arrDestinationCopy.info,
+                    checked: effectiveDeleteFromArr && effectiveArrAvailable &&
+                      !useRadarrPathOverride,
+                    disabled: pending ||
+                      (selection.deleteWholeItem &&
+                        (wholeItemPreview.isLoading || !wholeItemArrAvailable)) ||
+                      (item.mediaType === "episode" && arrReassignAvailable &&
+                        !useRadarrPathOverride),
+                    warning: false,
+                    onChange: (checked: boolean) => {
+                      if (checked && useRadarrPathOverride) {
+                        setUseRadarrPathOverride(false);
+                        return;
+                      }
+                      setDeleteFromArr(checked);
+                      if (!checked && !selection.deleteWholeItem) setCleanupDownloads(false);
+                    },
                   },
-                },
-              ]
-              : []),
-            ...(pathOverride
-              ? [
-                {
-                  id: "arr-path-override" as const,
-                  service: "radarr" as const,
-                  label: "Use remaining folder in Radarr",
-                  info: "Break-glass option: this location is not a verified ordinary Radarr " +
-                    `library folder. Radarr will manage ${pathOverride.proposedMoviePath} and may ` +
-                    "later rename, upgrade, move, or delete files there.",
-                  checked: useRadarrPathOverride,
-                  disabled: pending || useRadarrPathOverride,
-                  warning: false,
-                  onChange: (checked: boolean) => {
-                    if (!checked) return;
-                    setUseRadarrPathOverride(true);
-                    setCleanupDownloads(false);
+                ]
+                : []),
+              ...(pathOverride
+                ? [
+                  {
+                    id: "arr-path-override" as const,
+                    service: "radarr" as const,
+                    label: "Use remaining folder in Radarr",
+                    info: "Break-glass option: this location is not a verified ordinary Radarr " +
+                      `library folder. Radarr will manage ${pathOverride.proposedMoviePath} and may ` +
+                      "later rename, upgrade, move, or delete files there.",
+                    checked: useRadarrPathOverride,
+                    disabled: pending || useRadarrPathOverride,
+                    warning: false,
+                    onChange: (checked: boolean) => {
+                      if (!checked) return;
+                      setUseRadarrPathOverride(true);
+                      setCleanupDownloads(false);
+                    },
                   },
-                },
-              ]
-              : []),
-            ...(destinationOptionVisibility.cleanup
-              ? [
-                {
-                  id: "cleanup" as const,
-                  service: "qbittorrent" as const,
-                  label: "qBittorrent",
-                  info: pathReassignmentActive
-                    ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
-                    : "Deletes the verified qBittorrent job and its downloaded files along with " +
-                      "the selected Plex version.",
-                  checked: cleanupDownloads,
-                  disabled: pending || !deleteFromArr || pathReassignmentActive,
-                  warning: (cleanupDownloads && !cleanupAvailable) || pathReassignmentActive,
-                  onChange: setCleanupDownloads,
-                },
-              ]
-              : []),
-          ]}
-        />
+                ]
+                : []),
+              ...((selection.deleteWholeItem || destinationOptionVisibility.cleanup)
+                ? [
+                  {
+                    id: "cleanup" as const,
+                    service: "qbittorrent" as const,
+                    label: "qBittorrent",
+                    info: selection.deleteWholeItem
+                      ? (wholeItemPreviewEntry?.reason ??
+                        (wholeItemCleanupAvailable
+                          ? "Deletes the independently verified qBittorrent job and its downloaded payload."
+                          : "No verified qBittorrent job is available"))
+                      : pathReassignmentActive
+                      ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
+                      : "Deletes the verified qBittorrent job and its downloaded files along with " +
+                        "the selected Plex version.",
+                    checked: cleanupDownloads,
+                    disabled: pending ||
+                      (selection.deleteWholeItem
+                        ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
+                        : !deleteFromArr || pathReassignmentActive),
+                    warning: !cleanupAvailable ||
+                      (!selection.deleteWholeItem && pathReassignmentActive),
+                    onChange: setCleanupDownloads,
+                  },
+                ]
+                : []),
+            ]}
+          />
+          <ArrDeletionWarning service={arrService} impacts={arrDeletionImpacts} />
+        </>
       )}
 
       {effectiveDeleteFromArr && pathAdoption && pathAdoption.mode === "adopt_safe_path" && (
@@ -440,9 +584,13 @@ export function VersionPickerDialog({
       )}
 
       <DeletionPreviewStatus
-        error={preview.isError && blockingOperationId === null ? preview.error.message : null}
-        onRetry={blockingOperationId === null ? () => void preview.refetch() : undefined}
-        retrying={preview.isFetching}
+        error={activePreviewError && blockingOperationId === null
+          ? activePreviewError.message
+          : null}
+        onRetry={blockingOperationId === null
+          ? () => void (selection.deleteWholeItem ? wholeItemPreview.refetch() : preview.refetch())
+          : undefined}
+        retrying={selection.deleteWholeItem ? wholeItemPreview.isFetching : preview.isFetching}
         warnings={showFallbackWarning
           ? [
             effectiveDeleteFromArr
@@ -484,7 +632,7 @@ export function VersionPickerDialog({
       <DeletionDialogFooter
         cancelButtonRef={cancelButtonRef}
         pending={pending}
-        preparing={showPreviewLoading}
+        preparing={selection.deleteWholeItem ? showWholeItemPreviewLoading : showPreviewLoading}
         confirmDisabled={confirmDisabled}
         confirmLabel={
           <>
@@ -497,8 +645,10 @@ export function VersionPickerDialog({
           onConfirm({
             mediaIds,
             deleteWholeItem: selection.deleteWholeItem,
-            deleteFromArr: effectiveDeleteFromArr && arrAvailable,
-            cleanupDownloads: effectiveDeleteFromArr && arrAvailable && cleanupDownloads,
+            deleteFromArr: effectiveDeleteFromArr && effectiveArrAvailable,
+            cleanupDownloads: selection.deleteWholeItem
+              ? cleanupDownloads && wholeItemCleanupAvailable
+              : effectiveDeleteFromArr && arrAvailable && cleanupDownloads,
             cleanupMediaIds,
             ...(effectiveDeleteFromArr &&
                 (useRadarrPathOverride ? pathOverride : pathAdoption)?.planFingerprint

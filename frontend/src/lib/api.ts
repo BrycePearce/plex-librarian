@@ -326,7 +326,7 @@ export const api = {
       key: string,
       ratingKeys: string[],
       coordinatedRatingKeys: string[],
-      cleanupDownloads = false,
+      cleanupDownloadRatingKeys: string[] = [],
       unmonitorRatingKeys: string[] = [],
       quickCleanupThresholdDays?: number,
     ) =>
@@ -336,7 +336,7 @@ export const api = {
           clientRequestId: uuidv4(),
           ratingKeys,
           coordinatedRatingKeys,
-          cleanupDownloads,
+          cleanupDownloadRatingKeys,
           unmonitorRatingKeys,
           quickCleanupThresholdDays,
         }),

@@ -2,8 +2,8 @@ import type { ArrType } from '../integrations/arr.ts';
 
 export interface DeleteItemsRequest {
   ratingKeys: string[];
-  mode: 'coordinated' | 'plex-only';
-  cleanupDownloads?: boolean;
+  coordinatedRatingKeys: string[];
+  cleanupDownloadRatingKeys: string[];
 }
 
 export interface DownloadCleanupJob {

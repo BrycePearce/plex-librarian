@@ -1,6 +1,32 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { api, ApiError } from "./api.ts";
 
+Deno.test("whole-item deletion serializes independent Arr and qBittorrent selections", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: Record<string, unknown> = {};
+  globalThis.fetch = (_input, init) => {
+    body = JSON.parse(String(init?.body));
+    return Promise.resolve(Response.json({ operationId: "operation-1", status: "queued" }, {
+      status: 202,
+    }));
+  };
+  try {
+    await api.libraries.deleteItems(
+      "movies",
+      ["arr-only", "qbit-only"],
+      ["arr-only"],
+      ["qbit-only"],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(body.ratingKeys, ["arr-only", "qbit-only"]);
+  assertEquals(body.coordinatedRatingKeys, ["arr-only"]);
+  assertEquals(body.cleanupDownloadRatingKeys, ["qbit-only"]);
+  assertEquals(Object.hasOwn(body, "cleanupDownloads"), false);
+});
+
 Deno.test("movie version deletion serializes explicit Plex-only intent", async () => {
   const originalFetch = globalThis.fetch;
   const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };

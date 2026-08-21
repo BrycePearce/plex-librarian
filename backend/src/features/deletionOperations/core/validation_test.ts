@@ -5,6 +5,48 @@ import {
   validateArrMonitoringEvidence,
 } from './validation.ts';
 
+function wholeItemCleanupSnapshot(
+  cleanupDownloadRatingKeys: string[],
+  cleanupDownloads = true,
+): DurableTargetSnapshot {
+  return {
+    machineIdentifier: 'plex-machine',
+    serverUrl: 'http://plex:32400',
+    libraryKey: 'movies',
+    ratingKey: 'movie-a',
+    title: 'Movie A',
+    type: 'movie',
+    tmdbId: 1,
+    tvdbId: null,
+    mode: 'plex-only',
+    cleanupDownloads,
+    selectedRatingKeys: ['movie-a', 'movie-b'],
+    cleanupDownloadRatingKeys,
+  };
+}
+
+Deno.test('whole-item cleanup intent is a sorted subset bound to its target flag', () => {
+  validateArrMonitoringEvidence(wholeItemCleanupSnapshot(['movie-a']));
+  for (
+    const invalid of [
+      ['movie-b', 'movie-a'],
+      ['movie-a', 'movie-a'],
+      ['outside'],
+    ]
+  ) {
+    assertThrows(
+      () => validateArrMonitoringEvidence(wholeItemCleanupSnapshot(invalid)),
+      DeletionValidationError,
+      'cleanup selection is malformed',
+    );
+  }
+  assertThrows(
+    () => validateArrMonitoringEvidence(wholeItemCleanupSnapshot([], true)),
+    DeletionValidationError,
+    'cleanup selection is malformed',
+  );
+});
+
 function removalSnapshot(mappingIdentity: string): DurableTargetSnapshot {
   return {
     machineIdentifier: 'plex-machine',

@@ -366,7 +366,7 @@ Deno.test("season destinations are independently authorized for only the exact s
   });
   assertEquals(seasonDestinationChoice("selection-b", authorized), {
     sonarrMode: "none",
-    cleanupDownloads: false,
+    cleanupDownloads: true,
   });
   assertEquals(
     seasonDestinationChoice("selection-a", { ...authorized, sonarrMode: "none" }),

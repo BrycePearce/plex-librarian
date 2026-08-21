@@ -249,7 +249,7 @@ function DuplicatesPage() {
           libraryKey: group.libraryKey,
           ratingKeys: [group.ratingKey],
           coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
-          cleanupDownloads: plan.deleteFromArr && plan.cleanupDownloads,
+          cleanupDownloadRatingKeys: plan.cleanupDownloads ? [group.ratingKey] : [],
           unmonitorRatingKeys: [],
         },
         {

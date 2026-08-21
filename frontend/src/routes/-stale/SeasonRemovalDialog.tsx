@@ -5,7 +5,10 @@ import { AlertTriangle, HardDrive, ListVideo, LoaderCircle, Trash2 } from "lucid
 import type { StaleItem } from "../../lib/api.ts";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
-import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import {
+  ArrDeletionWarning,
+  DestinationOptions,
+} from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import {
   ActiveServiceMark,
   downloadJobFiles,
@@ -179,10 +182,14 @@ export function SeasonRemovalDialog({
   onCancel: () => void;
 }) {
   const [coordinated, setCoordinated] = useState(true);
-  const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [cleanupDownloads, setCleanupDownloads] = useState(true);
+  const [verifiedCleanupKey, setVerifiedCleanupKey] = useState<string | null>(null);
+  const [verifiedSonarrKey, setVerifiedSonarrKey] = useState<string | null>(null);
   useEffect(() => {
     setCoordinated(true);
-    setCleanupDownloads(false);
+    setCleanupDownloads(true);
+    setVerifiedCleanupKey(null);
+    setVerifiedSonarrKey(null);
   }, [item?.ratingKey]);
   const preview = useQuery({
     queryKey: [
@@ -206,14 +213,36 @@ export function SeasonRemovalDialog({
   // A failed refetch can retain placeholder data from the previous destination choice.
   // Never present or submit that stale plan alongside the new verification error.
   const value = usableSeasonRemovalPreview(preview.data, preview.error);
-  const sonarrActionAvailable = seasonSonarrActionAvailable(value);
+  const sonarrActionAvailableNow = seasonSonarrActionAvailable(value);
+  useEffect(() => {
+    if (!item || !value || !coordinated) return;
+    setVerifiedSonarrKey(sonarrActionAvailableNow ? item.ratingKey : null);
+  }, [coordinated, item, sonarrActionAvailableNow, value]);
+  const sonarrActionAvailable = sonarrActionAvailableNow ||
+    verifiedSonarrKey === item?.ratingKey;
   useEffect(() => {
     if (value && !sonarrActionAvailable && coordinated) setCoordinated(false);
   }, [coordinated, sonarrActionAvailable, value]);
-  const cleanupAvailable = seasonCleanupAvailable(value);
+  const cleanupAvailableNow = seasonCleanupAvailable(value);
+  useEffect(() => {
+    if (!item || !value || !cleanupDownloads) return;
+    setVerifiedCleanupKey(cleanupAvailableNow ? item.ratingKey : null);
+  }, [cleanupAvailableNow, cleanupDownloads, item, value]);
+  const cleanupAvailable = cleanupAvailableNow || verifiedCleanupKey === item?.ratingKey;
   useEffect(() => {
     if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
   }, [cleanupAvailable, cleanupDownloads, value]);
+  const sonarrDeletionImpacts = coordinated && value?.sonarrStatus === "resolved" &&
+      value.managedFileCount > 0
+    ? [{
+      key: value.seasonRatingKey,
+      title: `${value.showTitle} — ${value.seasonTitle}`,
+      fileCount: value.managedFileCount,
+      sizeBytes: value.sonarrFiles.length > 0
+        ? value.sonarrFiles.reduce((total, file) => total + file.size, 0)
+        : null,
+    }]
+    : [];
   const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
     (coordinated && !sonarrActionAvailable);
 
@@ -299,33 +328,47 @@ export function SeasonRemovalDialog({
               <>
                 <DestinationOptions
                   options={[
-                    ...(sonarrActionAvailable
-                      ? [{
-                        id: "arr" as const,
-                        service: "sonarr" as const,
-                        label: "Update Sonarr",
-                        info:
-                          "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
-                        checked: coordinated,
-                        disabled: value?.sonarrStatus !== "resolved",
-                        warning: coordinated && value?.sonarrStatus !== "resolved",
-                        onChange: setCoordinated,
-                      }]
-                      : []),
-                    ...(cleanupAvailable
-                      ? [{
-                        id: "cleanup" as const,
-                        service: "qbittorrent" as const,
-                        label: "Clean downloads",
-                        info:
-                          "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
-                        checked: cleanupDownloads,
-                        disabled: value?.cleanupStatus !== "resolved",
-                        warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
-                        onChange: setCleanupDownloads,
-                      }]
-                      : []),
+                    {
+                      id: "plex" as const,
+                      service: "plex" as const,
+                      label: "Plex",
+                      info: "Plex season reconciliation is required for every removal.",
+                      checked: true,
+                      disabled: true,
+                      warning: false,
+                      onChange: () => {},
+                    },
+                    {
+                      id: "arr" as const,
+                      service: "sonarr" as const,
+                      label: "Update Sonarr",
+                      info: value?.sonarrReason ??
+                        (sonarrActionAvailable
+                          ? "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles."
+                          : "No verified Sonarr season destination is available"),
+                      checked: coordinated,
+                      disabled: pending || preview.isFetching || !sonarrActionAvailable,
+                      warning: coordinated && value?.sonarrStatus !== "resolved",
+                      onChange: setCoordinated,
+                    },
+                    {
+                      id: "cleanup" as const,
+                      service: "qbittorrent" as const,
+                      label: "Clean downloads",
+                      info: value?.cleanupReason ??
+                        (cleanupAvailable
+                          ? "Remove only qBittorrent jobs whose complete payload is proven to belong to this season."
+                          : "No verified qBittorrent job is available"),
+                      checked: cleanupDownloads,
+                      disabled: pending || preview.isFetching || !cleanupAvailable,
+                      warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
+                      onChange: setCleanupDownloads,
+                    },
                   ]}
+                />
+                <ArrDeletionWarning
+                  service="sonarr"
+                  impacts={sonarrDeletionImpacts}
                 />
                 <SeasonRemovalDeletionTree
                   preview={value}

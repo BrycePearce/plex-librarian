@@ -858,7 +858,11 @@ export class PlexClient {
       undefined,
       signal,
     );
-    return (data.MediaContainer.Metadata ?? []).flatMap((metadata) =>
+    const metadata = data.MediaContainer.Metadata ?? [];
+    const allMediaEntriesRepresented = metadata.every((entry) =>
+      (entry.Media ?? []).every((media) => media.id != null)
+    );
+    return metadata.flatMap((metadata) =>
       (metadata.Media ?? []).flatMap((media) => {
         if (media.id == null) return [];
         const paths: string[] = [];
@@ -885,6 +889,7 @@ export class PlexClient {
           : null;
         return [{
           mediaId: media.id,
+          allMediaEntriesRepresented,
           paths,
           truncated,
           fileSize,

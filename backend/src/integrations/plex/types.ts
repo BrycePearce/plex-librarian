@@ -235,6 +235,9 @@ export interface PlexMediaPathPreview {
 
 export interface PlexMediaVersionPathPreview extends PlexMediaPathPreview {
   mediaId: number;
+  // False when Plex returned at least one Media entry without an ID. Callers that
+  // require a complete whole-item manifest must reject that incomplete evidence.
+  allMediaEntriesRepresented?: boolean;
   // Present only when Plex reports one unambiguous Part size for this Media entry.
   fileSize?: number | null;
   // The persisted decimal-KB projection, including Plex's legacy signed-32-bit

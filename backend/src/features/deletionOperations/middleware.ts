@@ -19,6 +19,19 @@ import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
 import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning/types.ts';
+import {
+  assertDownloadJobSelectionConsistent,
+  loadAttemptedArrInstancesByItem,
+  loadAttemptedDownloadJobKeysByItem,
+  loadAttemptedOrphanFilesByItem,
+  resolveWholeItemDownloadCleanupBatch,
+} from '../mediaDeletion/planning.ts';
+import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import {
+  persistResolvedCleanupIdentity,
+  reconcileSharedDownloadCleanups,
+  type ResolvedCleanupItem,
+} from '../mediaDeletion/cleanup.ts';
 
 const QUICK_CLEANUP_LIVE_READ_CONCURRENCY = 3;
 
@@ -89,6 +102,26 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
   try {
     if (libraryMatch) {
       const libraryKey = decode(libraryMatch[1]);
+      if (body.cleanupDownloads !== undefined) {
+        return c.json(
+          { error: 'cleanupDownloadRatingKeys must be used for whole-item cleanup selection' },
+          400,
+        );
+      }
+      if (
+        body.cleanupDownloadRatingKeys !== undefined &&
+        (!Array.isArray(body.cleanupDownloadRatingKeys) ||
+          !body.cleanupDownloadRatingKeys.every((key) => typeof key === 'string'))
+      ) {
+        return c.json({ error: 'cleanupDownloadRatingKeys must be an array of strings' }, 400);
+      }
+      if (
+        body.coordinatedRatingKeys !== undefined &&
+        (!Array.isArray(body.coordinatedRatingKeys) ||
+          !body.coordinatedRatingKeys.every((key) => typeof key === 'string'))
+      ) {
+        return c.json({ error: 'coordinatedRatingKeys must be an array of strings' }, 400);
+      }
       const ratingKeys = Array.isArray(body.ratingKeys)
         ? [...new Set(body.ratingKeys.filter((key): key is string => typeof key === 'string'))]
         : [];
@@ -118,8 +151,15 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           ? body.unmonitorRatingKeys.filter((key): key is string => typeof key === 'string')
           : [],
       );
+      const cleanupDownloadRatingKeys = new Set(
+        Array.isArray(body.cleanupDownloadRatingKeys)
+          ? body.cleanupDownloadRatingKeys.filter((key): key is string => typeof key === 'string')
+          : [],
+      );
       if (
-        [...coordinated, ...unmonitor].some((key) => !ratingKeys.includes(key)) ||
+        [...coordinated, ...unmonitor, ...cleanupDownloadRatingKeys].some((key) =>
+          !ratingKeys.includes(key)
+        ) ||
         [...unmonitor].some((key) => coordinated.has(key))
       ) {
         return c.json({ error: 'invalid whole-item destinations' }, 400);
@@ -128,7 +168,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         path,
         ratingKeys,
         coordinatedRatingKeys: [...coordinated].sort(),
-        cleanupDownloads: body.cleanupDownloads === true,
+        cleanupDownloadRatingKeys: [...cleanupDownloadRatingKeys].sort(),
         unmonitorRatingKeys: [...unmonitor].sort(),
         ...(quickCleanupDays !== null ? { quickCleanupThresholdDays: quickCleanupDays } : {}),
       };
@@ -228,8 +268,59 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       if (rows.some((row) => row === null)) {
         return c.json({ error: 'one or more items were not found in this library' }, 404);
       }
-      const coordinatedKeys = ratingKeys.filter((key) => coordinated.has(key));
-      const plexOnlyKeys = ratingKeys.filter((key) => !coordinated.has(key));
+      let acceptedCleanups = new Map<string, ResolvedCleanupItem>();
+      if (cleanupDownloadRatingKeys.size > 0) {
+        const selectedItems = rows.map((row) => ({
+          ratingKey: row!.ratingKey,
+          title: row!.item[0],
+          type: row!.item[1],
+          tmdbId: row!.item[3],
+          tvdbId: row!.item[4],
+        }));
+        const [arrTargets, downloadTargets] = await Promise.all([
+          getArrDeleteTargets(serverId, libraryKey),
+          getDownloadClientTargets(serverId),
+        ]);
+        const [attemptedJobs, attemptedOrphans, attemptedArr] = await Promise.all([
+          loadAttemptedDownloadJobKeysByItem(serverId, ratingKeys),
+          loadAttemptedOrphanFilesByItem(serverId, ratingKeys),
+          loadAttemptedArrInstancesByItem(
+            serverId,
+            selectedItems,
+            arrTargets.map((target) => target.instanceId),
+          ),
+        ]);
+        const rawCleanups = await resolveWholeItemDownloadCleanupBatch(
+          serverId,
+          libraryKey,
+          selectedItems,
+          arrTargets,
+          downloadTargets,
+          activeServer.client,
+          attemptedJobs,
+          attemptedOrphans,
+          attemptedArr,
+        );
+        try {
+          assertDownloadJobSelectionConsistent(rawCleanups, cleanupDownloadRatingKeys);
+        } catch (error) {
+          throw new DeletionConflictError(
+            error instanceof Error ? error.message : 'qBittorrent selection is inconsistent',
+            409,
+          );
+        }
+        const reconciled = reconcileSharedDownloadCleanups(rawCleanups);
+        acceptedCleanups = new Map(reconciled.map((cleanup) => [cleanup.ratingKey, cleanup]));
+        for (const ratingKey of cleanupDownloadRatingKeys) {
+          const cleanup = acceptedCleanups.get(ratingKey);
+          if (!cleanup || cleanup.status !== 'resolved' || cleanup.downloadJobs.length === 0) {
+            return c.json({
+              error: cleanup?.reason ?? 'No verified qBittorrent job is available',
+            }, 409);
+          }
+        }
+      }
+      const sortedCleanupKeys = [...cleanupDownloadRatingKeys].sort();
       const targets: NewDeletionTarget[] = rows.map((row) => {
         const found = row!;
         const mode = coordinated.has(found.ratingKey) ? 'coordinated' : 'plex-only';
@@ -249,9 +340,20 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             tmdbId: found.item[3],
             tvdbId: found.item[4],
             mode,
-            cleanupDownloads: mode === 'coordinated' && body.cleanupDownloads === true,
+            cleanupDownloads: cleanupDownloadRatingKeys.has(found.ratingKey),
             unmonitorFromArr: mode === 'plex-only' && unmonitor.has(found.ratingKey),
-            selectedRatingKeys: mode === 'coordinated' ? coordinatedKeys : plexOnlyKeys,
+            selectedRatingKeys: [...ratingKeys],
+            cleanupDownloadRatingKeys: sortedCleanupKeys,
+            ...(cleanupDownloadRatingKeys.has(found.ratingKey) &&
+                acceptedCleanups.get(found.ratingKey)?.downloadJobs.every((job) =>
+                  job.provenance === 'direct_manifest'
+                )
+              ? {
+                wholeItemDownloadCleanup: persistResolvedCleanupIdentity(
+                  acceptedCleanups.get(found.ratingKey)!,
+                ),
+              }
+              : {}),
             ...(quickCleanupCandidate
               ? {
                 quickCleanupEvidence: {

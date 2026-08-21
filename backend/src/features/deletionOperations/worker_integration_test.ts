@@ -135,6 +135,7 @@ let plexMediaDeleteCount = 0;
 let coordinatedRatingKey: string | null = null;
 let arrPresent = false;
 let arrDeleteCount = 0;
+const destinationOrder: string[] = [];
 let loseArrRemovalResponse = false;
 let radarrExclusion: {
   id: number;
@@ -219,6 +220,7 @@ let seasonPackForeignOwner = false;
 let qbitPresent = false;
 let qbitDeleteCount = 0;
 let qbitRequestCount = 0;
+let loseQbitDeleteResponse = false;
 let fetchCount = 0;
 let technicalDetailsRequestCount = 0;
 let historyAccountId: unknown = null;
@@ -370,6 +372,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(Response.json({ totalRecords: 1, records: [{ movieId: 7 }] }));
     }
     if (url.pathname === '/api/v3/movie/7' && init?.method === 'DELETE') {
+      destinationOrder.push('arr');
       versionDeleteOrder.push('radarr');
       arrDeleteCount++;
       arrPresent = false;
@@ -806,9 +809,14 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       }, ...(seasonPackMixed ? [{ name: 'release/unselected.mkv', size: 40_000 }] : [])]));
     }
     if (url.pathname === '/api/v2/torrents/delete' && init?.method === 'POST') {
+      destinationOrder.push('qbittorrent');
       if (seasonPackQbit) versionDeleteOrder.push('qbit');
       qbitDeleteCount++;
       qbitPresent = false;
+      if (loseQbitDeleteResponse) {
+        loseQbitDeleteResponse = false;
+        return Promise.reject(new TypeError('lost qBittorrent delete response'));
+      }
       return Promise.resolve(new Response(null, { status: 200 }));
     }
   }
@@ -867,6 +875,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     if (init?.method === 'DELETE') {
       if (!item) return Promise.resolve(new Response(null, { status: 404 }));
       if (failDeleteBeforeMutation) return Promise.reject(new TypeError('fetch failed'));
+      destinationOrder.push('plex');
       wholeDeleteOrder.push(ratingKey);
       live.delete(ratingKey);
       return Promise.resolve(new Response(null, { status: 200 }));
@@ -905,6 +914,7 @@ function reset(): void {
   coordinatedRatingKey = null;
   arrPresent = false;
   arrDeleteCount = 0;
+  destinationOrder.length = 0;
   loseArrRemovalResponse = false;
   radarrExclusion = null;
   arrManagedFilePresent = true;
@@ -964,6 +974,7 @@ function reset(): void {
   qbitPresent = false;
   qbitDeleteCount = 0;
   qbitRequestCount = 0;
+  loseQbitDeleteResponse = false;
   fetchCount = 0;
   technicalDetailsRequestCount = 0;
   historyAccountId = null;
@@ -1713,12 +1724,28 @@ async function enqueueCoordinated(
   ratingKeys: string[],
   cleanupDownloads = false,
 ): Promise<string> {
+  return await enqueueWholeDestinations(
+    ratingKeys,
+    new Set(ratingKeys),
+    new Set(cleanupDownloads ? ratingKeys : []),
+  );
+}
+
+async function enqueueWholeDestinations(
+  ratingKeys: string[],
+  coordinatedKeys: ReadonlySet<string>,
+  cleanupKeys: ReadonlySet<string>,
+): Promise<string> {
   const result = await enqueueDeletionOperation({
     clientRequestId: crypto.randomUUID(),
     serverId: 1,
     libraryKey: 'movies',
     kind: 'whole_item',
-    payload: { ratingKeys, mode: 'coordinated', cleanupDownloads },
+    payload: {
+      ratingKeys,
+      coordinatedRatingKeys: [...coordinatedKeys].sort(),
+      cleanupDownloadRatingKeys: [...cleanupKeys].sort(),
+    },
     targets: ratingKeys.map((ratingKey) => ({
       kind: 'whole_item' as const,
       key: ratingKey,
@@ -1733,9 +1760,10 @@ async function enqueueCoordinated(
         type: 'movie',
         tmdbId: 10,
         tvdbId: null,
-        mode: 'coordinated',
-        cleanupDownloads,
+        mode: coordinatedKeys.has(ratingKey) ? 'coordinated' : 'plex-only',
+        cleanupDownloads: cleanupKeys.has(ratingKey),
         selectedRatingKeys: ratingKeys,
+        cleanupDownloadRatingKeys: [...cleanupKeys].sort(),
       },
     })),
   });
@@ -3108,6 +3136,207 @@ Deno.test('coordinated deletion executes verified qBittorrent cleanup before Rad
   assertEquals(operation?.status, 'completed', JSON.stringify(operation));
   assertEquals(qbitDeleteCount, 1);
   assertEquals(arrDeleteCount, 1);
+  assertEquals(destinationOrder, ['qbittorrent', 'arr', 'plex']);
+});
+
+Deno.test('qBittorrent-only whole-item deletion does not require Arr selection', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('qbit-only', [11, 12], 10);
+  coordinatedRatingKey = 'qbit-only';
+  arrPresent = true;
+  qbitPresent = true;
+  const operationId = await enqueueWholeDestinations(
+    ['qbit-only'],
+    new Set(),
+    new Set(['qbit-only']),
+  );
+
+  await settle();
+  const operation = getDeletionOperation(operationId, 1);
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+});
+
+Deno.test('whole-item direct-manifest cleanup converges after a lost delete response', async () => {
+  reset();
+  addMovie('direct-whole-item', [11]);
+  const localRoot = resolve(testDirectory, 'direct-whole-item').replaceAll('\\', '/');
+  const localRelease = `${localRoot}/release`;
+  const localMovie = `${localRelease}/old.mkv`;
+  await Deno.mkdir(localRelease, { recursive: true });
+  await Deno.writeFile(localMovie, new Uint8Array(40_000));
+  live.get('direct-whole-item')!.Media = [{
+    id: 11,
+    Part: [{ file: '/movies/old.mkv', size: 40_000 }],
+  }];
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO qbittorrent_instances (id, server_id, name, url, username, password, created_at, updated_at) VALUES (1, 1, 'qBittorrent', 'http://qbit', '', '', 1, 1)",
+    ).run();
+    client.prepare(
+      `INSERT INTO plex_path_mappings
+       (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+        validation_plex_path, validation_local_path, validation_size,
+        validated_at, created_at, updated_at)
+       VALUES (1, 'movies', '/movies', ?, 1, 1,
+               '/movies/old.mkv', ?, 40000, 1, 1, 1)`,
+    ).run(localRelease, localMovie);
+    client.prepare(
+      `INSERT INTO qbittorrent_path_mappings
+       (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+        validation_qbittorrent_path, validation_local_path, validation_size,
+        validated_at, created_at, updated_at)
+       VALUES (1, 'db:1', '/downloads', ?, 1, 1,
+               '/downloads/release/old.mkv', ?, 40000, 1, 1, 1)`,
+    ).run(localRoot, localMovie);
+  });
+  seasonPackQbit = true;
+  qbitPresent = true;
+  loseQbitDeleteResponse = true;
+
+  const previewResponse = await app.request(
+    '/api/libraries/movies/items/download-cleanup-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ratingKeys: ['direct-whole-item'] }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
+  assertEquals(preview.items[0].downloadJobs.length, 1);
+
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['direct-whole-item'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: ['direct-whole-item'],
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json() as { operationId: string };
+  const snapshotJson = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<[string]>(
+      operationId,
+    )?.[0]
+  );
+  const snapshot = JSON.parse(snapshotJson!);
+  assertEquals(snapshot.wholeItemDownloadCleanup.status, 'resolved');
+  assertEquals(
+    snapshot.wholeItemDownloadCleanup.downloadJobs.map((job: { provenance: string }) =>
+      job.provenance
+    ),
+    ['direct_manifest'],
+  );
+
+  await settle();
+  assertEquals(
+    getDeletionOperation(operationId, 1)?.status,
+    'waiting_retry',
+    JSON.stringify(getDeletionOperation(operationId, 1)),
+  );
+  makeRetryReady(operationId);
+  await settle();
+  assertEquals(
+    getDeletionOperation(operationId, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(operationId, 1)),
+  );
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+});
+
+Deno.test('whole-item acceptance rejects a shared job split across cleanup selection', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('shared-selected', [11], 10);
+  addMovie('shared-unselected', [12], 10);
+  arrPresent = true;
+  qbitPresent = true;
+
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['shared-selected', 'shared-unselected'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: ['shared-selected'],
+    }),
+  });
+
+  assertEquals(response.status, 409, await response.clone().text());
+  assertStringIncludes(
+    (await response.json()).error,
+    'shared by cleanup-selected and cleanup-unselected items',
+  );
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM deletion_operations').value<[number]>()?.[0]
+    ),
+    0,
+  );
+});
+
+Deno.test('whole-item retry rejects changed evidence that splits a shared job', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('retry-shared-selected', [11], 10);
+  addMovie('retry-shared-unselected', [12], 10);
+  arrPresent = true;
+  qbitPresent = true;
+  const operationId = await enqueueWholeDestinations(
+    ['retry-shared-selected', 'retry-shared-unselected'],
+    new Set(),
+    new Set(['retry-shared-selected']),
+  );
+
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(destinationOrder, ['plex']);
+});
+
+Deno.test('selected cleanup and Arr still execute after Plex metadata is already absent', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('absent-retry-destinations', [11, 12], 10);
+  coordinatedRatingKey = 'absent-retry-destinations';
+  arrPresent = true;
+  qbitPresent = true;
+  const operationId = await enqueueCoordinated(['absent-retry-destinations'], true);
+  live.delete('absent-retry-destinations');
+
+  await settle();
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(arrDeleteCount, 1);
+  assertEquals(destinationOrder, ['qbittorrent', 'arr']);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
+});
+
+Deno.test('active playback blocks selected destinations even after Plex metadata is absent', async () => {
+  reset();
+  configureRadarr(true);
+  addMovie('absent-playing', [11, 12], 10);
+  coordinatedRatingKey = 'absent-playing';
+  arrPresent = true;
+  qbitPresent = true;
+  activePlaybackRatingKey = 'absent-playing';
+  const operationId = await enqueueCoordinated(['absent-playing'], true);
+  live.delete('absent-playing');
+
+  await settle();
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(destinationOrder, []);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
 });
 
 Deno.test('coordinated Radarr work never queries qBittorrent unless cleanup is selected', async () => {
