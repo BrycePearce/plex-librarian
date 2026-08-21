@@ -105,17 +105,24 @@
 
 .expandable-search-field input[type="search"]::-webkit-search-cancel-button { display: none; }
 
-.expandable-search-icon {
+.expandable-search-icon-position {
   position: absolute;
   z-index: 1;
   top: 50%;
   left: .65rem;
+  display: block;
   width: .9rem;
   height: .9rem;
-  opacity: .78;
   transform: translateY(-50%);
-  color: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 72%, var(--color-base-content));
   pointer-events: none;
+}
+
+.expandable-search-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: .78;
+  color: color-mix(in oklab, var(--workspace-color, var(--color-primary)) 72%, var(--color-base-content));
 }
 
 .expandable-search-clear {

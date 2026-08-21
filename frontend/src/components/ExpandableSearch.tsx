@@ -105,9 +105,11 @@ export function ExpandableSearch({
         <kbd>/</kbd>
       </button>
       <div className="expandable-search-field" aria-hidden={!open}>
-        {pending
-          ? <LoaderCircle className="expandable-search-icon animate-spin" />
-          : <Search className="expandable-search-icon" />}
+        <span className="expandable-search-icon-position" aria-hidden="true">
+          {pending
+            ? <LoaderCircle className="expandable-search-icon animate-spin" />
+            : <Search className="expandable-search-icon" />}
+        </span>
         <input
           id={inputId}
           ref={inputRef}
