@@ -70,7 +70,7 @@ withTransaction((client) => {
      VALUES (1, ?, 'show-one', 'shows', ?, ?, ?, ?, ?, 100, 10, ?, 1)`,
   );
   const now = Math.floor(Date.now() / 1000);
-  insertSeason.run('season-1', 1, 'Season 1', 1, null, 600, 0);
+  insertSeason.run('season-1', 1, 'Season 1', now - 2 * 365 * 86_400, null, 600, 0);
   insertSeason.run('season-2', 2, 'Season 2', 1, now, 300, 12);
   insertSeason.run('season-3', 3, 'Season 3', now, null, 100, 0);
 });
@@ -164,6 +164,38 @@ Deno.test('stale route keeps an exact total for a past-end direct link', async (
   assertEquals(page.total, 3);
   assertEquals(page.hasMore, false);
   assertEquals(page.items, []);
+});
+
+Deno.test('stale route excludes suspicious persisted Plex timestamps', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  withTransaction((client) => {
+    const insert = client.prepare(
+      `INSERT INTO items
+        (server_id, rating_key, library_key, title, type, added_at, last_viewed_at,
+         file_size, updated_at)
+       VALUES (1, ?, 'movies', ?, 'movie', ?, ?, 1, ?)`,
+    );
+    insert.run('sus-added', 'Suspicious added timestamp', 2021, null, now);
+    insert.run(
+      'sus-viewed',
+      'Suspicious viewed timestamp',
+      now - 2 * 365 * 86_400,
+      2021,
+      now,
+    );
+  });
+
+  try {
+    const response = await app.request(
+      '/api/libraries/movies/stale?days=365&search=Suspicious&limit=10',
+    );
+    assertEquals(response.status, 200);
+    assertEquals(((await response.json()) as StaleResponse).total, 0);
+  } finally {
+    withTransaction((client) => {
+      client.prepare("DELETE FROM items WHERE rating_key IN ('sus-added', 'sus-viewed')").run();
+    });
+  }
 });
 
 Deno.test('ignored content API adds, searches, filters, and restores synced items', async () => {

@@ -18,7 +18,9 @@ Deno.test('automatic stale threshold scales with library age and stays bounded',
 
 Deno.test('automatic stale threshold uses the existing fallback without age evidence', () => {
   assertEquals(automaticStaleThresholdDays(null, NOW), 365);
+  assertEquals(automaticStaleThresholdDays(2021, NOW), 365);
   assertEquals(automaticStaleThresholdDays(NOW + 2 * DAY_SECONDS, NOW), 365);
+  assertEquals(plausibleItemAddedAt(2021, NOW), false);
   assertEquals(plausibleItemAddedAt(NOW + DAY_SECONDS, NOW), true);
 });
 

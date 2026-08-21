@@ -16,7 +16,10 @@ import { syncUsers } from './userSync.ts';
 import { withLibraryOperation } from '../../services/libraryOperations.ts';
 import { syncSeerrRequests } from '../seerr/sync.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
-import { plausibleItemAddedAt } from '../libraries/automaticStaleThreshold.ts';
+import {
+  EARLIEST_PLAUSIBLE_ITEM_ADDED_AT,
+  plausibleItemAddedAt,
+} from '../libraries/automaticStaleThreshold.ts';
 
 // Derives the SQL excluded.column_name string from the schema column object so that
 // a rename in schema.ts + migration automatically updates the upsert set clause.
@@ -282,6 +285,7 @@ async function syncLibrary(
     await db.update(libraries).set({
       oldestItemAddedAt: sql`CASE
         WHEN ${libraries.oldestItemAddedAt} IS NULL
+          OR ${libraries.oldestItemAddedAt} < ${EARLIEST_PLAUSIBLE_ITEM_ADDED_AT}
           OR ${libraries.oldestItemAddedAt} > ${oldestItemAddedAt}
         THEN ${oldestItemAddedAt}
         ELSE ${libraries.oldestItemAddedAt}

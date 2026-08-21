@@ -1,5 +1,11 @@
+import {
+  EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP,
+  plausiblePlexTimestamp,
+} from '../../integrations/plex/timestamps.ts';
+
 const DAY_SECONDS = 86_400;
 const DAYS_PER_YEAR = 365;
+export const EARLIEST_PLAUSIBLE_ITEM_ADDED_AT = EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP;
 
 export const STALE_BROWSER_FALLBACK_DAYS = DAYS_PER_YEAR;
 export const STALE_QUICK_CLEANUP_FALLBACK_DAYS = 3 * DAYS_PER_YEAR;
@@ -9,10 +15,7 @@ const MAX_AUTOMATIC_YEARS = 6;
 const LIBRARY_YEARS_PER_STALE_YEAR = 3;
 
 export function plausibleItemAddedAt(addedAt: number | null, now: number): boolean {
-  // A one-day allowance avoids discarding otherwise valid data because the Plex and
-  // app clocks differ slightly. Larger future timestamps are not useful age evidence.
-  return addedAt !== null && Number.isSafeInteger(addedAt) && addedAt > 0 &&
-    addedAt <= now + DAY_SECONDS;
+  return plausiblePlexTimestamp(addedAt, now);
 }
 
 export function automaticStaleThresholdDays(

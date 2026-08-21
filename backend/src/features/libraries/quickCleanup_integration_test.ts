@@ -39,6 +39,7 @@ withTransaction((client) => {
   insertItem.run('unknown-age', 'Unknown age', null, null, 600, NOW);
   insertItem.run('duplicate', 'Duplicate', OLD, null, 700, NOW);
   insertItem.run('requested', 'Recently requested', OLD, null, 800, NOW);
+  insertItem.run('suspicious-time', 'Suspicious timestamp', 2021, null, 900, NOW);
   const insertVersion = client.prepare(
     `INSERT INTO item_media_versions
       (server_id, media_id, item_rating_key, library_key, file_size, updated_at)
@@ -102,6 +103,7 @@ Deno.test('quick cleanup recommends only inactive single-version titles without 
     },
   );
   assertEquals(isStaleQuickCleanupCandidate(1, 'movies', 365, 'never', NOW), true);
+  assertEquals(isStaleQuickCleanupCandidate(1, 'movies', 365, 'suspicious-time', NOW), false);
 
   withTransaction((client) => {
     const insertVersion = client.prepare(

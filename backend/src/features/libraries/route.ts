@@ -18,6 +18,7 @@ import {
 import { db } from '../../db/index.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
+import { EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP } from '../../integrations/plex/timestamps.ts';
 import {
   episodeMediaVersions,
   itemMediaVersions,
@@ -259,15 +260,19 @@ router.get('/:key/stale', async (c) => {
 
   if (scope === 'season') {
     const showEverything = days === 0 && maxDays === null;
-    const watchedStaleCond = showEverything ? isNotNull(seasons.lastViewedAt) : and(
+    const watchedStaleCond = and(
       isNotNull(seasons.lastViewedAt),
-      viewedOnOrAfter !== null
+      gte(seasons.lastViewedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+      showEverything
+        ? undefined
+        : viewedOnOrAfter !== null
         ? and(lt(seasons.lastViewedAt, viewedBefore), gte(seasons.lastViewedAt, viewedOnOrAfter))
         : lt(seasons.lastViewedAt, viewedBefore),
     );
     const unwatchedCond = showEverything ? isNull(seasons.lastViewedAt) : and(
       isNull(seasons.lastViewedAt),
       isNotNull(seasons.addedAt),
+      gte(seasons.addedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
       unwatchedAddedOnOrAfter !== null
         ? and(
           lt(seasons.addedAt, unwatchedAddedBefore),
@@ -385,9 +390,12 @@ router.get('/:key/stale', async (c) => {
   // Watched but stale: viewed before the minimum boundary and, for range queries,
   // on or after the maximum boundary.
   const showEverything = days === 0 && maxDays === null;
-  const watchedStaleCond = showEverything ? isNotNull(items.lastViewedAt) : and(
+  const watchedStaleCond = and(
     isNotNull(items.lastViewedAt),
-    viewedOnOrAfter !== null
+    gte(items.lastViewedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+    showEverything
+      ? undefined
+      : viewedOnOrAfter !== null
       ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
       : lt(items.lastViewedAt, viewedBefore),
   );
@@ -399,6 +407,7 @@ router.get('/:key/stale', async (c) => {
   const unwatchedCond = showEverything ? isNull(items.lastViewedAt) : and(
     isNull(items.lastViewedAt),
     isNotNull(items.addedAt),
+    gte(items.addedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
     unwatchedAddedOnOrAfter !== null
       ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
       : lt(items.addedAt, unwatchedAddedBefore),

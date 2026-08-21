@@ -4,6 +4,7 @@ import { items } from '../../db/schema.ts';
 import { itemByRatingKey } from '../../db/scope.ts';
 import { getActiveServer } from '../../integrations/plex/index.ts';
 import type { PlexWebhookPayload } from '../../integrations/plex/index.ts';
+import { normalizePlexTimestamp } from '../../integrations/plex/timestamps.ts';
 import { recordPlaybackObservation } from '../users/observationService.ts';
 
 const PLAYBACK_EVENTS = new Set([
@@ -92,7 +93,10 @@ router.post('/plex', async (c) => {
     isLocal: payload.Player?.local ?? null,
     source: 'webhook',
     scrobble: isScrobble
-      ? { viewedAt: Metadata.lastViewedAt ?? null, duration: Metadata.duration ?? null }
+      ? {
+        viewedAt: normalizePlexTimestamp(Metadata.lastViewedAt, now),
+        duration: Metadata.duration ?? null,
+      }
       : undefined,
   });
   if (result === 'ambiguous') {

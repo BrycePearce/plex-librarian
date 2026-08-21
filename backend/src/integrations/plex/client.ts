@@ -28,6 +28,7 @@ import {
   type PlexRawMedia as RawMedia,
   type PlexRawPart as RawPart,
 } from './fileBackedMedia.ts';
+import { normalizePlexTimestamp } from './timestamps.ts';
 export { buildPlexHeaders, PLEX_CLIENT_PRODUCT, PLEX_TV } from './headers.ts';
 
 const ITEMS_PAGE_SIZE = 300;
@@ -199,8 +200,8 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
       title: item.title,
       type: item.type,
       thumb: item.thumb ?? null,
-      addedAt: item.addedAt ?? null,
-      lastViewedAt: item.lastViewedAt ?? null,
+      addedAt: normalizePlexTimestamp(item.addedAt),
+      lastViewedAt: normalizePlexTimestamp(item.lastViewedAt),
       viewCount: item.viewCount ?? 0,
       fileSize: extractFileSize(item),
       duration: item.duration ?? null,
@@ -312,8 +313,8 @@ function mapEpisodes(raw: PlexRawMetadata[]): PlexEpisode[] {
       seasonIndex: item.parentIndex!,
       episodeIndex: item.index ?? null,
       seasonTitle: item.parentTitle ?? `Season ${item.parentIndex}`,
-      addedAt: item.addedAt ?? null,
-      lastViewedAt: item.lastViewedAt ?? null,
+      addedAt: normalizePlexTimestamp(item.addedAt),
+      lastViewedAt: normalizePlexTimestamp(item.lastViewedAt),
       fileSize: extractFileSize(item),
       duration: item.duration ?? null,
       viewCount: item.viewCount ?? 0,
@@ -1143,7 +1144,11 @@ export class PlexClient {
             `Plex history contained an invalid account id for library ${libraryKey}`,
           );
         }
-        return { ...entry, accountID: accountID as number };
+        return {
+          ...entry,
+          viewedAt: normalizePlexTimestamp(entry.viewedAt) ?? undefined,
+          accountID: accountID as number,
+        };
       });
 
     const sameHistoryEntry = (left: PlexHistoryEntry, right: PlexHistoryEntry): boolean => {

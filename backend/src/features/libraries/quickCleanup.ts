@@ -7,6 +7,7 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import { STALE_QUICK_CLEANUP_LIMIT } from './quickCleanupRules.ts';
 import { workflowOwnedItemSql } from '../deletionOperations/core/ownership.ts';
+import { EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP } from '../../integrations/plex/timestamps.ts';
 export {
   parseStaleQuickCleanupDays,
   STALE_QUICK_CLEANUP_DEFAULT_DAYS,
@@ -53,8 +54,11 @@ const recentRequestSql = `EXISTS (
 )`;
 
 const inactiveSql = `(
-  (i.last_viewed_at IS NULL AND i.added_at IS NOT NULL AND i.added_at < ?)
-  OR i.last_viewed_at < ?
+  (i.last_viewed_at IS NULL
+    AND i.added_at >= ${EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP}
+    AND i.added_at < ?)
+  OR (i.last_viewed_at >= ${EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP}
+    AND i.last_viewed_at < ?)
 )`;
 
 const notIgnoredSql = `NOT EXISTS (
