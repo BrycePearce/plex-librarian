@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ChevronDown, ExternalLink, Layers3, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, Layers3, LoaderCircle, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { compareDuplicateVersions, summarizeDuplicateComparisons } from "@shared/mediaComparison";
@@ -974,13 +974,11 @@ export function SeasonDuplicateDialog({
     setKeepersState({ key: seasonKey, values: next });
   }
 
+  const deletionPlanVerifying = selections.length > 0 && deletionPreview.isFetching;
   const destinationPreview = selections.length > 0 &&
-    (deletionPreview.isLoading ||
-      (deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 ||
-      breakGlassVisible) &&
+    ((deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 || breakGlassVisible) &&
     (
       <div className="season-profile-note" aria-live="polite">
-        {deletionPreview.isLoading && "Verifying Plex and Sonarr destinations…"}
         {sonarrMode !== "none" && deletionPreview.data &&
           deletionPreview.data.automaticAdoptionCount > 0 && (
           <div className="space-y-1">
@@ -1188,7 +1186,7 @@ export function SeasonDuplicateDialog({
           <span className="season-batch-header-icon">
             <Layers3 className="size-5" />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold uppercase tracking-[0.14em] text-primary/70">
               {season.showTitle}
             </div>
@@ -1223,6 +1221,22 @@ export function SeasonDuplicateDialog({
                 </p>
               )}
           </div>
+          {deletionPlanVerifying && (
+            <div
+              className="season-batch-plan-status"
+              role="status"
+              aria-live="polite"
+              aria-label="Verifying deletion plan"
+            >
+              <span className="season-batch-plan-status-icon" aria-hidden="true">
+                <LoaderCircle className="size-4 animate-spin" />
+              </span>
+              <span className="min-w-0">
+                <strong>Verifying deletion plan…</strong>
+                <small>Checking live paths, ownership, and playback</small>
+              </span>
+            </div>
+          )}
         </header>
 
         <div className="season-batch-body">
