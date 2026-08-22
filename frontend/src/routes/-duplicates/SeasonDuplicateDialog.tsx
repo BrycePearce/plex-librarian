@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ChevronDown, Layers3, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, Layers3, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { compareDuplicateVersions, summarizeDuplicateComparisons } from "@shared/mediaComparison";
@@ -44,6 +44,122 @@ export function seasonDownloadCleanupVisible(
   preview: { cleanupConfigured: boolean; cleanupEligibleVersionCount: number } | undefined,
 ): boolean {
   return preview?.cleanupConfigured === true && preview.cleanupEligibleVersionCount > 0;
+}
+
+export function seasonSelectedDestinationServices(input: {
+  sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
+  cleanupDownloads: boolean;
+  preview: SeasonDeletionPreviewResponse | undefined;
+}): Array<"Sonarr" | "qBittorrent"> {
+  return [
+    ...(input.sonarrMode !== "none" && (input.preview?.sonarrDestinations?.length ?? 0) > 0
+      ? ["Sonarr" as const]
+      : []),
+    ...(input.cleanupDownloads && (input.preview?.downloadDestinations?.length ?? 0) > 0
+      ? ["qBittorrent" as const]
+      : []),
+  ];
+}
+
+function SeasonDestinationLinks({
+  preview,
+  showRatingKey,
+  sonarrSelected,
+  downloadsSelected,
+}: {
+  preview: SeasonDeletionPreviewResponse;
+  showRatingKey: string;
+  sonarrSelected: boolean;
+  downloadsSelected: boolean;
+}) {
+  const sonarr = sonarrSelected ? preview.sonarrDestinations ?? [] : [];
+  const downloads = downloadsSelected ? preview.downloadDestinations ?? [] : [];
+  const downloadGroups = new Map<string, typeof downloads>();
+  for (const destination of downloads) {
+    const key = `${destination.instanceUrl}:${destination.instanceName}`;
+    const group = downloadGroups.get(key) ?? [];
+    group.push(destination);
+    downloadGroups.set(key, group);
+  }
+  if (sonarr.length === 0 && downloads.length === 0) return null;
+
+  return (
+    <section className="border-b border-base-300/70 bg-base-200/35 px-4 py-3">
+      <strong className="mb-2 block text-xs uppercase tracking-wide text-base-content/55">
+        Selected destinations
+      </strong>
+      <div className="grid gap-2 md:grid-cols-2">
+        {sonarr.map((destination) => (
+          <div
+            key={`${destination.instanceId}:${destination.seriesId}`}
+            className="flex min-w-0 items-center gap-2 rounded-lg border border-base-300 bg-base-100/60 px-3 py-2"
+          >
+            <ServiceIcon service="sonarr" className="size-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <a
+                className="link link-hover inline-flex max-w-full items-center gap-1 font-medium"
+                href={`/api/tools/episode-gaps/open/sonarr/${destination.instanceId}/${
+                  encodeURIComponent(showRatingKey)
+                }`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span className="truncate">{destination.instanceName} series</span>
+                <ExternalLink className="size-3 shrink-0" />
+              </a>
+              <p className="truncate text-xs text-base-content/55" title={destination.seriesPath}>
+                {destination.seriesPath}
+              </p>
+            </div>
+          </div>
+        ))}
+        {[...downloadGroups.entries()].map(([key, destinations]) => (
+          <div
+            key={key}
+            className="flex min-w-0 items-start gap-2 rounded-lg border border-base-300 bg-base-100/60 px-3 py-2"
+          >
+            <details className="group min-w-0 flex-1">
+              <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+                <ServiceIcon service="qbittorrent" className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1">
+                  <strong className="block truncate">{destinations[0]!.instanceName}</strong>
+                  <small className="text-base-content/55">
+                    {destinations.length} verified {destinations.length === 1 ? "job" : "jobs"}{" "}
+                    selected for deletion
+                  </small>
+                </span>
+                <ChevronDown className="size-3.5 shrink-0 transition-transform group-open:rotate-180" />
+              </summary>
+              <ul className="mt-2 max-h-48 space-y-1.5 overflow-y-auto border-t border-base-300/70 pt-2">
+                {destinations.map((destination) => (
+                  <li key={destination.jobId} className="min-w-0 text-xs">
+                    <strong className="block truncate" title={destination.jobName}>
+                      {destination.jobName}
+                    </strong>
+                    <code
+                      className="block truncate text-[0.7rem] text-base-content/55"
+                      title={destination.contentPath}
+                    >
+                      {destination.contentPath}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <a
+              className="link link-hover mt-0.5 inline-flex shrink-0 items-center gap-1 text-xs"
+              href={destinations[0]!.instanceUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open ${destinations[0]!.instanceName}`}
+            >
+              Open <ExternalLink className="size-3" />
+            </a>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function LaneDestinationMark({
@@ -912,20 +1028,19 @@ export function SeasonDuplicateDialog({
     ? 0
     : (deletionPreview.data?.automaticAdoptionCount ?? 0) +
       (deletionPreview.data?.removedAndUnmonitoredCount ?? 0);
+  const downloadCleanupVisible = seasonDownloadCleanupVisible({
+    cleanupConfigured: cleanupDestinationAvailable,
+    cleanupEligibleVersionCount,
+  });
+  const selectedDestinationServices = seasonSelectedDestinationServices({
+    sonarrMode,
+    cleanupDownloads,
+    preview: deletionPreview.data,
+  });
   const destinationOptions = (
     <>
       <DestinationOptions
         options={[
-          {
-            id: "plex" as const,
-            service: "plex" as const,
-            label: "Plex",
-            info: "Plex reconciliation is required for every version removal.",
-            checked: true,
-            disabled: true,
-            warning: false,
-            onChange: () => {},
-          },
           ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
               deletionPreview.data?.breakGlassAvailable !== true
             ? [{
@@ -945,40 +1060,29 @@ export function SeasonDuplicateDialog({
                 });
               },
             }]
-            : breakGlassVisible
-            ? []
-            : [{
-              id: "arr" as const,
-              service: "sonarr" as const,
-              label: "Sonarr",
-              info: deletionPreview.data?.sonarrInspectionWarning ??
-                deletionPreview.data?.adoptionUnavailableReason ??
-                "No verified Sonarr destination is available",
-              checked: false,
-              disabled: true,
-              warning: true,
-              onChange: () => {},
-            }]),
-          {
-            id: "cleanup" as const,
-            service: "qbittorrent" as const,
-            label: "Delete from qBittorrent",
-            info: deletionPreview.data?.cleanupReason ??
-              (cleanupEligibleVersionCount > 0
-                ? `Deletes verified qBittorrent jobs and their downloaded files for ${cleanupEligibleVersionCount} selected ${
-                  cleanupEligibleVersionCount === 1 ? "version" : "versions"
-                }. Unmatched downloads are left untouched.`
-                : "No verified qBittorrent job is available"),
-            checked: cleanupDownloads,
-            disabled: pending || deletionPreview.isFetching || !cleanupDestinationAvailable,
-            warning: !cleanupDestinationAvailable,
-            onChange: (checked: boolean) =>
-              setDestinationChoice({
-                key: authorizationKey,
-                sonarrMode,
-                cleanupDownloads: checked,
-              }),
-          },
+            : []),
+          ...(downloadCleanupVisible
+            ? [{
+              id: "cleanup" as const,
+              service: "qbittorrent" as const,
+              label: "Delete from qBittorrent",
+              info: deletionPreview.data?.cleanupReason ??
+                (cleanupEligibleVersionCount > 0
+                  ? `Deletes verified qBittorrent jobs and their downloaded files for ${cleanupEligibleVersionCount} selected ${
+                    cleanupEligibleVersionCount === 1 ? "version" : "versions"
+                  }. Unmatched downloads are left untouched.`
+                  : "No verified qBittorrent job is available"),
+              checked: cleanupDownloads,
+              disabled: pending || deletionPreview.isFetching || !cleanupDestinationAvailable,
+              warning: !cleanupDestinationAvailable,
+              onChange: (checked: boolean) =>
+                setDestinationChoice({
+                  key: authorizationKey,
+                  sonarrMode,
+                  cleanupDownloads: checked,
+                }),
+            }]
+            : []),
           ...(breakGlassVisible
             ? [{
               id: "arr-break-glass" as const,
@@ -1433,11 +1537,21 @@ export function SeasonDuplicateDialog({
                       <span>
                         Preview {selectedPlans.length} affected{" "}
                         {selectedPlans.length === 1 ? "episode" : "episodes"}
+                        {selectedDestinationServices.length > 0 &&
+                          ` · ${selectedDestinationServices.join(" + ")}`}
                       </span>
                     </button>
                     <div className="season-version-preview-content" aria-hidden={!previewOpen}>
                       <div className="season-version-preview-clip">
                         <div className="season-version-preview-list">
+                          {deletionPreview.data && (
+                            <SeasonDestinationLinks
+                              preview={deletionPreview.data}
+                              showRatingKey={season.showRatingKey}
+                              sonarrSelected={sonarrMode !== "none"}
+                              downloadsSelected={cleanupDownloads}
+                            />
+                          )}
                           {selectedPlans.map((plan) => {
                             const mediaIds = new Set(profileDeleteIds.get(planKey(plan)) ?? []);
                             const versions = plan.episode.versions.filter((item) =>

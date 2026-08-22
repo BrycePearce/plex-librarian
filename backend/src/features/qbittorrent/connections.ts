@@ -40,6 +40,7 @@ export async function getQbittorrentTargets(serverId: number): Promise<DownloadC
     return [{
       provider: 'qbittorrent',
       instanceKey,
+      instanceUrl: normalized,
       configurationIdentity: `env:${normalized}:${JSON.stringify(pathMappings)}`,
       instanceId: null,
       instanceName: 'qBittorrent (environment)',
@@ -63,6 +64,7 @@ export async function getQbittorrentTargets(serverId: number): Promise<DownloadC
     return {
       provider: 'qbittorrent',
       instanceKey,
+      instanceUrl: normalizeQbittorrentUrl(row.url),
       configurationIdentity: `db:${row.id}:${row.updatedAt}:${normalizeQbittorrentUrl(row.url)}:${
         JSON.stringify(pathMappings)
       }`,

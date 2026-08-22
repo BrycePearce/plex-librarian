@@ -20,6 +20,7 @@ import {
   seasonLaneMatchBasisLabel,
   seasonProfilesDeletionPlan,
   seasonProfileSelection,
+  seasonSelectedDestinationServices,
   seasonSonarrVisible,
 } from "./SeasonDuplicateDialog.tsx";
 import { ApiError } from "../../lib/api.ts";
@@ -344,6 +345,42 @@ Deno.test("season download cleanup is offered only for verified selected version
   assertEquals(
     seasonDownloadCleanupVisible({ cleanupConfigured: true, cleanupEligibleVersionCount: 2 }),
     true,
+  );
+});
+
+Deno.test("season preview title names only selected destinations", () => {
+  const preview = {
+    sonarrDestinations: [{
+      instanceId: 1,
+      instanceName: "Sonarr",
+      seriesId: 8,
+      seriesPath: "/tv/Moomin",
+    }],
+    downloadDestinations: [{
+      provider: "qbittorrent",
+      instanceName: "qBittorrent",
+      instanceUrl: "http://qb:8080",
+      jobId: "hash",
+      jobName: "Moomin Season 1",
+      contentPath: "/downloads/Moomin",
+      savePath: "/downloads",
+    }],
+  } as SeasonDeletionPreviewResponse;
+  assertEquals(
+    seasonSelectedDestinationServices({
+      sonarrMode: "adopt_retained",
+      cleanupDownloads: true,
+      preview,
+    }),
+    ["Sonarr", "qBittorrent"],
+  );
+  assertEquals(
+    seasonSelectedDestinationServices({
+      sonarrMode: "none",
+      cleanupDownloads: false,
+      preview,
+    }),
+    [],
   );
 });
 

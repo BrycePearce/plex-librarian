@@ -4846,6 +4846,12 @@ Deno.test('season adoption selects the best retained candidate that passes exact
     path: sonarrRescanTargetPath,
     fallbackCandidateCount: 0,
   }]);
+  assertEquals(preview.sonarrDestinations, [{
+    instanceId: 2,
+    instanceName: 'Sonarr',
+    seriesId: 8,
+    seriesPath: '/tv/Show',
+  }]);
   const response = await seasonCleanupRequest('season-1', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -5406,6 +5412,15 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
   const preview = await previewResponse.json();
   assertEquals(preview.sonarrAvailable, true);
   assertEquals(preview.cleanupEligibleVersionCount, 1);
+  assertEquals(preview.downloadDestinations, [{
+    provider: 'qbittorrent',
+    instanceName: 'qBittorrent',
+    instanceUrl: 'http://qbit',
+    jobId: torrentHash,
+    jobName: 'Release',
+    contentPath: '/downloads/release/old.mkv',
+    savePath: '/downloads',
+  }]);
   assertEquals(preview.automaticAdoptionCount, 0);
   assertEquals(preview.plexOnlyCount, 1);
 

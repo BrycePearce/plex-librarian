@@ -995,6 +995,44 @@ export async function buildAuthoritativeSeasonPlan(input: {
         : [];
     })
   ).sort((left, right) => left.episodeRatingKey.localeCompare(right.episodeRatingKey));
+  const sonarrDestinations = [...managedGroups.values()].flatMap((group) => {
+    const target = targetPlans.find((entry) =>
+      entry.target.instanceId === group.arrInstanceId && entry.seriesId === group.seriesId
+    );
+    return target
+      ? [{
+        instanceId: target.target.instanceId,
+        instanceName: target.target.instanceName,
+        seriesId: target.seriesId,
+        seriesPath: target.seriesPath,
+      }]
+      : [];
+  }).sort((left, right) =>
+    left.instanceName.localeCompare(right.instanceName) || left.seriesId - right.seriesId
+  );
+  const downloadDestinationMap = new Map<
+    string,
+    NonNullable<SeasonDeletionPreviewResponse['downloadDestinations']>[number]
+  >();
+  for (const job of cleanupPlans.flatMap((entry) => entry.cleanup.downloadJobs)) {
+    if (job.provider !== 'qbittorrent') continue;
+    const target = downloadTargets.find((entry) =>
+      entry.provider === job.provider && entry.instanceKey === job.instanceKey
+    );
+    if (!target?.instanceUrl) continue;
+    downloadDestinationMap.set(`${job.instanceKey}:${job.jobId}`, {
+      provider: 'qbittorrent',
+      instanceName: job.instanceName,
+      instanceUrl: target.instanceUrl,
+      jobId: job.jobId,
+      jobName: job.name,
+      contentPath: job.contentPath,
+      savePath: job.savePath,
+    });
+  }
+  const downloadDestinations = [...downloadDestinationMap.values()].sort((left, right) =>
+    left.instanceName.localeCompare(right.instanceName) || left.jobName.localeCompare(right.jobName)
+  );
   const preview: SeasonDeletionPreviewResponse = {
     seasonRatingKey: input.seasonRatingKey,
     completeEpisodeCount: byEpisode.size,
@@ -1016,6 +1054,8 @@ export async function buildAuthoritativeSeasonPlan(input: {
     cleanupEligibleVersionCount: cleanupEligibleMedia.length,
     cleanupReason: seriesCleanup?.reason ?? null,
     sonarrAdoptionTargets,
+    sonarrDestinations,
+    downloadDestinations,
     breakGlassAvailable: adoptionUnavailable || acceptedBreakGlass,
     adoptionUnavailableReason: adoptionUnavailable || acceptedBreakGlass
       ? 'Sonarr could not verify an exact eligible retained file for every managed episode. Break-glass removal permanently unmonitors the affected episode.'

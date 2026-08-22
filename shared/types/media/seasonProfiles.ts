@@ -96,6 +96,23 @@ export interface SeasonDeletionMemberPreview {
   reason: string | null;
 }
 
+export interface SeasonSonarrDestinationPreview {
+  instanceId: number;
+  instanceName: string;
+  seriesId: number;
+  seriesPath: string;
+}
+
+export interface SeasonDownloadDestinationPreview {
+  provider: 'qbittorrent';
+  instanceName: string;
+  instanceUrl: string;
+  jobId: string;
+  jobName: string;
+  contentPath: string;
+  savePath: string;
+}
+
 export interface SeasonDeletionPreviewResponse {
   seasonRatingKey: string;
   completeEpisodeCount: number;
@@ -116,9 +133,11 @@ export interface SeasonDeletionPreviewResponse {
     path: string;
     fallbackCandidateCount: number;
   }>;
+  sonarrDestinations?: SeasonSonarrDestinationPreview[];
   cleanupConfigured: boolean;
   cleanupEligibleVersionCount: number;
   cleanupReason: string | null;
+  downloadDestinations?: SeasonDownloadDestinationPreview[];
   adoptionUnavailableReason?: string | null;
   breakGlassAvailable?: boolean;
   fingerprint: string;

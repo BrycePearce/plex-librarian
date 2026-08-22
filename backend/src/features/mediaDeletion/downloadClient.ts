@@ -86,6 +86,8 @@ export function downloadJobManifestFingerprint(job: DownloadJob): Promise<string
 export interface DownloadClientTarget {
   provider: string;
   instanceKey: string;
+  /** User-facing Web UI root. It contains no credentials and is safe to return in previews. */
+  instanceUrl?: string;
   /** Stable, non-secret identity for the exact configured endpoint accepted by preview. */
   configurationIdentity: string;
   instanceId: number | null;
