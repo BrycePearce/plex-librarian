@@ -905,10 +905,11 @@ function SyncProgressPanel(
 
   return (
     <div className="card bg-base-200">
-      <div className="card-body gap-0 py-3">
+      <div className="card-body gap-0 p-0">
         <button
           type="button"
-          className="flex items-center gap-3 text-sm w-full text-left"
+          className="flex w-full cursor-pointer items-center gap-3 rounded-box px-8 py-3 text-left text-sm"
+          aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
         >
           {done
@@ -937,7 +938,7 @@ function SyncProgressPanel(
         </button>
 
         {expanded && (
-          <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-base-300">
+          <div className="mx-8 mb-3 flex flex-col gap-2 border-t border-base-300 pt-3">
             {progress.map((lib) => <LibraryProgressRow key={lib.key} lib={lib} />)}
           </div>
         )}
