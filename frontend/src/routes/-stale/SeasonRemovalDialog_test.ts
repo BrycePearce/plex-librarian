@@ -7,9 +7,13 @@ import {
 
 Deno.test("season cleanup option appears only for a detected qBittorrent job", () => {
   assertEquals(seasonCleanupAvailable(undefined), false);
-  assertEquals(seasonCleanupAvailable({ downloadJobs: [] }), false);
   assertEquals(
-    seasonCleanupAvailable({ downloadJobs: [{} as never] }),
+    seasonCleanupAvailable({ cleanupConfigured: false, downloadJobs: [{} as never] }),
+    false,
+  );
+  assertEquals(seasonCleanupAvailable({ cleanupConfigured: true, downloadJobs: [] }), false);
+  assertEquals(
+    seasonCleanupAvailable({ cleanupConfigured: true, downloadJobs: [{} as never] }),
     true,
   );
 });

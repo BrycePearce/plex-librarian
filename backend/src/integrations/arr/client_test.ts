@@ -1455,6 +1455,30 @@ Deno.test('Sonarr activity ignores routine global scheduler commands', async () 
   assertEquals(await client.sonarrSeriesActivity(7), { quiet: true, blocking: [] });
 });
 
+Deno.test('Sonarr activity ignores terminal commands but blocks active and statusless work', async () => {
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/queue')) {
+      return Promise.resolve(Response.json({ records: [], totalRecords: 0 }));
+    }
+    return Promise.resolve(Response.json([
+      { id: 90, name: 'RefreshSeries', status: 'completed', body: { seriesId: 7 } },
+      { id: 91, name: 'RefreshSeries', status: 'failed', body: { seriesId: 7 } },
+      { id: 92, name: 'RescanSeries', status: 'aborted', body: { seriesId: 7 } },
+      { id: 93, name: 'RescanSeries', status: 'cancelled', body: { seriesId: 7 } },
+      { id: 94, name: 'RefreshSeries', status: 'started', body: { seriesId: 7 } },
+      { id: 95, name: 'RenameSeries', body: { seriesId: 7 } },
+    ]));
+  });
+  assertEquals(await client.sonarrSeriesActivity(7), {
+    quiet: false,
+    blocking: [
+      { source: 'command', id: 94, name: 'RefreshSeries' },
+      { source: 'command', id: 95, name: 'RenameSeries' },
+    ],
+  });
+});
+
 Deno.test('Sonarr activity rejects truncated queue evidence', async () => {
   const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
     const path = new URL(String(input)).pathname;

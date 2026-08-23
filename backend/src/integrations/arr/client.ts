@@ -1219,6 +1219,13 @@ export class ArrClient {
     }
     const allowed = new Set(allowedCommandIds);
     const blockedNames = /(import|download|search|rescan|refresh|rename|move)/i;
+    const terminalCommandStatuses = new Set([
+      'completed',
+      'failed',
+      'aborted',
+      'cancelled',
+      'canceled',
+    ]);
     // These are Sonarr's routine global scheduler shells. They commonly remain in
     // the command list even when they found no work for this series; the scoped queue
     // above is the authoritative evidence for an actual download/import conflict.
@@ -1242,9 +1249,11 @@ export class ArrClient {
         ...(Array.isArray(body.seriesIds) ? body.seriesIds : []),
       ].map(Number).filter(Number.isSafeInteger);
       const name = String(value.name ?? body.name ?? value.commandName ?? '');
+      const status = typeof value.status === 'string' ? value.status.trim().toLowerCase() : null;
       const id = Number(value.id);
       if (
-        !blockedNames.test(name) || routineGlobalCommands.has(name.toLocaleLowerCase('en-US')) ||
+        terminalCommandStatuses.has(status ?? '') || !blockedNames.test(name) ||
+        routineGlobalCommands.has(name.toLocaleLowerCase('en-US')) ||
         (Number.isSafeInteger(id) && allowed.has(id))
       ) continue;
       // A relevant command without an attributable series boundary may be global or
