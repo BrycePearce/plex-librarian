@@ -111,19 +111,32 @@ export function DeletionDialogLayout({
 export function DeletionPreviewDisclosure({
   label = "Deletion preview",
   meta,
+  controls,
   children,
 }: {
   label?: ReactNode;
   meta?: ReactNode;
+  controls?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <details className="group deletion-preview mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40">
-      <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 text-xs text-base-content/50">
-        <ChevronDown className="size-3.5 shrink-0 -rotate-90 transition-transform group-open:rotate-0" />
-        <span className="font-medium">{label}</span>
-        {meta && <span className="ml-auto">{meta}</span>}
-      </summary>
+      <div className="relative">
+        <summary
+          className={`flex h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 text-xs text-base-content/50 ${
+            controls ? "group-open:pr-40" : ""
+          }`}
+        >
+          <ChevronDown className="size-3.5 shrink-0 -rotate-90 transition-transform group-open:rotate-0" />
+          <span className="font-medium">{label}</span>
+          {meta && <span className="ml-auto">{meta}</span>}
+        </summary>
+        {controls && (
+          <div className="absolute right-1.5 top-1/2 hidden -translate-y-1/2 group-open:block">
+            {controls}
+          </div>
+        )}
+      </div>
       <div className="border-t border-base-300/70 px-2.5 pb-2">
         {children}
       </div>
@@ -190,8 +203,7 @@ export function DeletionPreview({
   );
   if (collapsible) {
     return (
-      <DeletionPreviewDisclosure>
-        <div className="flex justify-end pt-2">{modePicker}</div>
+      <DeletionPreviewDisclosure controls={modePicker}>
         {content}
       </DeletionPreviewDisclosure>
     );
