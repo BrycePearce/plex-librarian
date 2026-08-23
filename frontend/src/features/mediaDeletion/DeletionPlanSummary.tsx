@@ -8,7 +8,7 @@ import { formatKilobytes } from "../../lib/format.ts";
 import { InfoTip } from "./InfoTip.tsx";
 
 export interface DeletionDestinationOption {
-  id: "plex" | "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
+  id: "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
   service?: ServiceIconName;
   label: string;
   info: string;

@@ -12,10 +12,7 @@ import {
 import type { StaleItem } from "../../lib/api.ts";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
-import {
-  ArrDeletionWarning,
-  DestinationOptions,
-} from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import {
   ActiveServiceMark,
   downloadJobFiles,
@@ -240,17 +237,6 @@ export function SeasonRemovalDialog({
   useEffect(() => {
     if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
   }, [cleanupAvailable, cleanupDownloads, value]);
-  const sonarrDeletionImpacts = coordinated && value?.sonarrStatus === "resolved" &&
-      value.managedFileCount > 0
-    ? [{
-      key: value.seasonRatingKey,
-      title: `${value.showTitle} — ${value.seasonTitle}`,
-      fileCount: value.managedFileCount,
-      sizeBytes: value.sonarrFiles.length > 0
-        ? value.sonarrFiles.reduce((total, file) => total + file.size, 0)
-        : null,
-    }]
-    : [];
   const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
     (coordinated && !sonarrActionAvailable);
 
@@ -299,10 +285,6 @@ export function SeasonRemovalDialog({
             <AlertTriangle className="size-4" /> {blocker}
           </div>
         ))}
-        <ArrDeletionWarning
-          service="sonarr"
-          impacts={sonarrDeletionImpacts}
-        />
         {item && (
           <div className="mt-4 rounded-box border border-base-300 bg-base-200/50 p-4 text-sm">
             <div className="flex items-center justify-between gap-4 text-base-content/70">
@@ -349,16 +331,6 @@ export function SeasonRemovalDialog({
         {item && !preview.error && (
           <DestinationOptions
             options={[
-              {
-                id: "plex" as const,
-                service: "plex" as const,
-                label: "Plex",
-                info: "Plex season reconciliation is required for every removal.",
-                checked: true,
-                disabled: true,
-                warning: false,
-                onChange: () => {},
-              },
               {
                 id: "arr" as const,
                 service: "sonarr" as const,

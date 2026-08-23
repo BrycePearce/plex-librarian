@@ -472,18 +472,6 @@ export function VersionPickerDialog({
         <>
           <DestinationOptions
             options={[
-              ...(selection.deleteWholeItem
-                ? [{
-                  id: "plex" as const,
-                  service: "plex" as const,
-                  label: "Plex",
-                  info: "Plex removal and reconciliation is required for whole-item deletion.",
-                  checked: true,
-                  disabled: true,
-                  warning: false,
-                  onChange: () => {},
-                }]
-                : []),
               ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
                 ? [
                   {

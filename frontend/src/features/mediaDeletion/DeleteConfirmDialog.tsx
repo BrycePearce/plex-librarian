@@ -262,16 +262,6 @@ export function DeleteConfirmDialog({
       <DestinationOptions
         options={[
           {
-            id: "plex" as const,
-            service: "plex" as const,
-            label: "Plex",
-            info: "Plex removal and reconciliation is required for every deletion.",
-            checked: true,
-            disabled: true,
-            warning: false,
-            onChange: () => {},
-          },
-          {
             id: "arr" as const,
             service: arrService,
             label: arrLabel,
