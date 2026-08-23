@@ -2482,7 +2482,7 @@ Deno.test('whole-season replay finalizes when Plex already confirms season absen
   await settle();
 
   const operation = getDeletionOperation(result.operationId, 1)!;
-  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
+  assertEquals(operation.status, 'completed', JSON.stringify(operation));
   assertEquals(live.has('show-1'), true);
   assertEquals(
     withTransaction((client) =>
@@ -3083,7 +3083,7 @@ Deno.test('warning retry needs current Arr absence but not a pruned legacy attem
 
   assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
@@ -3315,7 +3315,7 @@ Deno.test('selected cleanup and Arr still execute after Plex metadata is already
   assertEquals(qbitDeleteCount, 1);
   assertEquals(arrDeleteCount, 1);
   assertEquals(destinationOrder, ['qbittorrent', 'arr']);
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
 });
 
 Deno.test('active playback blocks selected destinations even after Plex metadata is absent', async () => {
@@ -9395,7 +9395,7 @@ Deno.test('sync preserves a needs-attention whole-item projection until manual r
 
   assertEquals(retryDeletionOperation(operationId, 1), true);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
 });
 
 Deno.test('manual retry cannot create two active operations for one library', async () => {

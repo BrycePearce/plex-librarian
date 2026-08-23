@@ -129,19 +129,12 @@ function ActivityPage() {
                         {" "}
                         {deletionRecoverySummary(operation.failureReasons, operation.status)}
                       </p>
-                    </div>
-                    <div className="flex gap-2 shrink-0">
                       <ArrRecoveryLinks
                         operationId={operation.id}
                         hasCandidates={operation.arrDestinations.length > 0}
                       />
-                      <Link
-                        to="/deletion-operations/$id"
-                        params={{ id: operation.id }}
-                        className="btn btn-ghost btn-sm"
-                      >
-                        Open
-                      </Link>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
                       {operation.retryable && (
                         <button
                           type="button"
@@ -153,6 +146,13 @@ function ActivityPage() {
                           Recheck
                         </button>
                       )}
+                      <Link
+                        to="/deletion-operations/$id"
+                        params={{ id: operation.id }}
+                        className="btn btn-ghost btn-sm"
+                      >
+                        Open details
+                      </Link>
                       {operation.retryable && (
                         <button
                           type="button"
@@ -261,25 +261,30 @@ function ArrRecoveryLinks({
     retry: false,
   });
   const resolved = links.data?.links ?? [];
-  return resolved.map((link) => (
-    <a
-      key={`${link.targetId}:${link.instanceId}:${link.href}`}
-      href={link.href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="btn btn-ghost btn-sm"
-      title={`Open ${link.targetTitle} in ${link.instanceName}`}
-      aria-label={`Open ${link.targetTitle} in ${link.instanceName}`}
-    >
-      <ServiceIcon service={link.instanceType} className="size-4" />
-      {resolved.length > 1
-        ? link.instanceName
-        : link.instanceType === "sonarr"
-        ? "Sonarr"
-        : "Radarr"}
-      <ExternalLink className="size-3" aria-hidden />
-    </a>
-  ));
+  if (resolved.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {resolved.map((link) => (
+        <a
+          key={`${link.targetId}:${link.instanceId}:${link.href}`}
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-md border border-base-300 bg-base-100/60 px-2.5 py-1.5 text-xs font-medium text-base-content/75 transition-colors hover:border-base-content/25 hover:bg-base-200 hover:text-base-content"
+          title={`Open ${link.targetTitle} in ${link.instanceName}`}
+          aria-label={`Open ${link.targetTitle} in ${link.instanceName}`}
+        >
+          <ServiceIcon service={link.instanceType} className="size-3.5" />
+          {resolved.length > 1
+            ? `Open ${link.targetTitle} in ${link.instanceName}`
+            : link.instanceType === "sonarr"
+            ? "Open in Sonarr"
+            : "Open in Radarr"}
+          <ExternalLink className="size-3" aria-hidden />
+        </a>
+      ))}
+    </div>
+  );
 }
 
 // EventType is a closed union, so these lookups cannot miss: TypeScript's
