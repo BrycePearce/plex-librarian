@@ -20,10 +20,7 @@ import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
-import {
-  ArrDeletionWarning,
-  DestinationOptions,
-} from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
@@ -1022,10 +1019,6 @@ export function SeasonDuplicateDialog({
       </div>
     );
 
-  const sonarrDeletedFileCount = sonarrMode === "none"
-    ? 0
-    : (deletionPreview.data?.automaticAdoptionCount ?? 0) +
-      (deletionPreview.data?.removedAndUnmonitoredCount ?? 0);
   const downloadCleanupVisible = seasonDownloadCleanupVisible({
     cleanupConfigured: cleanupDestinationAvailable,
     cleanupEligibleVersionCount,
@@ -1036,88 +1029,76 @@ export function SeasonDuplicateDialog({
     preview: deletionPreview.data,
   });
   const destinationOptions = (
-    <>
-      <DestinationOptions
-        options={[
-          ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
-              deletionPreview.data?.breakGlassAvailable !== true
-            ? [{
-              id: "arr" as const,
-              service: "sonarr" as const,
-              label: "Sonarr",
-              info:
-                "For a Sonarr-managed episode file, Sonarr protects monitoring, removes only the old EpisodeFile, and first imports the exact retained path. A whole-series rescan is used only as a guarded fallback and may adopt another verified retained copy. Versions Sonarr does not manage are removed through Plex; the series itself is never removed.",
-              checked: sonarrMode === "adopt_retained",
-              disabled: pending || deletionPreview.isFetching,
-              warning: false,
-              onChange: (checked: boolean) => {
-                setDestinationChoice({
-                  key: authorizationKey,
-                  sonarrMode: checked ? "adopt_retained" : "none",
-                  cleanupDownloads,
-                });
-              },
-            }]
-            : []),
-          ...(downloadCleanupVisible
-            ? [{
-              id: "cleanup" as const,
-              service: "qbittorrent" as const,
-              label: "Delete from qBittorrent",
-              info: deletionPreview.data?.cleanupReason ??
-                (cleanupEligibleVersionCount > 0
-                  ? `Deletes verified qBittorrent jobs and their downloaded files for ${cleanupEligibleVersionCount} selected ${
-                    cleanupEligibleVersionCount === 1 ? "version" : "versions"
-                  }. Unmatched downloads are left untouched.`
-                  : "No verified qBittorrent job is available"),
-              checked: cleanupDownloads,
-              disabled: pending || deletionPreview.isFetching || !cleanupDestinationAvailable,
-              warning: !cleanupDestinationAvailable,
-              onChange: (checked: boolean) =>
-                setDestinationChoice({
-                  key: authorizationKey,
-                  sonarrMode,
-                  cleanupDownloads: checked,
-                }),
-            }]
-            : []),
-          ...(breakGlassVisible
-            ? [{
-              id: "arr-break-glass" as const,
-              service: "sonarr" as const,
-              label: "Remove from Sonarr and unmonitor",
-              info:
-                "Break glass: episodes without an eligible retained path have only their exact managed EpisodeFile removed and remain permanently unmonitored. Eligible episodes still adopt a verified retained copy. The series is never removed.",
-              checked: sonarrMode === "remove_and_unmonitor",
-              disabled: pending || deletionPreview.isFetching,
-              warning: true,
-              onChange: (checked: boolean) => {
-                if (
-                  checked && !globalThis.confirm(
-                    "Permanently unmonitor each affected Sonarr episode that has no eligible retained path after removing its managed file? Eligible episodes will still adopt a verified retained copy.",
-                  )
-                ) return;
-                setDestinationChoice({
-                  key: authorizationKey,
-                  sonarrMode: checked ? "remove_and_unmonitor" : "none",
-                  cleanupDownloads,
-                });
-              },
-            }]
-            : []),
-        ]}
-      />
-      <ArrDeletionWarning
-        service="sonarr"
-        impacts={sonarrDeletedFileCount > 0
+    <DestinationOptions
+      options={[
+        ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
+            deletionPreview.data?.breakGlassAvailable !== true
           ? [{
-            key: seasonKey,
-            title: `${season.showTitle} — Season ${season.seasonIndex}`,
-            fileCount: sonarrDeletedFileCount,
+            id: "arr" as const,
+            service: "sonarr" as const,
+            label: "Sonarr",
+            info:
+              "For a Sonarr-managed episode file, Sonarr protects monitoring, removes only the old EpisodeFile, and first imports the exact retained path. A whole-series rescan is used only as a guarded fallback and may adopt another verified retained copy. Versions Sonarr does not manage are removed through Plex; the series itself is never removed.",
+            checked: sonarrMode === "adopt_retained",
+            disabled: pending || deletionPreview.isFetching,
+            warning: false,
+            onChange: (checked: boolean) => {
+              setDestinationChoice({
+                key: authorizationKey,
+                sonarrMode: checked ? "adopt_retained" : "none",
+                cleanupDownloads,
+              });
+            },
           }]
-          : []}
-      />
-    </>
+          : []),
+        ...(downloadCleanupVisible
+          ? [{
+            id: "cleanup" as const,
+            service: "qbittorrent" as const,
+            label: "Delete from qBittorrent",
+            info: deletionPreview.data?.cleanupReason ??
+              (cleanupEligibleVersionCount > 0
+                ? `Deletes verified qBittorrent jobs and their downloaded files for ${cleanupEligibleVersionCount} selected ${
+                  cleanupEligibleVersionCount === 1 ? "version" : "versions"
+                }. Unmatched downloads are left untouched.`
+                : "No verified qBittorrent job is available"),
+            checked: cleanupDownloads,
+            disabled: pending || deletionPreview.isFetching || !cleanupDestinationAvailable,
+            warning: !cleanupDestinationAvailable,
+            onChange: (checked: boolean) =>
+              setDestinationChoice({
+                key: authorizationKey,
+                sonarrMode,
+                cleanupDownloads: checked,
+              }),
+          }]
+          : []),
+        ...(breakGlassVisible
+          ? [{
+            id: "arr-break-glass" as const,
+            service: "sonarr" as const,
+            label: "Remove from Sonarr and unmonitor",
+            info:
+              "Break glass: episodes without an eligible retained path have only their exact managed EpisodeFile removed and remain permanently unmonitored. Eligible episodes still adopt a verified retained copy. The series is never removed.",
+            checked: sonarrMode === "remove_and_unmonitor",
+            disabled: pending || deletionPreview.isFetching,
+            warning: true,
+            onChange: (checked: boolean) => {
+              if (
+                checked && !globalThis.confirm(
+                  "Permanently unmonitor each affected Sonarr episode that has no eligible retained path after removing its managed file? Eligible episodes will still adopt a verified retained copy.",
+                )
+              ) return;
+              setDestinationChoice({
+                key: authorizationKey,
+                sonarrMode: checked ? "remove_and_unmonitor" : "none",
+                cleanupDownloads,
+              });
+            },
+          }]
+          : []),
+      ]}
+    />
   );
 
   return (

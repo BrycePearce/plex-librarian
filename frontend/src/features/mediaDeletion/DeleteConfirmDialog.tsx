@@ -7,14 +7,11 @@ import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
 import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { formatKilobytes } from "../../lib/format.ts";
-import {
-  arrCleanupTargetImpact,
-  ArrDeletionWarning,
-  DestinationOptions,
-} from "./DeletionPlanSummary.tsx";
+import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
 import {
   arrDestinationState,
+  downloadCleanupDestinationVisible,
   effectiveArrSelection,
   shouldUseArrByDefault,
 } from "./deletionPreviewState.ts";
@@ -24,6 +21,7 @@ import {
   BasicDeletionList,
   BasicDeletionRow,
   DeletionDialogFooter,
+  DeletionDialogLayout,
   DeletionModalShell,
   DeletionPreview,
   DeletionPreviewStatus,
@@ -87,12 +85,6 @@ export function DeleteConfirmDialog({
     preview.data?.items.filter((item) =>
       item.status === "resolved" && item.downloadJobs.length > 0
     ) ?? [];
-  const downloadJobs = [...new Map(
-    cleanupEligibleItems.flatMap((item) => item.downloadJobs).map((job) => [
-      `${job.instanceKey}:${job.jobId}`,
-      job,
-    ]),
-  ).values()];
   const cleanupEligibleCount = cleanupEligibleItems.length;
   const coordinatedRatingKeys = preview.data?.coordinatedConfigured
     ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((
@@ -111,12 +103,7 @@ export function DeleteConfirmDialog({
   // selection immediately when no coordinated destination exists so the displayed
   // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
-  const arrDeletionImpacts = effectiveDeleteFromArr
-    ? preview.data?.items.flatMap((item) =>
-      item.arrStatus === "resolved" ? item.arrTargets.map(arrCleanupTargetImpact) : []
-    ) ?? []
-    : [];
-  const cleanupUsesQbittorrent = downloadJobs.length > 0;
+  const cleanupDestinationVisible = downloadCleanupDestinationVisible(preview.data);
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     setDeleteFromArr(true);
@@ -183,157 +170,167 @@ export function DeleteConfirmDialog({
         </>
       }
     >
-      <DeletionPreview
-        mode={previewMode}
-        onModeChange={setPreviewMode}
-        basic={
-          <BasicDeletionList>
-            {items.map((item) => {
-              const versions = item.versions ?? [];
-              const isMultiVersion = versions.length >= 2;
-              const previewItem = previewByRatingKey.get(item.ratingKey);
-              return (
-                <BasicDeletionRow
-                  key={item.ratingKey}
-                  title={item.title}
-                  titleText={item.title}
-                  badges={
-                    <>
-                      {isMultiVersion && (
-                        <span className="badge badge-warning badge-xs shrink-0">
-                          {versions.length} versions
-                        </span>
-                      )}
-                      {!isMultiVersion && item.hasDuplicateEpisodes && (
-                        <span
-                          className="inline-flex size-4 shrink-0 items-center justify-center text-warning"
-                          title="This show contains episodes with multiple Plex versions"
-                          role="img"
-                          aria-label="Has duplicate episodes"
-                        >
-                          <Copy className="size-3" />
-                        </span>
-                      )}
-                    </>
-                  }
-                  marks={
-                    <DeletionServiceMarks
-                      item={item}
-                      preview={previewItem}
-                      deleteFromArr={effectiveDeleteFromArr}
-                      cleanupDownloads={cleanupDownloads}
-                    />
-                  }
-                  size={item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
-                />
-              );
-            })}
-          </BasicDeletionList>
+      <DeletionDialogLayout
+        status={
+          <>
+            {error != null && (
+              <p className="text-error text-sm">
+                {error instanceof Error ? error.message : "Delete failed"}
+              </p>
+            )}
+            <DeletionPreviewStatus
+              error={preview.isError ? preview.error.message : null}
+              onRetry={() => void preview.refetch()}
+              retrying={preview.isFetching}
+              warnings={[
+                ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
+                  ? [
+                    `${arrProblems.length} ${
+                      arrProblems.length === 1 ? "item has" : "items have"
+                    } no verified Arr destination. Plex and any independently selected qBittorrent cleanup will still run. ${
+                      arrProblems.length === 1 ? "It" : "They"
+                    } may be downloaded again if ${
+                      arrProblems.length === 1 ? "it remains" : "they remain"
+                    } monitored.`,
+                  ]
+                  : []),
+                ...(cleanupDownloads && cleanupProblems.length > 0
+                  ? [
+                    `qBittorrent cleanup could not be verified for ${cleanupProblems.length} ${
+                      cleanupProblems.length === 1 ? "item" : "items"
+                    }: ${cleanupProblems[0]?.reason ?? "No verified qBittorrent job is available"}`,
+                  ]
+                  : []),
+              ]}
+            />
+          </>
         }
-        advanced={
-          <AdvancedDeletionTree
-            items={items}
-            plexPreviews={previewByRatingKey}
-            deleteFromArr={effectiveDeleteFromArr}
-            cleanupDownloads={cleanupDownloads}
-            loading={preview.isLoading}
+        review={
+          <>
+            <DeletionPreview
+              mode={previewMode}
+              onModeChange={setPreviewMode}
+              collapsible={!embedded}
+              basic={
+                <BasicDeletionList>
+                  {items.map((item) => {
+                    const versions = item.versions ?? [];
+                    const isMultiVersion = versions.length >= 2;
+                    const previewItem = previewByRatingKey.get(item.ratingKey);
+                    return (
+                      <BasicDeletionRow
+                        key={item.ratingKey}
+                        title={item.title}
+                        titleText={item.title}
+                        badges={
+                          <>
+                            {isMultiVersion && (
+                              <span className="badge badge-warning badge-xs shrink-0">
+                                {versions.length} versions
+                              </span>
+                            )}
+                            {!isMultiVersion && item.hasDuplicateEpisodes && (
+                              <span
+                                className="inline-flex size-4 shrink-0 items-center justify-center text-warning"
+                                title="This show contains episodes with multiple Plex versions"
+                                role="img"
+                                aria-label="Has duplicate episodes"
+                              >
+                                <Copy className="size-3" />
+                              </span>
+                            )}
+                          </>
+                        }
+                        marks={
+                          <DeletionServiceMarks
+                            item={item}
+                            preview={previewItem}
+                            deleteFromArr={effectiveDeleteFromArr}
+                            cleanupDownloads={cleanupDownloads}
+                          />
+                        }
+                        size={item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
+                      />
+                    );
+                  })}
+                </BasicDeletionList>
+              }
+              advanced={
+                <AdvancedDeletionTree
+                  items={items}
+                  plexPreviews={previewByRatingKey}
+                  deleteFromArr={effectiveDeleteFromArr}
+                  cleanupDownloads={cleanupDownloads}
+                  loading={preview.isLoading}
+                />
+              }
+            />
+            {hasMultiVersionItems && (
+              <p className="mt-1.5 text-xs text-base-content/40">
+                Items marked with multiple versions lose all of them here. To remove just one, use
+                the{" "}
+                <Link
+                  to="/duplicates"
+                  search={{ type: "all", comparison: "all" }}
+                  className="link link-primary"
+                >
+                  Duplicates page
+                </Link>{" "}
+                instead.
+              </p>
+            )}
+          </>
+        }
+        destinations={
+          <DestinationOptions
+            options={[
+              ...(coordinatedRatingKeys.length > 0
+                ? [{
+                  id: "arr" as const,
+                  service: arrService,
+                  label: arrLabel,
+                  info: `Deletes the managed title and its files through ${arrLabel}.`,
+                  checked: effectiveDeleteFromArr,
+                  disabled: pending || preview.isLoading,
+                  warning: arrProblems.length > 0,
+                  onChange: (checked: boolean) => {
+                    setDeleteFromArr(checked);
+                  },
+                }]
+                : []),
+              ...(cleanupDestinationVisible
+                ? [{
+                  id: "cleanup" as const,
+                  service: "qbittorrent" as const,
+                  label: "qBittorrent",
+                  info:
+                    "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed.",
+                  checked: cleanupDownloads,
+                  disabled: pending || preview.isLoading,
+                  warning: cleanupDownloads && cleanupProblems.length > 0,
+                  onChange: setCleanupDownloads,
+                }]
+                : []),
+            ]}
           />
         }
-      />
-      {hasMultiVersionItems && (
-        <p className="mt-1.5 text-xs text-base-content/40">
-          Items marked with multiple versions lose all of them here. To remove just one, use the
-          {" "}
-          <Link
-            to="/duplicates"
-            search={{ type: "all", comparison: "all" }}
-            className="link link-primary"
-          >
-            Duplicates page
-          </Link>{" "}
-          instead.
-        </p>
-      )}
-      {error != null && (
-        <p className="text-error text-sm">
-          {error instanceof Error ? error.message : "Delete failed"}
-        </p>
-      )}
-      <DestinationOptions
-        options={[
-          {
-            id: "arr" as const,
-            service: arrService,
-            label: arrLabel,
-            info: arrProblems[0]?.arrReason ??
-              (coordinatedRatingKeys.length > 0
-                ? `Deletes the managed title and its files through ${arrLabel}.`
-                : `No verified ${arrLabel} destination is available`),
-            checked: effectiveDeleteFromArr,
-            disabled: pending || preview.isLoading ||
-              coordinatedRatingKeys.length === 0,
-            warning: arrProblems.length > 0,
-            onChange: (checked: boolean) => {
-              setDeleteFromArr(checked);
-            },
-          },
-          {
-            id: "cleanup" as const,
-            service: "qbittorrent" as const,
-            label: "qBittorrent",
-            info: cleanupProblems[0]?.reason ??
-              (cleanupUsesQbittorrent
-                ? "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed."
-                : "No verified qBittorrent job is available"),
-            checked: cleanupDownloads,
-            disabled: pending || preview.isLoading || cleanupEligibleCount === 0,
-            warning: cleanupProblems.length > 0,
-            onChange: setCleanupDownloads,
-          },
-        ]}
-      />
-      <ArrDeletionWarning service={arrService} impacts={arrDeletionImpacts} />
-
-      <DeletionPreviewStatus
-        error={preview.isError ? preview.error.message : null}
-        onRetry={() => void preview.refetch()}
-        retrying={preview.isFetching}
-        warnings={[
-          ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
-            ? [
-              `${arrProblems.length} ${
-                arrProblems.length === 1 ? "item has" : "items have"
-              } no verified Arr destination. Plex and any independently selected qBittorrent cleanup will still run. ${
-                arrProblems.length === 1 ? "It" : "They"
-              } may be downloaded again if ${
-                arrProblems.length === 1 ? "it remains" : "they remain"
-              } monitored.`,
-            ]
-            : []),
-          ...(cleanupProblems.length > 0
-            ? [
-              `qBittorrent cleanup could not be verified for ${cleanupProblems.length} ${
-                cleanupProblems.length === 1 ? "item" : "items"
-              }: ${cleanupProblems[0]?.reason ?? "No verified qBittorrent job is available"}`,
-            ]
-            : []),
-        ]}
-      />
-
-      <DeletionDialogFooter
-        cancelButtonRef={cancelButtonRef}
-        pending={pending}
-        preparing={showPreviewLoading}
-        confirmDisabled={confirmDisabled}
-        confirmLabel="Delete permanently"
-        onCancel={cancel}
-        onConfirm={() =>
-          onConfirm({
-            coordinatedRatingKeys: effectiveDeleteFromArr ? coordinatedRatingKeys : [],
-            cleanupDownloadRatingKeys: cleanupDownloads
-              ? cleanupEligibleItems.map((item) => item.ratingKey)
-              : [],
-          })}
+        footer={
+          <DeletionDialogFooter
+            cancelButtonRef={cancelButtonRef}
+            pending={pending}
+            preparing={showPreviewLoading}
+            confirmDisabled={confirmDisabled}
+            confirmLabel="Delete permanently"
+            onCancel={cancel}
+            onConfirm={() =>
+              onConfirm({
+                coordinatedRatingKeys: effectiveDeleteFromArr ? coordinatedRatingKeys : [],
+                cleanupDownloadRatingKeys: cleanupDownloads
+                  ? cleanupEligibleItems.map((item) => item.ratingKey)
+                  : [],
+              })}
+          />
+        }
       />
     </DeletionModalShell>
   );

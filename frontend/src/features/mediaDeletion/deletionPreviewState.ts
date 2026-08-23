@@ -22,3 +22,10 @@ export function effectiveArrSelection(
 ): boolean {
   return selected && shouldUseArrByDefault(preview);
 }
+
+export function downloadCleanupDestinationVisible(
+  preview: DownloadCleanupPreviewResponse | undefined,
+): boolean {
+  return preview?.downloadClientsConfigured === true &&
+    preview.items.some((item) => item.status === "resolved" && item.downloadJobs.length > 0);
+}

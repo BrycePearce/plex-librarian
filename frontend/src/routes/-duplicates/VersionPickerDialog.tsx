@@ -11,11 +11,7 @@ import { VersionTechnicalInfo } from "../../features/mediaDeletion/VersionTechni
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import { comparisonIcon, comparisonToneClass } from "./duplicatePresentation.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
-import {
-  arrCleanupTargetImpact,
-  ArrDeletionWarning,
-  DestinationOptions,
-} from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import {
   AdvancedVersionDeletionTree,
   VersionDeletionServiceMarks,
@@ -312,26 +308,6 @@ export function VersionPickerDialog({
   const activePreviewError = selection.deleteWholeItem ? wholeItemPreview.error : preview.error;
   const blockingOperationId = deletionOperationIdFromError(activePreviewError) ??
     deletionOperationIdFromError(error);
-  const arrDeletionImpacts = selection.deleteWholeItem && effectiveDeleteFromArr &&
-      wholeItemPreviewEntry?.arrStatus === "resolved"
-    ? wholeItemPreviewEntry.arrTargets.map(arrCleanupTargetImpact)
-    : item.mediaType === "episode" && effectiveDeleteFromArr
-    ? selectedVersions.flatMap((version) => {
-      const entry = preview.data?.versions.find((candidate) =>
-        candidate.mediaId === version.mediaId
-      );
-      if (entry?.arrStatus !== "resolved") return [];
-      return entry.arrPaths.map((path) => ({
-        key: `${ratingKey}:${path}`,
-        title: `${item.showTitle} — S${item.seasonIndex}E${item.episodeIndex}`,
-        path,
-        fileCount: 1,
-        sizeBytes: entry.arrPaths.length === 1 && version.fileSize !== null
-          ? version.fileSize * 1000
-          : null,
-      }));
-    })
-    : [];
   return (
     <DeletionModalShell
       dialogRef={dialogRef}
@@ -469,90 +445,87 @@ export function VersionPickerDialog({
 
       {(selection.deleteWholeItem ? wholeItemPreview.data : preview.data) &&
         destinationOptionsVisible && (
-        <>
-          <DestinationOptions
-            options={[
-              ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
-                ? [
-                  {
-                    id: "arr" as const,
-                    service: arrService,
-                    label: arrDestinationCopy.label,
-                    info: selection.deleteWholeItem
-                      ? (wholeItemPreviewEntry?.arrReason ??
-                        (wholeItemArrAvailable
-                          ? `Deletes the managed title and its files through ${arrLabel}.`
-                          : `No verified ${arrLabel} destination is available`))
-                      : arrDestinationCopy.info,
-                    checked: effectiveDeleteFromArr && effectiveArrAvailable &&
-                      !useRadarrPathOverride,
-                    disabled: pending ||
-                      (selection.deleteWholeItem &&
-                        (wholeItemPreview.isLoading || !wholeItemArrAvailable)) ||
-                      (item.mediaType === "episode" && arrReassignAvailable &&
-                        !useRadarrPathOverride),
-                    warning: false,
-                    onChange: (checked: boolean) => {
-                      if (checked && useRadarrPathOverride) {
-                        setUseRadarrPathOverride(false);
-                        return;
-                      }
-                      setDeleteFromArr(checked);
-                      if (!checked && !selection.deleteWholeItem) setCleanupDownloads(false);
-                    },
+        <DestinationOptions
+          options={[
+            ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
+              ? [
+                {
+                  id: "arr" as const,
+                  service: arrService,
+                  label: arrDestinationCopy.label,
+                  info: selection.deleteWholeItem
+                    ? (wholeItemPreviewEntry?.arrReason ??
+                      (wholeItemArrAvailable
+                        ? `Deletes the managed title and its files through ${arrLabel}.`
+                        : `No verified ${arrLabel} destination is available`))
+                    : arrDestinationCopy.info,
+                  checked: effectiveDeleteFromArr && effectiveArrAvailable &&
+                    !useRadarrPathOverride,
+                  disabled: pending ||
+                    (selection.deleteWholeItem &&
+                      (wholeItemPreview.isLoading || !wholeItemArrAvailable)) ||
+                    (item.mediaType === "episode" && arrReassignAvailable &&
+                      !useRadarrPathOverride),
+                  warning: false,
+                  onChange: (checked: boolean) => {
+                    if (checked && useRadarrPathOverride) {
+                      setUseRadarrPathOverride(false);
+                      return;
+                    }
+                    setDeleteFromArr(checked);
+                    if (!checked && !selection.deleteWholeItem) setCleanupDownloads(false);
                   },
-                ]
-                : []),
-              ...(pathOverride
-                ? [
-                  {
-                    id: "arr-path-override" as const,
-                    service: "radarr" as const,
-                    label: "Use remaining folder in Radarr",
-                    info: "Break-glass option: this location is not a verified ordinary Radarr " +
-                      `library folder. Radarr will manage ${pathOverride.proposedMoviePath} and may ` +
-                      "later rename, upgrade, move, or delete files there.",
-                    checked: useRadarrPathOverride,
-                    disabled: pending || useRadarrPathOverride,
-                    warning: false,
-                    onChange: (checked: boolean) => {
-                      if (!checked) return;
-                      setUseRadarrPathOverride(true);
-                      setCleanupDownloads(false);
-                    },
+                },
+              ]
+              : []),
+            ...(pathOverride
+              ? [
+                {
+                  id: "arr-path-override" as const,
+                  service: "radarr" as const,
+                  label: "Use remaining folder in Radarr",
+                  info: "Break-glass option: this location is not a verified ordinary Radarr " +
+                    `library folder. Radarr will manage ${pathOverride.proposedMoviePath} and may ` +
+                    "later rename, upgrade, move, or delete files there.",
+                  checked: useRadarrPathOverride,
+                  disabled: pending || useRadarrPathOverride,
+                  warning: false,
+                  onChange: (checked: boolean) => {
+                    if (!checked) return;
+                    setUseRadarrPathOverride(true);
+                    setCleanupDownloads(false);
                   },
-                ]
-                : []),
-              ...((selection.deleteWholeItem || destinationOptionVisibility.cleanup)
-                ? [
-                  {
-                    id: "cleanup" as const,
-                    service: "qbittorrent" as const,
-                    label: "qBittorrent",
-                    info: selection.deleteWholeItem
-                      ? (wholeItemPreviewEntry?.reason ??
-                        (wholeItemCleanupAvailable
-                          ? "Deletes the independently verified qBittorrent job and its downloaded payload."
-                          : "No verified qBittorrent job is available"))
-                      : pathReassignmentActive
-                      ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
-                      : "Deletes the verified qBittorrent job and its downloaded files along with " +
-                        "the selected Plex version.",
-                    checked: cleanupDownloads,
-                    disabled: pending ||
-                      (selection.deleteWholeItem
-                        ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
-                        : !deleteFromArr || pathReassignmentActive),
-                    warning: !cleanupAvailable ||
-                      (!selection.deleteWholeItem && pathReassignmentActive),
-                    onChange: setCleanupDownloads,
-                  },
-                ]
-                : []),
-            ]}
-          />
-          <ArrDeletionWarning service={arrService} impacts={arrDeletionImpacts} />
-        </>
+                },
+              ]
+              : []),
+            ...((selection.deleteWholeItem || destinationOptionVisibility.cleanup)
+              ? [
+                {
+                  id: "cleanup" as const,
+                  service: "qbittorrent" as const,
+                  label: "qBittorrent",
+                  info: selection.deleteWholeItem
+                    ? (wholeItemPreviewEntry?.reason ??
+                      (wholeItemCleanupAvailable
+                        ? "Deletes the independently verified qBittorrent job and its downloaded payload."
+                        : "No verified qBittorrent job is available"))
+                    : pathReassignmentActive
+                    ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
+                    : "Deletes the verified qBittorrent job and its downloaded files along with " +
+                      "the selected Plex version.",
+                  checked: cleanupDownloads,
+                  disabled: pending ||
+                    (selection.deleteWholeItem
+                      ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
+                      : !deleteFromArr || pathReassignmentActive),
+                  warning: !cleanupAvailable ||
+                    (!selection.deleteWholeItem && pathReassignmentActive),
+                  onChange: setCleanupDownloads,
+                },
+              ]
+              : []),
+          ]}
+        />
       )}
 
       {effectiveDeleteFromArr && pathAdoption && pathAdoption.mode === "adopt_safe_path" && (

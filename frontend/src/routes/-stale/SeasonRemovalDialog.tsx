@@ -1,14 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
-import {
-  AlertTriangle,
-  ChevronDown,
-  HardDrive,
-  ListVideo,
-  LoaderCircle,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, HardDrive, ListVideo, LoaderCircle } from "lucide-react";
 import type { StaleItem } from "../../lib/api.ts";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
@@ -21,6 +14,13 @@ import {
   PathTreeRoot,
 } from "../../features/mediaDeletion/DeletionTree.tsx";
 import { InfoTip } from "../../features/mediaDeletion/InfoTip.tsx";
+import {
+  DeletionDialogFooter,
+  DeletionDialogLayout,
+  DeletionModalShell,
+  DeletionPreviewDisclosure,
+  useDelayedFlag,
+} from "../../features/mediaDeletion/DeletionDialog.tsx";
 import type { SeasonRemovalPreviewResponse } from "@shared/types";
 
 export interface SeasonRemovalChoice {
@@ -111,20 +111,22 @@ function SeasonRemovalDeletionTree({
     downloadJobs.reduce((total, job) => total + job.fileCount, 0);
 
   return (
-    <details className="group mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40">
-      <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 text-[11px] text-base-content/45">
-        <ChevronDown className="size-3.5 shrink-0 -rotate-90 transition-transform group-open:rotate-0" />
-        <span className="font-medium text-base-content/60">Deletion preview</span>
-        <InfoTip text="Shows every file path reported by Plex and each selected cleanup service. The services revalidate these exact targets before deletion." />
-        {loading
-          ? <span className="loading loading-spinner loading-xs ml-auto" />
-          : (
-            <span className="ml-auto font-mono">
-              {pathCount} {pathCount === 1 ? "path" : "paths"}
-            </span>
-          )}
-      </summary>
-      <div className="max-h-64 overflow-y-auto border-t border-base-300/70 px-2.5 py-1">
+    <DeletionPreviewDisclosure
+      label={
+        <span className="inline-flex items-center gap-1.5">
+          <span>Deletion preview</span>
+          <InfoTip text="Shows every file path reported by Plex and each selected cleanup service. The services revalidate these exact targets before deletion." />
+        </span>
+      }
+      meta={loading
+        ? <span className="loading loading-spinner loading-xs" />
+        : (
+          <span className="font-mono">
+            {pathCount} {pathCount === 1 ? "path" : "paths"}
+          </span>
+        )}
+    >
+      <div className="max-h-64 overflow-y-auto py-1">
         {fileGroups.map((group) => (
           <PathTreeRoot
             key={`${group.source}:${group.root}`}
@@ -165,7 +167,7 @@ function SeasonRemovalDeletionTree({
           <p className="py-1 text-[10px] text-base-content/35">No file paths reported</p>
         )}
       </div>
-    </details>
+    </DeletionPreviewDisclosure>
   );
 }
 
@@ -237,154 +239,158 @@ export function SeasonRemovalDialog({
   useEffect(() => {
     if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
   }, [cleanupAvailable, cleanupDownloads, value]);
+  const showPreviewLoading = useDelayedFlag(preview.isFetching, 350);
   const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
     (coordinated && !sonarrActionAvailable);
 
   return (
-    <dialog ref={dialogRef} className="modal" onCancel={onCancel}>
-      <div className="modal-box max-w-3xl">
-        <h3 className="font-bold text-lg">Remove this season?</h3>
-        <p className="mt-2 text-sm text-base-content/70">
-          {item ? `${item.title} · Season ${item.seasonIndex ?? "?"}` : "Selected season"}
-        </p>
-        {preview.error && (
-          <div className="alert alert-error mt-4 items-start text-sm" role="alert">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="font-semibold">Couldn’t verify this removal</div>
-              <p className="mt-1 text-error-content/80">
-                {preview.error instanceof Error
-                  ? preview.error.message
-                  : "The deletion preview could not be verified. Try again in a moment."}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn btn-sm shrink-0"
-              disabled={preview.isFetching}
-              onClick={() => void preview.refetch()}
-            >
-              {preview.isFetching && <LoaderCircle className="size-4 animate-spin" />}
-              Try again
-            </button>
-          </div>
-        )}
-        {error != null && (
-          <div className="alert alert-error mt-4 items-start text-sm" role="alert">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <div>
-              <div className="font-semibold">Couldn’t start the removal</div>
-              <p className="mt-1 text-error-content/80">
-                {error instanceof Error ? error.message : "Could not start season removal"}
-              </p>
-            </div>
-          </div>
-        )}
-        {value?.blockers.map((blocker) => (
-          <div key={blocker} className="alert alert-error mt-4 text-sm" role="alert">
-            <AlertTriangle className="size-4" /> {blocker}
-          </div>
-        ))}
-        {item && (
-          <div className="mt-4 rounded-box border border-base-300 bg-base-200/50 p-4 text-sm">
-            <div className="flex items-center justify-between gap-4 text-base-content/70">
-              <span className="inline-flex items-center gap-2">
-                <span className="inline-flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-                  <ListVideo className="size-4" />
-                </span>
-                <span>
-                  <strong className="font-semibold text-base-content">
-                    {item.leafCount ?? 0}
-                  </strong>{" "}
-                  episodes
-                </span>
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <HardDrive className="size-4 text-base-content/40" />
-                <strong className="font-semibold text-base-content">
-                  {formatKilobytes(item.fileSize ?? 0)}
-                </strong>
-              </span>
-            </div>
-            {preview.isFetching && (
-              <div className="mt-3 flex items-center gap-2 text-base-content/60">
-                <LoaderCircle className="size-4 animate-spin" />{" "}
-                Verifying Plex, Sonarr, and download ownership…
+    <DeletionModalShell
+      dialogRef={dialogRef}
+      pending={pending}
+      onClose={onCancel}
+      modalBoxClassName="max-w-3xl"
+      title="Remove this season?"
+      summary={item ? `${item.title} · Season ${item.seasonIndex ?? "?"}` : "Selected season"}
+    >
+      <DeletionDialogLayout
+        status={
+          <>
+            {preview.error && (
+              <div className="alert alert-error mt-2 items-start text-sm" role="alert">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold">Couldn’t verify this removal</div>
+                  <p className="mt-1 text-error-content/80">
+                    {preview.error instanceof Error
+                      ? preview.error.message
+                      : "The deletion preview could not be verified. Try again in a moment."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-sm shrink-0"
+                  disabled={preview.isFetching}
+                  onClick={() =>
+                    void preview.refetch()}
+                >
+                  {preview.isFetching && <LoaderCircle className="size-4 animate-spin" />}
+                  Try again
+                </button>
               </div>
             )}
-            {value && coordinated && value.sonarrStatus === "resolved" && (
-              <p className="mt-3 text-base-content/70">
-                Sonarr will keep the series and unmonitor {value.monitoredEpisodeCount}{" "}
-                season episode{value.monitoredEpisodeCount === 1 ? "" : "s"}.
-              </p>
+            {error != null && (
+              <div className="alert alert-error mt-2 items-start text-sm" role="alert">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <div>
+                  <div className="font-semibold">Couldn’t start the removal</div>
+                  <p className="mt-1 text-error-content/80">
+                    {error instanceof Error ? error.message : "Could not start season removal"}
+                  </p>
+                </div>
+              </div>
             )}
-            {!preview.error && (
-              <SeasonRemovalDeletionTree
-                preview={value}
-                coordinated={coordinated}
-                cleanupDownloads={cleanupDownloads}
-                loading={preview.isFetching}
-              />
-            )}
-          </div>
-        )}
-        {item && !preview.error && (
-          <DestinationOptions
-            options={[
-              {
-                id: "arr" as const,
-                service: "sonarr" as const,
-                label: "Update Sonarr",
-                info: value?.sonarrReason ??
-                  (sonarrActionAvailable
-                    ? "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles."
-                    : "No verified Sonarr season destination is available"),
-                checked: coordinated,
-                disabled: pending || preview.isFetching || !sonarrActionAvailable,
-                warning: coordinated && value?.sonarrStatus !== "resolved",
-                onChange: setCoordinated,
-              },
-              ...(cleanupAvailable
-                ? [{
-                  id: "cleanup" as const,
-                  service: "qbittorrent" as const,
-                  label: "Clean downloads",
-                  info:
-                    "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
-                  checked: cleanupDownloads,
-                  disabled: pending || preview.isFetching,
-                  warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
-                  onChange: setCleanupDownloads,
-                }]
-                : []),
-            ]}
-          />
-        )}
-        <div className="modal-action">
-          <button type="button" className="btn" disabled={pending} onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-error gap-2"
-            disabled={pending || blocked}
-            onClick={() =>
+            {value?.blockers.map((blocker) => (
+              <div key={blocker} className="alert alert-error mt-2 text-sm" role="alert">
+                <AlertTriangle className="size-4" /> {blocker}
+              </div>
+            ))}
+          </>
+        }
+        review={item
+          ? (
+            <div className="mt-3 rounded-box border border-base-300 bg-base-200/50 p-4 text-sm">
+              <div className="flex items-center justify-between gap-4 text-base-content/70">
+                <span className="inline-flex items-center gap-2">
+                  <span className="inline-flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+                    <ListVideo className="size-4" />
+                  </span>
+                  <span>
+                    <strong className="font-semibold text-base-content">
+                      {item.leafCount ?? 0}
+                    </strong>{" "}
+                    episodes
+                  </span>
+                </span>
+                <span className="inline-flex items-center gap-2">
+                  <HardDrive className="size-4 text-base-content/40" />
+                  <strong className="font-semibold text-base-content">
+                    {formatKilobytes(item.fileSize ?? 0)}
+                  </strong>
+                </span>
+              </div>
+              {preview.isFetching && (
+                <div className="mt-3 flex items-center gap-2 text-base-content/60">
+                  <LoaderCircle className="size-4 animate-spin" />{" "}
+                  Verifying Plex, Sonarr, and download ownership…
+                </div>
+              )}
+              {value && coordinated && value.sonarrStatus === "resolved" && (
+                <p className="mt-3 text-base-content/70">
+                  Sonarr will keep the series and unmonitor {value.monitoredEpisodeCount}{" "}
+                  season episode{value.monitoredEpisodeCount === 1 ? "" : "s"}.
+                </p>
+              )}
+              {!preview.error && (
+                <SeasonRemovalDeletionTree
+                  preview={value}
+                  coordinated={coordinated}
+                  cleanupDownloads={cleanupDownloads}
+                  loading={preview.isFetching}
+                />
+              )}
+            </div>
+          )
+          : null}
+        destinations={item && !preview.error
+          ? (
+            <DestinationOptions
+              options={[
+                ...(sonarrActionAvailable
+                  ? [{
+                    id: "arr" as const,
+                    service: "sonarr" as const,
+                    label: "Update Sonarr",
+                    info: value?.sonarrReason ??
+                      "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
+                    checked: coordinated,
+                    disabled: pending || preview.isFetching,
+                    warning: coordinated && value?.sonarrStatus !== "resolved",
+                    onChange: setCoordinated,
+                  }]
+                  : []),
+                ...(cleanupAvailable
+                  ? [{
+                    id: "cleanup" as const,
+                    service: "qbittorrent" as const,
+                    label: "Clean downloads",
+                    info:
+                      "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
+                    checked: cleanupDownloads,
+                    disabled: pending || preview.isFetching,
+                    warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
+                    onChange: setCleanupDownloads,
+                  }]
+                  : []),
+              ]}
+            />
+          )
+          : undefined}
+        footer={
+          <DeletionDialogFooter
+            pending={pending}
+            preparing={showPreviewLoading}
+            confirmDisabled={pending || blocked}
+            confirmLabel="Remove season"
+            onCancel={onCancel}
+            onConfirm={() =>
               value && onConfirm({
                 previewFingerprint: value.fingerprint,
                 coordinated,
                 cleanupDownloads,
               })}
-          >
-            {pending
-              ? <LoaderCircle className="size-4 animate-spin" />
-              : <Trash2 className="size-4" />}
-            Remove season
-          </button>
-        </div>
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="button" disabled={pending} onClick={onCancel}>close</button>
-      </form>
-    </dialog>
+          />
+        }
+      />
+    </DeletionModalShell>
   );
 }

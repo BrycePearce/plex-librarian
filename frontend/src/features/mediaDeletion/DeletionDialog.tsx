@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { AlertTriangle, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Trash2 } from "lucide-react";
 
 export type DeletionPreviewMode = "basic" | "advanced";
 
@@ -41,6 +41,7 @@ export function DeletionModalShell({
   summary,
   children,
   onClose,
+  modalBoxClassName = "max-w-2xl",
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
   pending: boolean;
@@ -49,6 +50,7 @@ export function DeletionModalShell({
   summary: ReactNode;
   children: ReactNode;
   onClose: () => void;
+  modalBoxClassName?: string;
 }) {
   const content = (
     <>
@@ -67,8 +69,15 @@ export function DeletionModalShell({
   }
 
   return (
-    <dialog ref={dialogRef} className="modal" onClose={onClose}>
-      <div className="modal-box polished-modal max-w-2xl">
+    <dialog
+      ref={dialogRef}
+      className="modal"
+      onClose={onClose}
+      onCancel={(event) => {
+        if (pending) event.preventDefault();
+      }}
+    >
+      <div className={`modal-box polished-modal ${modalBoxClassName}`}>
         {content}
       </div>
       <form method="dialog" className="modal-backdrop">
@@ -78,50 +87,93 @@ export function DeletionModalShell({
   );
 }
 
+export function DeletionDialogLayout({
+  status,
+  review,
+  destinations,
+  footer,
+}: {
+  status?: ReactNode;
+  review: ReactNode;
+  destinations?: ReactNode;
+  footer: ReactNode;
+}) {
+  return (
+    <>
+      {status}
+      {review}
+      {destinations}
+      {footer}
+    </>
+  );
+}
+
+export function DeletionPreviewDisclosure({
+  label = "Deletion preview",
+  meta,
+  children,
+}: {
+  label?: ReactNode;
+  meta?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group deletion-preview mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40">
+      <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 text-xs text-base-content/50">
+        <ChevronDown className="size-3.5 shrink-0 -rotate-90 transition-transform group-open:rotate-0" />
+        <span className="font-medium">{label}</span>
+        {meta && <span className="ml-auto">{meta}</span>}
+      </summary>
+      <div className="border-t border-base-300/70 px-2.5 pb-2">
+        {children}
+      </div>
+    </details>
+  );
+}
+
 export function DeletionPreview({
   mode,
   onModeChange,
   basic,
   advanced,
+  collapsible = false,
 }: {
   mode: DeletionPreviewMode;
   onModeChange: (mode: DeletionPreviewMode) => void;
   basic: ReactNode;
   advanced: ReactNode;
+  collapsible?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
   const hasMounted = useRef(false);
   useEffect(() => {
     hasMounted.current = true;
   }, []);
-  return (
-    <div className="deletion-preview">
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <span className="text-xs font-medium text-base-content/50">
-          Deletion preview
-        </span>
-        <div
-          className="join rounded-md border border-base-300 bg-base-200/50 p-0.5"
-          role="group"
-          aria-label="Deletion preview detail"
+  const modePicker = (
+    <div
+      className="join rounded-md border border-base-300 bg-base-200/50 p-0.5"
+      role="group"
+      aria-label="Deletion preview detail"
+    >
+      {(["basic", "advanced"] as const).map((candidate) => (
+        <button
+          key={candidate}
+          type="button"
+          className={`join-item btn btn-xs h-6 min-h-0 border-0 px-2.5 capitalize ${
+            mode === candidate
+              ? "bg-base-100 text-base-content shadow-sm"
+              : "bg-transparent text-base-content/45 shadow-none"
+          }`}
+          aria-pressed={mode === candidate}
+          onClick={() => onModeChange(candidate)}
         >
-          {(["basic", "advanced"] as const).map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              className={`join-item btn btn-xs h-6 min-h-0 border-0 px-2.5 capitalize ${
-                mode === candidate
-                  ? "bg-base-100 text-base-content shadow-sm"
-                  : "bg-transparent text-base-content/45 shadow-none"
-              }`}
-              aria-pressed={mode === candidate}
-              onClick={() => onModeChange(candidate)}
-            >
-              {candidate}
-            </button>
-          ))}
-        </div>
-      </div>
+          {candidate}
+        </button>
+      ))}
+    </div>
+  );
+  const content = (
+    <>
       <motion.div
         className="deletion-preview-content"
         key={mode}
@@ -134,6 +186,23 @@ export function DeletionPreview({
       >
         {mode === "basic" ? basic : advanced}
       </motion.div>
+    </>
+  );
+  if (collapsible) {
+    return (
+      <DeletionPreviewDisclosure>
+        <div className="flex justify-end pt-2">{modePicker}</div>
+        {content}
+      </DeletionPreviewDisclosure>
+    );
+  }
+  return (
+    <div className="deletion-preview">
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <span className="text-xs font-medium text-base-content/50">Deletion preview</span>
+        {modePicker}
+      </div>
+      {content}
     </div>
   );
 }

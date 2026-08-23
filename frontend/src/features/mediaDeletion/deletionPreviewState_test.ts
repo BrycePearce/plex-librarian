@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
 import {
   arrDestinationState,
+  downloadCleanupDestinationVisible,
   effectiveArrSelection,
   shouldUseArrByDefault,
 } from "./deletionPreviewState.ts";
@@ -48,4 +49,36 @@ Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview 
 
   assertEquals(effectiveArrSelection(true, undefined), true);
   assertEquals(effectiveArrSelection(true, preview), false);
+});
+
+Deno.test("download cleanup is visible only for a configured client with a verified job", () => {
+  const item = {
+    ratingKey: "1",
+    status: "resolved",
+    downloadJobs: [{}],
+  };
+  assertEquals(
+    downloadCleanupDestinationVisible({
+      coordinatedConfigured: false,
+      downloadClientsConfigured: false,
+      items: [item],
+    } as unknown as DownloadCleanupPreviewResponse),
+    false,
+  );
+  assertEquals(
+    downloadCleanupDestinationVisible({
+      coordinatedConfigured: false,
+      downloadClientsConfigured: true,
+      items: [{ ...item, downloadJobs: [] }],
+    } as unknown as DownloadCleanupPreviewResponse),
+    false,
+  );
+  assertEquals(
+    downloadCleanupDestinationVisible({
+      coordinatedConfigured: false,
+      downloadClientsConfigured: true,
+      items: [item],
+    } as unknown as DownloadCleanupPreviewResponse),
+    true,
+  );
 });
