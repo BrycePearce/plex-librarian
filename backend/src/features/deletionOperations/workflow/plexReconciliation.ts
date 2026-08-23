@@ -37,18 +37,13 @@ function finalizeTarget(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
   attributable: boolean,
-  removedOutsideApp = false,
 ): void {
   const now = Math.floor(Date.now() / 1000);
-  const status = removedOutsideApp ? 'completed_with_warning' : 'completed';
-  const warning = removedOutsideApp
-    ? 'The target was removed outside Plex Librarian; the requested safe final state was verified.'
-    : null;
   const changed = client
     .prepare(
-      "UPDATE deletion_targets SET status = ?, phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = ?, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
+      "UPDATE deletion_targets SET status = 'completed', phase = 'finalizing', removal_confirmed_at = COALESCE(removal_confirmed_at, ?), plex_reconciled_at = ?, next_retry_at = NULL, error = NULL, warning = NULL, updated_at = ? WHERE id = ? AND status = 'running' AND phase = 'plex_reconciliation'",
     )
-    .run(status, now, now, warning, now, target.id);
+    .run(now, now, now, target.id);
   if (changed !== 1) throw new DeletionConvergenceError('deletion target state changed');
   let removed = 0;
   if (target.targetKind === 'whole_item') {
@@ -463,13 +458,9 @@ export async function reconcilePlexTarget(
     : !live!.media.some((entry) => entry.mediaId === snapshot.mediaId);
   if (alreadyAbsent) {
     withTransaction((sqlite) => {
-      finalizeTarget(
-        sqlite,
-        target,
-        snapshot,
-        false,
-        target.plexAttemptCount === 0 && target.removalConfirmedAt === null,
-      );
+      // Absence plus every retained-version and Arr postcondition above is the requested
+      // safe final state. It is an idempotent success even when another actor got there first.
+      finalizeTarget(sqlite, target, snapshot, false);
       refreshDeletionOperation(sqlite, target.operationId);
     });
     return;

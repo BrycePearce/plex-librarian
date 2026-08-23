@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import {
   cancelDeletionOperation,
+  deletionOperationArrLinks,
   dismissDeletionOperation,
   getDeletionOperation,
   listDeletionOperations,
@@ -73,6 +74,13 @@ router.get('/:id', (c) => {
   if (serverId === null) return c.json({ error: 'operation not found' }, 404);
   const operation = getDeletionOperation(c.req.param('id'), serverId);
   return operation ? c.json(operation) : c.json({ error: 'operation not found' }, 404);
+});
+
+router.get('/:id/arr-links', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
+  const links = await deletionOperationArrLinks(c.req.param('id'), serverId);
+  return links === null ? c.json({ error: 'operation not found' }, 404) : c.json({ links });
 });
 
 router.post('/:id/cancel', (c) => {

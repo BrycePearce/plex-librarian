@@ -122,6 +122,7 @@ export const queryKeys = {
     lists: [roots.deletionOperations, "list"] as const,
     list: <TParams>(params: TParams) => [roots.deletionOperations, "list", params] as const,
     detail: (id: string) => [roots.deletionOperations, id] as const,
+    arrLinks: (id: string) => [roots.deletionOperations, id, "arr-links"] as const,
   },
   episodeGaps: {
     all: [roots.episodeGaps] as const,

@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CheckCircle,
   Copy,
+  ExternalLink,
   History,
   RotateCcw,
   Trash2,
@@ -22,6 +23,7 @@ import { requireAuth } from "../lib/requireAuth.ts";
 import { DataSurface, PageHeader } from "../components/Workspace.tsx";
 import { deletionRecoverySummary } from "../features/deletionOperations/recoveryGuidance.ts";
 import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRecoveryDialog.tsx";
+import { ServiceIcon } from "../components/ServiceIcons.tsx";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -129,6 +131,10 @@ function ActivityPage() {
                       </p>
                     </div>
                     <div className="flex gap-2 shrink-0">
+                      <ArrRecoveryLinks
+                        operationId={operation.id}
+                        hasCandidates={operation.arrDestinations.length > 0}
+                      />
                       <Link
                         to="/deletion-operations/$id"
                         params={{ id: operation.id }}
@@ -238,6 +244,42 @@ function ActivityPage() {
       )}
     </div>
   );
+}
+
+function ArrRecoveryLinks({
+  operationId,
+  hasCandidates,
+}: {
+  operationId: string;
+  hasCandidates: boolean;
+}) {
+  const links = useQuery({
+    queryKey: queryKeys.deletionOperations.arrLinks(operationId),
+    queryFn: () => api.deletionOperations.arrLinks(operationId),
+    enabled: hasCandidates,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const resolved = links.data?.links ?? [];
+  return resolved.map((link) => (
+    <a
+      key={`${link.targetId}:${link.instanceId}:${link.href}`}
+      href={link.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="btn btn-ghost btn-sm"
+      title={`Open ${link.targetTitle} in ${link.instanceName}`}
+      aria-label={`Open ${link.targetTitle} in ${link.instanceName}`}
+    >
+      <ServiceIcon service={link.instanceType} className="size-4" />
+      {resolved.length > 1
+        ? link.instanceName
+        : link.instanceType === "sonarr"
+        ? "Sonarr"
+        : "Radarr"}
+      <ExternalLink className="size-3" aria-hidden />
+    </a>
+  ));
 }
 
 // EventType is a closed union, so these lookups cannot miss: TypeScript's

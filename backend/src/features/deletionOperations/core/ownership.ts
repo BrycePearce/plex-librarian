@@ -3,9 +3,9 @@ import { deletionOperations, deletionTargets } from '../../../db/schema.ts';
 
 // One lifecycle definition for projection roots that are still owned by durable work.
 // Terminal targets stop owning normal library insight unless Plex reconciliation or a
-// relocation handshake is still open. A finalized external-removal warning has already
-// released reservations and is deliberately actionable again; an unresolved warning
-// remains in plex_reconciliation and continues to own its root.
+// relocation handshake is still open. A finalized audit warning has already released
+// reservations and is deliberately actionable again; an unresolved warning remains in
+// plex_reconciliation and continues to own its root.
 export const WORKFLOW_OWNED_TARGET_SQL = `(
   t.status IN ('queued', 'running', 'waiting_retry', 'needs_attention')
   OR (t.status = 'completed_with_warning' AND t.phase <> 'finalizing')

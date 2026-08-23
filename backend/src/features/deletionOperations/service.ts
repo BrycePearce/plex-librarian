@@ -1,6 +1,7 @@
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
 import { ArrApiError } from '../../integrations/arr/client.ts';
+import { getArrDeleteTargets } from '../arr/delete.ts';
 import { activeServerMatches } from './core/coordination.ts';
 import { isRetryableDeletionFailure } from './core/policy.ts';
 import { recoverInterruptedDeletionWork } from './core/recovery.ts';
@@ -84,6 +85,11 @@ export function listDeletionOperations(
     updatedAt: number;
     titles: string[];
     failureReasons: string[];
+    arrDestinations: Array<{
+      instanceId: number;
+      instanceName: string;
+      instanceType: 'sonarr' | 'radarr';
+    }>;
     retryable: boolean;
   }>;
 } {
@@ -132,7 +138,7 @@ export function listDeletionOperations(
           `SELECT title, error, status, phase,
                   json_type(snapshot, '$.relocationGuidance'),
                   json_type(snapshot, '$.relocationSyncBarrier'),
-                  json_type(snapshot, '$.resolutionState')
+                  json_type(snapshot, '$.resolutionState'), snapshot
            FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal`,
         ).values<[
           string,
@@ -142,7 +148,41 @@ export function listDeletionOperations(
           string | null,
           string | null,
           string | null,
+          string,
         ]>(row[0]);
+        const acceptedArrInstances = new Map<number, 'sonarr' | 'radarr'>();
+        for (const target of targets) {
+          const snapshot = JSON.parse(target[7]) as {
+            arrReassignments?: Array<{ instanceId?: unknown; instanceType?: unknown }>;
+          };
+          for (const reassignment of snapshot.arrReassignments ?? []) {
+            if (
+              Number.isSafeInteger(reassignment.instanceId) &&
+              Number(reassignment.instanceId) > 0 &&
+              (reassignment.instanceType === 'sonarr' || reassignment.instanceType === 'radarr')
+            ) {
+              acceptedArrInstances.set(Number(reassignment.instanceId), reassignment.instanceType);
+            }
+          }
+        }
+        const arrDestinations = [...acceptedArrInstances.entries()].flatMap(
+          ([instanceId, instanceType]) => {
+            const instance = client.prepare(
+              'SELECT name, type FROM arr_instances WHERE id = ? AND server_id = ?',
+            ).value<[string, 'sonarr' | 'radarr']>(instanceId, serverId);
+            return instance && instance[1] === instanceType
+              ? [{
+                instanceId,
+                instanceName: instance[0],
+                instanceType,
+              }]
+              : [];
+          },
+        ).sort((left, right) =>
+          left.instanceType.localeCompare(right.instanceType) ||
+          left.instanceName.localeCompare(right.instanceName) ||
+          left.instanceId - right.instanceId
+        );
         return {
           id: row[0],
           libraryKey: row[1],
@@ -153,6 +193,7 @@ export function listDeletionOperations(
           updatedAt: row[6],
           titles: [...new Set(targets.map((target) => target[0]))],
           failureReasons: [...new Set(targets.flatMap((target) => target[1] ? [target[1]] : []))],
+          arrDestinations,
           retryable: targets.some((target) =>
             (target[2] === 'needs_attention' ||
               (target[2] === 'completed_with_warning' && target[3] !== 'finalizing' &&
@@ -163,6 +204,89 @@ export function listDeletionOperations(
       }),
     };
   });
+}
+
+export async function deletionOperationArrLinks(
+  operationId: string,
+  serverId: number,
+): Promise<
+  Array<{
+    targetId: number;
+    targetTitle: string;
+    instanceId: number;
+    instanceName: string;
+    instanceType: 'sonarr' | 'radarr';
+    href: string;
+  }> | null
+> {
+  const loaded = withTransaction((client) => {
+    const operation = client.prepare(
+      'SELECT library_key FROM deletion_operations WHERE id = ? AND server_id = ?',
+    ).value<[string]>(operationId, serverId);
+    if (!operation) return null;
+    const targets = client.prepare(
+      'SELECT id, title, snapshot FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
+    ).values<[number, string, string]>(operationId).map(([id, title, rawSnapshot]) => ({
+      id,
+      title,
+      snapshot: JSON.parse(rawSnapshot) as {
+        tmdbId?: number | null;
+        tvdbId?: number | null;
+        arrReassignments?: Array<{
+          instanceId?: unknown;
+          instanceType?: unknown;
+          recordId?: unknown;
+        }>;
+      },
+    }));
+    return { libraryKey: operation[0], targets };
+  });
+  if (!loaded) return null;
+
+  const configured = await getArrDeleteTargets(serverId, loaded.libraryKey);
+  const links = new Map<string, {
+    targetId: number;
+    targetTitle: string;
+    instanceId: number;
+    instanceName: string;
+    instanceType: 'sonarr' | 'radarr';
+    href: string;
+  }>();
+  for (const target of loaded.targets) {
+    for (const evidence of target.snapshot.arrReassignments ?? []) {
+      if (
+        !Number.isSafeInteger(evidence.instanceId) || Number(evidence.instanceId) <= 0 ||
+        !Number.isSafeInteger(evidence.recordId) || Number(evidence.recordId) <= 0 ||
+        (evidence.instanceType !== 'sonarr' && evidence.instanceType !== 'radarr')
+      ) continue;
+      const instance = configured.find((candidate) =>
+        candidate.instanceId === evidence.instanceId &&
+        candidate.instanceType === evidence.instanceType
+      );
+      const externalId = evidence.instanceType === 'radarr'
+        ? target.snapshot.tmdbId
+        : target.snapshot.tvdbId;
+      if (!instance || !Number.isSafeInteger(externalId) || Number(externalId) <= 0) continue;
+      try {
+        const record = await instance.client.lookup(Number(externalId));
+        if (!record || record.id !== evidence.recordId || !record.titleSlug) continue;
+        const section = evidence.instanceType === 'radarr' ? 'movie' : 'series';
+        const href = instance.instanceUrl.replace(/\/+$/, '') + '/' + section + '/' +
+          encodeURIComponent(record.titleSlug);
+        links.set(target.id + ':' + instance.instanceId + ':' + href, {
+          targetId: target.id,
+          targetTitle: target.title,
+          instanceId: instance.instanceId,
+          instanceName: instance.instanceName,
+          instanceType: instance.instanceType,
+          href,
+        });
+      } catch {
+        // Optional recovery affordance: never show an unverified or unreachable item link.
+      }
+    }
+  }
+  return [...links.values()];
 }
 
 export class DeletionConflictError extends Error {

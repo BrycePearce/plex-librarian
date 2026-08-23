@@ -5,6 +5,7 @@ import type {
   AuthStatus,
   CancelPendingInvitationResponse,
   DeletionOperation,
+  DeletionOperationArrLinksResponse,
   DeletionOperationCreated,
   DeletionOperationsResponse,
   DownloadCleanupPreviewResponse,
@@ -574,6 +575,10 @@ export const api = {
     },
     get: (id: string) =>
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}`),
+    arrLinks: (id: string) =>
+      apiFetch<DeletionOperationArrLinksResponse>(
+        `/deletion-operations/${encodeURIComponent(id)}/arr-links`,
+      ),
     cancel: (id: string) =>
       apiFetch<DeletionOperation>(`/deletion-operations/${encodeURIComponent(id)}/cancel`, {
         method: "POST",

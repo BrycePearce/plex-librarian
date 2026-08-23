@@ -63,8 +63,14 @@ withTransaction((client) => {
     "INSERT INTO settings (id, client_id, active_server_id) VALUES (1, 'test-client', 1)",
   ).run();
   client.prepare(
+    "INSERT INTO arr_instances (id, server_id, type, name, url, api_key, created_at, updated_at) VALUES (7, 1, 'radarr', 'Living Room Radarr', 'http://radarr:7878', 'key', ?, ?)",
+  ).run(NOW, NOW);
+  client.prepare(
     "INSERT INTO libraries (server_id, key, title, type, synced_at, history_synced_at) VALUES (1, 'movies', 'Movies', 'movie', ?, ?), (1, 'shows', 'Shows', 'show', ?, ?)",
   ).run(NOW, NOW, NOW, NOW);
+  client.prepare(
+    "INSERT INTO arr_library_mappings (server_id, library_key, arr_instance_id, add_import_exclusion) VALUES (1, 'movies', 7, 1)",
+  ).run();
   const item = client.prepare(
     `INSERT INTO items
       (server_id, rating_key, library_key, title, type, added_at, file_size, updated_at)
@@ -180,6 +186,13 @@ insertOperation('op-owned-movie', 'movies', 'movie_version', 'needs_attention', 
   libraryKey: 'movies',
   ratingKey: 'owned-movie',
   mediaId: 1,
+  tmdbId: 10,
+  arrReassignments: [{
+    instanceId: 7,
+    instanceType: 'radarr',
+    instanceUrl: 'http://stale-radarr:7878',
+    recordId: 42,
+  }],
 });
 insertOperation('op-owned-episode', 'shows', 'episode_version', 'needs_attention', 'Owned Show', {
   libraryKey: 'shows',
@@ -519,6 +532,15 @@ Deno.test('current attention listing includes unresolved warnings exactly once',
     true,
   );
   assertEquals(
+    response.operations.find((operation: { id: string }) => operation.id === 'op-owned-movie')
+      ?.arrDestinations,
+    [{
+      instanceId: 7,
+      instanceName: 'Living Room Radarr',
+      instanceType: 'radarr',
+    }],
+  );
+  assertEquals(
     response.operations.find((operation: { id: string }) => operation.id === 'op-warning-owned')
       ?.retryable,
     true,
@@ -529,6 +551,46 @@ Deno.test('current attention listing includes unresolved warnings exactly once',
     ),
     false,
   );
+});
+
+Deno.test('Arr recovery links require a live matching managed item', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.href === 'http://radarr:7878/api/v3/movie?tmdbId=10') {
+      return Promise.resolve(Response.json([{
+        id: 42,
+        tmdbId: 10,
+        title: 'Owned Movie',
+        titleSlug: 'owned-movie',
+        path: '/movies/Owned Movie',
+      }]));
+    }
+    return Promise.reject(new Error(`Unexpected request: ${url.href}`));
+  }) as typeof fetch;
+  try {
+    const targetId = withTransaction((client) =>
+      client.prepare(
+        "SELECT id FROM deletion_targets WHERE operation_id = 'op-owned-movie'",
+      ).value<[number]>()![0]
+    );
+    const response = await app.request('/api/deletion-operations/op-owned-movie/arr-links');
+    assertEquals(response.status, 200);
+    assertEquals((await response.json()).links, [{
+      targetId,
+      targetTitle: 'Owned Movie',
+      instanceId: 7,
+      instanceName: 'Living Room Radarr',
+      instanceType: 'radarr',
+      href: 'http://radarr:7878/movie/owned-movie',
+    }]);
+
+    globalThis.fetch = (() => Promise.resolve(Response.json([]))) as typeof fetch;
+    const missing = await app.request('/api/deletion-operations/op-owned-movie/arr-links');
+    assertEquals((await missing.json()).links, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 Deno.test('dismiss releases recovery ownership but preserves an audit warning', async () => {

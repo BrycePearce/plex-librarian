@@ -24,7 +24,23 @@ export interface DeletionOperationListItem {
   updatedAt: number;
   titles: string[];
   failureReasons: string[];
+  arrDestinations: Array<{
+    instanceId: number;
+    instanceName: string;
+    instanceType: 'sonarr' | 'radarr';
+  }>;
   retryable: boolean;
+}
+
+export interface DeletionOperationArrLinksResponse {
+  links: Array<{
+    targetId: number;
+    targetTitle: string;
+    instanceId: number;
+    instanceName: string;
+    instanceType: 'sonarr' | 'radarr';
+    href: string;
+  }>;
 }
 
 export interface DeletionOperationsResponse {

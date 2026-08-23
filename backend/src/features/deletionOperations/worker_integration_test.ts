@@ -2776,11 +2776,8 @@ Deno.test('whole-item replay finalizes when Plex already confirms absence', asyn
   const operationId = await enqueueWhole('whole-absent');
   await settle();
   const operation = getDeletionOperation(operationId, 1)!;
-  assertEquals(operation.status, 'completed_with_warning');
-  assertStringIncludes(
-    String((operation.targets as Array<{ warning?: string }>)[0]?.warning),
-    'removed outside Plex Librarian',
-  );
+  assertEquals(operation.status, 'completed');
+  assertEquals((operation.targets as Array<{ warning?: string | null }>)[0]?.warning, null);
   assertEquals(
     withTransaction((client) =>
       client.prepare('SELECT COUNT(*) FROM items WHERE rating_key = ?').value<[number]>(
@@ -2791,7 +2788,7 @@ Deno.test('whole-item replay finalizes when Plex already confirms absence', asyn
   );
 });
 
-Deno.test('externally removed version finalizes only after safe state is proven', async () => {
+Deno.test('externally removed version completes after safe state is proven', async () => {
   reset();
   addMovie('version-absent', [11, 12]);
   const operationId = await enqueueVersion('version-absent', 11);
@@ -2804,10 +2801,10 @@ Deno.test('externally removed version finalizes only after safe state is proven'
 
   const operation = getDeletionOperation(operationId, 1)!;
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
-  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
+  assertEquals(operation.status, 'completed', JSON.stringify(operation));
   assertEquals(target.plexAttemptCount, 0);
   assertEquals(target.removalConfirmedAt !== null, true);
-  assertStringIncludes(String(target.warning), 'removed outside Plex Librarian');
+  assertEquals(target.warning, null);
   assertEquals(
     withTransaction((client) =>
       client.prepare(
@@ -5801,7 +5798,7 @@ Deno.test('season cleanup warning pauses later ordinals and remains recheckable'
   );
 });
 
-Deno.test('finalized season audit warning allows later ordinals without replay', async () => {
+Deno.test('externally removed season target completes and allows later ordinals', async () => {
   reset();
   addManualSeasonEpisode('audit-show', 'audit-season', 'audit-episode-1', 1, [151, 152]);
   addManualSeasonEpisode('audit-show', 'audit-season', 'audit-episode-2', 2, [251, 252]);
@@ -5825,20 +5822,20 @@ Deno.test('finalized season audit warning allows later ordinals without replay',
   const { operationId } = await response.json();
 
   // Model the first selected version disappearing after acceptance. Its retained
-  // version is still valid, so reconciliation produces a finalized audit warning.
+  // version is still valid, so reconciliation treats the verified final state as complete.
   live.get('audit-episode-1')!.Media = [live.get('audit-episode-1')!.Media![1]!];
   const deletesBeforeRun = plexMediaDeleteCount;
   await settle();
 
   const completed = getDeletionOperation(operationId, 1)!;
-  assertEquals(completed.status, 'completed_with_warning');
+  assertEquals(completed.status, 'completed');
   assertEquals(
     (completed.targets as Array<{ status: string; phase: string }>).map((target) => [
       target.status,
       target.phase,
     ]),
     [
-      ['completed_with_warning', 'finalizing'],
+      ['completed', 'finalizing'],
       ['completed', 'finalizing'],
     ],
   );
@@ -7830,7 +7827,7 @@ Deno.test('Plex reconciliation rechecks exact Radarr adoption metadata', async (
   );
 });
 
-Deno.test('legacy Radarr external repair finalizes without mutation or lifetime attribution', async () => {
+Deno.test('legacy Radarr external repair completes without mutation or lifetime attribution', async () => {
   reset();
   configureRadarr();
   addMovie('legacy-radarr-repair', [12, 13], 10);
@@ -7866,7 +7863,7 @@ Deno.test('legacy Radarr external repair finalizes without mutation or lifetime 
 
   const operation = getDeletionOperation(operationId, 1)!;
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
-  assertEquals(operation.status, 'completed_with_warning', JSON.stringify(operation));
+  assertEquals(operation.status, 'completed', JSON.stringify(operation));
   assertEquals(target.plexAttemptCount, 0);
   assertEquals(arrMonitored, true);
   assertEquals(arrMonitorMutationCount, 2);

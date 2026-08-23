@@ -173,6 +173,59 @@ Deno.test('0052 invalidates existing TV history confidence until season dates ar
   sqlite.close();
 });
 
+Deno.test('0054 reclassifies only verified external removals as completed', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE deletion_operations (
+      id TEXT PRIMARY KEY, status TEXT NOT NULL,
+      completed_count INTEGER NOT NULL, warning_count INTEGER NOT NULL
+    );
+    CREATE TABLE deletion_targets (
+      id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, status TEXT NOT NULL,
+      phase TEXT NOT NULL, warning TEXT, error TEXT
+    );
+    INSERT INTO deletion_operations VALUES
+      ('safe', 'completed_with_warning', 0, 1),
+      ('mixed', 'completed_with_warning', 0, 2);
+    INSERT INTO deletion_targets VALUES
+      (1, 'safe', 'completed_with_warning', 'finalizing',
+       'The target was removed outside Plex Librarian; the requested safe final state was verified.', NULL),
+      (2, 'mixed', 'completed_with_warning', 'finalizing',
+       'The target was removed outside Plex Librarian; the requested safe final state was verified.', NULL),
+      (3, 'mixed', 'completed_with_warning', 'plex_reconciliation',
+       'Media removed; Plex metadata needs attention.', 'Plex did not converge');
+  `);
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0054_normalize_verified_deletions.sql')),
+  );
+  assertEquals(
+    sqlite.prepare(
+      'SELECT id, status, completed_count, warning_count FROM deletion_operations ORDER BY id',
+    ).values(),
+    [
+      ['mixed', 'completed_with_warning', 1, 1],
+      ['safe', 'completed', 1, 0],
+    ],
+  );
+  assertEquals(
+    sqlite.prepare(
+      'SELECT id, status, warning, error FROM deletion_targets ORDER BY id',
+    ).values(),
+    [
+      [1, 'completed', null, null],
+      [2, 'completed', null, null],
+      [
+        3,
+        'completed_with_warning',
+        'Media removed; Plex metadata needs attention.',
+        'Plex did not converge',
+      ],
+    ],
+  );
+  sqlite.close();
+});
+
 Deno.test('0046 backfills legacy deletion milestones and preserves recovery evidence', async () => {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
