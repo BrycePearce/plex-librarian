@@ -3,6 +3,7 @@ import type {
   DownloadCleanupPreviewItem,
 } from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
+import type { ArrExtraFile, ArrManagedFile } from '../../integrations/arr/client.ts';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { plexPathMappings } from '../../db/schema.ts';
@@ -33,6 +34,13 @@ import {
   type PlexNamespaceMappingRecord,
   resolvePlexToLocal,
 } from './pathNamespace.ts';
+import {
+  assertPersistedSonarrReclamation,
+  buildSonarrReclamation,
+  canonicalSonarrInventory,
+  type PersistedSonarrReclamation,
+  sonarrInventoryIdentity,
+} from './reclamation.ts';
 
 export interface DirectPlexPathEvidence {
   serverId: number;
@@ -91,6 +99,7 @@ export interface ResolvedCleanupItem extends CleanupItemWithoutPlexPaths {
   orphanFiles: VerifiedOrphanFile[];
   /** Every live job whose manifest owned one of this title's historical paths. */
   observedDownloadJobKeys?: Set<string>;
+  sonarrReclamation?: PersistedSonarrReclamation;
 }
 
 export interface PersistedResolvedDownloadJob extends Omit<ResolvedDownloadJob, 'target'> {
@@ -100,6 +109,27 @@ export interface PersistedResolvedDownloadJob extends Omit<ResolvedDownloadJob, 
 export interface PersistedResolvedCleanupItem
   extends Omit<ResolvedCleanupItem, 'downloadJobs' | 'observedDownloadJobKeys'> {
   downloadJobs: PersistedResolvedDownloadJob[];
+}
+
+export function cleanupIsEligible(
+  cleanup: Pick<
+    ResolvedCleanupItem,
+    'status' | 'downloadJobs' | 'orphanFiles' | 'sonarrReclamation'
+  >,
+): boolean {
+  return cleanup.status === 'resolved' &&
+    (cleanup.downloadJobs.length > 0 ||
+      (cleanup.sonarrReclamation !== undefined && cleanup.orphanFiles.length > 0));
+}
+
+export function cleanupHasDurableAcceptedIdentity(
+  cleanup: Pick<ResolvedCleanupItem, 'downloadJobs' | 'sonarrReclamation'>,
+): boolean {
+  // Arr-history live jobs are deliberately rediscovered at execution time. Only
+  // direct manifests and the accepted Sonarr orphan proof are durable authority.
+  return cleanup.sonarrReclamation !== undefined ||
+    (cleanup.downloadJobs.length > 0 &&
+      cleanup.downloadJobs.every((job) => job.provenance === 'direct_manifest'));
 }
 
 export function persistResolvedCleanup(
@@ -197,7 +227,42 @@ export function rehydrateResolvedCleanup(
     }
     return { ...job, target: matches[0]! };
   });
+  if (cleanup.sonarrReclamation) {
+    assertPersistedSonarrReclamation(cleanup.sonarrReclamation, cleanup.orphanFiles);
+  }
   return { ...cleanup, downloadJobs };
+}
+
+/**
+ * Sonarr orphan proofs are accepted filesystem authority, but Arr-history jobs are not.
+ * Keep the accepted paths while taking history-derived live jobs from the current bounded
+ * resolution so new cross-title associations still retain a shared payload.
+ */
+export function mergeAcceptedSonarrCleanup(
+  current: ResolvedCleanupItem,
+  accepted: ResolvedCleanupItem,
+): ResolvedCleanupItem {
+  if (!accepted.sonarrReclamation) return accepted;
+  if (current.status !== 'resolved') {
+    throw new Error(
+      current.reason ?? 'Arr-history download cleanup could not be revalidated',
+    );
+  }
+  const observedLiveHashes = new Set(
+    [...(current.observedDownloadJobKeys ?? [])].map((key) => key.slice(key.lastIndexOf(':') + 1)),
+  );
+  return {
+    ...current,
+    downloadJobs: [
+      ...accepted.downloadJobs.filter((job) => job.provenance === 'direct_manifest'),
+      ...current.downloadJobs.filter((job) => job.provenance === 'arr_history'),
+    ],
+    // Newly discovered history can change live-job eligibility, but it must never
+    // authorize a replacement orphan path after the user accepted the preview. A
+    // reappeared live job also suppresses direct unlink even when it cannot be deleted.
+    orphanFiles: accepted.orphanFiles.filter((file) => !observedLiveHashes.has(file.hash)),
+    sonarrReclamation: accepted.sonarrReclamation,
+  };
 }
 
 export interface DownloadedFileCleanupResult {
@@ -359,6 +424,7 @@ export async function executeDownloadedFileCleanup(
     Promise.resolve(),
   deleteOrphanFile: (file: VerifiedOrphanFile) => Promise<void> = deleteVerifiedOrphanFile,
   beforeOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
+  afterOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
 ): Promise<DownloadedFileCleanupResult> {
   const result: DownloadedFileCleanupResult = {
     deletedJobs: [],
@@ -456,6 +522,7 @@ export async function executeDownloadedFileCleanup(
     try {
       await beforeOrphanDelete(orphanFile);
       await deleteOrphanFile(orphanFile);
+      await afterOrphanDelete(orphanFile);
       deletedOrphanPaths.add(orphanFile.path);
       result.deletedOrphanFiles.push(orphanFile.path);
     } catch (error) {
@@ -524,13 +591,16 @@ export async function resolveDownloadCleanup(
   const sharedAssociationHashes = new Set<string>();
   const sources = new Map<string, ResolvedCleanupItem['sources'][number]>();
   const orphanFiles: VerifiedOrphanFile[] = [];
+  const sonarrCandidates: PersistedSonarrReclamation[] = [];
   const inspectionWarnings = new Map<string, ResolvedCleanupItem['retainedPaths'][number]>();
   const resolvedArrTargets: ResolvedCleanupItem['arrTargets'] = [];
   const arrErrors: string[] = [];
   const historyErrors: string[] = [];
+  const managedFileErrors: string[] = [];
   const orphanAttemptErrors: string[] = [];
   let completedOrphanAttemptCount = 0;
   let completedArrAttemptCount = 0;
+  let reclamationUnavailableReason: string | undefined;
   const configuredDownloadRoots = new Set(
     arrTargets.flatMap((target) =>
       target.pathMappings.filter((mapping) => mapping.kind === 'download').map((mapping) =>
@@ -565,10 +635,33 @@ export async function resolveDownloadCleanup(
       continue;
     }
     arrMediaIds.set(arr.instanceId, record.id);
-    const [mediaFiles, extraFiles] = await Promise.all([
-      arr.client.mediaFiles(record.id).catch(() => null),
-      arr.client.extraFiles(record.id).catch(() => null),
-    ]);
+    const verifiedStart = orphanFiles.length;
+    let mediaFiles: ArrManagedFile[] | null;
+    let extraFiles: ArrExtraFile[] | null;
+    try {
+      [mediaFiles, extraFiles] = await Promise.all([
+        arr.client.type === 'sonarr'
+          ? arr.client.mediaFiles(record.id)
+          : arr.client.mediaFiles(record.id).catch(() => null),
+        arr.client.extraFiles(record.id).catch(() => null),
+      ]);
+    } catch (error) {
+      managedFileErrors.push(
+        `${arr.instanceName}: ${
+          error instanceof Error ? error.message : 'managed-file inventory lookup failed'
+        }`,
+      );
+      resolvedArrTargets.push({
+        instanceName: arr.instanceName,
+        type: arr.client.type,
+        title: record.title,
+        path: record.path,
+        seasons: record.seasons,
+        mediaFiles: null,
+        extraFiles: null,
+      });
+      continue;
+    }
     resolvedArrTargets.push({
       instanceName: arr.instanceName,
       type: arr.client.type,
@@ -590,15 +683,20 @@ export async function resolveDownloadCleanup(
             ...(mediaFiles ?? []).map((file) => file.relativePath),
             ...(extraFiles ?? []).map((file) => file.relativePath),
           ];
-          const currentManagedPaths = trackedPaths.flatMap((relativePath) => {
-            const path = record.path ? appendRemotePath(record.path, relativePath) : null;
-            return path ? [path] : [];
-          });
+          const currentManagedPaths = arr.client.type === 'sonarr'
+            ? (mediaFiles ?? []).flatMap((file) =>
+              file.path ? [{ path: file.path, id: file.id, size: file.size }] : []
+            )
+            : trackedPaths.flatMap((relativePath) => {
+              const path = record.path ? appendRemotePath(record.path, relativePath) : null;
+              return path ? [path] : [];
+            });
           const verification = await verifyOrphanHardlink(
             arr.instanceName,
             association,
             arr.pathMappings,
             currentManagedPaths,
+            { exactTwoLinks: arr.client.type === 'sonarr' },
           );
           if (verification) {
             sources.set(
@@ -607,21 +705,45 @@ export async function resolveDownloadCleanup(
             );
             if (verification.file) orphanFiles.push(verification.file);
           }
-          orphanFiles.push(
-            ...await verifyTrackedHardlinks(
-              record.path,
-              trackedPaths,
-              association,
-              arr.pathMappings,
-            ),
-          );
+          if (arr.client.type === 'radarr') {
+            orphanFiles.push(
+              ...await verifyTrackedHardlinks(
+                record.path,
+                trackedPaths,
+                association,
+                arr.pathMappings,
+              ),
+            );
+          }
         }
+      }
+      if (arr.client.type === 'sonarr' && item.type === 'show' && mediaFiles !== null) {
+        const snapshot = await arr.client.sonarrSeriesSnapshot(record.id);
+        const inventory = canonicalSonarrInventory(snapshot);
+        sonarrCandidates.push(buildSonarrReclamation(
+          arr,
+          record.id,
+          id,
+          inventory,
+          await sonarrInventoryIdentity(inventory),
+          orphanFiles.slice(verifiedStart),
+        ));
       }
     } catch (error) {
       historyErrors.push(
         `${arr.instanceName}: ${error instanceof Error ? error.message : 'history lookup failed'}`,
       );
     }
+  }
+
+  let sonarrReclamation = sonarrCandidates.length === 1 ? sonarrCandidates[0] : undefined;
+  if (sonarrCandidates.length > 1) {
+    for (let index = orphanFiles.length - 1; index >= 0; index--) {
+      if (orphanFiles[index]!.strictTwoLinkProof) orphanFiles.splice(index, 1);
+    }
+    sonarrReclamation = undefined;
+    reclamationUnavailableReason =
+      'More than one mapped Sonarr instance contains this series; hardlink data removal cannot be verified';
   }
 
   if (downloadTargets.length > 0 && arrErrors.length === 0 && associationHashes.size > 0) {
@@ -658,6 +780,7 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (resolvedArrTargets.length === 0 && completedArrAttemptCount === 0) {
@@ -672,6 +795,7 @@ export async function resolveDownloadCleanup(
       sources: [],
       orphanFiles: [],
       retainedPaths: [...inspectionWarnings.values()],
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (orphanAttemptErrors.length > 0) {
@@ -680,6 +804,20 @@ export async function resolveDownloadCleanup(
       status: 'error',
       downloadJobs: [],
       reason: [...new Set(orphanAttemptErrors)].join('; '),
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
+      orphanFiles: [],
+      retainedPaths: [...inspectionWarnings.values()],
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
+    };
+  }
+  if (managedFileErrors.length > 0) {
+    return {
+      ratingKey,
+      status: 'error',
+      downloadJobs: [],
+      reason: [...new Set(managedFileErrors)].join('; '),
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
       sources: publicSources,
@@ -701,6 +839,7 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles: [],
       retainedPaths: [...inspectionWarnings.values()],
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (historyErrors.length > 0) {
@@ -714,6 +853,7 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
 
@@ -803,12 +943,20 @@ export async function resolveDownloadCleanup(
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
       observedDownloadJobKeys,
+      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   // Never unlink a file underneath a live job that was retained because its complete
   // payload could not be attributed. A download client could otherwise restore the file, and
   // the user would still have an active job with a partially removed payload.
   const directOrphanFiles = selectDirectOrphanFiles(orphanFiles, ownedLiveJobs);
+  const directOrphanPaths = new Set(directOrphanFiles.map((file) => file.path));
+  const executableReclamation = sonarrReclamation
+    ? {
+      ...sonarrReclamation,
+      proofs: sonarrReclamation.proofs.filter((proof) => directOrphanPaths.has(proof.path)),
+    }
+    : undefined;
   const retainedPaths = [...new Map([
     ...inspectionWarnings.values(),
     ...await findRetainedSiblingPaths(
@@ -838,25 +986,30 @@ export async function resolveDownloadCleanup(
       orphanFiles: directOrphanFiles,
       retainedPaths,
       observedDownloadJobKeys,
+      ...(executableReclamation && executableReclamation.proofs.length > 0
+        ? { sonarrReclamation: executableReclamation }
+        : {}),
     };
   }
   return {
     ratingKey,
     status: 'unavailable',
     downloadJobs: [],
-    reason: associationHashes.size === 0
-      ? 'Arr has no retained download import history for this item'
-      : nonExclusiveLiveJobCount > 0
-      ? 'A matching live download contains files that are not all attributable to this Arr title'
-      : unownedLiveJobCount > 0
-      ? 'A matching download ID exists, but its manifest does not own the historical source path'
-      : 'The imported download is no longer present in configured download clients',
+    reason: reclamationUnavailableReason ??
+      (associationHashes.size === 0
+        ? 'Arr has no retained download import history for this item'
+        : nonExclusiveLiveJobCount > 0
+        ? 'A matching live download contains files that are not all attributable to this Arr title'
+        : unownedLiveJobCount > 0
+        ? 'A matching download ID exists, but its manifest does not own the historical source path'
+        : 'The imported download is no longer present in configured download clients'),
     arrStatus: 'resolved',
     arrTargets: resolvedArrTargets,
     sources: publicSources,
     orphanFiles: [],
     retainedPaths,
     observedDownloadJobKeys,
+    ...(sonarrReclamation ? { sonarrReclamation } : {}),
   };
 }
 
@@ -895,21 +1048,13 @@ export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithout
     }) => job),
     arrStatus: item.arrStatus,
     arrReason: item.arrReason,
-    arrTargets: item.arrTargets,
+    arrTargets: item.arrTargets.map((target) => ({
+      ...target,
+      mediaFiles: target.mediaFiles?.map(({ relativePath, size }) => ({ relativePath, size })) ??
+        null,
+    })),
     sources: item.sources,
-    orphanFiles: item.orphanFiles.map((
-      {
-        hash: _hash,
-        importedPath: _importedPath,
-        importedRoot: _importedRoot,
-        root: _root,
-        boundary: _boundary,
-        remotePath: _remotePath,
-        dev: _dev,
-        ino: _ino,
-        ...file
-      },
-    ) => file),
+    orphanFiles: item.orphanFiles.map(({ path, size, method }) => ({ path, size, method })),
     retainedPaths: item.retainedPaths,
   };
 }

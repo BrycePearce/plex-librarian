@@ -81,10 +81,12 @@ export function DeleteConfirmDialog({
     () => new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
   );
-  const cleanupEligibleItems =
-    preview.data?.items.filter((item) =>
-      item.status === "resolved" && item.downloadJobs.length > 0
-    ) ?? [];
+  const allowOrphanOnlyCleanup = items.every((item) => item.type === "show");
+  const cleanupEligibleItems = preview.data?.items.filter((item) =>
+    item.status === "resolved" &&
+    (item.downloadJobs.length > 0 ||
+      (allowOrphanOnlyCleanup && item.orphanFiles.length > 0))
+  ) ?? [];
   const cleanupEligibleCount = cleanupEligibleItems.length;
   const coordinatedRatingKeys = preview.data?.coordinatedConfigured
     ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((
@@ -93,17 +95,21 @@ export function DeleteConfirmDialog({
     : [];
   const arrDestination = arrDestinationState(preview.data);
   const arrProblems = arrDestination.problems;
-  const cleanupProblems =
-    preview.data?.items.filter((item) =>
-      item.status !== "resolved" || item.downloadJobs.length === 0
-    ) ?? [];
+  const cleanupProblems = preview.data?.items.filter((item) =>
+    item.status !== "resolved" ||
+    (item.downloadJobs.length === 0 &&
+      (!allowOrphanOnlyCleanup || item.orphanFiles.length === 0))
+  ) ?? [];
   const arrService: ServiceIconName = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   // Query results and effects commit in separate renders. Suppress an obsolete Arr
   // selection immediately when no coordinated destination exists so the displayed
   // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
-  const cleanupDestinationVisible = downloadCleanupDestinationVisible(preview.data);
+  const cleanupDestinationVisible = downloadCleanupDestinationVisible(
+    preview.data,
+    allowOrphanOnlyCleanup,
+  );
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     setDeleteFromArr(true);
@@ -123,7 +129,6 @@ export function DeleteConfirmDialog({
     if (!preview.data) return;
     if (cleanupDefaultsKeyRef.current !== selectionKey) {
       cleanupDefaultsKeyRef.current = selectionKey;
-      setCleanupDownloads(cleanupEligibleCount > 0);
       return;
     }
     // A refetch may invalidate a destination, but must not silently reverse a
@@ -132,7 +137,7 @@ export function DeleteConfirmDialog({
   }, [preview.data, cleanupEligibleCount, selectionKey]);
   const cancel = () => {
     setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
-    setCleanupDownloads(cleanupEligibleCount > 0);
+    setCleanupDownloads(false);
     onCancel();
   };
   const { totalSize, unknownSizeCount } = deletionImpact(items);
@@ -302,9 +307,9 @@ export function DeleteConfirmDialog({
                 ? [{
                   id: "cleanup" as const,
                   service: "qbittorrent" as const,
-                  label: "qBittorrent",
+                  label: "Download cleanup",
                   info:
-                    "Removes verified qBittorrent jobs and asks qBittorrent to delete their downloaded files. Verified orphan hardlinks are also removed.",
+                    "Removes verified qBittorrent jobs and verified orphan hardlinks. Orphan-only cleanup remains available after the download job is gone.",
                   checked: cleanupDownloads,
                   disabled: pending || preview.isLoading,
                   warning: cleanupDownloads && cleanupProblems.length > 0,

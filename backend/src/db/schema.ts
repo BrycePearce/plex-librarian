@@ -976,6 +976,11 @@ export const deletionTargets = sqliteTable(
     nextRetryAt: integer('next_retry_at'),
     error: text('error'),
     logicalSize: integer('logical_size'),
+    storageOutcome: text('storage_outcome', { enum: ['verified', 'unknown', 'mixed'] }),
+    verifiedHardlinkDataSize: integer('verified_hardlink_data_size'),
+    verifiedFileCount: integer('verified_file_count'),
+    unknownFileCount: integer('unknown_file_count'),
+    storageOutcomeReasons: text('storage_outcome_reasons'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1102,6 +1107,16 @@ export const mediaRemovals = sqliteTable(
     // Decimal KB, matching items.fileSize. Null preserves the distinction between a
     // genuinely zero-byte payload and a removal whose size Plex did not report.
     mediaSize: integer('media_size'),
+    // Legacy rows are logically attributable. A verified-storage checkpoint may create
+    // the row before Plex finalization and flips this to true only when logical removal
+    // is attributable under the existing audit rules.
+    logicalAttributable: integer('logical_attributable', { mode: 'boolean' }).notNull().default(
+      true,
+    ),
+    verifiedHardlinkDataSize: integer('verified_hardlink_data_size').notNull().default(0),
+    verifiedFileCount: integer('verified_file_count'),
+    unknownFileCount: integer('unknown_file_count'),
+    storageOutcome: text('storage_outcome', { enum: ['verified', 'unknown', 'mixed'] }),
     createdAt: integer('created_at').notNull(),
   },
   (table) => ({

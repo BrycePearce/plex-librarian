@@ -472,7 +472,7 @@ function DashboardInner() {
             librariesData.libraries.length > 0 && (
             <StatsStrip
               libraries={librariesData.libraries}
-              mediaSizeRemoved={mediaRemovalSummary?.mediaSizeRemoved ?? 0}
+              verifiedHardlinkDataRemoved={mediaRemovalSummary?.verifiedHardlinkDataRemoved ?? 0}
             />
           )}
 
@@ -588,10 +588,10 @@ function useCountUp(target: number, duration = 800, skipAnimation = false) {
 
 function StatsStrip({
   libraries,
-  mediaSizeRemoved,
+  verifiedHardlinkDataRemoved,
 }: {
   libraries: Library[];
-  mediaSizeRemoved: number;
+  verifiedHardlinkDataRemoved: number;
 }) {
   const totals = libraries.reduce(
     (acc, lib) => {
@@ -605,7 +605,7 @@ function StatsStrip({
 
   const animatedItems = useCountUp(totals.items, 900);
   const animatedSize = useCountUp(totals.size, 900);
-  const animatedRemovedSize = useCountUp(mediaSizeRemoved, 900);
+  const animatedRemovedSize = useCountUp(verifiedHardlinkDataRemoved, 900);
 
   return (
     <motion.div
@@ -630,8 +630,9 @@ function StatsStrip({
         icon={<Trash2 className="w-5 h-5" />}
         iconClass="bg-primary/20 text-primary"
         tone="primary"
-        label="Media removed"
+        label="Verified hardlink data removed"
         value={formatKilobytes(animatedRemovedSize)}
+        title="Verified two-link namespace removals. Snapshots or open file handles may delay free-space recovery."
       />
       <StatTile
         icon={<Clock className="w-5 h-5" />}
@@ -772,17 +773,20 @@ function StatTile({
   tone,
   label,
   value,
+  title,
 }: {
   icon: ReactNode;
   iconClass: string;
   tone: "primary" | "secondary" | "accent";
   label: string;
   value: string;
+  title?: string;
 }) {
   return (
     <motion.div
       variants={cardVariants}
       className={`dashboard-stat-card dashboard-stat-${tone}`}
+      title={title}
     >
       <div className="dashboard-stat-content">
         <div

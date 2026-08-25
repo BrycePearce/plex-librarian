@@ -4,6 +4,7 @@ import {
   deletionOperationPollInterval,
   deletionOperationTitle,
   deletionWarningSummary,
+  hardlinkOutcomeSummary,
   isRelocationGuidanceActive,
   nonSupersededCancelledCount,
   retryableRelocationSafeTargetCount,
@@ -83,4 +84,26 @@ Deno.test("terminal failures are presented as needing attention", () => {
     deletionOperationTitle("needs_attention"),
     "Deletion needs attention",
   );
+});
+
+Deno.test("hardlink outcomes use durable counts instead of a rounded byte total", () => {
+  assertEquals(
+    hardlinkOutcomeSummary({
+      verifiedHardlinkDataRemoved: 0,
+      verifiedTargetCount: 1,
+      unknownTargetCount: 0,
+      mixedTargetCount: 0,
+    }),
+    "0 KB verified hardlink data removed",
+  );
+  assertEquals(
+    hardlinkOutcomeSummary({
+      verifiedHardlinkDataRemoved: 0,
+      verifiedTargetCount: 0,
+      unknownTargetCount: 1,
+      mixedTargetCount: 0,
+    }),
+    "Hardlink data removal not verified",
+  );
+  assertEquals(hardlinkOutcomeSummary({}), null);
 });

@@ -68,7 +68,7 @@ function draftFor(
 }
 
 function pathMappings(type: ArrType, draft: ArrDraft) {
-  if (type === "sonarr") return [];
+  void type;
   return [
     draft.libraryArrPath.trim() && draft.libraryLocalPath.trim()
       ? {
@@ -315,7 +315,7 @@ export function ArrConnectionWizard({
                     : `Find it under Settings → General → Security in ${appName}.`}
                 </span>
               </label>
-              {type === "radarr" && (
+              {
                 <details className="rounded-xl border border-base-300 bg-base-200/30 p-3">
                   <summary className="cursor-pointer text-sm font-medium">
                     Orphan download cleanup
@@ -357,7 +357,7 @@ export function ArrConnectionWizard({
                     overlap.
                   </p>
                 </details>
-              )}
+              }
             </>
           )
           : (

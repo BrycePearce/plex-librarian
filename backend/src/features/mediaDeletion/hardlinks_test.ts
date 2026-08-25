@@ -81,6 +81,8 @@ Deno.test({
       ], [association.importedPath!]);
       assertExists(result?.file);
       assertEquals(result.source.verification, 'hardlink');
+      assertEquals(result.file.rootDevice, undefined);
+      assertEquals(result.file.importedRootDevice, undefined);
       assertEquals(await findRetainedSiblingPaths([result.file]), []);
 
       await deleteVerifiedOrphanFile(result.file);
@@ -420,6 +422,133 @@ Deno.test({
       await Deno.writeTextFile(source, 'media');
       await assertRejects(
         () => deleteVerifiedOrphanFile(result.file!),
+        Error,
+        'Hardlink verification changed',
+      );
+      assertEquals(await Deno.readTextFile(source), 'media');
+      assertEquals(await Deno.readTextFile(imported), 'media');
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'strict Sonarr cleanup refuses accepted size drift before unlink',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const downloads = `${root}/downloads`;
+      const library = `${root}/library`;
+      await Deno.mkdir(`${downloads}/release`, { recursive: true });
+      await Deno.mkdir(`${library}/Movie`, { recursive: true });
+      const source = `${downloads}/release/movie.mkv`;
+      const imported = `${library}/Movie/movie.mkv`;
+      await Deno.writeTextFile(source, 'media');
+      await Deno.link(source, imported);
+      const result = await verifyOrphanHardlink(
+        'Sonarr',
+        association,
+        [
+          { kind: 'download', arrPath: '/arr/downloads', localPath: downloads },
+          { kind: 'library', arrPath: '/arr/media', localPath: library },
+        ],
+        [{ path: association.importedPath!, id: 1, size: 5 }],
+        { exactTwoLinks: true },
+      );
+      assertExists(result?.file);
+
+      await Deno.writeTextFile(imported, 'changed media');
+      await assertRejects(
+        () => deleteVerifiedOrphanFile(result.file!),
+        Error,
+        'Hardlink verification changed',
+      );
+      assertEquals(await Deno.readTextFile(source), 'changed media');
+      assertEquals(await Deno.readTextFile(imported), 'changed media');
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'strict Sonarr cleanup refuses a newly created third hardlink before unlink',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      const downloads = `${root}/downloads`;
+      const library = `${root}/library`;
+      await Deno.mkdir(`${downloads}/release`, { recursive: true });
+      await Deno.mkdir(`${library}/Movie`, { recursive: true });
+      const source = `${downloads}/release/movie.mkv`;
+      const imported = `${library}/Movie/movie.mkv`;
+      await Deno.writeTextFile(source, 'media');
+      await Deno.link(source, imported);
+      const result = await verifyOrphanHardlink(
+        'Sonarr',
+        association,
+        [
+          { kind: 'download', arrPath: '/arr/downloads', localPath: downloads },
+          { kind: 'library', arrPath: '/arr/media', localPath: library },
+        ],
+        [{ path: association.importedPath!, id: 1, size: 5 }],
+        { exactTwoLinks: true },
+      );
+      assertExists(result?.file);
+
+      await Deno.link(source, `${root}/third-link.mkv`);
+      await assertRejects(
+        () => deleteVerifiedOrphanFile(result.file!),
+        Error,
+        'Hardlink verification changed',
+      );
+      assertEquals(await Deno.readTextFile(source), 'media');
+      assertEquals(await Deno.readTextFile(imported), 'media');
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'strict Sonarr cleanup refuses aliased library and download roots',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    const root = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${root}/downloads`);
+      await Deno.mkdir(`${root}/library`);
+      const source = `${root}/downloads/movie.mkv`;
+      const imported = `${root}/library/movie.mkv`;
+      await Deno.writeTextFile(source, 'media');
+      await Deno.link(source, imported);
+      const fileInfo = await Deno.lstat(source);
+      const rootInfo = await Deno.lstat(root);
+
+      await assertRejects(
+        () =>
+          deleteVerifiedOrphanFile({
+            hash: association.hash,
+            path: source,
+            importedPath: imported,
+            importedRoot: root,
+            root,
+            boundary: `${root}/downloads`,
+            remotePath: association.importedPath!,
+            size: fileInfo.size,
+            method: 'hardlink',
+            dev: fileInfo.dev!,
+            ino: fileInfo.ino!,
+            nlink: 2,
+            rootDevice: String(rootInfo.dev),
+            rootInode: String(rootInfo.ino),
+            importedRootDevice: String(rootInfo.dev),
+            importedRootInode: String(rootInfo.ino),
+            strictTwoLinkProof: true,
+          }),
         Error,
         'Hardlink verification changed',
       );

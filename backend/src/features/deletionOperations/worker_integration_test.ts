@@ -214,6 +214,9 @@ let sonarrUnavailable = false;
 let sonarrHistoryUnavailable = false;
 let sonarrActivityReadCount = 0;
 let blockSonarrActivityAtRead: number | null = null;
+let sonarrSeriesPresent = true;
+let sonarrSeriesDeleteHook: (() => void) | null = null;
+let loseSonarrSeriesDeleteResponse = false;
 let seasonPackQbit = false;
 let seasonPackMixed = false;
 let seasonPackForeignOwner = false;
@@ -476,12 +479,29 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(Response.json({ appName: 'Sonarr', version: sonarrReportedVersion }));
     }
     if (url.pathname === '/api/v3/series') {
-      return Promise.resolve(Response.json([{
-        id: 8,
-        tvdbId: 20,
-        title: 'Example Show',
-        path: '/tv/Show',
-      }]));
+      return Promise.resolve(Response.json(
+        sonarrSeriesPresent
+          ? [{
+            id: 8,
+            tvdbId: 20,
+            title: 'Example Show',
+            path: '/tv/Show',
+          }]
+          : [],
+      ));
+    }
+    if (url.pathname === '/api/v3/series/8' && init?.method === 'DELETE') {
+      if (!sonarrSeriesPresent) return Promise.resolve(new Response(null, { status: 404 }));
+      destinationOrder.push('arr');
+      arrDeleteCount++;
+      sonarrSeriesDeleteHook?.();
+      sonarrSeriesPresent = false;
+      sonarrManagedFilePresent = false;
+      if (loseSonarrSeriesDeleteResponse) {
+        loseSonarrSeriesDeleteResponse = false;
+        return Promise.reject(new TypeError('lost Sonarr series deletion response'));
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/queue') {
       sonarrActivityReadCount++;
@@ -968,6 +988,9 @@ function reset(): void {
   sonarrHistoryUnavailable = false;
   sonarrActivityReadCount = 0;
   blockSonarrActivityAtRead = null;
+  sonarrSeriesPresent = true;
+  sonarrSeriesDeleteHook = null;
+  loseSonarrSeriesDeleteResponse = false;
   seasonPackQbit = false;
   seasonPackMixed = false;
   seasonPackForeignOwner = false;
@@ -3155,6 +3178,326 @@ Deno.test('qBittorrent-only whole-item deletion does not require Arr selection',
   assertEquals(qbitDeleteCount, 1);
   assertEquals(arrDeleteCount, 0);
   assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+});
+
+Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true);
+  seasonPackQbit = true;
+  qbitPresent = true;
+  const result = await enqueueDeletionOperation({
+    clientRequestId: crypto.randomUUID(),
+    serverId: 1,
+    libraryKey: 'shows',
+    kind: 'whole_item',
+    payload: {
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: ['show-1'],
+    },
+    targets: [{
+      kind: 'whole_item',
+      key: 'show-1',
+      title: 'Example Show',
+      logicalSize: 100,
+      snapshot: {
+        machineIdentifier: 'machine-1',
+        serverUrl: 'http://plex',
+        libraryKey: 'shows',
+        ratingKey: 'show-1',
+        title: 'Example Show',
+        type: 'show',
+        tmdbId: null,
+        tvdbId: 20,
+        mode: 'plex-only',
+        cleanupDownloads: true,
+        selectedRatingKeys: ['show-1'],
+        cleanupDownloadRatingKeys: ['show-1'],
+      },
+    }],
+  });
+
+  await settle();
+  const operation = getDeletionOperation(result.operationId, 1)!;
+  assertEquals(operation.status, 'completed', JSON.stringify(operation));
+  assertEquals(operation.unknownTargetCount, 1);
+  const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+  assertEquals(target.storageOutcome, 'unknown');
+  assertEquals(target.verifiedHardlinkDataRemoved, 0);
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+});
+
+Deno.test({
+  name: 'coordinated Sonarr orphan cleanup verifies the complete two-link removal',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    reset();
+    addEpisode();
+    configureSonarr();
+    seasonPackQbit = true;
+    const storageRoot = await Deno.makeTempDir();
+    const libraryRoot = `${storageRoot}/library`;
+    const downloadRoot = `${storageRoot}/downloads`;
+    const libraryPath = `${libraryRoot}/Show/Season 01/old.mkv`;
+    const downloadPath = `${downloadRoot}/release/old.mkv`;
+    try {
+      await Deno.mkdir(libraryPath.slice(0, libraryPath.lastIndexOf('/')), { recursive: true });
+      await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
+      await Deno.writeFile(libraryPath, new Uint8Array(40_000));
+      await Deno.link(libraryPath, downloadPath);
+      sonarrSeriesDeleteHook = () => Deno.removeSync(libraryPath);
+      withTransaction((client) => {
+        client.prepare(
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+        ).run(libraryRoot, downloadRoot);
+      });
+
+      const previewResponse = await app.request(
+        '/api/libraries/shows/items/download-cleanup-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: ['show-1'] }),
+        },
+      );
+      assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+      const preview = await previewResponse.json();
+      assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
+      assertEquals(preview.items[0].downloadJobs.length, 0);
+      assertEquals(preview.items[0].orphanFiles.length, 1);
+
+      const response = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: ['show-1'],
+          cleanupDownloadRatingKeys: ['show-1'],
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json() as { operationId: string };
+
+      await settle();
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(operation.status, 'completed', JSON.stringify(operation));
+      assertEquals(operation.verifiedHardlinkDataRemoved, 40);
+      assertEquals(operation.verifiedTargetCount, 1);
+      assertEquals(operation.unknownTargetCount, 0);
+      const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
+      assertEquals(target.storageOutcome, 'verified');
+      assertEquals(target.verifiedHardlinkDataRemoved, 40);
+      assertEquals(arrDeleteCount, 1);
+      assertEquals(destinationOrder, ['arr', 'plex']);
+      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
+    } finally {
+      await Deno.remove(storageRoot, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'coordinated Sonarr orphan cleanup reconciles a lost series-delete response',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    reset();
+    addEpisode();
+    configureSonarr();
+    seasonPackQbit = true;
+    const storageRoot = await Deno.makeTempDir();
+    const libraryRoot = `${storageRoot}/library`;
+    const downloadRoot = `${storageRoot}/downloads`;
+    const libraryPath = `${libraryRoot}/Show/Season 01/old.mkv`;
+    const downloadPath = `${downloadRoot}/release/old.mkv`;
+    try {
+      await Deno.mkdir(libraryPath.slice(0, libraryPath.lastIndexOf('/')), { recursive: true });
+      await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
+      await Deno.writeFile(libraryPath, new Uint8Array(40_000));
+      await Deno.link(libraryPath, downloadPath);
+      sonarrSeriesDeleteHook = () => Deno.removeSync(libraryPath);
+      loseSonarrSeriesDeleteResponse = true;
+      withTransaction((client) => {
+        client.prepare(
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+        ).run(libraryRoot, downloadRoot);
+      });
+
+      const response = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: ['show-1'],
+          cleanupDownloadRatingKeys: ['show-1'],
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json() as { operationId: string };
+
+      await settle();
+      const interrupted = getDeletionOperation(operationId, 1)!;
+      assertEquals(interrupted.status, 'waiting_retry', JSON.stringify(interrupted));
+      assertEquals(arrDeleteCount, 1);
+      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
+
+      makeRetryReady(operationId);
+      await settle();
+      const completed = getDeletionOperation(operationId, 1)!;
+      assertEquals(completed.status, 'completed', JSON.stringify(completed));
+      assertEquals(completed.verifiedHardlinkDataRemoved, 40);
+      assertEquals(completed.verifiedTargetCount, 1);
+      assertEquals(completed.unknownTargetCount, 0);
+      assertEquals(arrDeleteCount, 1);
+      assertEquals(destinationOrder, ['arr', 'plex']);
+    } finally {
+      await Deno.remove(storageRoot, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'pre-unlink playback gate preserves both accepted hardlinks',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    reset();
+    addEpisode();
+    configureSonarr();
+    seasonPackQbit = true;
+    const storageRoot = await Deno.makeTempDir();
+    const libraryRoot = `${storageRoot}/library`;
+    const downloadRoot = `${storageRoot}/downloads`;
+    const libraryPath = `${libraryRoot}/Show/Season 01/old.mkv`;
+    const downloadPath = `${downloadRoot}/release/old.mkv`;
+    try {
+      await Deno.mkdir(libraryPath.slice(0, libraryPath.lastIndexOf('/')), { recursive: true });
+      await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
+      await Deno.writeFile(libraryPath, new Uint8Array(40_000));
+      await Deno.link(libraryPath, downloadPath);
+      sonarrSeriesDeleteHook = () => Deno.removeSync(libraryPath);
+      withTransaction((client) => {
+        client.prepare(
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+        ).run(libraryRoot, downloadRoot);
+      });
+
+      const response = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: ['show-1'],
+          cleanupDownloadRatingKeys: ['show-1'],
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json() as { operationId: string };
+
+      let workerSessionReads = 0;
+      activeSessionsHook = () => {
+        workerSessionReads++;
+        if (workerSessionReads === 2) activePlaybackRatingKey = 'show-1';
+      };
+      await settle();
+
+      const blocked = getDeletionOperation(operationId, 1)!;
+      assertEquals(blocked.status, 'needs_attention', JSON.stringify(blocked));
+      assertEquals(blocked.verifiedTargetCount, 0);
+      assertEquals(blocked.unknownTargetCount, 0);
+      assertEquals(blocked.verifiedHardlinkDataRemoved, 0);
+      assertEquals(arrDeleteCount, 0);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
+      assertEquals((await Deno.lstat(libraryPath)).isFile, true);
+    } finally {
+      await Deno.remove(storageRoot, { recursive: true });
+    }
+  },
+});
+
+Deno.test({
+  name: 'final playback gate preserves accepted proof for an explicit retry',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    reset();
+    addEpisode();
+    configureSonarr();
+    seasonPackQbit = true;
+    const storageRoot = await Deno.makeTempDir();
+    const libraryRoot = `${storageRoot}/library`;
+    const downloadRoot = `${storageRoot}/downloads`;
+    const libraryPath = `${libraryRoot}/Show/Season 01/old.mkv`;
+    const downloadPath = `${downloadRoot}/release/old.mkv`;
+    try {
+      await Deno.mkdir(libraryPath.slice(0, libraryPath.lastIndexOf('/')), { recursive: true });
+      await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
+      await Deno.writeFile(libraryPath, new Uint8Array(40_000));
+      await Deno.link(libraryPath, downloadPath);
+      sonarrSeriesDeleteHook = () => Deno.removeSync(libraryPath);
+      withTransaction((client) => {
+        client.prepare(
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+        ).run(libraryRoot, downloadRoot);
+      });
+
+      const response = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: ['show-1'],
+          cleanupDownloadRatingKeys: ['show-1'],
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json() as { operationId: string };
+
+      let workerSessionReads = 0;
+      activeSessionsHook = () => {
+        workerSessionReads++;
+        if (workerSessionReads === 3) activePlaybackRatingKey = 'show-1';
+      };
+      await settle();
+
+      const blocked = getDeletionOperation(operationId, 1)!;
+      assertEquals(blocked.status, 'needs_attention', JSON.stringify(blocked));
+      assertEquals(blocked.unknownTargetCount, 1);
+      assertEquals(blocked.verifiedHardlinkDataRemoved, 0);
+      assertEquals(arrDeleteCount, 0);
+      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(libraryPath)).isFile, true);
+
+      activeSessionsHook = null;
+      activePlaybackRatingKey = null;
+      assertEquals(retryDeletionOperation(operationId, 1), true);
+      await settle();
+
+      const completed = getDeletionOperation(operationId, 1)!;
+      assertEquals(completed.status, 'completed', JSON.stringify(completed));
+      assertEquals(completed.verifiedTargetCount, 1);
+      assertEquals(completed.unknownTargetCount, 0);
+      assertEquals(completed.verifiedHardlinkDataRemoved, 40);
+      assertEquals(arrDeleteCount, 1);
+      const completionPayloads = withTransaction((client) =>
+        client.prepare(
+          "SELECT payload FROM events WHERE type = 'deletion.completed' AND json_extract(payload, '$.operationId') = ? ORDER BY id",
+        ).values<[string]>(operationId).map(([payload]) => JSON.parse(payload))
+      );
+      assertEquals(completionPayloads.length, 2);
+      assertEquals(completionPayloads[0].unknownTargetCount, 1);
+      assertEquals(completionPayloads[0].verifiedHardlinkDataRemoved, 0);
+      assertEquals(completionPayloads[1].verifiedTargetCount, 1);
+      assertEquals(completionPayloads[1].verifiedHardlinkDataRemoved, 40);
+    } finally {
+      await Deno.remove(storageRoot, { recursive: true });
+    }
+  },
 });
 
 Deno.test('whole-item direct-manifest cleanup converges after a lost delete response', async () => {

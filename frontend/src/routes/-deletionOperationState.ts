@@ -1,3 +1,5 @@
+import { formatKilobytes } from "../lib/format.ts";
+
 export const activeDeletionStatuses = new Set([
   "queued",
   "running",
@@ -56,6 +58,26 @@ export function deletionWarningSummary(
   return removalConfirmedCount === 0
     ? "No Plex media removal was confirmed"
     : `${removalConfirmedCount} removed · ${warningCount} warning`;
+}
+
+export function hardlinkOutcomeSummary(outcome: {
+  verifiedHardlinkDataRemoved?: number;
+  verifiedTargetCount?: number;
+  unknownTargetCount?: number;
+  mixedTargetCount?: number;
+}): string | null {
+  const verifiedTargets = (outcome.verifiedTargetCount ?? 0) +
+    (outcome.mixedTargetCount ?? 0);
+  const uncertainTargets = (outcome.unknownTargetCount ?? 0) +
+    (outcome.mixedTargetCount ?? 0);
+  if (verifiedTargets > 0) {
+    return `${
+      formatKilobytes(outcome.verifiedHardlinkDataRemoved ?? 0)
+    } verified hardlink data removed${
+      uncertainTargets > 0 ? ` · ${uncertainTargets} targets unknown` : ""
+    }`;
+  }
+  return uncertainTargets > 0 ? "Hardlink data removal not verified" : null;
 }
 
 export function retryableRelocationSafeTargetCount(

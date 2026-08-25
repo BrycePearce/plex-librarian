@@ -9,9 +9,12 @@ import { ArrClient } from '../../integrations/arr/client.ts';
 import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
+  cleanupHasDurableAcceptedIdentity,
+  cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
   DownloadedFileCleanupError,
   executeDownloadedFileCleanup,
+  mergeAcceptedSonarrCleanup,
   persistResolvedCleanup,
   persistResolvedCleanupIdentity,
   publicCleanupItem,
@@ -26,6 +29,119 @@ import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './owners
 import { assertDownloadJobSelectionConsistent } from './planning.ts';
 
 const hash = 'a'.repeat(40);
+
+Deno.test('public cleanup projection strips durable Sonarr proof evidence', () => {
+  const projected = publicCleanupItem({
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [{
+      instanceName: 'Sonarr',
+      type: 'sonarr',
+      title: 'Show',
+      path: '/tv/Show',
+      seasons: [],
+      mediaFiles: [{
+        id: 10,
+        path: '/tv/Show/episode.mkv',
+        relativePath: 'episode.mkv',
+        size: 1_000,
+      }],
+      extraFiles: [],
+    }],
+    sources: [],
+    orphanFiles: [{
+      path: '/downloads/episode.mkv',
+      size: 1_000,
+      method: 'hardlink',
+      hash,
+      importedPath: '/library/Show/episode.mkv',
+      importedRoot: '/library',
+      root: '/downloads',
+      boundary: '/downloads/release',
+      remotePath: '/tv/Show/episode.mkv',
+      dev: 1,
+      ino: 2,
+      nlink: 2,
+      rootDevice: '1',
+      rootInode: '3',
+      importedRootDevice: '1',
+      importedRootInode: '4',
+      managedFileId: 10,
+      managedFileSize: 1_000,
+      managedPath: '/tv/Show/episode.mkv',
+      strictTwoLinkProof: true,
+    }],
+    retainedPaths: [],
+  } as unknown as ResolvedCleanupItem);
+
+  assertEquals(projected.arrTargets[0]?.mediaFiles, [{
+    relativePath: 'episode.mkv',
+    size: 1_000,
+  }]);
+  assertEquals(projected.orphanFiles, [{
+    path: '/downloads/episode.mkv',
+    size: 1_000,
+    method: 'hardlink',
+  }]);
+});
+
+Deno.test('only accepted filesystem or direct-manifest cleanup evidence is persisted', () => {
+  const job = (provenance: 'arr_history' | 'direct_manifest') => ({ provenance });
+  assertEquals(
+    cleanupHasDurableAcceptedIdentity(
+      {
+        downloadJobs: [job('arr_history')],
+        sonarrReclamation: undefined,
+      } as unknown as Parameters<typeof cleanupHasDurableAcceptedIdentity>[0],
+    ),
+    false,
+  );
+  assertEquals(
+    cleanupHasDurableAcceptedIdentity(
+      {
+        downloadJobs: [job('direct_manifest')],
+        sonarrReclamation: undefined,
+      } as unknown as Parameters<typeof cleanupHasDurableAcceptedIdentity>[0],
+    ),
+    true,
+  );
+  assertEquals(
+    cleanupHasDurableAcceptedIdentity(
+      {
+        downloadJobs: [job('arr_history')],
+        sonarrReclamation: {},
+      } as unknown as Parameters<typeof cleanupHasDurableAcceptedIdentity>[0],
+    ),
+    true,
+  );
+  assertEquals(
+    cleanupHasDurableAcceptedIdentity(
+      {
+        downloadJobs: [],
+        sonarrReclamation: undefined,
+      } as unknown as Parameters<typeof cleanupHasDurableAcceptedIdentity>[0],
+    ),
+    false,
+  );
+});
+
+Deno.test('orphan-only cleanup eligibility requires an accepted Sonarr proof', () => {
+  const cleanup = {
+    status: 'resolved',
+    downloadJobs: [],
+    orphanFiles: [{ path: '/downloads/episode.mkv' }],
+    sonarrReclamation: undefined,
+  } as unknown as Parameters<typeof cleanupIsEligible>[0];
+
+  assertEquals(cleanupIsEligible(cleanup), false);
+  assertEquals(cleanupIsEligible({ ...cleanup, sonarrReclamation: {} } as typeof cleanup), true);
+  assertEquals(
+    cleanupIsEligible({ ...cleanup, downloadJobs: [{}] } as typeof cleanup),
+    true,
+  );
+});
 
 Deno.test('persisted cleanup confirms a lost-response download deletion from live absence', async () => {
   const cleanup = {
@@ -247,6 +363,80 @@ Deno.test('qBittorrent selection cannot split one associated job across a reques
     'shared by cleanup-selected and cleanup-unselected',
   );
   assertDownloadJobSelectionConsistent(cleanups, new Set(['selected', 'unselected']));
+});
+
+Deno.test('accepted Sonarr proof uses fresh Arr-history jobs and retains accepted orphan paths', () => {
+  const acceptedOrphan = { path: '/downloads/accepted.mkv', hash: 'accepted' };
+  const replacementOrphan = { path: '/downloads/replacement.mkv' };
+  const accepted = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [{ instanceKey: 'qb:1', jobId: 'old', provenance: 'arr_history' }],
+    orphanFiles: [acceptedOrphan],
+    sonarrReclamation: { inventoryIdentity: 'accepted' },
+  } as unknown as ResolvedCleanupItem;
+  const current = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [{ instanceKey: 'qb:1', jobId: 'current', provenance: 'arr_history' }],
+    orphanFiles: [replacementOrphan],
+    observedDownloadJobKeys: new Set(['qb:1:current']),
+  } as unknown as ResolvedCleanupItem;
+
+  const merged = mergeAcceptedSonarrCleanup(current, accepted);
+  assertEquals(merged.downloadJobs.map((job) => job.jobId), ['current']);
+  assert(merged.orphanFiles[0] === acceptedOrphan);
+  assert(merged.sonarrReclamation === accepted.sonarrReclamation);
+  assertEquals(merged.observedDownloadJobKeys, new Set(['qb:1:current']));
+});
+
+Deno.test('accepted orphan-only Sonarr cleanup suppresses unlink beneath a reappeared job', () => {
+  const accepted = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    orphanFiles: [{ path: '/downloads/accepted.mkv', hash: 'reappeared' }],
+    sonarrReclamation: { inventoryIdentity: 'accepted' },
+  } as unknown as ResolvedCleanupItem;
+  const currentJob = {
+    instanceKey: 'qb:1',
+    jobId: 'reappeared',
+    provenance: 'arr_history',
+  };
+  const current = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [currentJob],
+    orphanFiles: [],
+    observedDownloadJobKeys: new Set(['qb:1:reappeared']),
+  } as unknown as ResolvedCleanupItem;
+
+  const merged = mergeAcceptedSonarrCleanup(current, accepted);
+  assertEquals(merged.downloadJobs.map((job) => job.jobId), ['reappeared']);
+  assertEquals(merged.orphanFiles, []);
+});
+
+Deno.test('accepted Sonarr cleanup does not replace a failed Arr-history revalidation', () => {
+  const accepted = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [{ instanceKey: 'qb:1', jobId: 'old', provenance: 'arr_history' }],
+    orphanFiles: [{ path: '/downloads/accepted.mkv' }],
+    sonarrReclamation: { inventoryIdentity: 'accepted' },
+  } as unknown as ResolvedCleanupItem;
+  const current = {
+    ratingKey: 'show',
+    status: 'error',
+    reason: 'Current Sonarr history is unavailable',
+    downloadJobs: [],
+    orphanFiles: [],
+  } as unknown as ResolvedCleanupItem;
+
+  assertThrows(
+    () => mergeAcceptedSonarrCleanup(current, accepted),
+    Error,
+    'Current Sonarr history is unavailable',
+  );
 });
 
 Deno.test('live torrent ownership requires an exact manifest path, not only the hash', () => {
@@ -847,4 +1037,45 @@ Deno.test('optional history and extra-file failures do not block verified Arr de
   assertEquals(result.arrTargets[0]?.mediaFiles, null);
   assertEquals(result.arrTargets[0]?.extraFiles, null);
   assertEquals(result.status, 'unavailable');
+});
+
+Deno.test('bounded Sonarr inventory failures remain item-scoped cleanup errors', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr',
+    'key',
+    ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/series?tvdbId=')) {
+        return Promise.resolve(Response.json([{
+          id: 7,
+          title: 'Show',
+          path: '/tv/Show',
+          seasons: [],
+        }]));
+      }
+      return Promise.resolve(new Response('Inventory unavailable', { status: 503 }));
+    }) as typeof fetch,
+  );
+  const result = await resolveDownloadCleanup(
+    'plex-show',
+    { title: 'Show', type: 'show', tmdbId: null, tvdbId: 10 },
+    [{
+      instanceId: 1,
+      instanceName: 'Sonarr',
+      instanceType: 'sonarr',
+      instanceUrl: 'http://sonarr',
+      configurationUpdatedAt: 1,
+      mappingIdentity: '{"addImportExclusion":false,"pathMappings":[]}',
+      client,
+      addImportExclusion: false,
+      pathMappings: [],
+    }],
+    [],
+  );
+
+  assertEquals(result.status, 'error');
+  assertEquals(result.arrStatus, 'resolved');
+  assertEquals(result.arrTargets[0]?.mediaFiles, null);
+  assertStringIncludes(result.reason ?? '', 'Inventory unavailable');
 });

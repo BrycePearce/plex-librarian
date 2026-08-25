@@ -97,13 +97,6 @@ router.post('/instances', async (c) => {
   ) {
     return c.json({ error: 'type, name, URL, API key, and mapping options are required' }, 400);
   }
-  if (body.type === 'sonarr' && pathMappings.length > 0) {
-    return c.json({
-      error:
-        'direct orphan-hardlink cleanup currently supports Radarr only; Sonarr path mappings must be empty',
-    }, 400);
-  }
-
   const libraryKeys = await validLibrariesForInstance(serverId, body.type, body.libraryKeys);
   if (libraryKeys === null) {
     return c.json({ error: 'selected libraries are not valid for this connection' }, 400);
@@ -225,13 +218,6 @@ router.patch('/instances/:id', async (c) => {
     and(eq(arrInstances.serverId, serverId), eq(arrInstances.id, id)),
   ).limit(1);
   if (!instance) return c.json({ error: 'instance not found' }, 404);
-  if (instance.type === 'sonarr' && pathMappings.length > 0) {
-    return c.json({
-      error:
-        'direct orphan-hardlink cleanup currently supports Radarr only; Sonarr path mappings must be empty',
-    }, 400);
-  }
-
   const libraryKeys = await validLibrariesForInstance(
     serverId,
     instance.type,

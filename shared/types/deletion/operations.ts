@@ -67,6 +67,10 @@ export interface DeletionOperation {
   removalConfirmedCount: number;
   failedCount: number;
   logicalSizeRemoved: number;
+  verifiedHardlinkDataRemoved?: number;
+  verifiedTargetCount?: number;
+  unknownTargetCount?: number;
+  mixedTargetCount?: number;
   nextRetryAt: number | null;
   createdAt: number;
   startedAt: number | null;

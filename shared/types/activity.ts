@@ -21,6 +21,10 @@ export interface DeletionCompletedPayload {
   cancelledCount: number;
   supersededCount: number;
   logicalSizeRemoved: number;
+  verifiedHardlinkDataRemoved?: number;
+  verifiedTargetCount?: number;
+  unknownTargetCount?: number;
+  mixedTargetCount?: number;
 }
 
 export interface SyncCompletedPayload {
@@ -108,6 +112,8 @@ export interface ActivityEventsResponse {
 export interface MediaRemovalSummary {
   // Lifetime logical size of media removed through Plex Librarian, in decimal KB.
   mediaSizeRemoved: number;
+  // Lifetime conservative namespace-link proof total, in decimal KB.
+  verifiedHardlinkDataRemoved: number;
   removalCount: number;
   unknownSizeCount: number;
 }

@@ -28,6 +28,21 @@ export interface VerifiedOrphanFile extends ArrCleanupFile {
   remotePath: string;
   dev: number;
   ino: number;
+  nlink?: number;
+  rootDevice?: string;
+  rootInode?: string;
+  importedRootDevice?: string;
+  importedRootInode?: string;
+  managedFileId?: number;
+  managedFileSize?: number;
+  managedPath?: string;
+  strictTwoLinkProof?: true;
+}
+
+export interface ManagedPathEvidence {
+  path: string;
+  id?: number;
+  size?: number | null;
 }
 
 export interface OrphanVerification {
@@ -267,6 +282,8 @@ async function verifiedFile(
   source: MappedPath,
   imported: MappedPath,
   boundary: string,
+  managed?: ManagedPathEvidence,
+  exactTwoLinks = false,
 ): Promise<VerifiedOrphanFile | null> {
   // The library-side path is deletion evidence, never a deletion target. Keep this
   // invariant in the shared verifier so every current and future caller gets it.
@@ -276,9 +293,18 @@ async function verifiedFile(
   ) {
     return null;
   }
-  const [sourceInfo, importedInfo, sourceContained, importedContained] = await Promise.all([
+  const [
+    sourceInfo,
+    importedInfo,
+    sourceRootInfo,
+    importedRootInfo,
+    sourceContained,
+    importedContained,
+  ] = await Promise.all([
     lstatWithoutSymlinks(source.path),
     lstatWithoutSymlinks(imported.path),
+    lstatWithoutSymlinks(source.root),
+    lstatWithoutSymlinks(imported.root),
     canonicalWithin(source.root, source.path),
     canonicalWithin(imported.root, imported.path),
   ]);
@@ -287,7 +313,13 @@ async function verifiedFile(
     sourceInfo.dev === null || sourceInfo.ino === null || importedInfo.dev === null ||
     importedInfo.ino === null || sourceInfo.dev !== importedInfo.dev ||
     sourceInfo.ino !== importedInfo.ino || sourceInfo.size !== importedInfo.size ||
-    sourceInfo.nlink === null || sourceInfo.nlink < 2
+    sourceInfo.nlink === null || (exactTwoLinks ? sourceInfo.nlink !== 2 : sourceInfo.nlink < 2) ||
+    !sourceRootInfo.isDirectory || sourceRootInfo.dev === null || sourceRootInfo.ino === null ||
+    !importedRootInfo.isDirectory || importedRootInfo.dev === null ||
+    importedRootInfo.ino === null ||
+    (exactTwoLinks && sourceRootInfo.dev === importedRootInfo.dev &&
+      sourceRootInfo.ino === importedRootInfo.ino) ||
+    (managed?.size != null && sourceInfo.size !== managed.size)
   ) return null;
   return {
     hash,
@@ -301,6 +333,19 @@ async function verifiedFile(
     method: 'hardlink',
     dev: sourceInfo.dev,
     ino: sourceInfo.ino,
+    ...(exactTwoLinks
+      ? {
+        nlink: sourceInfo.nlink,
+        rootDevice: String(sourceRootInfo.dev),
+        rootInode: String(sourceRootInfo.ino),
+        importedRootDevice: String(importedRootInfo.dev),
+        importedRootInode: String(importedRootInfo.ino),
+      }
+      : {}),
+    ...(managed?.id !== undefined ? { managedFileId: managed.id } : {}),
+    ...(managed?.size != null ? { managedFileSize: managed.size } : {}),
+    ...(managed?.path ? { managedPath: managed.path } : {}),
+    ...(exactTwoLinks ? { strictTwoLinkProof: true as const } : {}),
   };
 }
 
@@ -308,7 +353,8 @@ export async function verifyOrphanHardlink(
   instanceName: string,
   association: ArrTorrentAssociation,
   mappings: readonly ArrPathMapping[],
-  currentManagedPaths: readonly string[],
+  currentManagedPaths: readonly (string | ManagedPathEvidence)[],
+  options: { exactTwoLinks?: boolean } = {},
 ): Promise<OrphanVerification | null> {
   if (!association.sourcePath) return null;
   if (!pathMappingRootsAreDisjoint(mappings)) {
@@ -332,10 +378,13 @@ export async function verifyOrphanHardlink(
   const historicalImported = association.importedPath
     ? normalizeRemoteAbsolute(association.importedPath)
     : null;
-  const managedCandidates = currentManagedPaths.flatMap((remotePath) => {
+  const managedCandidates = currentManagedPaths.flatMap((entry) => {
+    const remotePath = typeof entry === 'string' ? entry : entry.path;
     const normalized = normalizeRemoteAbsolute(remotePath);
     const mapped = mapArrPath(remotePath, 'library', mappings);
-    return normalized && mapped ? [{ remotePath, normalized, mapped }] : [];
+    return normalized && mapped
+      ? [{ remotePath, normalized, mapped, managed: typeof entry === 'string' ? undefined : entry }]
+      : [];
   }).sort((left, right) => {
     const leftHistorical = historicalImported?.separator === left.normalized.separator &&
       historicalImported.comparison === left.normalized.comparison;
@@ -363,6 +412,10 @@ export async function verifyOrphanHardlink(
     const boundary = await payloadBoundary(association, source);
     let inspectedCandidate = false;
     let missingCandidateError: Deno.errors.NotFound | null = null;
+    const strictMatches: Array<{
+      candidate: (typeof managedCandidates)[number];
+      file: VerifiedOrphanFile;
+    }> = [];
     for (const candidate of managedCandidates) {
       let file: VerifiedOrphanFile | null;
       try {
@@ -372,6 +425,8 @@ export async function verifyOrphanHardlink(
           source,
           candidate.mapped,
           boundary,
+          candidate.managed,
+          options.exactTwoLinks === true,
         );
         inspectedCandidate = true;
       } catch (error) {
@@ -386,6 +441,32 @@ export async function verifyOrphanHardlink(
         throw error;
       }
       if (!file) continue;
+      if (options.exactTwoLinks === true) {
+        strictMatches.push({ candidate, file });
+        continue;
+      }
+      return {
+        source: {
+          instanceName,
+          downloadId: association.hash,
+          path: association.sourcePath,
+          importedPath: candidate.remotePath,
+          localPath: source.path,
+          verification: 'hardlink',
+        },
+        file,
+      };
+    }
+    if (strictMatches.length > 1) {
+      return unavailable(
+        instanceName,
+        association,
+        'Source matches more than one current Sonarr EpisodeFile identity',
+        source.path,
+      );
+    }
+    if (strictMatches.length === 1) {
+      const [{ candidate, file }] = strictMatches;
       return {
         source: {
           instanceName,
@@ -472,12 +553,31 @@ export async function deleteVerifiedOrphanFile(file: VerifiedOrphanFile): Promis
   if (file.path === file.importedPath) {
     throw new Error('Refusing to unlink the Arr-managed evidence file');
   }
-  const sourceInfo = await lstatWithoutSymlinks(file.path);
-  const importedInfo = await lstatWithoutSymlinks(file.importedPath);
+  const [sourceInfo, importedInfo, sourceRootInfo, importedRootInfo] = await Promise.all([
+    lstatWithoutSymlinks(file.path),
+    lstatWithoutSymlinks(file.importedPath),
+    lstatWithoutSymlinks(file.root),
+    lstatWithoutSymlinks(file.importedRoot),
+  ]);
   if (
+    (file.rootDevice !== undefined &&
+      (!sourceRootInfo.isDirectory || sourceRootInfo.dev === null || sourceRootInfo.ino === null ||
+        String(sourceRootInfo.dev) !== file.rootDevice ||
+        String(sourceRootInfo.ino) !== file.rootInode)) ||
+    (file.importedRootDevice !== undefined &&
+      (!importedRootInfo.isDirectory || importedRootInfo.dev === null ||
+        importedRootInfo.ino === null ||
+        String(importedRootInfo.dev) !== file.importedRootDevice ||
+        String(importedRootInfo.ino) !== file.importedRootInode)) ||
+    (file.strictTwoLinkProof && sourceRootInfo.dev !== null && sourceRootInfo.ino !== null &&
+      sourceRootInfo.dev === importedRootInfo.dev && sourceRootInfo.ino === importedRootInfo.ino) ||
     !sourceInfo.isFile || !importedInfo.isFile || sourceInfo.dev !== file.dev ||
     sourceInfo.ino !== file.ino || importedInfo.dev !== file.dev || importedInfo.ino !== file.ino ||
-    sourceInfo.size !== importedInfo.size || sourceInfo.nlink === null || sourceInfo.nlink < 2 ||
+    (file.strictTwoLinkProof
+      ? sourceInfo.size !== file.size || importedInfo.size !== file.size
+      : sourceInfo.size !== importedInfo.size) ||
+    sourceInfo.nlink === null ||
+    (file.strictTwoLinkProof ? sourceInfo.nlink !== 2 : sourceInfo.nlink < 2) ||
     !(await canonicalWithin(file.root, file.path)) ||
     !(await canonicalWithin(file.importedRoot, file.importedPath)) ||
     !isWithin(file.boundary, file.path)
@@ -489,13 +589,53 @@ export async function deleteVerifiedOrphanFile(file: VerifiedOrphanFile): Promis
   // Keep the final path resolution immediately adjacent to unlink. Deno does not expose
   // unlinkat/openat-style descriptor-relative deletion, so re-check the exact inode after
   // every other awaited guard and fail closed if another process changed the entry.
-  const finalSourceInfo = await lstatWithoutSymlinks(file.path);
+  const [finalSourceInfo, finalImportedInfo] = await Promise.all([
+    lstatWithoutSymlinks(file.path),
+    lstatWithoutSymlinks(file.importedPath),
+  ]);
   if (
-    !finalSourceInfo.isFile || finalSourceInfo.dev !== file.dev || finalSourceInfo.ino !== file.ino
+    !finalSourceInfo.isFile || !finalImportedInfo.isFile || finalSourceInfo.dev !== file.dev ||
+    finalSourceInfo.ino !== file.ino || finalImportedInfo.dev !== file.dev ||
+    finalImportedInfo.ino !== file.ino ||
+    (file.strictTwoLinkProof
+      ? finalSourceInfo.size !== file.size || finalImportedInfo.size !== file.size
+      : finalSourceInfo.size !== finalImportedInfo.size) ||
+    finalSourceInfo.nlink === null ||
+    (file.strictTwoLinkProof ? finalSourceInfo.nlink !== 2 : finalSourceInfo.nlink < 2)
   ) throw new Error('Hardlink identity changed immediately before unlink');
 
   await Deno.remove(file.path);
   await pruneEmptyParents(parent(file.path), file.root);
+}
+
+export async function assertVerifiedLibrarySurvivor(
+  file: VerifiedOrphanFile,
+): Promise<void> {
+  const root = await lstatWithoutSymlinks(file.importedRoot);
+  const info = await lstatWithoutSymlinks(file.importedPath);
+  if (
+    !root.isDirectory || root.dev === null || root.ino === null ||
+    String(root.dev) !== file.importedRootDevice || String(root.ino) !== file.importedRootInode ||
+    !info.isFile || info.dev !== file.dev || info.ino !== file.ino || info.size !== file.size ||
+    info.nlink !== 1 || !(await canonicalWithin(file.importedRoot, file.importedPath))
+  ) throw new Error('The surviving Sonarr library hardlink changed after download cleanup');
+}
+
+export async function assertVerifiedLibraryPathAbsent(
+  file: VerifiedOrphanFile,
+): Promise<void> {
+  const root = await lstatWithoutSymlinks(file.importedRoot);
+  if (
+    !root.isDirectory || root.dev === null || root.ino === null ||
+    String(root.dev) !== file.importedRootDevice || String(root.ino) !== file.importedRootInode
+  ) throw new Error('The configured Sonarr library root mount changed');
+  try {
+    await lstatWithoutSymlinks(file.importedPath);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return;
+    throw error;
+  }
+  throw new Error('Sonarr removed its record but a verified library hardlink remains');
 }
 
 export async function findRetainedSiblingPaths(

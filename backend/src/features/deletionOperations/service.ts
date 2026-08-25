@@ -1217,9 +1217,20 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
        WHERE o.server_id = ? AND o.library_key = ? AND t.status = 'needs_attention'`,
       )
       .value<[number]>(serverId, String(row[2]))?.[0] ?? 0;
+    const storageAggregate = client.prepare(
+      `SELECT CAST(COALESCE(SUM(verified_hardlink_data_size), 0) AS TEXT),
+              COUNT(*) FILTER (WHERE storage_outcome = 'verified'),
+              COUNT(*) FILTER (WHERE storage_outcome = 'unknown'),
+              COUNT(*) FILTER (WHERE storage_outcome = 'mixed')
+       FROM deletion_targets WHERE operation_id = ?`,
+    ).value<[string, number, number, number]>(id) ?? ['0', 0, 0, 0];
+    result.verifiedHardlinkDataRemoved = Number(storageAggregate[0]);
+    result.verifiedTargetCount = storageAggregate[1];
+    result.unknownTargetCount = storageAggregate[2];
+    result.mixedTargetCount = storageAggregate[3];
     const targetRows = client
       .prepare(
-        'SELECT id, ordinal, target_kind, target_key, title, status, attempt_count, phase, removal_confirmed_at, plex_reconciled_at, plex_attempt_count, warning, next_retry_at, error, logical_size, snapshot FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
+        'SELECT id, ordinal, target_kind, target_key, title, status, attempt_count, phase, removal_confirmed_at, plex_reconciled_at, plex_attempt_count, warning, next_retry_at, error, logical_size, snapshot, storage_outcome, verified_hardlink_data_size, verified_file_count, unknown_file_count, storage_outcome_reasons FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal',
       )
       .values<unknown[]>(id);
     const projectedTargets = targetRows.map((target) => {
@@ -1273,6 +1284,13 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
             'logicalSize',
           ].map((key, index) => [key, target[index]]),
         );
+        targetResult.storageOutcome = target[16];
+        targetResult.verifiedHardlinkDataRemoved = target[17];
+        targetResult.verifiedFileCount = target[18];
+        targetResult.unknownFileCount = target[19];
+        targetResult.storageOutcomeReasons = target[20] === null
+          ? []
+          : JSON.parse(String(target[20]));
         targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
         if (legacyUnsupported) {
           targetResult.unsupportedLegacyWorkflow = true;

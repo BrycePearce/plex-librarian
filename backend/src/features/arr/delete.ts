@@ -33,6 +33,10 @@ export interface ArrDeleteOptions {
   attemptedInstanceIds?: ReadonlySet<number>;
   acceptAlreadyAbsent?: boolean;
   onAttemptStarting?: (target: ArrDeleteTarget) => Promise<void>;
+  /** Restrict this mutation to one record accepted by a prior durable proof. */
+  exactMatch?: { instanceId: number; mediaId: number };
+  /** Require an error-free all-target lookup proving the external ID is absent. */
+  confirmRecordAbsence?: boolean;
 }
 
 export function arrDeleteDisposition(
@@ -190,6 +194,29 @@ export async function deleteThroughArr(
   // remain visible as a partial result instead of being discarded by a later lookup
   // failure, but none of the records found above are mutated until every lookup works.
   if (result.failures.length > 0) return result;
+  if (options.exactMatch) {
+    const expected = matches.filter(({ target, mediaId }) =>
+      target.instanceId === options.exactMatch!.instanceId &&
+      mediaId === options.exactMatch!.mediaId
+    );
+    const unexpected = matches.filter(({ target, mediaId }) =>
+      target.instanceId !== options.exactMatch!.instanceId ||
+      mediaId !== options.exactMatch!.mediaId
+    );
+    const reconciledAbsence = result.deletedInstances.some(({ instanceId, alreadyAbsent }) =>
+      instanceId === options.exactMatch!.instanceId && alreadyAbsent
+    );
+    if (unexpected.length > 0 || (expected.length !== 1 && !reconciledAbsence)) {
+      result.failures.push({
+        instanceId: options.exactMatch.instanceId,
+        instanceName: targets.find((target) => target.instanceId === options.exactMatch!.instanceId)
+          ?.instanceName ?? 'Arr',
+        error: 'The accepted Arr record identity changed before deletion',
+      });
+      return result;
+    }
+    matches.splice(0, matches.length, ...expected);
+  }
   if (matches.length === 0 && result.deletedInstances.length === 0) {
     throw new Error(`${item.title} was not found in any mapped Arr instance`);
   }
@@ -221,6 +248,26 @@ export async function deleteThroughArr(
         instanceName: target.instanceName,
         error: error instanceof Error ? error.message : 'delete failed',
       });
+    }
+  }
+  if (options.confirmRecordAbsence && result.failures.length === 0) {
+    for (const target of targets) {
+      try {
+        const record = await target.client.lookup(externalId);
+        if (record) {
+          result.failures.push({
+            instanceId: target.instanceId,
+            instanceName: target.instanceName,
+            error: 'Arr still reports the record after deletion',
+          });
+        }
+      } catch (error) {
+        result.failures.push({
+          instanceId: target.instanceId,
+          instanceName: target.instanceName,
+          error: error instanceof Error ? error.message : 'post-delete lookup failed',
+        });
+      }
     }
   }
   return result;

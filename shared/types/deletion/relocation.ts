@@ -28,6 +28,11 @@ interface DeletionOperationTargetBase {
   nextRetryAt: number | null;
   error: string | null;
   logicalSize: number | null;
+  storageOutcome?: 'verified' | 'unknown' | 'mixed' | null;
+  verifiedHardlinkDataRemoved?: number | null;
+  verifiedFileCount?: number | null;
+  unknownFileCount?: number | null;
+  storageOutcomeReasons?: string[];
   supersededReason: string | null;
   seasonRemovedUnmonitoredAvailable?: boolean;
   seasonReassignmentRetryAvailable?: boolean;

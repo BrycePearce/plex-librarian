@@ -24,6 +24,7 @@ import { DataSurface, PageHeader } from "../components/Workspace.tsx";
 import { deletionRecoverySummary } from "../features/deletionOperations/recoveryGuidance.ts";
 import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRecoveryDialog.tsx";
 import { ServiceIcon } from "../components/ServiceIcons.tsx";
+import { hardlinkOutcomeSummary } from "./-deletionOperationState.ts";
 
 export const Route = createFileRoute("/activity")({
   beforeLoad: ({ context }) => requireAuth(context.queryClient),
@@ -410,6 +411,9 @@ function EventRow(
         (event.payload.removalConfirmedCount ?? event.payload.completedCount) > 0
     ? event.payload.logicalSizeRemoved
     : undefined;
+  const storageOutcome = event.type === "deletion.completed" && event.payload
+    ? hardlinkOutcomeSummary(event.payload)
+    : null;
 
   const row = (
     <div className="polished-row">
@@ -418,9 +422,13 @@ function EventRow(
         <span className="text-sm flex-1 min-w-0 truncate">
           {describeEvent(event, libraryTitleByKey)}
         </span>
-        {fileSizeFreed !== undefined && (
+        {(fileSizeFreed !== undefined || storageOutcome) && (
           <span className="text-xs font-mono text-base-content/40 shrink-0">
-            {formatKilobytes(fileSizeFreed)} logical size removed
+            {fileSizeFreed !== undefined
+              ? `${formatKilobytes(fileSizeFreed)} logical size removed`
+              : ""}
+            {fileSizeFreed !== undefined && storageOutcome ? " · " : ""}
+            {storageOutcome ?? ""}
           </span>
         )}
         <span

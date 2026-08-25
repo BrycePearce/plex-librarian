@@ -115,6 +115,10 @@ export interface RadarrMoviePathUpdateResult {
 export interface ArrManagedFile {
   relativePath: string;
   size: number | null;
+  /** Stable provider record identity when the provider exposes one. */
+  id?: number;
+  /** Exact provider-managed absolute path. Prefer this over rebuilding from a title root. */
+  path?: string | null;
 }
 
 export interface ArrManagedVersionFile extends ArrManagedFile {
@@ -627,11 +631,15 @@ export class ArrClient {
   }
 
   async mediaFiles(mediaId: number): Promise<ArrManagedFile[] | null> {
-    // A Sonarr series may contain tens of thousands of episodes, and this endpoint
-    // does not offer a bounded file-list response. The managed series root remains
-    // authoritative in the preview; avoid turning a confirmation dialog into a full
-    // series export. Radarr movie file lists are naturally small.
-    if (this.type !== 'radarr') return null;
+    if (this.type === 'sonarr') {
+      const snapshot = await this.sonarrSeriesSnapshot(mediaId);
+      return snapshot.files.map((file) => ({
+        id: file.id,
+        path: file.path,
+        relativePath: file.relativePath,
+        size: file.size,
+      }));
+    }
     const records = await this.request<
       Array<{ relativePath?: string; path?: string; size?: number }>
     >(`/moviefile?movieId=${mediaId}`);

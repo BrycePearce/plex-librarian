@@ -38,6 +38,13 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
   const superseded = client.prepare(
     `SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND ${relocationSupersededPredicateSql()}`,
   ).value<[number]>(operationId)?.[0] ?? 0;
+  const storage = client.prepare(
+    `SELECT CAST(COALESCE(SUM(verified_hardlink_data_size), 0) AS TEXT),
+            COUNT(*) FILTER (WHERE storage_outcome = 'verified'),
+            COUNT(*) FILTER (WHERE storage_outcome = 'unknown'),
+            COUNT(*) FILTER (WHERE storage_outcome = 'mixed')
+     FROM deletion_targets WHERE operation_id = ?`,
+  ).value<[string, number, number, number]>(operationId) ?? ['0', 0, 0, 0];
   const active = running + queued + retrying;
   const sequentialSeasonCleanup = client.prepare(
     "SELECT 1 FROM deletion_targets WHERE operation_id = ? AND json_extract(snapshot, '$.seasonCleanup') = 1 LIMIT 1",
@@ -93,6 +100,10 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
         cancelledCount: cancelled,
         supersededCount: superseded,
         logicalSizeRemoved: size,
+        verifiedHardlinkDataRemoved: Number(storage[0]),
+        verifiedTargetCount: storage[1],
+        unknownTargetCount: storage[2],
+        mixedTargetCount: storage[3],
       }),
       now,
     );

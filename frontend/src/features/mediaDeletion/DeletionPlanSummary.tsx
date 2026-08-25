@@ -214,6 +214,7 @@ export function PlannedServiceExceptions({
   cleanupDownloads,
   cleanupStatus,
   cleanupReason,
+  hardlinkVerificationSkipped = false,
 }: {
   deleteFromArr: boolean;
   arrService: "radarr" | "sonarr";
@@ -225,6 +226,7 @@ export function PlannedServiceExceptions({
   cleanupDownloads: boolean;
   cleanupStatus?: "resolved" | "unavailable" | "error";
   cleanupReason?: string;
+  hardlinkVerificationSkipped?: boolean;
 }) {
   const arrUnavailable = deleteFromArr && arrStatus !== undefined &&
     arrStatus !== "resolved";
@@ -232,7 +234,7 @@ export function PlannedServiceExceptions({
     downloadCleanupResuming;
   const cleanupUnavailable = cleanupDownloads && !cleanupAvailable;
 
-  if (!arrUnavailable && !cleanupUnavailable) return null;
+  if (!arrUnavailable && !cleanupUnavailable && !hardlinkVerificationSkipped) return null;
 
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -271,6 +273,23 @@ export function PlannedServiceExceptions({
                   (cleanupStatus === "error"
                     ? "Cleanup verification failed."
                     : "No verified download job or hardlink was found.")}
+              </div>
+            </>
+          }
+          className="bg-base-300/70 text-base-content/35"
+          unavailable
+        />
+      )}
+      {hardlinkVerificationSkipped && (
+        <ServiceMark
+          service="qbittorrent"
+          ariaLabel="Hardlink data removal will not be verified"
+          popover={
+            <>
+              <div className="font-semibold text-warning">Hardlink verification not selected</div>
+              <div className="mt-1 text-base-content/60">
+                Coordinated deletion will continue, but hardlink data removal will be reported as
+                unknown and add zero to the verified counter.
               </div>
             </>
           }

@@ -110,7 +110,10 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
     assertEquals(
       targetColumns.values().map((column) => column[1]).filter((name) =>
         name === 'phase' || name === 'removal_confirmed_at' ||
-        name === 'plex_reconciled_at' || name === 'plex_attempt_count' || name === 'warning'
+        name === 'plex_reconciled_at' || name === 'plex_attempt_count' || name === 'warning' ||
+        name === 'storage_outcome' || name === 'verified_hardlink_data_size' ||
+        name === 'verified_file_count' || name === 'unknown_file_count' ||
+        name === 'storage_outcome_reasons'
       ),
       [
         'phase',
@@ -118,9 +121,30 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'plex_reconciled_at',
         'plex_attempt_count',
         'warning',
+        'storage_outcome',
+        'verified_hardlink_data_size',
+        'verified_file_count',
+        'unknown_file_count',
+        'storage_outcome_reasons',
       ],
     );
     targetColumns.finalize();
+    const removalColumns = sqlite.prepare("PRAGMA table_info('media_removals')");
+    assertEquals(
+      removalColumns.values().map((column) => column[1]).filter((name) =>
+        name === 'logical_attributable' || name === 'verified_hardlink_data_size' ||
+        name === 'verified_file_count' || name === 'unknown_file_count' ||
+        name === 'storage_outcome'
+      ),
+      [
+        'logical_attributable',
+        'verified_hardlink_data_size',
+        'verified_file_count',
+        'unknown_file_count',
+        'storage_outcome',
+      ],
+    );
+    removalColumns.finalize();
     const requestColumns = sqlite.prepare("PRAGMA table_info('seerr_requests')");
     assertEquals(
       requestColumns.values().map((column) => column[1]).filter((name) =>

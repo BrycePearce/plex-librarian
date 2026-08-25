@@ -18,8 +18,10 @@ import {
 } from '../../arr/delete.ts';
 import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
 import {
+  cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
   executeDownloadedFileCleanup,
+  mergeAcceptedSonarrCleanup,
   persistResolvedCleanup,
   reconcileSharedDownloadCleanups,
   rehydrateResolvedCleanup,
@@ -28,10 +30,20 @@ import {
   selectVerifiedDownloadCleanups,
 } from '../../mediaDeletion/cleanup.ts';
 import {
+  assertVerifiedLibraryPathAbsent,
+  assertVerifiedLibrarySurvivor,
   completedOrphanFileAttempt,
   normalizeRemoteAbsolute,
   orphanRootIdentity,
 } from '../../mediaDeletion/hardlinks.ts';
+import {
+  assertAcceptedSonarrInventory,
+  checkpointHardlinkStorageOutcome,
+  deriveHardlinkStorageAggregate,
+  HARDLINK_OUTCOME_REASON,
+  type PersistedSonarrReclamation,
+  unlinkConfirmedReclamationProofs,
+} from '../../mediaDeletion/reclamation.ts';
 import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarrSeasonInspection.ts';
 import {
   assertDownloadJobSelectionConsistent,
@@ -569,6 +581,14 @@ async function executeCleanup(
   cleanup: ResolvedCleanupItem,
   attemptParentRatingKey?: string,
   reconcileAttemptedAbsence = false,
+  callbacks: {
+    beforeOrphanDelete?: (
+      file: import('../../mediaDeletion/hardlinks.ts').VerifiedOrphanFile,
+    ) => Promise<void>;
+    afterOrphanDelete?: (
+      file: import('../../mediaDeletion/hardlinks.ts').VerifiedOrphanFile,
+    ) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const attemptRatingKey = attemptParentRatingKey ?? cleanup.ratingKey;
   const confirmedJobAbsences = new Set<string>();
@@ -656,7 +676,167 @@ async function executeCleanup(
             },
           });
       }
+      await callbacks.beforeOrphanDelete?.(file);
     },
+    async (file) => await callbacks.afterOrphanDelete?.(file),
+  );
+}
+
+function updateReclamationSnapshot(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  update: (accepted: PersistedSonarrReclamation) => void,
+): void {
+  const before = JSON.stringify(snapshot);
+  const next = structuredClone(snapshot);
+  if (!next.wholeItemDownloadCleanup?.sonarrReclamation) {
+    throw new DeletionConvergenceError('The accepted Sonarr hardlink proof is missing');
+  }
+  update(next.wholeItemDownloadCleanup.sonarrReclamation);
+  const now = Math.floor(Date.now() / 1000);
+  const changed = withTransaction((client) =>
+    client.prepare(
+      "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'running' AND snapshot = ?",
+    ).run(JSON.stringify(next), now, target.id, before)
+  );
+  if (changed !== 1) {
+    throw new DeletionConvergenceError('Could not persist hardlink proof progress');
+  }
+  Object.assign(snapshot, next);
+  target.snapshot = JSON.stringify(next);
+}
+
+async function acceptedSonarrReclamationTarget(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  accepted: PersistedSonarrReclamation,
+  allowAttemptedAbsence = false,
+): Promise<{ target: ArrDeleteTarget; configured: ArrDeleteTarget[]; present: boolean }> {
+  const configured = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
+  const acceptedTarget = configured.find((entry) =>
+    entry.instanceType === 'sonarr' && entry.instanceId === accepted.instanceId
+  );
+  if (!acceptedTarget) {
+    throw new ReclamationEvidenceMismatchError(
+      'The accepted Sonarr connection is no longer configured',
+    );
+  }
+  if (
+    acceptedTarget.instanceUrl !== accepted.instanceUrl ||
+    acceptedTarget.configurationUpdatedAt !== accepted.configurationUpdatedAt ||
+    acceptedTarget.mappingIdentity !== accepted.mappingIdentity
+  ) {
+    throw new ReclamationEvidenceMismatchError(
+      'The accepted Sonarr connection or path mapping changed',
+    );
+  }
+  const matches: Array<{ target: ArrDeleteTarget; id: number }> = [];
+  for (const candidate of configured.filter((entry) => entry.instanceType === 'sonarr')) {
+    const record = await candidate.client.lookup(accepted.tvdbId);
+    if (record) matches.push({ target: candidate, id: record.id });
+  }
+  if (matches.length === 0 && allowAttemptedAbsence) {
+    return { target: acceptedTarget, configured, present: false };
+  }
+  if (
+    matches.length !== 1 || matches[0]!.target.instanceId !== accepted.instanceId ||
+    matches[0]!.id !== accepted.seriesId
+  ) {
+    throw new ReclamationEvidenceMismatchError(
+      'The accepted series is no longer unique across mapped Sonarr instances',
+    );
+  }
+  const sonarr = matches[0]!.target;
+  try {
+    await assertAcceptedSonarrInventory(
+      accepted,
+      await sonarr.client.sonarrSeriesSnapshot(accepted.seriesId),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('EpisodeFile inventory changed')) {
+      throw new ReclamationEvidenceMismatchError(error.message, { cause: error });
+    }
+    throw error;
+  }
+  const activity = await sonarr.client.sonarrSeriesActivity(accepted.seriesId);
+  if (!activity.quiet) {
+    throw new Error(sonarrActivityConflictMessage(activity.blocking.map((entry) => entry.name)));
+  }
+  return { target: sonarr, configured, present: true };
+}
+
+class ReclamationEvidenceMismatchError extends Error {}
+
+async function assertReclamationLibrarySurvivors(
+  accepted: PersistedSonarrReclamation,
+): Promise<void> {
+  try {
+    for (const proof of unlinkConfirmedReclamationProofs(accepted)) {
+      await assertVerifiedLibrarySurvivor(proof);
+    }
+  } catch (error) {
+    throw new ReclamationEvidenceMismatchError(
+      error instanceof Error
+        ? error.message
+        : 'The surviving Sonarr library hardlink changed after download cleanup',
+      { cause: error },
+    );
+  }
+}
+
+function persistStorageOutcome(
+  target: DeletionWorkTarget,
+  aggregate: ReturnType<typeof deriveHardlinkStorageAggregate>,
+  advanceToPlexReconciliation = false,
+): void {
+  withTransaction((client) =>
+    checkpointHardlinkStorageOutcome(client, {
+      targetId: target.id,
+      serverId: target.serverId,
+      operationId: target.operationId,
+      targetKey: target.targetKey,
+      aggregate,
+      now: Math.floor(Date.now() / 1000),
+      advanceToPlexReconciliation,
+    })
+  );
+  if (advanceToPlexReconciliation) target.phase = 'plex_reconciliation';
+}
+
+function persistUnknownStorageOutcome(
+  target: DeletionWorkTarget,
+  reason: string,
+  accepted?: PersistedSonarrReclamation,
+  advanceToPlexReconciliation = false,
+): void {
+  persistStorageOutcome(target, {
+    outcome: 'unknown',
+    verifiedHardlinkDataSize: 0,
+    verifiedFileCount: accepted ? 0 : null,
+    unknownFileCount: accepted?.inventory.length ?? null,
+    reasons: [reason],
+  }, advanceToPlexReconciliation);
+}
+
+function recordReclamationGateFailure(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  error: unknown,
+): void {
+  const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+  if (!accepted || unlinkConfirmedReclamationProofs(accepted).length === 0) return;
+  if (error instanceof ReclamationEvidenceMismatchError) {
+    updateReclamationSnapshot(target, snapshot, (current) => {
+      const now = Math.floor(Date.now() / 1000);
+      for (const proof of current.proofs) {
+        if (proof.unlinkConfirmedAt !== undefined) proof.accountingIneligibleAt ??= now;
+      }
+    });
+  }
+  persistUnknownStorageOutcome(
+    target,
+    HARDLINK_OUTCOME_REASON.incompleteProof,
+    snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
   );
 }
 
@@ -718,8 +898,9 @@ async function ensureWholeItemDeleted(
         downloadTargets,
       );
       const index = rawCleanups.findIndex((cleanup) => cleanup.ratingKey === snapshot.ratingKey);
-      if (index >= 0) rawCleanups[index] = accepted;
-      else rawCleanups.push(accepted);
+      if (index >= 0) {
+        rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+      } else rawCleanups.push(accepted);
     }
     assertDownloadJobSelectionConsistent(rawCleanups, cleanupSelectedKeys);
     const cleanups = selectVerifiedDownloadCleanups(
@@ -727,19 +908,77 @@ async function ensureWholeItemDeleted(
     );
     const cleanup = cleanups.get(snapshot.ratingKey);
     if (
-      !cleanup ||
-      (cleanup.downloadJobs.length === 0 &&
-        !cleanup.reason?.includes('previously started'))
+      !cleanup || (!cleanupIsEligible(cleanup) && !cleanup.reason?.includes('previously started'))
     ) {
-      throw new Error(cleanup?.reason ?? 'no verified qBittorrent job is available');
+      throw new Error(
+        cleanup?.reason ?? 'no verified download job or orphan hardlink is available',
+      );
     }
-    await executeCleanup(
-      target.serverId,
-      cleanups,
-      cleanup,
-      undefined,
-      snapshot.wholeItemDownloadCleanup !== undefined,
-    );
+    const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+    if (accepted) {
+      try {
+        await acceptedSonarrReclamationTarget(
+          target,
+          snapshot,
+          accepted,
+          accepted.arrDeleteAttemptedAt !== undefined,
+        );
+        const currentSessions = await client.activeSessions();
+        if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), currentSessions).size > 0) {
+          throw new Error('cannot delete media with active playback');
+        }
+      } catch (error) {
+        recordReclamationGateFailure(target, snapshot, error);
+        throw error;
+      }
+    }
+    try {
+      await executeCleanup(
+        target.serverId,
+        cleanups,
+        cleanup,
+        undefined,
+        snapshot.wholeItemDownloadCleanup !== undefined,
+        accepted
+          ? {
+            beforeOrphanDelete: (file) => {
+              updateReclamationSnapshot(
+                target,
+                snapshot,
+                (current) => {
+                  const proof = current.proofs.find((entry) => entry.path === file.path);
+                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+                  proof.unlinkAttemptedAt ??= Math.floor(Date.now() / 1000);
+                },
+              );
+              return Promise.resolve();
+            },
+            afterOrphanDelete: (file) => {
+              updateReclamationSnapshot(
+                target,
+                snapshot,
+                (current) => {
+                  const proof = current.proofs.find((entry) => entry.path === file.path);
+                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+                  proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
+                },
+              );
+              return Promise.resolve();
+            },
+          }
+          : {},
+      );
+    } catch (error) {
+      const current = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+      if (current && unlinkConfirmedReclamationProofs(current).length > 0) {
+        persistUnknownStorageOutcome(
+          target,
+          HARDLINK_OUTCOME_REASON.incompleteProof,
+          current,
+        );
+      }
+      throw error;
+    }
   }
 
   if (snapshot.unmonitorFromArr) {
@@ -765,7 +1004,17 @@ async function ensureWholeItemDeleted(
   }
   if (snapshot.mode === 'plex-only') {
     if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
-    advancePhase(target, 'plex_reconciliation');
+    if (snapshot.type === 'show' && snapshot.cleanupDownloads) {
+      const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+      persistUnknownStorageOutcome(
+        target,
+        accepted ? HARDLINK_OUTCOME_REASON.incompleteProof : HARDLINK_OUTCOME_REASON.liveJobOnly,
+        accepted,
+        true,
+      );
+    } else {
+      advancePhase(target, 'plex_reconciliation');
+    }
     await reconcilePlexTarget(target, snapshot);
     return;
   }
@@ -785,20 +1034,127 @@ async function ensureWholeItemDeleted(
     arrTargets.map((entry) => entry.instanceId),
   );
 
+  const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+  let reclamationArrTargets: ArrDeleteTarget[] | undefined;
+  if (accepted) {
+    try {
+      const gate = await acceptedSonarrReclamationTarget(
+        target,
+        snapshot,
+        accepted,
+        accepted.arrDeleteAttemptedAt !== undefined,
+      );
+      reclamationArrTargets = gate.configured;
+    } catch (error) {
+      recordReclamationGateFailure(target, snapshot, error);
+      throw error;
+    }
+  }
+
   if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
 
-  const result = await deleteThroughArr(item, arrTargets, {
-    attemptedInstanceIds: attemptedArr.get(snapshot.ratingKey),
+  const result = await deleteThroughArr(item, reclamationArrTargets ?? arrTargets, {
+    attemptedInstanceIds: accepted
+      ? accepted.arrDeleteAttemptedAt !== undefined ? new Set([accepted.instanceId]) : new Set()
+      : attemptedArr.get(snapshot.ratingKey),
     acceptAlreadyAbsent: false,
-    onAttemptStarting: (entry) => markArrAttempt(target.serverId, snapshot, entry),
+    onAttemptStarting: async (entry) => {
+      if (accepted) {
+        if (entry.instanceId !== accepted.instanceId) {
+          const error = new ReclamationEvidenceMismatchError(
+            'The Sonarr deletion target changed before mutation',
+          );
+          recordReclamationGateFailure(target, snapshot, error);
+          throw error;
+        }
+        try {
+          const finalGate = await acceptedSonarrReclamationTarget(
+            target,
+            snapshot,
+            accepted,
+          );
+          if (!finalGate.present || finalGate.target.instanceId !== entry.instanceId) {
+            throw new ReclamationEvidenceMismatchError(
+              'The accepted Sonarr series changed before mutation',
+            );
+          }
+          const currentSessions = await client.activeSessions();
+          if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), currentSessions).size > 0) {
+            throw new Error('cannot delete media with active playback');
+          }
+          await assertReclamationLibrarySurvivors(accepted);
+        } catch (error) {
+          recordReclamationGateFailure(target, snapshot, error);
+          throw error;
+        }
+      }
+      await markArrAttempt(target.serverId, snapshot, entry);
+      if (accepted) {
+        updateReclamationSnapshot(target, snapshot, (current) => {
+          current.arrDeleteAttemptedAt ??= Math.floor(Date.now() / 1000);
+        });
+      }
+    },
+    ...(accepted
+      ? {
+        exactMatch: { instanceId: accepted.instanceId, mediaId: accepted.seriesId },
+        confirmRecordAbsence: true,
+      }
+      : {}),
   });
   const disposition = arrDeleteDisposition(result);
   if (disposition.status !== 'complete') {
+    if (snapshot.type === 'show' && result.deletedInstances.length > 0) {
+      persistUnknownStorageOutcome(
+        target,
+        HARDLINK_OUTCOME_REASON.incompleteProof,
+        snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
+      );
+    }
     throw new Error(
       result.failures.map((failure) => failure.error).join('; ') || 'Arr deletion failed',
     );
   }
-  advancePhase(target, 'plex_reconciliation');
+  if (accepted) {
+    let aggregate: ReturnType<typeof deriveHardlinkStorageAggregate>;
+    try {
+      for (const proof of unlinkConfirmedReclamationProofs(accepted)) {
+        await assertVerifiedLibraryPathAbsent(proof);
+      }
+      aggregate = deriveHardlinkStorageAggregate(accepted, [
+        ...(accepted.proofs.length === 0 ? [HARDLINK_OUTCOME_REASON.incompleteProof] : []),
+        ...(snapshot.wholeItemDownloadCleanup!.downloadJobs.length > 0
+          ? [HARDLINK_OUTCOME_REASON.liveJobOnly]
+          : []),
+      ]);
+    } catch (error) {
+      updateReclamationSnapshot(target, snapshot, (current) => {
+        const now = Math.floor(Date.now() / 1000);
+        for (const proof of current.proofs) {
+          if (proof.unlinkConfirmedAt !== undefined) proof.accountingIneligibleAt ??= now;
+        }
+      });
+      persistUnknownStorageOutcome(
+        target,
+        HARDLINK_OUTCOME_REASON.incompleteProof,
+        snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
+      );
+      throw error;
+    }
+    // Keep the durable write outside the evidence-invalidating catch. A transient
+    // checkpoint failure must retry without permanently disqualifying a valid proof.
+    persistStorageOutcome(target, aggregate, true);
+  } else if (snapshot.type === 'show') {
+    persistUnknownStorageOutcome(
+      target,
+      snapshot.cleanupDownloads
+        ? HARDLINK_OUTCOME_REASON.liveJobOnly
+        : HARDLINK_OUTCOME_REASON.cleanupUnselected,
+      undefined,
+      true,
+    );
+  }
+  if (target.phase !== 'plex_reconciliation') advancePhase(target, 'plex_reconciliation');
   await reconcilePlexTarget(target, snapshot);
 }
 

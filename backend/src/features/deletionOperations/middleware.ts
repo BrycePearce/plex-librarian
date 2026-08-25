@@ -28,6 +28,8 @@ import {
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import {
+  cleanupHasDurableAcceptedIdentity,
+  cleanupIsEligible,
   persistResolvedCleanupIdentity,
   reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
@@ -313,9 +315,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         acceptedCleanups = new Map(reconciled.map((cleanup) => [cleanup.ratingKey, cleanup]));
         for (const ratingKey of cleanupDownloadRatingKeys) {
           const cleanup = acceptedCleanups.get(ratingKey);
-          if (!cleanup || cleanup.status !== 'resolved' || cleanup.downloadJobs.length === 0) {
+          if (!cleanup || !cleanupIsEligible(cleanup)) {
             return c.json({
-              error: cleanup?.reason ?? 'No verified qBittorrent job is available',
+              error: cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
             }, 409);
           }
         }
@@ -325,6 +327,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         const found = row!;
         const mode = coordinated.has(found.ratingKey) ? 'coordinated' : 'plex-only';
         const quickCleanupCandidate = quickCleanupCandidates?.get(found.ratingKey);
+        const acceptedCleanup = acceptedCleanups.get(found.ratingKey);
+        const persistAcceptedCleanup = cleanupDownloadRatingKeys.has(found.ratingKey) &&
+          acceptedCleanup !== undefined && cleanupHasDurableAcceptedIdentity(acceptedCleanup);
         return {
           kind: 'whole_item',
           key: found.ratingKey,
@@ -344,13 +349,10 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             unmonitorFromArr: mode === 'plex-only' && unmonitor.has(found.ratingKey),
             selectedRatingKeys: [...ratingKeys],
             cleanupDownloadRatingKeys: sortedCleanupKeys,
-            ...(cleanupDownloadRatingKeys.has(found.ratingKey) &&
-                acceptedCleanups.get(found.ratingKey)?.downloadJobs.every((job) =>
-                  job.provenance === 'direct_manifest'
-                )
+            ...(persistAcceptedCleanup
               ? {
                 wholeItemDownloadCleanup: persistResolvedCleanupIdentity(
-                  acceptedCleanups.get(found.ratingKey)!,
+                  acceptedCleanup,
                 ),
               }
               : {}),

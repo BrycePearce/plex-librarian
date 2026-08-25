@@ -14,6 +14,7 @@ import {
   activeDeletionStatuses,
   deletionOperationPollInterval,
   deletionOperationTitle,
+  hardlinkOutcomeSummary,
   nonSupersededCancelledCount,
   retryableRelocationSafeTargetCount,
 } from "./-deletionOperationState.ts";
@@ -180,6 +181,14 @@ function DeletionOperationPage() {
               value={formatKilobytes(operation.logicalSizeRemoved)}
             />
             <Stat
+              label="Verified hardlink data removed"
+              value={formatKilobytes(operation.verifiedHardlinkDataRemoved ?? 0)}
+            />
+            <Stat
+              label="Hardlink outcome"
+              value={hardlinkOutcomeSummary(operation) ?? "Pending / not applicable"}
+            />
+            <Stat
               label="Cancelled"
               value={String(
                 nonSupersededCancelledCount(operation.cancelledCount, operation.supersededCount),
@@ -340,6 +349,17 @@ function DeletionOperationPage() {
                 <p className="text-sm text-base-content/50">
                   {target.logicalSize != null ? formatKilobytes(target.logicalSize) : ""}
                 </p>
+                {target.storageOutcome && (
+                  <p className="text-xs text-base-content/55 mt-1">
+                    Hardlink data: {target.storageOutcome === "verified"
+                      ? `${formatKilobytes(target.verifiedHardlinkDataRemoved ?? 0)} verified`
+                      : target.storageOutcome === "mixed"
+                      ? `${formatKilobytes(target.verifiedHardlinkDataRemoved ?? 0)} verified · ${
+                        target.unknownFileCount ?? 0
+                      } files unknown`
+                      : "not verified"}
+                  </p>
+                )}
                 {target.error && target.phase !== "plex_reconciliation" && (
                   <p className="text-sm text-error mt-1">{target.error}</p>
                 )}

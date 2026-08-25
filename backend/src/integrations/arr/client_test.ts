@@ -1113,19 +1113,39 @@ Deno.test('Radarr lookup and extra files expose its managed deletion boundary', 
   ]);
 });
 
-Deno.test('Sonarr deletion preview stays at the managed series root', async () => {
-  let requested = false;
+Deno.test('Sonarr media files adapt exact bounded EpisodeFile identities', async () => {
   const client = new ArrClient(
     'sonarr',
     'http://sonarr:8989',
     'secret',
-    (() => {
-      requested = true;
-      return Promise.resolve(Response.json([]));
+    ((input) => {
+      const path = new URL(String(input)).pathname;
+      return Promise.resolve(Response.json(
+        path.endsWith('/episode')
+          ? [{
+            id: 11,
+            seriesId: 7,
+            seasonNumber: 1,
+            episodeNumber: 1,
+            episodeFileId: 90,
+            monitored: true,
+          }]
+          : [{
+            id: 90,
+            seriesId: 7,
+            path: '/tv/Show/S01E01.mkv',
+            relativePath: 'Season 1/S01E01.mkv',
+            size: 2000,
+          }],
+      ));
     }) as typeof fetch,
   );
-  assertEquals(await client.mediaFiles(7), null);
-  assertEquals(requested, false);
+  assertEquals(await client.mediaFiles(7), [{
+    id: 90,
+    path: '/tv/Show/S01E01.mkv',
+    relativePath: 'Season 1/S01E01.mkv',
+    size: 2000,
+  }]);
 });
 
 Deno.test('ArrClient surfaces an HTTP failure', async () => {

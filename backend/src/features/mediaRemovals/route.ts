@@ -12,6 +12,7 @@ router.get('/summary', async (c) => {
     return c.json(
       {
         mediaSizeRemoved: 0,
+        verifiedHardlinkDataRemoved: 0,
         removalCount: 0,
         unknownSizeCount: 0,
       } satisfies MediaRemovalSummary,

@@ -25,7 +25,11 @@ export function effectiveArrSelection(
 
 export function downloadCleanupDestinationVisible(
   preview: DownloadCleanupPreviewResponse | undefined,
+  allowOrphanOnly = false,
 ): boolean {
-  return preview?.downloadClientsConfigured === true &&
-    preview.items.some((item) => item.status === "resolved" && item.downloadJobs.length > 0);
+  return preview?.items.some((item) =>
+    item.status === "resolved" &&
+    ((allowOrphanOnly && (item.orphanFiles?.length ?? 0) > 0) ||
+      (preview.downloadClientsConfigured === true && item.downloadJobs.length > 0))
+  ) ?? false;
 }

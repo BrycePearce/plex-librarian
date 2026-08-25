@@ -102,11 +102,13 @@ function finalizeTarget(
   }
   if (attributable) {
     const kind = target.targetKind === 'whole_item' ? 'item' : target.targetKind;
-    client
-      .prepare(
-        'INSERT OR IGNORE INTO media_removals (server_id, operation_id, target_kind, target_key, media_size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(target.serverId, target.operationId, kind, target.targetKey, target.logicalSize, now);
+    client.prepare(
+      `INSERT INTO media_removals
+         (server_id, operation_id, target_kind, target_key, media_size, logical_attributable, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)
+       ON CONFLICT(server_id, operation_id, target_kind, target_key) DO UPDATE SET
+         media_size = excluded.media_size, logical_attributable = 1`,
+    ).run(target.serverId, target.operationId, kind, target.targetKey, target.logicalSize, now);
   }
   client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(target.id);
   client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(target.id);

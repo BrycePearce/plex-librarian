@@ -323,7 +323,8 @@ export function DeletionServiceMarks({
   const arrActive = deleteFromArr && preview?.arrStatus === "resolved" &&
     preview.arrTargets.length > 0;
   const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
-    preview.downloadJobs.length > 0;
+    (preview.downloadJobs.length > 0 ||
+      (item.type === "show" && preview.orphanFiles.length > 0));
   const qbitActive = itemCleanupSelected;
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -355,6 +356,7 @@ export function DeletionServiceMarks({
         cleanupDownloads={itemCleanupSelected}
         cleanupStatus={preview?.status}
         cleanupReason={preview?.reason}
+        hardlinkVerificationSkipped={item.type === "show" && arrActive && !itemCleanupSelected}
       />
     </span>
   );
@@ -376,7 +378,8 @@ export function AdvancedDeletionTree({
   const plans = items.map((item) => {
     const preview = plexPreviews.get(item.ratingKey);
     const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
-      preview.downloadJobs.length > 0;
+      (preview.downloadJobs.length > 0 ||
+        (item.type === "show" && preview.orphanFiles.length > 0));
     const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
     const plexEntries = arrTargets.length === 0 ? plexPreviewPathEntries([item], plexPreviews) : [];
     const downloadJobs = itemCleanupSelected ? preview.downloadJobs : [];

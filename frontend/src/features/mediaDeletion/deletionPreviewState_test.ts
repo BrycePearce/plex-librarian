@@ -51,7 +51,7 @@ Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview 
   assertEquals(effectiveArrSelection(true, preview), false);
 });
 
-Deno.test("download cleanup is visible only for a configured client with a verified job", () => {
+Deno.test("download cleanup is visible for a verified job or an orphan-only proof", () => {
   const item = {
     ratingKey: "1",
     status: "resolved",
@@ -80,5 +80,21 @@ Deno.test("download cleanup is visible only for a configured client with a verif
       items: [item],
     } as unknown as DownloadCleanupPreviewResponse),
     true,
+  );
+  assertEquals(
+    downloadCleanupDestinationVisible({
+      coordinatedConfigured: true,
+      downloadClientsConfigured: false,
+      items: [{ ...item, downloadJobs: [], orphanFiles: [{}] }],
+    } as unknown as DownloadCleanupPreviewResponse, true),
+    true,
+  );
+  assertEquals(
+    downloadCleanupDestinationVisible({
+      coordinatedConfigured: true,
+      downloadClientsConfigured: false,
+      items: [{ ...item, downloadJobs: [], orphanFiles: [{}] }],
+    } as unknown as DownloadCleanupPreviewResponse, false),
+    false,
   );
 });

@@ -189,8 +189,10 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
       snapshot.cleanupDownloads !== true || wholeItemCleanup.status !== 'resolved' ||
       wholeItemCleanup.ratingKey !== snapshot.ratingKey ||
       !Array.isArray(wholeItemCleanup.downloadJobs) ||
-      wholeItemCleanup.downloadJobs.length === 0 ||
-      wholeItemCleanup.downloadJobs.some((job) => job.provenance !== 'direct_manifest')
+      !Array.isArray(wholeItemCleanup.orphanFiles) ||
+      (wholeItemCleanup.downloadJobs.length === 0 && wholeItemCleanup.orphanFiles.length === 0) ||
+      (wholeItemCleanup.sonarrReclamation === undefined &&
+        wholeItemCleanup.downloadJobs.some((job) => job.provenance !== 'direct_manifest'))
     ) {
       throw new DeletionValidationError('durable whole-item download cleanup is malformed');
     }

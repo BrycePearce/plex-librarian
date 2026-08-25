@@ -202,3 +202,80 @@ Deno.test('retry preserves an already-reconciled target when another lookup fail
   });
   assertEquals(arrDeleteDisposition(result), { status: 'partial', shouldRefreshPlex: true });
 });
+
+Deno.test('exact Arr deletion refuses a newly matching second instance before mutation', async () => {
+  let deleteRequests = 0;
+  const matching = ((input: string | URL | Request) => {
+    if (String(input).includes('?tmdbId=')) {
+      return Promise.resolve(Response.json([{ id: 1, title: 'Example' }]));
+    }
+    deleteRequests++;
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const result = await deleteThroughArr(movie, [
+    target('primary', matching),
+    target('backup', matching),
+  ], {
+    exactMatch: { instanceId: 7, mediaId: 1 },
+  });
+
+  assertEquals(deleteRequests, 0);
+  assertEquals(result.deletedInstances, []);
+  assertEquals(
+    result.failures[0]?.error,
+    'The accepted Arr record identity changed before deletion',
+  );
+});
+
+Deno.test('exact Arr deletion requires an error-free record-absence postcondition', async () => {
+  let deleteRequests = 0;
+  const remains = ((input: string | URL | Request) => {
+    if (String(input).includes('?tmdbId=')) {
+      return Promise.resolve(Response.json([{ id: 1, title: 'Example' }]));
+    }
+    deleteRequests++;
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  const result = await deleteThroughArr(movie, [target('primary', remains)], {
+    exactMatch: { instanceId: 7, mediaId: 1 },
+    confirmRecordAbsence: true,
+  });
+
+  assertEquals(deleteRequests, 1);
+  assertEquals(result.deletedInstances, [{
+    instanceId: 7,
+    instanceName: 'primary',
+    alreadyAbsent: false,
+  }]);
+  assertEquals(result.failures, [{
+    instanceId: 7,
+    instanceName: 'primary',
+    error: 'Arr still reports the record after deletion',
+  }]);
+});
+
+Deno.test('exact Arr deletion confirms absence after the accepted mutation', async () => {
+  let lookups = 0;
+  const disappears = ((input: string | URL | Request) => {
+    if (String(input).includes('?tmdbId=')) {
+      lookups++;
+      return Promise.resolve(Response.json(
+        lookups === 1 ? [{ id: 1, title: 'Example' }] : [],
+      ));
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  }) as typeof fetch;
+
+  assertEquals(
+    await deleteThroughArr(movie, [target('primary', disappears)], {
+      exactMatch: { instanceId: 7, mediaId: 1 },
+      confirmRecordAbsence: true,
+    }),
+    {
+      deletedInstances: [{ instanceId: 7, instanceName: 'primary', alreadyAbsent: false }],
+      failures: [],
+    },
+  );
+});
