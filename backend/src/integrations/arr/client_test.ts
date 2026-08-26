@@ -209,6 +209,47 @@ Deno.test('ArrClient normalizes absent Radarr file visibility and rejects extra 
   await assertRejects(() => malformedExtra.extraFiles(42), ArrApiError, 'extra-file record');
 });
 
+Deno.test('ArrClient uses Sonarr filesystem type for exact-file existence', async () => {
+  for (const [type, expected] of [['file', true], ['folder', false]] as const) {
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr:8989',
+      'secret',
+      (() => Promise.resolve(Response.json({ type }))) as typeof fetch,
+    );
+    assertEquals(await client.sonarrExactFileExists('/tv/Show/episode.mkv'), expected);
+  }
+});
+
+Deno.test('ArrClient rejects unsupported Sonarr exact-file responses and Radarr calls', async () => {
+  for (
+    const response of [
+      Response.json({ type: 'missing' }),
+      Response.json({ type: 'unknown' }),
+      new Response('missing', { status: 404 }),
+    ]
+  ) {
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr:8989',
+      'secret',
+      (() => Promise.resolve(response.clone())) as typeof fetch,
+    );
+    await assertRejects(() => client.sonarrExactFileExists('/tv/Show/episode.mkv'), ArrApiError);
+  }
+  const radarr = new ArrClient(
+    'radarr',
+    'http://radarr:7878',
+    'secret',
+    (() => Promise.resolve(Response.json({ type: 'folder' }))) as typeof fetch,
+  );
+  await assertRejects(
+    () => radarr.sonarrExactFileExists('/movies/Movie/movie.mkv'),
+    ArrApiError,
+    'require Sonarr',
+  );
+});
+
 Deno.test('Radarr retained-path capability is feature-gated at 6.3.0.10514', async () => {
   for (
     const [version, available] of [

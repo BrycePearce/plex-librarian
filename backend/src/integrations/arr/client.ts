@@ -630,6 +630,22 @@ export class ArrClient {
     return type === 'file' ? 'file' : 'folder';
   }
 
+  async sonarrExactFileExists(path: string): Promise<boolean> {
+    if (this.type !== 'sonarr') {
+      throw new ArrApiError('Exact EpisodeFile checks require Sonarr');
+    }
+    const result = await this.request<{ type?: string }>(
+      `/filesystem/type?path=${encodeURIComponent(path)}`,
+    );
+    if (
+      !result || typeof result !== 'object' || Array.isArray(result) ||
+      (result.type !== 'file' && result.type !== 'folder')
+    ) {
+      throw new ArrApiError('Sonarr returned an invalid exact-file response');
+    }
+    return result.type === 'file';
+  }
+
   async mediaFiles(mediaId: number): Promise<ArrManagedFile[] | null> {
     if (this.type === 'sonarr') {
       const snapshot = await this.sonarrSeriesSnapshot(mediaId);

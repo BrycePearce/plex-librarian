@@ -67,9 +67,9 @@ async function confirmOldManagedFileRemoval(
   if (oldManagedFileIsPresent(entry, persisted)) {
     throw new DeletionConvergenceError(`${entry.target.instanceName} still reports the old file`);
   }
-  if (await entry.target.client.fileVisibility(persisted.managedPath) !== 'missing') {
+  if (await entry.target.client.sonarrExactFileExists(persisted.managedPath)) {
     throw new DeletionConvergenceError(
-      `${entry.target.instanceName} detached the old EpisodeFile but its path is still present`,
+      `${entry.target.instanceName} detached the old EpisodeFile but the exact file is still present`,
     );
   }
   const transition = persisted.sonarrTransition;

@@ -1,5 +1,5 @@
 import { withTransaction } from '../../../db/index.ts';
-import { ArrApiError } from '../../../integrations/arr/client.ts';
+import { ArrApiError, type ArrClient } from '../../../integrations/arr/client.ts';
 import { getArrDeleteTargets } from '../../arr/delete.ts';
 import { assertAcceptedArrMappingsUnchanged } from '../arr/arrReassignment.ts';
 import {
@@ -13,6 +13,24 @@ import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/vali
 export class SonarrSeasonRecoveryConflictError extends Error {
   constructor(message: string, readonly status: 404 | 409 = 409) {
     super(message);
+  }
+}
+
+async function assertSonarrExactFileAbsent(client: ArrClient, path: string): Promise<void> {
+  try {
+    if (await client.sonarrExactFileExists(path)) {
+      throw new SonarrSeasonRecoveryConflictError(
+        'Sonarr still sees the exact managed file',
+      );
+    }
+  } catch (error) {
+    if (error instanceof SonarrSeasonRecoveryConflictError) throw error;
+    if (error instanceof ArrApiError) {
+      throw new SonarrSeasonRecoveryConflictError(
+        `Could not verify exact-file absence in Sonarr; no recovery change was made: ${error.message}`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -44,17 +62,6 @@ function recoveryTarget(
     removalConfirmedAt: row[8] === null ? null : Number(row[8]),
     plexAttemptCount: Number(row[9]),
   };
-}
-
-async function oldPathIsAbsent(
-  client: Awaited<ReturnType<typeof getArrDeleteTargets>>[number]['client'],
-  path: string,
-): Promise<boolean> {
-  try {
-    return await client.fileVisibility(path) === 'missing';
-  } catch (error) {
-    return error instanceof ArrApiError && error.status === 404;
-  }
 }
 
 export async function acceptSonarrRemovedAndUnmonitored(
@@ -130,12 +137,13 @@ export async function acceptSonarrRemovedAndUnmonitored(
     episode.episodeFileId !== 0 ||
     state.files.some((entry) =>
       entry.id === reassignment.managedFileId || entry.episodeIds.includes(episodeId)
-    ) || !(await oldPathIsAbsent(sonarr.client, reassignment.managedPath))
+    )
   ) {
     throw new SonarrSeasonRecoveryConflictError(
       'Sonarr is not in the exact removed-and-unmonitored recovery state',
     );
   }
+  await assertSonarrExactFileAbsent(sonarr.client, reassignment.managedPath);
 
   const now = Math.floor(Date.now() / 1000);
   const next: DurableTargetSnapshot = {
@@ -239,13 +247,13 @@ export async function retrySonarrSeasonReassignment(
     episode.seasonNumber !== snapshot.seasonIndex ||
     episode.episodeNumber !== snapshot.episodeIndex || episode.monitored !== false ||
     episode.episodeFileId !== 0 ||
-    state.files.some((entry) => entry.episodeIds.includes(episodeId)) ||
-    !(await oldPathIsAbsent(sonarr.client, reassignment.managedPath))
+    state.files.some((entry) => entry.episodeIds.includes(episodeId))
   ) {
     throw new SonarrSeasonRecoveryConflictError(
       'Sonarr is not in the exact protected and unadopted recovery state',
     );
   }
+  await assertSonarrExactFileAbsent(sonarr.client, reassignment.managedPath);
   const commandIds = [transition.manualImportCommandId, transition.rescanCommandId].filter(
     (value): value is number => Number.isSafeInteger(value) && value! > 0,
   );

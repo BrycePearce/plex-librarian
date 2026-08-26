@@ -259,10 +259,10 @@ async function completeBreakGlassRemoval(
   if (
     !after || after.monitored !== false || after.episodeFileId !== 0 ||
     state.files.some((candidate) => candidate.id === evidence.episodeFileId) ||
-    await sonarr.client.fileVisibility(evidence.episodeFilePath) !== 'missing'
+    await sonarr.client.sonarrExactFileExists(evidence.episodeFilePath)
   ) {
     throw new DeletionConvergenceError(
-      'Sonarr removal did not converge to exact record and path absence; the episode remains intentionally unmonitored',
+      'Sonarr removal did not converge to exact record and exact-file absence; the episode remains intentionally unmonitored',
     );
   }
   if (evidence.fileRemovalConfirmedAt === undefined) {
@@ -1210,8 +1210,9 @@ async function assertWholeSeasonSonarrPostcondition(
       const live = current.files.find((candidate) => candidate.id === file.id);
       if (
         live && (live.seriesId !== expected.seriesId || live.path !== file.path ||
-          live.size !== file.size || JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
-            JSON.stringify(file.episodeIds))
+          live.size !== file.size ||
+          JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
+            JSON.stringify([...file.episodeIds].sort((a, b) => a - b)))
       ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
     }
     if (mutate) {
@@ -1226,9 +1227,32 @@ async function assertWholeSeasonSonarrPostcondition(
           }, false);
         }
       }
+      const protectedActivity = await sonarr.client.sonarrSeriesActivity(series.id);
+      if (!protectedActivity.quiet) {
+        throw new Error(sonarrActivityConflictMessage(
+          protectedActivity.blocking.map((entry) => entry.name),
+        ));
+      }
       current = await sonarr.client.sonarrSeriesSnapshot(series.id);
       for (const file of expected.files) {
-        if (!current.files.some((candidate) => candidate.id === file.id)) continue;
+        const live = current.files.find((candidate) => candidate.id === file.id);
+        if (!live) {
+          if (
+            current.episodes.some((episode) => episode.episodeFileId === file.id) ||
+            await sonarr.client.sonarrExactFileExists(file.path)
+          ) {
+            throw new DeletionConvergenceError(
+              'Sonarr detached an accepted EpisodeFile without removing the exact file',
+            );
+          }
+          continue;
+        }
+        if (
+          live.seriesId !== expected.seriesId || live.path !== file.path ||
+          live.size !== file.size ||
+          JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
+            JSON.stringify([...file.episodeIds].sort((a, b) => a - b))
+        ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
         try {
           await sonarr.client.deleteManagedFile(file.id);
         } catch (error) {
@@ -1242,12 +1266,22 @@ async function assertWholeSeasonSonarrPostcondition(
         const live = current.episodes.find((candidate) => candidate.id === episode.episodeId);
         return !live || live.monitored !== false || live.episodeFileId !== 0;
       }) || expected.files.some((file) =>
-        current.files.some((candidate) => candidate.id === file.id)
+        current.files.some((candidate) =>
+          candidate.id === file.id
+        ) ||
+        current.episodes.some((episode) => episode.episodeFileId === file.id)
       )
     ) {
       throw new DeletionConvergenceError(
         'Sonarr season removal did not reach its safe final state',
       );
+    }
+    for (const file of expected.files) {
+      if (await sonarr.client.sonarrExactFileExists(file.path)) {
+        throw new DeletionConvergenceError(
+          'Sonarr season removal did not reach exact-file absence',
+        );
+      }
     }
   }
 }
