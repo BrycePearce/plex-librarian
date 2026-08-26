@@ -47,6 +47,85 @@ Deno.test('whole-item cleanup intent is a sorted subset bound to its target flag
   );
 });
 
+function wholeShowHashSnapshot(): DurableTargetSnapshot {
+  const hash = 'a'.repeat(40);
+  return {
+    machineIdentifier: 'plex-machine',
+    serverUrl: 'http://plex:32400',
+    libraryKey: 'shows',
+    ratingKey: 'show-a',
+    title: 'Dark Angel',
+    type: 'show',
+    tmdbId: null,
+    tvdbId: 76148,
+    mode: 'plex-only',
+    cleanupDownloads: true,
+    selectedRatingKeys: ['show-a'],
+    cleanupDownloadRatingKeys: ['show-a'],
+    wholeItemDownloadCleanup: {
+      ratingKey: 'show-a',
+      status: 'resolved',
+      arrStatus: 'resolved',
+      arrTargets: [],
+      sources: [],
+      orphanFiles: [],
+      retainedPaths: [],
+      downloadJobs: [{
+        provider: 'qbittorrent',
+        instanceKey: 'db:1',
+        instanceName: 'qBittorrent',
+        jobId: hash,
+        authorizationMode: 'whole_show_hash',
+        provenance: 'arr_history',
+        authorizedSourcePaths: ['/downloads/release/episode-1.mkv'],
+        manifestFiles: [],
+        ownershipSummaryFingerprint: 'b'.repeat(64),
+        manifestFingerprint: 'c'.repeat(64),
+        sonarrAssociations: [{
+          instanceId: 2,
+          instanceUrl: 'http://sonarr',
+          configurationUpdatedAt: 10,
+          seriesId: 42,
+          hash,
+          sourcePaths: ['/downloads/release/episode-1.mkv'],
+        }],
+        targetIdentity: {
+          provider: 'qbittorrent',
+          instanceKey: 'db:1',
+          configurationIdentity: 'db:1:10:http://qbit',
+          instanceId: 1,
+          instanceName: 'qBittorrent',
+        },
+      } as never],
+    },
+  };
+}
+
+Deno.test('whole-show hash evidence is accepted only for a well-formed whole-item show', () => {
+  validateArrMonitoringEvidence(wholeShowHashSnapshot());
+  for (
+    const mutate of [
+      (snapshot: DurableTargetSnapshot) => snapshot.type = 'movie',
+      (snapshot: DurableTargetSnapshot) => snapshot.seasonCleanup = true,
+      (snapshot: DurableTargetSnapshot) => {
+        snapshot.wholeItemDownloadCleanup!.downloadJobs[0]!.manifestFingerprint = 'bad';
+      },
+      (snapshot: DurableTargetSnapshot) => {
+        snapshot.wholeItemDownloadCleanup!.downloadJobs[0]!.sonarrAssociations![0]!.sourcePaths =
+          [];
+      },
+    ]
+  ) {
+    const snapshot = wholeShowHashSnapshot();
+    mutate(snapshot);
+    assertThrows(
+      () => validateArrMonitoringEvidence(snapshot),
+      DeletionValidationError,
+      'whole-show download cleanup is malformed',
+    );
+  }
+});
+
 function removalSnapshot(mappingIdentity: string): DurableTargetSnapshot {
   return {
     machineIdentifier: 'plex-machine',

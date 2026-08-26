@@ -220,13 +220,32 @@ export class QbittorrentClient {
   }
 
   async torrent(hash: string): Promise<QbittorrentTorrent | null> {
+    const normalizedHash = hash.trim().toLowerCase();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(normalizedHash)) {
+      throw new QbittorrentApiError('qBittorrent torrent lookup requires an exact torrent hash');
+    }
     const records = await this.request<Array<Record<string, unknown>>>(
-      `/torrents/info?hashes=${encodeURIComponent(hash)}`,
+      `/torrents/info?hashes=${encodeURIComponent(normalizedHash)}`,
     );
+    if (!Array.isArray(records) || records.length > 1) {
+      throw new QbittorrentApiError('qBittorrent returned an ambiguous torrent identity');
+    }
     const record = records[0];
     if (!record) return null;
+    const rawReturnedHash = record['hash'];
+    const returnedHash = typeof rawReturnedHash === 'string' ? rawReturnedHash.toLowerCase() : '';
+    if (
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(returnedHash) ||
+      returnedHash !== normalizedHash
+    ) {
+      throw new QbittorrentApiError('qBittorrent returned a nonmatching torrent identity');
+    }
+    const fileCount = record['num_files'];
+    if (typeof fileCount !== 'number' || !Number.isSafeInteger(fileCount) || fileCount <= 0) {
+      throw new QbittorrentApiError('qBittorrent returned a malformed torrent file count');
+    }
     const files = await this.request<Array<Record<string, unknown>>>(
-      `/torrents/files?hash=${encodeURIComponent(hash)}`,
+      `/torrents/files?hash=${encodeURIComponent(normalizedHash)}`,
       undefined,
       'json',
       MANIFEST_MAX_BYTES,
@@ -236,16 +255,45 @@ export class QbittorrentClient {
         `qBittorrent manifest exceeded the ${MANIFEST_MAX_RECORDS}-record safety limit`,
       );
     }
+    if (files.length !== fileCount) {
+      throw new QbittorrentApiError(
+        'qBittorrent returned an incomplete torrent manifest',
+      );
+    }
     const completed = Number(record['completion_on']);
-    const manifestFiles = files.flatMap((file) => {
-      const path = String(file['name'] ?? '').trim();
-      if (!path) return [];
-      const size = Number(file['size']);
-      return [{ path, size: Number.isFinite(size) && size >= 0 ? size : null }];
+    const manifestFiles = files.map((file) => {
+      const path = file['name'];
+      const size = file['size'];
+      if (
+        typeof path !== 'string' || path !== path.trim() ||
+        typeof size !== 'number'
+      ) {
+        throw new QbittorrentApiError('qBittorrent returned a malformed torrent manifest');
+      }
+      const parts = path.split(/[\\/]+/);
+      if (
+        !path || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('/') ||
+        parts.some((part) => !part || part === '.' || part === '..') ||
+        !Number.isSafeInteger(size) || size < 0
+      ) {
+        throw new QbittorrentApiError('qBittorrent returned a malformed torrent manifest');
+      }
+      return { path: parts.join('/'), size };
     });
+    const manifestPaths = manifestFiles.map((file) => file.path.toLocaleLowerCase('en-US'));
+    const uniquePaths = new Set(manifestPaths);
+    const conflicting = manifestPaths.some((path) => {
+      const parts = path.split('/');
+      return parts.slice(1).some((_, index) =>
+        uniquePaths.has(parts.slice(0, index + 1).join('/'))
+      );
+    });
+    if (uniquePaths.size !== manifestPaths.length || conflicting) {
+      throw new QbittorrentApiError('qBittorrent returned a conflicting torrent manifest');
+    }
     return {
-      hash: String(record['hash'] ?? hash).toLowerCase(),
-      name: String(record['name'] ?? hash),
+      hash: returnedHash,
+      name: String(record['name'] ?? normalizedHash),
       state: String(record['state'] ?? 'unknown'),
       size: Number(record['size'] ?? record['total_size'] ?? 0),
       uploaded: Number(record['uploaded'] ?? 0),
@@ -255,7 +303,7 @@ export class QbittorrentClient {
       contentPath: String(record['content_path'] ?? ''),
       savePath: String(record['save_path'] ?? ''),
       trackerHost: trackerHost(record['tracker']),
-      fileCount: files.length,
+      fileCount,
       files: manifestFiles.slice(0, PUBLIC_FILE_LIMIT),
       filesTruncated: files.length > PUBLIC_FILE_LIMIT,
       manifestFiles,

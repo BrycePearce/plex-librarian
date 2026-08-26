@@ -13,6 +13,7 @@ import type {
   PersistedRadarrRemovalFallback,
 } from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
 import type { PersistedResolvedCleanupItem } from '../../mediaDeletion/cleanup.ts';
+import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
 import {
@@ -163,6 +164,64 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  const cleanupSlots: Array<{
+    cleanup: PersistedResolvedCleanupItem | undefined;
+    wholeShowAllowed: boolean;
+  }> = [
+    {
+      cleanup: snapshot.wholeItemDownloadCleanup,
+      wholeShowAllowed: snapshot.type === 'show' && snapshot.mediaId === undefined &&
+        snapshot.seasonCleanup !== true && snapshot.cleanupDownloads === true &&
+        Number.isSafeInteger(snapshot.tvdbId) && snapshot.tvdbId! > 0,
+    },
+    { cleanup: snapshot.seasonDownloadCleanup, wholeShowAllowed: false },
+    { cleanup: snapshot.radarrRemovalDownloadCleanup, wholeShowAllowed: false },
+  ];
+  for (const { cleanup, wholeShowAllowed } of cleanupSlots) {
+    const containsWholeShow = cleanup?.downloadJobs.some((job) =>
+      job.authorizationMode === 'whole_show_hash'
+    ) ?? false;
+    if (
+      containsWholeShow &&
+      cleanup!.downloadJobs.some((job) => job.authorizationMode !== 'whole_show_hash')
+    ) throw new DeletionValidationError('durable whole-show download cleanup is malformed');
+    for (const job of cleanup?.downloadJobs ?? []) {
+      const mode = job.authorizationMode ?? 'manifest_paths';
+      if (mode !== 'manifest_paths' && mode !== 'whole_show_hash') {
+        throw new DeletionValidationError('durable download authorization mode is malformed');
+      }
+      if (mode !== 'whole_show_hash') continue;
+      const associations = job.sonarrAssociations;
+      const target = job.targetIdentity;
+      if (
+        !wholeShowAllowed || job.provenance !== 'arr_history' || job.provider !== 'qbittorrent' ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(job.jobId) ||
+        !target || target.provider !== 'qbittorrent' || target.provider !== job.provider ||
+        target.instanceKey !== job.instanceKey ||
+        target.instanceName !== job.instanceName ||
+        !Number.isSafeInteger(target.instanceId) || target.instanceId! <= 0 ||
+        typeof target.configurationIdentity !== 'string' || !target.configurationIdentity ||
+        !/^[a-f0-9]{64}$/.test(job.ownershipSummaryFingerprint ?? '') ||
+        !/^[a-f0-9]{64}$/.test(job.manifestFingerprint ?? '') ||
+        !Array.isArray(associations) || associations.length === 0 ||
+        new Set(
+            associations.map((entry) => `${entry?.instanceId}:${entry?.seriesId}:${entry?.hash}`),
+          ).size !== associations.length ||
+        associations.some((entry) =>
+          !entry || !Number.isSafeInteger(entry.instanceId) || entry.instanceId <= 0 ||
+          typeof entry.instanceUrl !== 'string' || !entry.instanceUrl ||
+          !Number.isSafeInteger(entry.configurationUpdatedAt) ||
+          entry.configurationUpdatedAt <= 0 || !Number.isSafeInteger(entry.seriesId) ||
+          entry.seriesId <= 0 || entry.hash !== job.jobId ||
+          !Array.isArray(entry.sourcePaths) || entry.sourcePaths.length === 0 ||
+          new Set(entry.sourcePaths).size !== entry.sourcePaths.length ||
+          entry.sourcePaths.some((path) =>
+            typeof path !== 'string' || normalizeRemoteAbsolute(path) === null
+          )
+        )
+      ) throw new DeletionValidationError('durable whole-show download cleanup is malformed');
+    }
+  }
   const wholeItemCleanup = snapshot.wholeItemDownloadCleanup;
   const hasWholeItemIntent = snapshot.cleanupDownloadRatingKeys !== undefined ||
     wholeItemCleanup !== undefined;
@@ -192,7 +251,9 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
       !Array.isArray(wholeItemCleanup.orphanFiles) ||
       (wholeItemCleanup.downloadJobs.length === 0 && wholeItemCleanup.orphanFiles.length === 0) ||
       (wholeItemCleanup.sonarrReclamation === undefined &&
-        wholeItemCleanup.downloadJobs.some((job) => job.provenance !== 'direct_manifest'))
+        wholeItemCleanup.downloadJobs.some((job) =>
+          job.provenance !== 'direct_manifest' && job.authorizationMode !== 'whole_show_hash'
+        ))
     ) {
       throw new DeletionValidationError('durable whole-item download cleanup is malformed');
     }

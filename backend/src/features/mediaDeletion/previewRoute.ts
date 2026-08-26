@@ -78,18 +78,14 @@ export function createDownloadCleanupPreviewRouter(
         arrTargets.map((target) => target.instanceId),
       ),
     ]);
-    const ambiguousByType = new Map<string, Set<number>>();
-    for (const type of ['movie', 'show'] as const) {
-      const ids = owned.flatMap((item) => {
-        if (item.type !== type) return [];
-        const id = type === 'movie' ? item.tmdbId : item.tvdbId;
-        return id === null ? [] : [id];
-      });
-      ambiguousByType.set(
-        type,
-        withTransaction((client) => findAmbiguousExternalIds(client, serverId, type, ids)),
-      );
-    }
+    const ambiguousMovieIds = withTransaction((client) =>
+      findAmbiguousExternalIds(
+        client,
+        serverId,
+        'movie',
+        owned.flatMap((item) => item.type === 'movie' && item.tmdbId !== null ? [item.tmdbId] : []),
+      )
+    );
     const plexPaths = await plexPathsPromise;
     const previews = reconcileSharedDownloadCleanups(
       await resolveWholeItemDownloadCleanupBatch(
@@ -106,11 +102,8 @@ export function createDownloadCleanupPreviewRouter(
     ).map((resolved) => {
       const item = owned.find((candidate) => candidate.ratingKey === resolved.ratingKey)!;
       const pathPreview = plexPaths.get(resolved.ratingKey)!;
-      const externalId = item.type === 'movie' ? item.tmdbId : item.tvdbId;
-      if (externalId !== null && ambiguousByType.get(item.type)?.has(externalId)) {
-        const reason = `${item.title} shares its ${
-          item.type === 'movie' ? 'TMDB' : 'TVDB'
-        } ID with another Plex item`;
+      if (item.type === 'movie' && item.tmdbId !== null && ambiguousMovieIds.has(item.tmdbId)) {
+        const reason = `${item.title} shares its TMDB ID with another Plex item`;
         return {
           ...publicCleanupItem({
             ...resolved,

@@ -9,6 +9,7 @@ import { ArrClient } from '../../integrations/arr/client.ts';
 import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
+  assertAcceptedWholeShowHashCleanup,
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
@@ -807,6 +808,7 @@ function qbitTarget(
           hash,
           name: 'Release',
           size: 100,
+          num_files: 1,
           content_path: `/downloads/${release}`,
           save_path: '/downloads',
           tracker: 'https://tracker.example/private-passkey',
@@ -824,6 +826,259 @@ function qbitTarget(
     client: new QbittorrentDownloadClient(client),
   };
 }
+
+function partialShowTargets(options: {
+  shared?: boolean;
+  historyFailure?: boolean;
+  exclusivityFailure?: boolean;
+  ownsSource?: boolean;
+  radarr?: boolean;
+  manifestFiles?: Array<{ path: string; size: number | null }>;
+} = {}) {
+  const sourcePath = options.ownsSource === false
+    ? '/downloads/other/episode-1.mkv'
+    : '/downloads/release/episode-1.mkv';
+  const manifestFiles = options.manifestFiles ?? [
+    { path: 'release/episode-1.mkv', size: 100 },
+    { path: 'release/episode-2.mkv', size: 100 },
+  ];
+  const arr = {
+    instanceId: 2,
+    instanceName: 'Sonarr',
+    instanceType: options.radarr ? 'radarr' as const : 'sonarr' as const,
+    instanceUrl: 'http://sonarr',
+    configurationUpdatedAt: 10,
+    mappingIdentity: 'mapping',
+    addImportExclusion: false,
+    pathMappings: [],
+    client: {
+      type: options.radarr ? 'radarr' as const : 'sonarr' as const,
+      lookup: () =>
+        Promise.resolve({
+          id: 42,
+          title: 'Dark Angel',
+          path: '/tv/Dark Angel',
+          seasons: [],
+        }),
+      mediaFiles: () => Promise.resolve([]),
+      extraFiles: () => Promise.resolve([]),
+      torrentAssociations: () =>
+        options.historyFailure ? Promise.reject(new Error('history failed')) : Promise.resolve([{
+          hash,
+          sourcePath,
+          payloadPath: null,
+          importedPath: '/tv/Dark Angel/episode-1.mkv',
+          historyId: 1,
+          date: null,
+        }]),
+      sonarrSeriesSnapshot: () => Promise.resolve({ episodes: [], files: [] }),
+      downloadIdIsExclusiveTo: () =>
+        options.exclusivityFailure
+          ? Promise.reject(new Error('exclusivity lookup failed'))
+          : Promise.resolve(options.shared !== true),
+    },
+  } as unknown as Parameters<typeof resolveDownloadCleanup>[2][number];
+  const job = {
+    id: hash,
+    name: 'Dark Angel season pack',
+    state: 'uploading',
+    size: 200,
+    uploaded: 0,
+    completedAt: null,
+    ratio: 1,
+    seedingTime: 10,
+    contentPath: '/downloads/release',
+    savePath: '/downloads',
+    trackerHost: null,
+    fileCount: manifestFiles.length,
+    files: manifestFiles,
+    filesTruncated: false,
+    manifestFiles,
+  };
+  const download = {
+    provider: 'qbittorrent',
+    instanceKey: 'db:1',
+    configurationIdentity: 'db:1:10:http://qbit',
+    instanceId: 1,
+    instanceName: 'qBittorrent',
+    client: {
+      findJob: () => Promise.resolve(job),
+      deleteJob: () => Promise.resolve(),
+    },
+  } as Parameters<typeof resolveDownloadCleanup>[3][number];
+  return { arr, download, job };
+}
+
+Deno.test('whole-show Sonarr hash authority accepts a complete live job with partial history', async () => {
+  const { arr, download } = partialShowTargets();
+  const result = await resolveDownloadCleanup(
+    'show-1',
+    { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+    [arr],
+    [download],
+    new Set(),
+    [],
+    new Set(),
+    undefined,
+    { allowWholeShowHash: true },
+  );
+  assertEquals(result.status, 'resolved');
+  assertEquals(result.downloadJobs[0]?.authorizationMode, 'whole_show_hash');
+  assertEquals(result.downloadJobs[0]?.sonarrAssociations?.[0]?.seriesId, 42);
+  assertEquals(result.downloadJobs[0]?.manifestFiles.length, 2);
+  assertEquals(publicCleanupItem(result).downloadJobs.length, 1);
+  assertEquals(
+    Object.hasOwn(publicCleanupItem(result).downloadJobs[0]!, 'authorizationMode'),
+    false,
+  );
+});
+
+Deno.test('default manifest-path authority still rejects partial Sonarr history coverage', async () => {
+  const { arr, download } = partialShowTargets();
+  const result = await resolveDownloadCleanup(
+    'show-1',
+    { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+    [arr],
+    [download],
+  );
+  assertEquals(result.downloadJobs, []);
+  assertStringIncludes(result.reason ?? '', 'not all attributable');
+});
+
+Deno.test('whole-show hash authority fails closed on shared, failed, unowned, or malformed evidence', async () => {
+  for (
+    const options of [
+      { shared: true },
+      { historyFailure: true },
+      { exclusivityFailure: true },
+      { ownsSource: false },
+      { radarr: true },
+    ]
+  ) {
+    const { arr, download } = partialShowTargets(options);
+    const result = await resolveDownloadCleanup(
+      'show-1',
+      { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+      [arr],
+      [download],
+      new Set(),
+      [],
+      new Set(),
+      undefined,
+      { allowWholeShowHash: true },
+    );
+    assertEquals(result.downloadJobs, [], JSON.stringify(options));
+  }
+  const malformed = partialShowTargets({
+    manifestFiles: [{ path: 'release/episode-1.mkv', size: null }],
+  });
+  const result = await resolveDownloadCleanup(
+    'show-1',
+    { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+    [malformed.arr],
+    [malformed.download],
+    new Set(),
+    [],
+    new Set(),
+    undefined,
+    { allowWholeShowHash: true },
+  );
+  assertEquals(result.status, 'error');
+  assertEquals(result.downloadJobs, []);
+  assertStringIncludes(result.reason ?? '', 'malformed whole-show download evidence');
+});
+
+Deno.test('accepted whole-show cleanup rejects replacement or expanded job sets and Sonarr drift', async () => {
+  const { arr, download } = partialShowTargets();
+  const current = await resolveDownloadCleanup(
+    'show-1',
+    { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+    [arr],
+    [download],
+    new Set(),
+    [],
+    new Set(),
+    undefined,
+    { allowWholeShowHash: true },
+  );
+  const accepted = {
+    ...current,
+    downloadJobs: current.downloadJobs.map((job) => ({
+      ...job,
+      sonarrAssociations: job.sonarrAssociations?.map((association) => ({
+        ...association,
+        sourcePaths: [...association.sourcePaths],
+      })),
+    })),
+  };
+  assertAcceptedWholeShowHashCleanup(current, accepted, new Set());
+  assertThrows(
+    () =>
+      assertAcceptedWholeShowHashCleanup(
+        {
+          ...current,
+          downloadJobs: [...current.downloadJobs, {
+            ...current.downloadJobs[0]!,
+            jobId: 'b'.repeat(40),
+          }],
+        },
+        accepted,
+        new Set(),
+      ),
+    Error,
+    'job set changed',
+  );
+  const drifted = {
+    ...current,
+    downloadJobs: current.downloadJobs.map((job) => ({
+      ...job,
+      sonarrAssociations: job.sonarrAssociations?.map((association) => ({
+        ...association,
+        sourcePaths: [...association.sourcePaths],
+      })),
+    })),
+  };
+  drifted.downloadJobs[0]!.sonarrAssociations![0]!.configurationUpdatedAt++;
+  assertThrows(
+    () => assertAcceptedWholeShowHashCleanup(drifted, accepted, new Set()),
+    Error,
+    'Sonarr download association changed',
+  );
+});
+
+Deno.test('whole-show execution rejects changed qBittorrent summary or manifest fingerprints', async () => {
+  const { arr, download, job } = partialShowTargets();
+  const cleanup = await resolveDownloadCleanup(
+    'show-1',
+    { title: 'Dark Angel', type: 'show', tmdbId: null, tvdbId: 76148 },
+    [arr],
+    [download],
+    new Set(),
+    [],
+    new Set(),
+    undefined,
+    { allowWholeShowHash: true },
+  );
+  let deleted = false;
+  download.client.findJob = () =>
+    Promise.resolve({
+      ...job,
+      size: job.size + 1,
+      manifestFiles: job.manifestFiles.map((file, index) =>
+        index === 0 ? { ...file, size: file.size! + 1 } : file
+      ),
+    });
+  download.client.deleteJob = () => {
+    deleted = true;
+    return Promise.resolve();
+  };
+  await assertRejects(
+    () => executeDownloadedFileCleanup(cleanup, new Set(), new Set()),
+    DownloadedFileCleanupError,
+    'identity or manifest changed',
+  );
+  assertEquals(deleted, false);
+});
 
 Deno.test('torrent cleanup resolves Arr import history to live redacted qBittorrent details', async () => {
   const result = await resolveDownloadCleanup(

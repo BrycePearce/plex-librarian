@@ -76,6 +76,16 @@ export interface ResolvedDownloadJob extends DownloadCleanupJob {
   directPlexPathEvidence?: DirectPlexPathEvidence[];
   directRetainedPathEvidence?: DirectRetainedPathEvidence[];
   provenance?: 'arr_history' | 'direct_manifest';
+  /** Missing means the legacy strict per-manifest-path authority. */
+  authorizationMode?: 'manifest_paths' | 'whole_show_hash';
+  sonarrAssociations?: Array<{
+    instanceId: number;
+    instanceUrl: string;
+    configurationUpdatedAt: number;
+    seriesId: number;
+    hash: string;
+    sourcePaths: string[];
+  }>;
   discoverySummaryFingerprint?: string;
   ownershipSummaryFingerprint?: string;
   manifestFingerprint?: string;
@@ -125,11 +135,13 @@ export function cleanupIsEligible(
 export function cleanupHasDurableAcceptedIdentity(
   cleanup: Pick<ResolvedCleanupItem, 'downloadJobs' | 'sonarrReclamation'>,
 ): boolean {
-  // Arr-history live jobs are deliberately rediscovered at execution time. Only
-  // direct manifests and the accepted Sonarr orphan proof are durable authority.
+  // Ordinary Arr-history live jobs are deliberately rediscovered at execution time.
+  // Whole-show hash authority is the one history-derived job mode durably bound here.
   return cleanup.sonarrReclamation !== undefined ||
     (cleanup.downloadJobs.length > 0 &&
-      cleanup.downloadJobs.every((job) => job.provenance === 'direct_manifest'));
+      cleanup.downloadJobs.every((job) =>
+        job.provenance === 'direct_manifest' || job.authorizationMode === 'whole_show_hash'
+      ));
 }
 
 export function persistResolvedCleanup(
@@ -207,6 +219,26 @@ export function rehydrateResolvedCleanup(
       job.instanceName !== targetIdentity.instanceName ||
       !Array.isArray(job.authorizedSourcePaths) || job.authorizedSourcePaths.length === 0 ||
       job.authorizedSourcePaths.some((path) => typeof path !== 'string' || !path) ||
+      (job.authorizationMode === 'whole_show_hash' &&
+        (job.provenance !== 'arr_history' ||
+          job.provider !== 'qbittorrent' || targetIdentity.provider !== 'qbittorrent' ||
+          !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(job.jobId) ||
+          !/^[a-f0-9]{64}$/.test(job.ownershipSummaryFingerprint ?? '') ||
+          !/^[a-f0-9]{64}$/.test(job.manifestFingerprint ?? '') ||
+          !Array.isArray(job.sonarrAssociations) || job.sonarrAssociations.length === 0 ||
+          job.sonarrAssociations.some((association) =>
+            !association || !Number.isSafeInteger(association.instanceId) ||
+            association.instanceId <= 0 || typeof association.instanceUrl !== 'string' ||
+            !association.instanceUrl ||
+            !Number.isSafeInteger(association.configurationUpdatedAt) ||
+            association.configurationUpdatedAt <= 0 ||
+            !Number.isSafeInteger(association.seriesId) ||
+            association.seriesId <= 0 || association.hash !== job.jobId ||
+            !Array.isArray(association.sourcePaths) || association.sourcePaths.length === 0 ||
+            association.sourcePaths.some((path) =>
+              typeof path !== 'string' || normalizeRemoteAbsolute(path) === null
+            )
+          ))) ||
       (job.directPathEvidence !== undefined &&
         (job.provenance !== 'direct_manifest' ||
           !Array.isArray(job.directPlexPathEvidence) || job.directPlexPathEvidence.length === 0 ||
@@ -263,6 +295,89 @@ export function mergeAcceptedSonarrCleanup(
     orphanFiles: accepted.orphanFiles.filter((file) => !observedLiveHashes.has(file.hash)),
     sonarrReclamation: accepted.sonarrReclamation,
   };
+}
+
+function wholeShowJobKey(job: Pick<ResolvedDownloadJob, 'instanceKey' | 'jobId'>): string {
+  return `${job.instanceKey}:${job.jobId}`;
+}
+
+function associationIdentity(
+  association: NonNullable<ResolvedDownloadJob['sonarrAssociations']>[number],
+): string {
+  return JSON.stringify({
+    instanceId: association.instanceId,
+    instanceUrl: association.instanceUrl,
+    configurationUpdatedAt: association.configurationUpdatedAt,
+    seriesId: association.seriesId,
+    hash: association.hash,
+  });
+}
+
+/** Bind fresh whole-show discovery to the exact accepted job and Sonarr identities. */
+export function assertAcceptedWholeShowHashCleanup(
+  current: ResolvedCleanupItem,
+  accepted: ResolvedCleanupItem,
+  attemptedJobKeys: ReadonlySet<string>,
+): void {
+  if (!accepted.downloadJobs.some((job) => job.authorizationMode === 'whole_show_hash')) return;
+  const acceptedJobs = accepted.downloadJobs;
+  if (acceptedJobs.some((job) => job.authorizationMode !== 'whole_show_hash')) {
+    throw new Error('The accepted whole-show download job set is malformed');
+  }
+  if (current.status !== 'resolved') {
+    throw new Error(current.reason ?? 'Whole-show qBittorrent cleanup could not be revalidated');
+  }
+  const currentJobs = current.downloadJobs;
+  const currentByKey = new Map(currentJobs.map((job) => [wholeShowJobKey(job), job]));
+  const expectedPresent = acceptedJobs.filter((job) => {
+    const key = wholeShowJobKey(job);
+    return currentByKey.has(key) || !attemptedJobKeys.has(key);
+  });
+  if (
+    new Set(currentJobs.map(wholeShowJobKey)).size !== currentJobs.length ||
+    new Set(acceptedJobs.map(wholeShowJobKey)).size !== acceptedJobs.length ||
+    currentJobs.length !== expectedPresent.length ||
+    expectedPresent.some((job) => !currentByKey.has(wholeShowJobKey(job)))
+  ) {
+    throw new Error('The accepted whole-show download job set changed');
+  }
+  for (const acceptedJob of expectedPresent) {
+    const currentJob = currentByKey.get(wholeShowJobKey(acceptedJob))!;
+    if (
+      currentJob.provenance !== 'arr_history' || currentJob.jobId !== acceptedJob.jobId ||
+      currentJob.provider !== acceptedJob.provider ||
+      currentJob.instanceName !== acceptedJob.instanceName ||
+      currentJob.target.configurationIdentity !== acceptedJob.target.configurationIdentity ||
+      currentJob.target.instanceId !== acceptedJob.target.instanceId ||
+      currentJob.ownershipSummaryFingerprint !== acceptedJob.ownershipSummaryFingerprint ||
+      currentJob.manifestFingerprint !== acceptedJob.manifestFingerprint
+    ) throw new Error('The accepted whole-show download identity changed');
+    const acceptedAssociations = acceptedJob.sonarrAssociations ?? [];
+    const currentAssociations = currentJob.sonarrAssociations ?? [];
+    if (
+      new Set(acceptedAssociations.map(associationIdentity)).size !== acceptedAssociations.length ||
+      new Set(currentAssociations.map(associationIdentity)).size !== currentAssociations.length ||
+      acceptedAssociations.length !== currentAssociations.length
+    ) throw new Error('The accepted Sonarr download association changed');
+    for (const acceptedAssociation of acceptedAssociations) {
+      const currentAssociation = currentAssociations.find((candidate) =>
+        associationIdentity(candidate) === associationIdentity(acceptedAssociation)
+      );
+      const acceptedPaths = new Set(
+        acceptedAssociation.sourcePaths.flatMap((path) => {
+          const normalized = normalizeRemoteAbsolute(path);
+          return normalized ? [normalized.comparison] : [];
+        }),
+      );
+      if (
+        !currentAssociation || acceptedPaths.size === 0 ||
+        !currentAssociation.sourcePaths.some((path) => {
+          const normalized = normalizeRemoteAbsolute(path);
+          return normalized !== null && acceptedPaths.has(normalized.comparison);
+        })
+      ) throw new Error('The accepted Sonarr download association changed');
+    }
+  }
 }
 
 export interface DownloadedFileCleanupResult {
@@ -491,11 +606,16 @@ export async function executeDownloadedFileCleanup(
         }
         await assertDirectRetainedPathsUnchanged(job.directRetainedPathEvidence ?? []);
       }
+      const wholeShowHash = job.authorizationMode === 'whole_show_hash';
       if (
         !current || current.id !== job.jobId ||
         !authorizedPaths.size ||
         ![...authorizedPaths].some((path) => downloadJobOwnsPath(current, path)) ||
-        !downloadPayloadIsExclusivelyOwned(current, authorizedPaths)
+        (wholeShowHash
+          ? !job.ownershipSummaryFingerprint || !job.manifestFingerprint ||
+            await downloadJobSummaryFingerprint(current) !== job.ownershipSummaryFingerprint ||
+            await downloadJobManifestFingerprint(current) !== job.manifestFingerprint
+          : !downloadPayloadIsExclusivelyOwned(current, authorizedPaths))
       ) {
         throw new Error(
           'Download job identity or manifest changed since verification; nothing was removed',
@@ -564,6 +684,7 @@ export async function resolveDownloadCleanup(
   attemptedOrphanFiles: readonly AttemptedOrphanFile[] = [],
   attemptedArrInstanceIds: ReadonlySet<number> = new Set(),
   payloadScanBudget?: PayloadScanBudget,
+  options: { allowWholeShowHash?: boolean } = {},
 ): Promise<ResolvedCleanupItem> {
   const id = externalId(item);
   if (id === null || arrTargets.length === 0) {
@@ -586,6 +707,10 @@ export async function resolveDownloadCleanup(
   }
 
   const associationPaths = new Map<string, Set<string>>();
+  const sonarrAssociations = new Map<
+    string,
+    NonNullable<ResolvedDownloadJob['sonarrAssociations']>[number]
+  >();
   const associationHashes = new Set<string>();
   const arrMediaIds = new Map<number, number | null>();
   const sharedAssociationHashes = new Set<string>();
@@ -678,6 +803,21 @@ export async function resolveDownloadCleanup(
         const hashPaths = associationPaths.get(association.hash) ?? new Set<string>();
         if (association.sourcePath) hashPaths.add(association.sourcePath);
         associationPaths.set(association.hash, hashPaths);
+        if (arr.client.type === 'sonarr' && association.sourcePath) {
+          const key = `${arr.instanceId}:${association.hash}`;
+          const evidence = sonarrAssociations.get(key) ?? {
+            instanceId: arr.instanceId,
+            instanceUrl: arr.instanceUrl,
+            configurationUpdatedAt: arr.configurationUpdatedAt,
+            seriesId: record.id,
+            hash: association.hash,
+            sourcePaths: [],
+          };
+          if (!evidence.sourcePaths.includes(association.sourcePath)) {
+            evidence.sourcePaths.push(association.sourcePath);
+          }
+          sonarrAssociations.set(key, evidence);
+        }
         if (association.sourcePath) {
           const trackedPaths = [
             ...(mediaFiles ?? []).map((file) => file.relativePath),
@@ -891,15 +1031,51 @@ export async function resolveDownloadCleanup(
           continue;
         }
         const { id: _id, ...publicJob } = job;
-        const resolvedJob = {
+        const wholeShowAssociations = [...sonarrAssociations.values()]
+          .filter((association) => association.hash === hash)
+          .map((association) => ({
+            ...association,
+            sourcePaths: [...association.sourcePaths].sort(),
+          }))
+          .sort((left, right) => left.instanceId - right.instanceId);
+        const wholeShowSourcePaths = wholeShowAssociations.flatMap((association) =>
+          association.sourcePaths
+        );
+        const wholeShowHashCandidate = options.allowWholeShowHash === true &&
+          item.type === 'show' && target.provider === 'qbittorrent' &&
+          Number.isSafeInteger(item.tvdbId) && item.tvdbId! > 0 &&
+          wholeShowAssociations.length > 0;
+        const canUseWholeShowHash = wholeShowHashCandidate && job.id === hash &&
+          Number.isSafeInteger(job.fileCount) && job.fileCount > 0 &&
+          Number.isSafeInteger(job.size) && job.size > 0 &&
+          normalizeRemoteAbsolute(job.contentPath) !== null &&
+          normalizeRemoteAbsolute(job.savePath) !== null &&
+          job.fileCount === job.manifestFiles.length &&
+          wholeShowSourcePaths.some((path) => downloadJobOwnsPath(job, path)) &&
+          job.manifestFiles.every((file) =>
+            typeof file.path === 'string' && file.path.length > 0 &&
+            Number.isSafeInteger(file.size) && file.size! >= 0
+          );
+        if (wholeShowHashCandidate && !canUseWholeShowHash) {
+          throw new Error('qBittorrent returned malformed whole-show download evidence');
+        }
+        const resolvedJob: ResolvedDownloadJob = {
           ...publicJob,
           provider: target.provider,
           jobId: hash,
           instanceKey: target.instanceKey,
           instanceName: target.instanceName,
-          sourcePath,
-          authorizedSourcePaths: [...sourcePaths],
+          sourcePath: canUseWholeShowHash ? wholeShowSourcePaths[0]! : sourcePath,
+          authorizedSourcePaths: canUseWholeShowHash ? wholeShowSourcePaths : [...sourcePaths],
           provenance: 'arr_history' as const,
+          authorizationMode: canUseWholeShowHash ? 'whole_show_hash' : 'manifest_paths',
+          ...(canUseWholeShowHash
+            ? {
+              sonarrAssociations: wholeShowAssociations,
+              ownershipSummaryFingerprint: await downloadJobSummaryFingerprint(job),
+              manifestFingerprint: await downloadJobManifestFingerprint(job),
+            }
+            : {}),
           target,
         };
         ownedLiveJobs.push(resolvedJob);
@@ -913,7 +1089,7 @@ export async function resolveDownloadCleanup(
           });
           continue;
         }
-        if (!downloadPayloadIsExclusivelyOwned(job, sourcePaths)) {
+        if (!canUseWholeShowHash && !downloadPayloadIsExclusivelyOwned(job, sourcePaths)) {
           nonExclusiveLiveJobCount++;
           inspectionWarnings.set(job.contentPath || job.savePath, {
             path: job.contentPath || job.savePath,
@@ -1039,6 +1215,8 @@ export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithout
       directPlexPathEvidence: _directPlexPathEvidence,
       directRetainedPathEvidence: _directRetainedPathEvidence,
       provenance: _provenance,
+      authorizationMode: _authorizationMode,
+      sonarrAssociations: _sonarrAssociations,
       discoverySummaryFingerprint: _discoverySummaryFingerprint,
       ownershipSummaryFingerprint: _ownershipSummaryFingerprint,
       manifestFingerprint: _manifestFingerprint,

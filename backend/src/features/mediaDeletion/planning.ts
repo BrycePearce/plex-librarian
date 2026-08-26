@@ -1,11 +1,11 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import {
   arrDeleteAttempts,
   downloadFileDeleteAttempts,
   torrentDeleteAttempts,
 } from '../../db/schema.ts';
-import type { ArrDeleteTarget } from '../arr/delete.ts';
+import { type ArrDeleteTarget, findAmbiguousExternalIds } from '../arr/delete.ts';
 import { type AttemptedOrphanFile, DEFAULT_PAYLOAD_SCAN_LIMITS } from './hardlinks.ts';
 import { type ResolvedCleanupItem, resolveDownloadCleanup } from './cleanup.ts';
 import type { DownloadClientTarget } from './downloadClient.ts';
@@ -47,6 +47,7 @@ export async function resolveDownloadCleanupBatch(
   attemptedJobKeysByItem: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   attemptedOrphanFilesByItem: ReadonlyMap<string, readonly AttemptedOrphanFile[]> = new Map(),
   attemptedArrInstancesByItem: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
+  wholeShowHashRatingKeys: ReadonlySet<string> = new Set(),
 ): Promise<ResolvedCleanupItem[]> {
   const payloadScanBudget = { remainingEntries: DEFAULT_PAYLOAD_SCAN_LIMITS.maxEntries };
   // A bounded pool keeps bulk previews responsive without bursting against external services.
@@ -63,8 +64,61 @@ export async function resolveDownloadCleanupBatch(
         attemptedOrphanFilesByItem.get(item.ratingKey),
         attemptedArrInstancesByItem.get(item.ratingKey),
         payloadScanBudget,
+        { allowWholeShowHash: wholeShowHashRatingKeys.has(item.ratingKey) },
       ),
   );
+}
+
+/** The narrow whole-show lane: centralizes only the positive/unambiguous TVDB gate. */
+export async function resolveWholeShowDownloadCleanupBatch(
+  serverId: number,
+  selectedItems: DownloadResolvableItem[],
+  arrTargets: ArrDeleteTarget[],
+  downloadTargets: DownloadClientTarget[],
+  attemptedJobKeysByItem: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+  attemptedOrphanFilesByItem: ReadonlyMap<string, readonly AttemptedOrphanFile[]> = new Map(),
+  attemptedArrInstancesByItem: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
+): Promise<ResolvedCleanupItem[]> {
+  const showIds = selectedItems.flatMap((item) =>
+    item.type === 'show' && Number.isSafeInteger(item.tvdbId) && item.tvdbId! > 0
+      ? [item.tvdbId!]
+      : []
+  );
+  const ambiguous = withTransaction((client) =>
+    findAmbiguousExternalIds(client, serverId, 'show', showIds)
+  );
+  const eligible = new Set(
+    selectedItems.flatMap((item) =>
+      item.type === 'show' && Number.isSafeInteger(item.tvdbId) && item.tvdbId! > 0 &&
+        !ambiguous.has(item.tvdbId!)
+        ? [item.ratingKey]
+        : []
+    ),
+  );
+  const resolved = await resolveDownloadCleanupBatch(
+    selectedItems,
+    arrTargets,
+    downloadTargets,
+    attemptedJobKeysByItem,
+    attemptedOrphanFilesByItem,
+    attemptedArrInstancesByItem,
+    eligible,
+  );
+  return resolved.map((cleanup, index) => {
+    const item = selectedItems[index]!;
+    if (item.type !== 'show' || item.tvdbId === null || !ambiguous.has(item.tvdbId)) return cleanup;
+    const reason = `${item.title} shares its TVDB ID with another Plex item`;
+    return {
+      ...cleanup,
+      status: 'error' as const,
+      reason,
+      arrStatus: 'error' as const,
+      arrReason: `${reason}; use Plex-only deletion or resolve the duplicate first`,
+      downloadJobs: [],
+      orphanFiles: [],
+      retainedPaths: [],
+    };
+  });
 }
 
 /** Resolve whole-item cleanup from Arr history, then use the existing strict direct
@@ -80,7 +134,8 @@ export async function resolveWholeItemDownloadCleanupBatch(
   attemptedOrphanFilesByItem: ReadonlyMap<string, readonly AttemptedOrphanFile[]> = new Map(),
   attemptedArrInstancesByItem: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
 ): Promise<ResolvedCleanupItem[]> {
-  const resolved = await resolveDownloadCleanupBatch(
+  const resolved = await resolveWholeShowDownloadCleanupBatch(
+    serverId,
     selectedItems,
     arrTargets,
     downloadTargets,

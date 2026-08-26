@@ -18,6 +18,7 @@ import {
 } from '../../arr/delete.ts';
 import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
 import {
+  assertAcceptedWholeShowHashCleanup,
   cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
   executeDownloadedFileCleanup,
@@ -50,7 +51,7 @@ import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
-  resolveDownloadCleanupBatch,
+  resolveWholeShowDownloadCleanupBatch,
 } from '../../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
 import {
@@ -884,7 +885,8 @@ async function ensureWholeItemDeleted(
       selected,
       arrTargets.map((entry) => entry.instanceId),
     );
-    const rawCleanups = await resolveDownloadCleanupBatch(
+    const rawCleanups = await resolveWholeShowDownloadCleanupBatch(
+      target.serverId,
       selected,
       arrTargets,
       downloadTargets,
@@ -899,7 +901,18 @@ async function ensureWholeItemDeleted(
       );
       const index = rawCleanups.findIndex((cleanup) => cleanup.ratingKey === snapshot.ratingKey);
       if (index >= 0) {
-        rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+        if (accepted.downloadJobs.some((job) => job.authorizationMode === 'whole_show_hash')) {
+          assertAcceptedWholeShowHashCleanup(
+            rawCleanups[index]!,
+            accepted,
+            attemptedJobs.get(snapshot.ratingKey) ?? new Set(),
+          );
+          if (accepted.sonarrReclamation) {
+            rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+          }
+        } else {
+          rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+        }
       } else rawCleanups.push(accepted);
     }
     assertDownloadJobSelectionConsistent(rawCleanups, cleanupSelectedKeys);

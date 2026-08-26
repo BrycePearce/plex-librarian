@@ -3412,6 +3412,84 @@ Deno.test('qBittorrent-only whole-item deletion does not require Arr selection',
   assertEquals(destinationOrder, ['qbittorrent', 'plex']);
 });
 
+Deno.test('whole-show preview exposes an exact Sonarr-associated job with partial file history', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true);
+  seasonPackQbit = true;
+  seasonPackMixed = true;
+  qbitPresent = true;
+
+  const response = await app.request(
+    '/api/libraries/shows/items/download-cleanup-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ratingKeys: ['show-1'] }),
+    },
+  );
+  assertEquals(response.status, 200, await response.clone().text());
+  const preview = await response.json();
+  assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
+  assertEquals(preview.items[0].downloadJobs.length, 1, JSON.stringify(preview));
+  assertEquals(preview.items[0].downloadJobs[0].fileCount, 2);
+
+  const acceptedResponse = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: ['show-1'],
+    }),
+  });
+  assertEquals(acceptedResponse.status, 202, await acceptedResponse.clone().text());
+  const { operationId } = await acceptedResponse.json() as { operationId: string };
+  const snapshotJson = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<[string]>(
+      operationId,
+    )?.[0]
+  );
+  const snapshot = JSON.parse(snapshotJson!);
+  assertEquals(
+    snapshot.wholeItemDownloadCleanup.downloadJobs[0].authorizationMode,
+    'whole_show_hash',
+  );
+  assertEquals(snapshot.wholeItemDownloadCleanup.downloadJobs[0].manifestFiles, []);
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(qbitDeleteCount, 1);
+});
+
+Deno.test('whole-show hash preview rejects ambiguous Plex TVDB identity', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true);
+  seasonPackQbit = true;
+  seasonPackMixed = true;
+  qbitPresent = true;
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO items (server_id, rating_key, library_key, title, type, file_size, tvdb_id, updated_at) VALUES (1, 'show-duplicate', 'shows', 'Duplicate Show', 'show', 100, 20, 1)",
+    ).run();
+  });
+
+  const response = await app.request(
+    '/api/libraries/shows/items/download-cleanup-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ratingKeys: ['show-1'] }),
+    },
+  );
+  assertEquals(response.status, 200, await response.clone().text());
+  const preview = await response.json();
+  assertEquals(preview.items[0].status, 'error', JSON.stringify(preview));
+  assertEquals(preview.items[0].downloadJobs, []);
+  assertStringIncludes(preview.items[0].reason, 'shares its TVDB ID');
+});
+
 Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', async () => {
   reset();
   addEpisode();
