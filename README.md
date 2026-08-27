@@ -18,7 +18,16 @@
   </p>
 </div>
 
-![Plex Librarian dashboard](https://github.com/user-attachments/assets/a8f19d12-d86f-4395-897b-0447768f5d12)
+![Plex Librarian dashboard](assets/screenshots/dashboard.png)
+
+<p align="center">
+  <a href="assets/screenshots/stale-analysis.png">Stale analysis</a> ·
+  <a href="assets/screenshots/duplicates.png">Duplicates</a> ·
+  <a href="assets/screenshots/episode-gaps.png">Episode Gaps</a> ·
+  <a href="assets/screenshots/activity.png">Activity</a>
+</p>
+
+<p align="center"><sub>Screenshots use fictional demo data; no Plex account or user information is shown.</sub></p>
 
 Plex Librarian is a tool for managing and maintaining Plex servers. It's
 intended as a simpler alternative to heavier tools with similar functionality,
