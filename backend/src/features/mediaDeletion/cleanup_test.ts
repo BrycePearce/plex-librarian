@@ -808,13 +808,15 @@ function qbitTarget(
           hash,
           name: 'Release',
           size: 100,
-          num_files: 1,
+          total_size: 100,
           content_path: `/downloads/${release}`,
           save_path: '/downloads',
           tracker: 'https://tracker.example/private-passkey',
         }]));
       }
-      return Promise.resolve(Response.json([{ name: `${release}/movie.mkv`, size: 100 }]));
+      return Promise.resolve(
+        Response.json([{ index: 0, name: `${release}/movie.mkv`, size: 100 }]),
+      );
     }) as typeof fetch,
   );
   return {

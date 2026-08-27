@@ -23,7 +23,6 @@ export interface QbittorrentDiscoverySummary {
   contentPath: string;
   savePath: string;
   size: number;
-  fileCount: number;
 }
 
 const PUBLIC_FILE_LIMIT = 100;
@@ -62,6 +61,56 @@ function trackerHost(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+interface ValidatedTorrentSummary {
+  hash: string;
+  size: number;
+  totalSize: number;
+  contentPath: string;
+  savePath: string;
+}
+
+function validateTorrentSummary(
+  record: Record<string, unknown>,
+  requestedHash: string,
+): ValidatedTorrentSummary {
+  const rawReturnedHash = record['hash'];
+  const returnedHash = typeof rawReturnedHash === 'string' ? rawReturnedHash.toLowerCase() : '';
+  if (
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(returnedHash) ||
+    returnedHash !== requestedHash
+  ) {
+    throw new QbittorrentApiError('qBittorrent returned a nonmatching torrent identity');
+  }
+  const size = record['size'];
+  const totalSize = record['total_size'];
+  if (
+    typeof totalSize !== 'number' || !Number.isSafeInteger(totalSize) || totalSize <= 0 ||
+    typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0 || size > totalSize
+  ) {
+    throw new QbittorrentApiError('qBittorrent returned a malformed torrent size');
+  }
+  const rawContentPath = record['content_path'];
+  const rawSavePath = record['save_path'];
+  if (
+    typeof rawContentPath !== 'string' || typeof rawSavePath !== 'string' ||
+    !normalizeQbittorrentAbsolute(rawContentPath) ||
+    !normalizeQbittorrentAbsolute(rawSavePath)
+  ) {
+    throw new QbittorrentApiError('qBittorrent returned malformed torrent storage paths');
+  }
+  return {
+    hash: returnedHash,
+    size,
+    totalSize,
+    contentPath: rawContentPath.trim(),
+    savePath: rawSavePath.trim(),
+  };
+}
+
+function torrentSummaryIdentity(summary: ValidatedTorrentSummary): string {
+  return JSON.stringify(summary);
 }
 
 export class QbittorrentClient {
@@ -232,39 +281,29 @@ export class QbittorrentClient {
     }
     const record = records[0];
     if (!record) return null;
-    const rawReturnedHash = record['hash'];
-    const returnedHash = typeof rawReturnedHash === 'string' ? rawReturnedHash.toLowerCase() : '';
-    if (
-      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(returnedHash) ||
-      returnedHash !== normalizedHash
-    ) {
-      throw new QbittorrentApiError('qBittorrent returned a nonmatching torrent identity');
-    }
-    const fileCount = record['num_files'];
-    if (typeof fileCount !== 'number' || !Number.isSafeInteger(fileCount) || fileCount <= 0) {
-      throw new QbittorrentApiError('qBittorrent returned a malformed torrent file count');
-    }
+    const firstSummary = validateTorrentSummary(record, normalizedHash);
     const files = await this.request<Array<Record<string, unknown>>>(
       `/torrents/files?hash=${encodeURIComponent(normalizedHash)}`,
       undefined,
       'json',
       MANIFEST_MAX_BYTES,
     );
-    if (!Array.isArray(files) || files.length > MANIFEST_MAX_RECORDS) {
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new QbittorrentApiError('qBittorrent returned a malformed torrent manifest');
+    }
+    if (files.length > MANIFEST_MAX_RECORDS) {
       throw new QbittorrentApiError(
         `qBittorrent manifest exceeded the ${MANIFEST_MAX_RECORDS}-record safety limit`,
       );
     }
-    if (files.length !== fileCount) {
-      throw new QbittorrentApiError(
-        'qBittorrent returned an incomplete torrent manifest',
-      );
-    }
     const completed = Number(record['completion_on']);
-    const manifestFiles = files.map((file) => {
+    let manifestTotalSize = 0;
+    const manifestFiles = files.map((file, position) => {
+      const index = file['index'];
       const path = file['name'];
       const size = file['size'];
       if (
+        typeof index !== 'number' || !Number.isSafeInteger(index) || index !== position ||
         typeof path !== 'string' || path !== path.trim() ||
         typeof size !== 'number'
       ) {
@@ -278,6 +317,10 @@ export class QbittorrentClient {
       ) {
         throw new QbittorrentApiError('qBittorrent returned a malformed torrent manifest');
       }
+      if (!Number.isSafeInteger(manifestTotalSize + size)) {
+        throw new QbittorrentApiError('qBittorrent returned a malformed torrent manifest');
+      }
+      manifestTotalSize += size;
       return { path: parts.join('/'), size };
     });
     const manifestPaths = manifestFiles.map((file) => file.path.toLocaleLowerCase('en-US'));
@@ -291,19 +334,32 @@ export class QbittorrentClient {
     if (uniquePaths.size !== manifestPaths.length || conflicting) {
       throw new QbittorrentApiError('qBittorrent returned a conflicting torrent manifest');
     }
+    if (manifestTotalSize !== firstSummary.totalSize) {
+      throw new QbittorrentApiError('qBittorrent returned an incomplete torrent manifest');
+    }
+    const afterRecords = await this.request<Array<Record<string, unknown>>>(
+      `/torrents/info?hashes=${encodeURIComponent(normalizedHash)}`,
+    );
+    if (!Array.isArray(afterRecords) || afterRecords.length !== 1) {
+      throw new QbittorrentApiError('qBittorrent torrent identity changed during manifest read');
+    }
+    const secondSummary = validateTorrentSummary(afterRecords[0]!, normalizedHash);
+    if (torrentSummaryIdentity(firstSummary) !== torrentSummaryIdentity(secondSummary)) {
+      throw new QbittorrentApiError('qBittorrent torrent identity changed during manifest read');
+    }
     return {
-      hash: returnedHash,
+      hash: firstSummary.hash,
       name: String(record['name'] ?? normalizedHash),
       state: String(record['state'] ?? 'unknown'),
-      size: Number(record['size'] ?? record['total_size'] ?? 0),
+      size: firstSummary.size,
       uploaded: Number(record['uploaded'] ?? 0),
       ratio: Number(record['ratio'] ?? 0),
       seedingTime: Number(record['seeding_time'] ?? 0),
       completedAt: Number.isFinite(completed) && completed > 0 ? completed : null,
-      contentPath: String(record['content_path'] ?? ''),
-      savePath: String(record['save_path'] ?? ''),
+      contentPath: firstSummary.contentPath,
+      savePath: firstSummary.savePath,
       trackerHost: trackerHost(record['tracker']),
-      fileCount,
+      fileCount: manifestFiles.length,
       files: manifestFiles.slice(0, PUBLIC_FILE_LIMIT),
       filesTruncated: files.length > PUBLIC_FILE_LIMIT,
       manifestFiles,
@@ -325,16 +381,14 @@ export class QbittorrentClient {
       hash: String(record.hash ?? '').trim().toLowerCase(),
       contentPath: String(record.content_path ?? '').trim(),
       savePath: String(record.save_path ?? '').trim(),
-      size: Number(record.size ?? record.total_size),
-      fileCount: Number(record.num_files),
+      size: Number(record.size),
     })).sort((left, right) => left.hash.localeCompare(right.hash));
     if (
       summaries.some((summary) =>
         !/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(summary.hash) ||
         !normalizeQbittorrentAbsolute(summary.contentPath) ||
         !normalizeQbittorrentAbsolute(summary.savePath) ||
-        !Number.isSafeInteger(summary.size) || summary.size <= 0 ||
-        !Number.isSafeInteger(summary.fileCount) || summary.fileCount <= 0
+        !Number.isSafeInteger(summary.size) || summary.size < 0
       ) || new Set(summaries.map((summary) => summary.hash)).size !== summaries.length
     ) {
       throw new QbittorrentApiError('qBittorrent returned malformed direct-discovery summaries');

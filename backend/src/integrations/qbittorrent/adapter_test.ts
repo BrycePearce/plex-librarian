@@ -21,12 +21,14 @@ function client(requests: string[]): QbittorrentDownloadClient {
               content_path: '/downloads/release/movie.mkv',
               save_path: '/downloads',
               size: 100,
-              num_files: 1,
+              total_size: 100,
             }],
           ));
         }
         if (url.includes('/torrents/files')) {
-          return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100 }]));
+          return Promise.resolve(
+            Response.json([{ index: 0, name: 'release/movie.mkv', size: 100 }]),
+          );
         }
         if (url.endsWith('/torrents/delete')) {
           requests.push(String(init?.body));
@@ -68,6 +70,71 @@ Deno.test('qBittorrent discovery fingerprints stable ownership summaries', async
   assertEquals(/^[a-f0-9]{64}$/.test(discovered.summaryFingerprint), true);
 });
 
+Deno.test('qBittorrent discovery prefilters equal and descendant paths without a file count', async () => {
+  const equalHash = '1'.repeat(40);
+  const descendantHash = '2'.repeat(40);
+  const unrelatedHash = '3'.repeat(40);
+  const manifestReads: string[] = [];
+  const summaries = [
+    {
+      hash: equalHash,
+      content_path: '/downloads/movie.mkv',
+      save_path: '/downloads',
+      size: 100,
+      total_size: 100,
+    },
+    {
+      hash: descendantHash,
+      content_path: '/downloads/show',
+      save_path: '/downloads',
+      size: 200,
+      total_size: 200,
+    },
+    {
+      hash: unrelatedHash,
+      content_path: '/downloads/other',
+      save_path: '/downloads',
+      size: 300,
+      total_size: 300,
+    },
+  ];
+  const adapter = new QbittorrentDownloadClient(
+    new QbittorrentClient(
+      'http://qbit:8080',
+      '',
+      '',
+      ((input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.1'));
+        if (url.pathname.endsWith('/torrents/files')) {
+          const requestedHash = url.searchParams.get('hash')!;
+          manifestReads.push(requestedHash);
+          return Promise.resolve(
+            Response.json(
+              requestedHash === equalHash ? [{ index: 0, name: 'movie.mkv', size: 100 }] : [
+                { index: 0, name: 'show/episode-1.mkv', size: 100 },
+                { index: 1, name: 'show/episode-2.mkv', size: 100 },
+              ],
+            ),
+          );
+        }
+        const requestedHash = url.searchParams.get('hashes');
+        return Promise.resolve(Response.json(
+          requestedHash ? summaries.filter((summary) => summary.hash === requestedHash) : summaries,
+        ));
+      }) as typeof fetch,
+    ),
+  );
+
+  const discovered = await adapter.discoverJobs([
+    { path: '/downloads/movie.mkv', caseSensitive: true },
+    { path: '/downloads/show/episode-1.mkv', caseSensitive: true },
+  ]);
+
+  assertEquals(discovered.jobs.map((job) => job.id), [equalHash, descendantHash]);
+  assertEquals(manifestReads.sort(), [equalHash, descendantHash]);
+});
+
 Deno.test('qBittorrent discovery rejects ownership summary changes around manifest reads', async () => {
   let summaryReads = 0;
   const adapter = new QbittorrentDownloadClient(
@@ -79,7 +146,9 @@ Deno.test('qBittorrent discovery rejects ownership summary changes around manife
         const url = String(input);
         if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
         if (url.includes('/torrents/files')) {
-          return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100 }]));
+          return Promise.resolve(
+            Response.json([{ index: 0, name: 'release/movie.mkv', size: 100 }]),
+          );
         }
         const summary = url.includes('limit=');
         if (summary) summaryReads++;
@@ -91,7 +160,7 @@ Deno.test('qBittorrent discovery rejects ownership summary changes around manife
             : '/downloads/release/movie.mkv',
           save_path: '/downloads',
           size: 100,
-          num_files: 1,
+          total_size: 100,
         }]));
       }) as typeof fetch,
     ),
@@ -122,7 +191,7 @@ Deno.test('qBittorrent discovery fetches manifests with bounded concurrency', as
           maximumManifestReads = Math.max(maximumManifestReads, activeManifestReads);
           await new Promise((resolve) => setTimeout(resolve, 5));
           activeManifestReads--;
-          return Response.json([{ name: `release-${index}/movie.mkv`, size: 100 }]);
+          return Response.json([{ index: 0, name: `release-${index}/movie.mkv`, size: 100 }]);
         }
         const requestedHashes = url.searchParams.get('hashes');
         const requested = requestedHashes === null ? hashes : [requestedHashes];
@@ -134,7 +203,7 @@ Deno.test('qBittorrent discovery fetches manifests with bounded concurrency', as
             content_path: `/downloads/release-${index}/movie.mkv`,
             save_path: '/downloads',
             size: 100,
-            num_files: 1,
+            total_size: 100,
           };
         }));
       }) as typeof fetch,
@@ -165,7 +234,9 @@ Deno.test('qBittorrent discovery ignores unrelated inventory churn', async () =>
         if (url.pathname.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
         if (url.pathname.endsWith('/torrents/files')) {
           manifestReads++;
-          return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100 }]));
+          return Promise.resolve(
+            Response.json([{ index: 0, name: 'release/movie.mkv', size: 100 }]),
+          );
         }
         const requestedHash = url.searchParams.get('hashes');
         if (requestedHash) {
@@ -175,7 +246,7 @@ Deno.test('qBittorrent discovery ignores unrelated inventory churn', async () =>
             content_path: '/downloads/release/movie.mkv',
             save_path: '/downloads',
             size: 100,
-            num_files: 1,
+            total_size: 100,
           }]));
         }
         summaryReads++;
@@ -186,7 +257,7 @@ Deno.test('qBittorrent discovery ignores unrelated inventory churn', async () =>
             content_path: '/downloads/release/movie.mkv',
             save_path: '/downloads',
             size: 100,
-            num_files: 1,
+            total_size: 100,
           },
           ...(summaryReads > 1
             ? [{
@@ -195,7 +266,7 @@ Deno.test('qBittorrent discovery ignores unrelated inventory churn', async () =>
               content_path: '/downloads/other/file.mkv',
               save_path: '/downloads',
               size: 200,
-              num_files: 1,
+              total_size: 200,
             }]
             : []),
         ]));
@@ -224,7 +295,9 @@ Deno.test('qBittorrent discovery rejects a new competing candidate job', async (
         const url = new URL(String(input));
         if (url.pathname.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
         if (url.pathname.endsWith('/torrents/files')) {
-          return Promise.resolve(Response.json([{ name: 'release/movie.mkv', size: 100 }]));
+          return Promise.resolve(
+            Response.json([{ index: 0, name: 'release/movie.mkv', size: 100 }]),
+          );
         }
         const requestedHash = url.searchParams.get('hashes');
         if (requestedHash) {
@@ -234,7 +307,7 @@ Deno.test('qBittorrent discovery rejects a new competing candidate job', async (
             content_path: '/downloads/release/movie.mkv',
             save_path: '/downloads',
             size: 100,
-            num_files: 1,
+            total_size: 100,
           }]));
         }
         summaryReads++;
@@ -245,7 +318,7 @@ Deno.test('qBittorrent discovery rejects a new competing candidate job', async (
             content_path: '/downloads/release/movie.mkv',
             save_path: '/downloads',
             size: 100,
-            num_files: 1,
+            total_size: 100,
           },
           ...(summaryReads > 1
             ? [{
@@ -254,7 +327,7 @@ Deno.test('qBittorrent discovery rejects a new competing candidate job', async (
               content_path: '/downloads/release/movie.mkv',
               save_path: '/downloads',
               size: 100,
-              num_files: 1,
+              total_size: 100,
             }]
             : []),
         ]));

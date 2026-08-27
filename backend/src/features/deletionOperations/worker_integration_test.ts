@@ -851,18 +851,22 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
             hash: torrentHash,
             name: 'Release',
             size: seasonPackQbit ? 40_000 : 100_000,
+            total_size: seasonPackMixed ? 80_000 : seasonPackQbit ? 40_000 : 100_000,
             content_path: seasonPackQbit ? '/downloads/release/old.mkv' : '/downloads/release',
             save_path: '/downloads',
-            num_files: seasonPackMixed ? 2 : 1,
           }]
           : [],
       ));
     }
     if (url.pathname === '/api/v2/torrents/files') {
-      return Promise.resolve(Response.json([{
-        name: seasonPackQbit ? 'release/old.mkv' : 'release/movie.mkv',
-        size: seasonPackQbit ? 40_000 : 100_000,
-      }, ...(seasonPackMixed ? [{ name: 'release/unselected.mkv', size: 40_000 }] : [])]));
+      return Promise.resolve(Response.json([
+        {
+          index: 0,
+          name: seasonPackQbit ? 'release/old.mkv' : 'release/movie.mkv',
+          size: seasonPackQbit ? 40_000 : 100_000,
+        },
+        ...(seasonPackMixed ? [{ index: 1, name: 'release/unselected.mkv', size: 40_000 }] : []),
+      ]));
     }
     if (url.pathname === '/api/v2/torrents/delete' && init?.method === 'POST') {
       destinationOrder.push('qbittorrent');

@@ -52,7 +52,7 @@ function within(path: string, root: string, caseSensitive: boolean): boolean {
 }
 
 function couldOwnCandidate(
-  summary: { contentPath: string; fileCount: number },
+  summary: { contentPath: string },
   candidates: readonly DownloadDiscoveryCandidate[],
 ): boolean {
   const content = normalizeRemoteAbsolute(summary.contentPath);
@@ -60,12 +60,7 @@ function couldOwnCandidate(
   return candidates.some((candidate) => {
     const path = normalizeRemoteAbsolute(candidate.path);
     if (!path || path.separator !== content.separator) return false;
-    if (summary.fileCount === 1) {
-      return candidate.caseSensitive
-        ? path.path === content.path
-        : path.path.toLocaleLowerCase('en-US') === content.path.toLocaleLowerCase('en-US');
-    }
-    return path.path !== content.path && within(path.path, content.path, candidate.caseSensitive);
+    return within(path.path, content.path, candidate.caseSensitive);
   });
 }
 
@@ -100,7 +95,6 @@ export class QbittorrentDownloadClient implements DownloadClient {
           contentPath: torrent.contentPath,
           savePath: torrent.savePath,
           size: torrent.size,
-          fileCount: torrent.fileCount,
         };
         if (summaryIdentity(summary) !== summaryIdentity(liveSummary)) {
           throw new Error('qBittorrent ownership summaries changed during direct discovery');
