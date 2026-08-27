@@ -439,7 +439,6 @@
   align-items: center;
   gap: 0.8rem;
   color: inherit;
-  text-decoration: none;
 }
 
 .episode-gap-poster {
@@ -498,24 +497,54 @@
   font-size: 0.65rem;
 }
 
-.episode-strip { margin-top: 0.7rem; }
-.episode-strip.is-cells { display: flex; gap: 0.18rem; }
+.episode-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.22rem 0.5rem;
+  margin-top: 0.7rem;
+}
 
-.episode-strip.is-cells > span {
+.episode-strip-visual { grid-column: 1 / -1; }
+.episode-strip.is-cells .episode-strip-visual { display: flex; gap: 0.18rem; }
+
+.episode-strip.is-cells .episode-strip-visual > span {
   position: relative;
   height: 0.43rem;
   min-width: 3px;
   flex: 1;
   border-radius: 2px;
   background: color-mix(in oklab, var(--present-tone) 38%, transparent);
+  transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
-.episode-strip.is-cells > span.is-gap {
+.episode-strip.is-cells .episode-strip-visual > span::before {
+  position: absolute;
+  content: "";
+  inset: -0.35rem 0;
+}
+
+.episode-strip.is-cells .episode-strip-visual > span.is-gap {
   border: 1px solid color-mix(in oklab, var(--gap-tone) 78%, transparent);
   background: color-mix(in oklab, var(--gap-tone) 6%, transparent);
 }
 
-.episode-strip i {
+.episode-strip.is-cells .episode-strip-visual > span.is-hovered,
+.episode-strip.is-cells .episode-strip-visual > span.is-related {
+  z-index: 1;
+  box-shadow: 0 0 0.5rem color-mix(in oklab, var(--present-tone) 35%, transparent);
+  background: color-mix(in oklab, var(--present-tone) 72%, transparent);
+  transform: scaleY(1.7);
+}
+
+.episode-strip.is-cells .episode-strip-visual > span.is-gap.is-hovered,
+.episode-strip.is-cells .episode-strip-visual > span.is-gap.is-related {
+  box-shadow: 0 0 0.55rem color-mix(in oklab, var(--gap-tone) 45%, transparent);
+  background: color-mix(in oklab, var(--gap-tone) 38%, transparent);
+}
+
+.episode-strip.is-cells .episode-strip-visual > span > i {
   position: absolute;
   clip: rect(0 0 0 0);
   width: 1px;
@@ -523,54 +552,116 @@
   overflow: hidden;
 }
 
-.episode-strip.is-track {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.episode-strip.is-track > div {
+.episode-strip.is-track .episode-strip-visual {
   position: relative;
-  grid-column: 1 / -1;
   height: 0.43rem;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in oklab, var(--present-tone) 38%, transparent);
 }
 
-.episode-strip.is-track > div span {
+.episode-strip.is-track .episode-strip-gap,
+.episode-strip.is-track .episode-strip-hover-marker {
   position: absolute;
   top: 0;
   bottom: 0;
   min-width: 3px;
-  background: color-mix(in oklab, var(--gap-tone) 84%, transparent);
 }
 
+.episode-strip.is-track .episode-strip-gap {
+  background: color-mix(in oklab, var(--gap-tone) 84%, transparent);
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
+
+.episode-strip.is-track .episode-strip-gap.is-related {
+  z-index: 1;
+  box-shadow: 0 0 0.55rem color-mix(in oklab, var(--gap-tone) 55%, transparent);
+  filter: brightness(1.35);
+}
+
+.episode-strip.is-track .episode-strip-hover-marker {
+  z-index: 2;
+  outline: 1px solid color-mix(in oklab, var(--present-tone) 82%, var(--color-base-content));
+  background: color-mix(in oklab, var(--present-tone) 68%, transparent);
+}
+
+.episode-strip.is-track .episode-strip-hover-marker.is-gap {
+  outline-color: color-mix(in oklab, var(--gap-tone) 86%, var(--color-base-content));
+  background: color-mix(in oklab, var(--gap-tone) 72%, transparent);
+}
+
+.episode-strip.is-cells small,
 .episode-strip.is-track small {
   color: color-mix(in oklab, var(--color-base-content) 39%, transparent);
   font-size: 0.56rem;
   font-variant-numeric: tabular-nums;
 }
 
+.episode-strip.is-cells small:last-child,
 .episode-strip.is-track small:last-child { grid-column: 3; }
+
+.episode-strip-tooltip {
+  position: absolute;
+  z-index: 4;
+  bottom: calc(100% + 0.3rem);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  border: 1px solid color-mix(in oklab, var(--present-tone) 28%, transparent);
+  border-radius: 0.4rem;
+  padding: 0.28rem 0.42rem;
+  color: color-mix(in oklab, var(--present-tone) 76%, var(--color-base-content));
+  background: color-mix(in oklab, var(--color-base-100) 94%, transparent);
+  box-shadow: 0 0.4rem 1rem rgb(0 0 0 / 0.2);
+  font-size: 0.58rem;
+  font-weight: 760;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.episode-strip-tooltip i {
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: var(--present-tone);
+}
+
+.episode-strip-tooltip.is-gap {
+  border-color: color-mix(in oklab, var(--gap-tone) 34%, transparent);
+  color: color-mix(in oklab, var(--gap-tone) 82%, var(--color-base-content));
+}
+
+.episode-strip-tooltip.is-gap i { background: var(--gap-tone); }
 
 .episode-gap-tokens {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.3rem;
   margin-top: 0.55rem;
 }
 
 .episode-gap-token {
-  border: 1px solid color-mix(in oklab, var(--row-tone) 23%, transparent);
+  border: 1px solid color-mix(in oklab, var(--row-tone) 48%, transparent);
   border-radius: 999px;
-  padding: 0.16rem 0.42rem;
-  color: color-mix(in oklab, var(--row-tone) 62%, var(--color-base-content));
-  background: color-mix(in oklab, var(--row-tone) 5%, transparent);
-  font-size: 0.57rem;
-  font-weight: 800;
+  padding: 0.24rem 0.52rem;
+  color: color-mix(in oklab, var(--row-tone) 82%, var(--color-base-content));
+  background: color-mix(in oklab, var(--row-tone) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--row-tone) 5%, transparent);
+  font-size: 0.64rem;
+  font-weight: 850;
   font-variant-numeric: tabular-nums;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+@media (hover: hover) {
+  .episode-gap-token:hover {
+    border-color: color-mix(in oklab, var(--row-tone) 68%, transparent);
+    background: color-mix(in oklab, var(--row-tone) 20%, transparent);
+    transform: translateY(-1px);
+  }
 }
 
 .episode-gap-actions {
@@ -582,8 +673,7 @@
   gap: 0.35rem;
 }
 
-.episode-gap-service-action,
-.episode-gap-open {
+.episode-gap-service-action {
   display: inline-flex;
   min-height: 2.1rem;
   align-items: center;
@@ -615,15 +705,6 @@
   color: color-mix(in oklab, var(--service-color) 74%, var(--color-base-content));
   background: color-mix(in oklab, var(--service-color) 10%, transparent);
 }
-
-.episode-gap-open svg { width: 0.85rem; transition: transform 140ms ease; }
-
-.episode-gap-open:hover {
-  color: color-mix(in oklab, var(--audit-tone) 75%, var(--color-base-content));
-  background: color-mix(in oklab, var(--audit-tone) 8%, transparent);
-}
-
-.episode-gap-open:hover svg { transform: translateX(2px); }
 
 .episode-gaps-empty {
   display: grid;
@@ -729,8 +810,7 @@
     margin: 0;
   }
 
-  .episode-gap-service-action,
-  .episode-gap-open {
+  .episode-gap-service-action {
     width: 100%;
     border: 1px solid color-mix(in oklab, var(--color-base-content) 8%, transparent);
   }
@@ -746,8 +826,10 @@
 @media (prefers-reduced-motion: reduce) {
   .episode-gap-row,
   .episode-gap-row::before,
-  .episode-gap-row-ambient,
-  .episode-gap-open svg { transition: none; }
+  .episode-gap-row-ambient { transition: none; }
   .episode-gap-row-ambient { animation: none; }
-  .episode-gap-open:hover svg { transform: none; }
+  .episode-strip.is-cells .episode-strip-visual > span,
+  .episode-strip.is-track .episode-strip-gap,
+  .episode-gap-token { transition: none; }
+  .episode-gap-token:hover { transform: none; }
 }

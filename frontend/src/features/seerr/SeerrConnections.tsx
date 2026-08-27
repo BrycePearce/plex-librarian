@@ -1,10 +1,11 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { ListPlus, Plus, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleHelp, ListPlus, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { useEffect } from "react";
 import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck.tsx";
 import { api } from "../../lib/api.ts";
 import type { SeerrInstance } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
+import { IntegrationCompatibilityIndicator } from "../integrationCompatibility/IntegrationCompatibilityIndicator.tsx";
 
 export function SeerrConnections({
   onConfigure,
@@ -17,7 +18,18 @@ export function SeerrConnections({
     queryKey: queryKeys.seerrIntegrations.all,
     queryFn: api.seerr.get,
   });
-  const test = useMutation({ mutationFn: api.seerr.testInstance });
+  const queryClient = useQueryClient();
+  const { data: compatibilityData } = useQuery({
+    queryKey: queryKeys.integrationCompatibility.all,
+    queryFn: api.integrationCompatibility.get,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const test = useMutation({
+    mutationFn: api.seerr.testInstance,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+  });
 
   useEffect(() => {
     if (!test.isSuccess) return;
@@ -81,6 +93,13 @@ export function SeerrConnections({
         >
           <ListPlus className="size-4 text-primary" />
           <span className="font-medium">{instance.name}</span>
+          <IntegrationCompatibilityIndicator
+            check={test.isSuccess && test.variables === instance.id
+              ? test.data
+              : compatibilityData?.checks.find((check) =>
+                check.kind === "seerr" && check.instanceId === instance.id
+              )}
+          />
           <span className="badge badge-warning badge-outline badge-xs">Beta</span>
           <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">
             {instance.url}
@@ -106,7 +125,11 @@ export function SeerrConnections({
             {test.isPending && test.variables === instance.id
               ? <span className="loading loading-spinner loading-xs" />
               : test.isSuccess && test.variables === instance.id
-              ? <AnimatedSuccessCheck />
+              ? test.data.status === "compatible"
+                ? <AnimatedSuccessCheck />
+                : test.data.status === "unverified"
+                ? <CircleHelp className="size-4 text-info" />
+                : <TriangleAlert className="size-4 text-warning" />
               : (
                 "Test"
               )}

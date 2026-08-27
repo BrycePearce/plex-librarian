@@ -234,7 +234,7 @@ export function normalizeArrUrl(raw: string): string {
   return parsed.toString().replace(/\/$/, '');
 }
 
-function versionAtLeast(actual: string, minimum: string): boolean {
+export function versionAtLeast(actual: string, minimum: string): boolean {
   const parse = (value: string): number[] | null => {
     const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(value.trim());
     return match ? match.slice(1).map(Number) : null;
@@ -252,6 +252,11 @@ function versionAtLeast(actual: string, minimum: string): boolean {
 export function supportedSonarrSeasonMutationVersion(actual: string): boolean {
   const major = /^(\d+)\./.exec(actual.trim());
   return major?.[1] === '4' && versionAtLeast(actual, SONARR_SEASON_COORDINATION_MIN_VERSION);
+}
+
+export function supportedRadarrPathAdoptionVersion(actual: string): boolean {
+  const major = /^(\d+)\./.exec(actual.trim());
+  return major?.[1] === '6' && versionAtLeast(actual, RADARR_PATH_ADOPTION_MIN_VERSION);
 }
 
 function stableJson(value: unknown): string {
@@ -1687,7 +1692,7 @@ export class ArrClient {
     }
     const status = await this.request<{ version?: string; appName?: string }>('/system/status');
     const version = typeof status.version === 'string' ? status.version.trim() : null;
-    if (!version || !versionAtLeast(version, RADARR_PATH_ADOPTION_MIN_VERSION)) {
+    if (!version || !supportedRadarrPathAdoptionVersion(version)) {
       return {
         available: false,
         version,
@@ -1695,8 +1700,8 @@ export class ArrClient {
         behaviorFingerprint: null,
         behavior: null,
         reason: version
-          ? `Radarr ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer is required for retained-path adoption; this instance reports ${version}`
-          : `Radarr version could not be verified; ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer is required for retained-path adoption`,
+          ? `Radarr ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer within major version 6 is required for retained-path adoption; this instance reports ${version}`
+          : `Radarr version could not be verified; ${RADARR_PATH_ADOPTION_MIN_VERSION} or newer within major version 6 is required for retained-path adoption`,
       };
     }
     const [mediaManagement, metadata, notifications] = await Promise.all([

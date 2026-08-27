@@ -263,9 +263,14 @@ export class QbittorrentClient {
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
-  async testConnection(): Promise<{ version: string }> {
+  async testConnection(): Promise<{ version: string; apiVersion: string }> {
     const version = await this.request<string>('/app/version', undefined, 'text');
-    return { version: version.trim() };
+    const apiVersion = await this.request<string>('/app/webapiVersion', undefined, 'text');
+    const torrents = await this.request<unknown>('/torrents/info?limit=1');
+    if (!Array.isArray(torrents)) {
+      throw new QbittorrentApiError('qBittorrent returned an invalid torrent-list response');
+    }
+    return { version: version.trim(), apiVersion: apiVersion.trim() };
   }
 
   async torrent(hash: string): Promise<QbittorrentTorrent | null> {

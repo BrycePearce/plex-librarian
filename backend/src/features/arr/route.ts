@@ -4,6 +4,7 @@ import { db, withTransaction } from '../../db/index.ts';
 import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { ArrClient, normalizeArrUrl } from '../../integrations/arr/client.ts';
+import { assessArr } from '../integrationCompatibility/assessment.ts';
 import {
   replaceArrInstanceMappings,
   replaceArrLibraryMappings,
@@ -185,9 +186,14 @@ router.post('/instances/:id/test', async (c) => {
   ).limit(1);
   if (!instance) return c.json({ error: 'instance not found' }, 404);
   try {
-    return c.json(
-      await new ArrClient(instance.type, instance.url, instance.apiKey).testConnection(),
-    );
+    const result = await new ArrClient(instance.type, instance.url, instance.apiKey)
+      .testConnection();
+    return c.json(assessArr({
+      key: `${instance.type}:${instance.id}`,
+      instanceId: instance.id,
+      kind: instance.type,
+      name: instance.name,
+    }, result.version));
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'connection test failed' },

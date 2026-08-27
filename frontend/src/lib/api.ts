@@ -15,6 +15,8 @@ import type {
   FinishRelocationResponse,
   IgnoredContentItem,
   IgnoredContentResponse,
+  IntegrationCompatibilityCheck,
+  IntegrationCompatibilityResponse,
   LibrariesResponse,
   Library,
   MediaRemovalSummary,
@@ -684,7 +686,7 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string | null }>(`/integrations/arr/instances/${id}/test`, {
+      apiFetch<IntegrationCompatibilityCheck>(`/integrations/arr/instances/${id}/test`, {
         method: "POST",
       }),
     deleteInstance: (id: number) =>
@@ -710,7 +712,7 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string }>(`/integrations/qbittorrent/instances/${id}/test`, {
+      apiFetch<IntegrationCompatibilityCheck>(`/integrations/qbittorrent/instances/${id}/test`, {
         method: "POST",
       }),
     deleteInstance: (id: number) =>
@@ -740,13 +742,16 @@ export const api = {
         body: JSON.stringify(instance),
       }),
     testInstance: (id: number) =>
-      apiFetch<{ version: string | null }>(`/integrations/seerr/instances/${id}/test`, {
+      apiFetch<IntegrationCompatibilityCheck>(`/integrations/seerr/instances/${id}/test`, {
         method: "POST",
       }),
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/seerr/instances/${id}`, {
         method: "DELETE",
       }),
+  },
+  integrationCompatibility: {
+    get: () => apiFetch<IntegrationCompatibilityResponse>("/integrations/compatibility"),
   },
   users: {
     invitations: (

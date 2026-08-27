@@ -13,6 +13,7 @@ export type * from './types/episodeGaps.ts';
 export type * from './types/integrations/arr.ts';
 export type * from './types/integrations/qbittorrent.ts';
 export type * from './types/integrations/seerr.ts';
+export type * from './types/integrations/compatibility.ts';
 
 export type * from './types/media/versions.ts';
 export type * from './types/media/duplicates.ts';

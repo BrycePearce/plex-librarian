@@ -61,14 +61,17 @@ Deno.test('client supports qBittorrent authentication bypass without credentials
     calls.push(url);
     assertEquals(new Headers(init?.headers).has('Cookie'), false);
     if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.endsWith('/app/webapiVersion')) return Promise.resolve(new Response('2.11.4'));
     return Promise.resolve(Response.json([]));
   });
 
-  assertEquals(await client.testConnection(), { version: 'v5.1.2' });
+  assertEquals(await client.testConnection(), { version: 'v5.1.2', apiVersion: '2.11.4' });
   assertEquals(await client.torrent('a'.repeat(40)), null);
   assertEquals(calls, [
     'http://qbit:8080/api/v2/app/version',
     'http://qbit:8080/api/v2/app/version',
+    'http://qbit:8080/api/v2/app/webapiVersion',
+    'http://qbit:8080/api/v2/torrents/info?limit=1',
     `http://qbit:8080/api/v2/torrents/info?hashes=${'a'.repeat(40)}`,
   ]);
 });
@@ -90,14 +93,18 @@ Deno.test('client supports qBittorrent 5.2 login responses with no content', asy
       );
     }
     assertEquals(new Headers(init?.headers).get('Cookie'), 'SID_8080=abc');
+    if (url.endsWith('/app/webapiVersion')) return Promise.resolve(new Response('2.14.1'));
+    if (url.includes('/torrents/info')) return Promise.resolve(Response.json([]));
     return Promise.resolve(new Response('v5.2.0'));
   });
 
-  assertEquals(await client.testConnection(), { version: 'v5.2.0' });
+  assertEquals(await client.testConnection(), { version: 'v5.2.0', apiVersion: '2.14.1' });
   assertEquals(calls, [
     'http://qbit:8080/api/v2/app/version',
     'http://qbit:8080/api/v2/auth/login',
     'http://qbit:8080/api/v2/app/version',
+    'http://qbit:8080/api/v2/app/webapiVersion',
+    'http://qbit:8080/api/v2/torrents/info?limit=1',
   ]);
 });
 
@@ -115,10 +122,27 @@ Deno.test('client accepts any successful login status when a session cookie is i
         }),
       );
     }
+    if (url.endsWith('/app/webapiVersion')) return Promise.resolve(new Response('3.0'));
+    if (url.includes('/torrents/info')) return Promise.resolve(Response.json([]));
     return Promise.resolve(new Response('vFuture'));
   });
 
-  assertEquals(await client.testConnection(), { version: 'vFuture' });
+  assertEquals(await client.testConnection(), { version: 'vFuture', apiVersion: '3.0' });
+});
+
+Deno.test('connection test exercises the bounded torrent-list endpoint', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.2.0'));
+    if (url.endsWith('/app/webapiVersion')) return Promise.resolve(new Response('2.14.1'));
+    return Promise.resolve(Response.json({ torrents: [] }));
+  });
+
+  await assertRejects(
+    () => client.testConnection(),
+    QbittorrentApiError,
+    'invalid torrent-list response',
+  );
 });
 
 Deno.test('client rejects failed authentication', async () => {

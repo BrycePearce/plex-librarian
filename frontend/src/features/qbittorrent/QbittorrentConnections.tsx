@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Download, Plus, Trash2 } from "lucide-react";
+import { CircleHelp, Download, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { QbittorrentInstance } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { AnimatedSuccessCheck } from "../arr/AnimatedSuccessCheck.tsx";
+import { IntegrationCompatibilityIndicator } from "../integrationCompatibility/IntegrationCompatibilityIndicator.tsx";
 
 export function QbittorrentConnections({
   onConfigure,
@@ -17,8 +18,18 @@ export function QbittorrentConnections({
     queryKey: queryKeys.qbittorrentIntegrations.all,
     queryFn: api.qbittorrent.get,
   });
-  const test = useMutation({ mutationFn: api.qbittorrent.testInstance });
   const queryClient = useQueryClient();
+  const { data: compatibilityData } = useQuery({
+    queryKey: queryKeys.integrationCompatibility.all,
+    queryFn: api.integrationCompatibility.get,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const test = useMutation({
+    mutationFn: api.qbittorrent.testInstance,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+  });
   const [mapping, setMapping] = useState({
     instanceKey: "",
     qbittorrentPath: "",
@@ -111,6 +122,11 @@ export function QbittorrentConnections({
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3">
           <Download className="size-4 text-primary" />
           <span className="text-sm font-medium">qBittorrent (environment)</span>
+          <IntegrationCompatibilityIndicator
+            check={compatibilityData?.checks.find((check) =>
+              check.kind === "qbittorrent" && check.instanceId === null
+            )}
+          />
           <span className="badge badge-sm badge-outline">
             Managed by environment variables
           </span>
@@ -123,6 +139,13 @@ export function QbittorrentConnections({
         >
           <Download className="size-4 text-primary" />
           <span className="font-medium">{instance.name}</span>
+          <IntegrationCompatibilityIndicator
+            check={test.isSuccess && test.variables === instance.id
+              ? test.data
+              : compatibilityData?.checks.find((check) =>
+                check.kind === "qbittorrent" && check.instanceId === instance.id
+              )}
+          />
           <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">
             {instance.url}
           </span>
@@ -147,7 +170,11 @@ export function QbittorrentConnections({
             {test.isPending && test.variables === instance.id
               ? <span className="loading loading-spinner loading-xs" />
               : test.isSuccess && test.variables === instance.id
-              ? <AnimatedSuccessCheck />
+              ? test.data.status === "compatible"
+                ? <AnimatedSuccessCheck />
+                : test.data.status === "unverified"
+                ? <CircleHelp className="size-4 text-info" />
+                : <TriangleAlert className="size-4 text-warning" />
               : (
                 "Test"
               )}

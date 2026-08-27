@@ -17,6 +17,7 @@ import downloadCleanupPreview from './features/mediaDeletion/previewRoute.ts';
 import proxy from './features/proxy/route.ts';
 import qbittorrent from './features/qbittorrent/route.ts';
 import seerr from './features/seerr/route.ts';
+import integrationCompatibility from './features/integrationCompatibility/route.ts';
 import settings from './features/settings/route.ts';
 import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
@@ -61,6 +62,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/proxy', proxy);
   app.route('/api/integrations/qbittorrent', qbittorrent);
   app.route('/api/integrations/seerr', seerr);
+  app.route('/api/integrations/compatibility', integrationCompatibility);
   app.route('/api/settings', settings);
   app.route('/api/sync', sync);
   app.route('/api/users', users);

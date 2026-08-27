@@ -15,6 +15,7 @@ import type {
   UpdateQbittorrentInstanceRequest,
 } from '@plex-librarian/shared/types.ts';
 import { qbitMappingsOverlap, validateQbittorrentPathMapping } from './pathMappings.ts';
+import { assessQbittorrent } from '../integrationCompatibility/assessment.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -167,13 +168,21 @@ router.post('/instances/:id/test', async (c) => {
   )).limit(1);
   if (!instance) return c.json({ error: 'instance not found' }, 404);
   try {
-    return c.json(
-      await new QbittorrentClient(
-        instance.url,
-        instance.username,
-        instance.password,
-      ).testConnection(),
-    );
+    const result = await new QbittorrentClient(
+      instance.url,
+      instance.username,
+      instance.password,
+    ).testConnection();
+    return c.json(assessQbittorrent(
+      {
+        key: `qbittorrent:${instance.id}`,
+        instanceId: instance.id,
+        kind: 'qbittorrent',
+        name: instance.name,
+      },
+      result.version,
+      result.apiVersion,
+    ));
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'connection test failed' },

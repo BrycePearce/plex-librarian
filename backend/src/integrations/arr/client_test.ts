@@ -256,6 +256,7 @@ Deno.test('Radarr retained-path capability is feature-gated at 6.3.0.10514', asy
       ['6.3.0.10513', false],
       ['6.3.0.10514', true],
       ['6.4.0.1', true],
+      ['7.0.0.0', false],
     ] as const
   ) {
     const client = new ArrClient(

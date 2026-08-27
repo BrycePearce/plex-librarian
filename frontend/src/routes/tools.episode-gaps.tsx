@@ -1,4 +1,4 @@
-import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
+import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ArrowDownUp,
   CheckCircle2,
-  ChevronRight,
   Clock3,
   ExternalLink,
   Library,
@@ -487,6 +486,9 @@ function EpisodeGapRow(
   { row, sonarrTargets }: { row: EpisodeGapSeason; sonarrTargets: SonarrTarget[] },
 ) {
   const irregular = row.status === "irregular";
+  const [highlightedRange, setHighlightedRange] = useState<
+    { start: number; end: number } | null
+  >(null);
   const ambientPoster = row.showThumb
     ? `/api/proxy/thumb?path=${encodeURIComponent(row.showThumb)}&width=96&height=144`
     : null;
@@ -506,24 +508,19 @@ function EpisodeGapRow(
       style={paletteStyle}
     >
       {palette && <span className="episode-gap-row-ambient" aria-hidden="true" />}
-      <Link
-        to="/libraries/$key/shows/$ratingKey"
-        params={{ key: row.libraryKey, ratingKey: row.showRatingKey }}
-        className="episode-gap-show group/poster"
-      >
+      <div className="episode-gap-show">
         <PosterThumb
           thumb={row.showThumb}
           width={96}
           height={144}
           className="episode-gap-poster"
-          hoverScope="poster"
         />
         <div>
           <span className="episode-gap-library">{row.libraryTitle}</span>
           <h3>{row.showTitle}</h3>
           <p>{row.seasonTitle || `Season ${row.seasonIndex}`}</p>
         </div>
-      </Link>
+      </div>
       <div className="episode-gap-finding">
         <div className="episode-gap-finding-title">
           {irregular ? "Numbering needs review" : (
@@ -539,12 +536,19 @@ function EpisodeGapRow(
               row.presentCount + row.missingCount
             } episodes present · inspected E${row.firstEpisodeIndex}–E${row.lastEpisodeIndex}`}
         </p>
-        {!irregular && <EpisodeStrip row={row} />}
-        <div className="episode-gap-tokens">
+        {!irregular && <EpisodeStrip row={row} highlightedRange={highlightedRange} />}
+        <div className="episode-gap-tokens" aria-label={irregular ? undefined : "Missing episodes"}>
           {irregular
             ? <span className="episode-gap-token">Irregular metadata</span>
             : row.missingRanges.map((range) => (
-              <span className="episode-gap-token" key={`${range.start}-${range.end}`}>
+              <span
+                className="episode-gap-token"
+                key={`${range.start}-${range.end}`}
+                onPointerEnter={(event) => {
+                  if (event.pointerType !== "touch") setHighlightedRange(range);
+                }}
+                onPointerLeave={() => setHighlightedRange(null)}
+              >
                 {range.start === range.end ? `E${range.start}` : `E${range.start}–E${range.end}`}
               </span>
             ))}
@@ -577,13 +581,6 @@ function EpisodeGapRow(
             <span>{sonarrTargets.length > 1 ? target.name : "Sonarr"}</span>
           </a>
         ))}
-        <Link
-          className="episode-gap-open"
-          to="/libraries/$key/shows/$ratingKey"
-          params={{ key: row.libraryKey, ratingKey: row.showRatingKey }}
-        >
-          <span>Details</span> <ChevronRight aria-hidden />
-        </Link>
       </nav>
     </article>
   );
@@ -625,12 +622,29 @@ function usePosterPalette(url: string | null): {
   return { palette, rowRef };
 }
 
-function EpisodeStrip({ row }: { row: EpisodeGapSeason }) {
+function EpisodeStrip({
+  row,
+  highlightedRange,
+}: {
+  row: EpisodeGapSeason;
+  highlightedRange: { start: number; end: number } | null;
+}) {
   const first = row.firstEpisodeIndex!;
   const last = row.lastEpisodeIndex!;
   const width = last - first + 1;
+  const [hoveredEpisode, setHoveredEpisode] = useState<number | null>(null);
   const missing = (index: number) =>
     row.missingRanges.some((range) => index >= range.start && index <= range.end);
+  const highlighted = (index: number) =>
+    highlightedRange !== null &&
+    index >= highlightedRange.start &&
+    index <= highlightedRange.end;
+  const tooltipRange = hoveredEpisode !== null
+    ? { start: hoveredEpisode, end: hoveredEpisode }
+    : highlightedRange;
+  const tooltipMissing = hoveredEpisode !== null
+    ? missing(hoveredEpisode)
+    : highlightedRange !== null;
   const label = `Episodes ${first} through ${last}; missing ${
     row.missingRanges.map((range) =>
       range.start === range.end
@@ -641,19 +655,52 @@ function EpisodeStrip({ row }: { row: EpisodeGapSeason }) {
   if (width <= 32) {
     return (
       <div className="episode-strip is-cells" role="img" aria-label={label}>
-        {Array.from({ length: width }, (_, i) => first + i).map((index) => (
-          <span className={missing(index) ? "is-gap" : ""} key={index}>
-            <i>{index}</i>
-          </span>
-        ))}
+        <div className="episode-strip-visual">
+          {Array.from({ length: width }, (_, i) => first + i).map((index) => (
+            <span
+              className={`${missing(index) ? "is-gap" : ""} ${
+                hoveredEpisode === index ? "is-hovered" : ""
+              } ${highlighted(index) ? "is-related" : ""}`}
+              key={index}
+              onPointerEnter={(event) => {
+                if (event.pointerType !== "touch") setHoveredEpisode(index);
+              }}
+              onPointerLeave={() => setHoveredEpisode(null)}
+            >
+              <i>{index}</i>
+            </span>
+          ))}
+        </div>
+        <EpisodeStripTooltip
+          range={tooltipRange}
+          first={first}
+          width={width}
+          missing={tooltipMissing}
+        />
+        <small>E{first}</small>
+        <small>E{last}</small>
       </div>
     );
   }
   return (
     <div className="episode-strip is-track" role="img" aria-label={label}>
-      <div>
+      <div
+        className="episode-strip-visual"
+        onPointerMove={(event) => {
+          if (event.pointerType === "touch") return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const position = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width - 1);
+          setHoveredEpisode(first + Math.floor((position / bounds.width) * width));
+        }}
+        onPointerLeave={() => setHoveredEpisode(null)}
+      >
         {row.missingRanges.map((range) => (
           <span
+            className={`episode-strip-gap ${
+              highlightedRange?.start === range.start && highlightedRange.end === range.end
+                ? "is-related"
+                : ""
+            }`}
             key={range.start}
             style={{
               left: `${((range.start - first) / width) * 100}%`,
@@ -661,10 +708,52 @@ function EpisodeStrip({ row }: { row: EpisodeGapSeason }) {
             }}
           />
         ))}
+        {hoveredEpisode !== null && (
+          <span
+            className={`episode-strip-hover-marker ${missing(hoveredEpisode) ? "is-gap" : ""}`}
+            style={{
+              left: `${((hoveredEpisode - first) / width) * 100}%`,
+              width: `${(1 / width) * 100}%`,
+            }}
+          />
+        )}
       </div>
+      <EpisodeStripTooltip
+        range={tooltipRange}
+        first={first}
+        width={width}
+        missing={tooltipMissing}
+      />
       <small>E{first}</small>
       <small>E{last}</small>
     </div>
+  );
+}
+
+function EpisodeStripTooltip({
+  range,
+  first,
+  width,
+  missing,
+}: {
+  range: { start: number; end: number } | null;
+  first: number;
+  width: number;
+  missing: boolean;
+}) {
+  if (range === null) return null;
+  const position = (((range.start + range.end) / 2 - first + 0.5) / width) * 100;
+  const episodeLabel = range.start === range.end
+    ? `E${range.start}`
+    : `E${range.start}–E${range.end}`;
+  return (
+    <span
+      aria-hidden="true"
+      className={`episode-strip-tooltip ${missing ? "is-gap" : ""}`}
+      style={{ left: `${Math.min(Math.max(position, 7), 93)}%` }}
+    >
+      {episodeLabel} <i aria-hidden /> {missing ? "Missing" : "Present"}
+    </span>
   );
 }
 

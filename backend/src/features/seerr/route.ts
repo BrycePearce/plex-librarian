@@ -9,6 +9,7 @@ import type {
   SeerrIntegrationSettings,
   UpdateSeerrInstanceRequest,
 } from '@plex-librarian/shared/types.ts';
+import { compatibleSeerr } from '../integrationCompatibility/assessment.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -125,9 +126,13 @@ router.post('/instances/:id/test', async (c) => {
     .limit(1);
   if (!instance) return c.json({ error: 'instance not found' }, 404);
   try {
-    return c.json(
-      await new SeerrClient(instance.url, instance.apiKey).testConnection(),
-    );
+    const result = await new SeerrClient(instance.url, instance.apiKey).testConnection();
+    return c.json(compatibleSeerr({
+      key: `seerr:${instance.id}`,
+      instanceId: instance.id,
+      kind: 'seerr',
+      name: instance.name,
+    }, result.version));
   } catch (error) {
     return c.json(
       {

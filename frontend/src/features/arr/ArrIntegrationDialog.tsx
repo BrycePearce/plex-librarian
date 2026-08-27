@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { PlugZap, Plus, Server, Trash2, X } from "lucide-react";
+import { CircleHelp, PlugZap, Plus, Server, Trash2, TriangleAlert, X } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
@@ -11,6 +11,7 @@ import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections.ts
 import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard.tsx";
 import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
 import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard.tsx";
+import { IntegrationCompatibilityIndicator } from "../integrationCompatibility/IntegrationCompatibilityIndicator.tsx";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -21,6 +22,12 @@ export function ArrIntegrationDialog() {
   const { data, isLoading, error } = useQuery({
     queryKey: queryKeys.arrIntegrations.all,
     queryFn: api.arr.get,
+  });
+  const { data: compatibilityData } = useQuery({
+    queryKey: queryKeys.integrationCompatibility.all,
+    queryFn: api.integrationCompatibility.get,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
   const {
     data: libraryData,
@@ -81,11 +88,15 @@ export function ArrIntegrationDialog() {
     mutationFn: api.arr.deleteInstance,
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.arrIntegrations.all });
+      await qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
       setPendingRemoval(null);
       setView("manager");
     },
   });
-  const test = useMutation({ mutationFn: api.arr.testInstance });
+  const test = useMutation({
+    mutationFn: api.arr.testInstance,
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+  });
   const createNamespaceMapping = useMutation({
     mutationFn: api.settings.createPlexPathMapping,
     onSuccess: async () => {
@@ -106,6 +117,7 @@ export function ArrIntegrationDialog() {
       await qc.invalidateQueries({
         queryKey: queryKeys.qbittorrentIntegrations.all,
       });
+      await qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
       setPendingQbittorrentRemoval(null);
       setView("manager");
     },
@@ -114,6 +126,7 @@ export function ArrIntegrationDialog() {
     mutationFn: api.seerr.deleteInstance,
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.seerrIntegrations.all });
+      await qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
       setPendingSeerrRemoval(null);
       setView("manager");
     },
@@ -250,6 +263,13 @@ export function ArrIntegrationDialog() {
                       {instance.type === "radarr" ? "Radarr" : "Sonarr"}
                     </span>
                     <span className="font-medium">{instance.name}</span>
+                    <IntegrationCompatibilityIndicator
+                      check={test.isSuccess && test.variables === instance.id
+                        ? test.data
+                        : compatibilityData?.checks.find((check) =>
+                          check.kind === instance.type && check.instanceId === instance.id
+                        )}
+                    />
                     <span className="min-w-0 flex-1 truncate text-xs text-base-content/50">
                       {instance.url}
                     </span>
@@ -274,7 +294,11 @@ export function ArrIntegrationDialog() {
                       {test.isPending && test.variables === instance.id
                         ? <span className="loading loading-spinner loading-xs" />
                         : test.isSuccess && test.variables === instance.id
-                        ? <AnimatedSuccessCheck />
+                        ? test.data.status === "compatible"
+                          ? <AnimatedSuccessCheck />
+                          : test.data.status === "unverified"
+                          ? <CircleHelp className="size-4 text-info" />
+                          : <TriangleAlert className="size-4 text-warning" />
                         : "Test"}
                     </button>
                     <button
@@ -463,6 +487,7 @@ export function ArrIntegrationDialog() {
             void qc.invalidateQueries({
               queryKey: queryKeys.arrIntegrations.all,
             });
+            void qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
             dialogRef.current?.close();
           }}
         />
@@ -478,6 +503,7 @@ export function ArrIntegrationDialog() {
             void qc.invalidateQueries({
               queryKey: queryKeys.qbittorrentIntegrations.all,
             });
+            void qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
             dialogRef.current?.close();
           }}
         />
@@ -492,6 +518,7 @@ export function ArrIntegrationDialog() {
           onCancel={() => dialogRef.current?.close()}
           onSaved={() => {
             void qc.invalidateQueries({ queryKey: queryKeys.seerrIntegrations.all });
+            void qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
             dialogRef.current?.close();
           }}
         />
