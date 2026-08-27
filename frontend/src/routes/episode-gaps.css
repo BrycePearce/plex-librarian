@@ -39,18 +39,34 @@
   color: var(--audit-tone);
 }
 
+.episode-gaps-scope-note {
+  display: block;
+  margin-top: 0.2rem;
+  color: color-mix(in oklab, var(--color-base-content) 34%, transparent);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
 .episode-gaps-summary { min-width: 0; }
 
 .episode-gaps-overview {
   position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(22rem, 1fr);
   min-height: 8.4rem;
+  overflow: hidden;
   border-color: color-mix(in oklab, var(--color-base-content) 9%, transparent);
   background:
     radial-gradient(circle at 10% 50%, color-mix(in oklab, var(--gap-tone) 6%, transparent), transparent 38%),
     color-mix(in oklab, var(--color-base-200) 84%, transparent);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.055);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.episode-gaps-overview > * {
+  position: relative;
+  z-index: 1;
 }
 
 .episode-gaps-overview::before {
@@ -60,6 +76,21 @@
   width: 2px;
   border-radius: 0 2px 2px 0;
   background: color-mix(in oklab, var(--gap-tone) 68%, transparent);
+  box-shadow: 0 0 0 transparent;
+  transition: inset 180ms ease, width 180ms ease, box-shadow 180ms ease;
+}
+
+.episode-gaps-overview::after {
+  position: absolute;
+  z-index: 0;
+  content: "";
+  inset: -55% auto -55% -9%;
+  width: 38%;
+  opacity: 0;
+  background: radial-gradient(circle, color-mix(in oklab, var(--gap-tone) 13%, transparent), transparent 68%);
+  pointer-events: none;
+  transform: scale(0.82);
+  transition: opacity 220ms ease, transform 260ms ease;
 }
 
 .episode-gaps-overview-main {
@@ -80,9 +111,13 @@
   border-radius: 1rem;
   color: color-mix(in oklab, var(--gap-tone) 82%, var(--color-base-content));
   background: color-mix(in oklab, var(--gap-tone) 8%, transparent);
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
-.episode-gaps-overview-icon svg { width: 1.35rem; }
+.episode-gaps-overview-icon svg {
+  width: 1.35rem;
+  transition: filter 180ms ease, transform 180ms ease;
+}
 
 .episode-gaps-overview-kicker {
   color: color-mix(in oklab, var(--color-base-content) 58%, transparent);
@@ -140,10 +175,12 @@
   justify-content: center;
   gap: 0.7rem;
   padding: 1.2rem;
+  transition: background-color 160ms ease;
 }
 
 .episode-gap-stat + .episode-gap-stat { border-left: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent); }
 .episode-gap-stat.is-irregular { --stat-tone: var(--irregular-tone); }
+.episode-gap-stat.is-irregular.is-clear { --stat-tone: var(--color-success); }
 
 .episode-gap-stat > svg {
   width: 1rem;
@@ -153,6 +190,7 @@
   padding: 0.58rem;
   color: color-mix(in oklab, var(--stat-tone) 68%, var(--color-base-content));
   background: color-mix(in oklab, var(--stat-tone) 7%, transparent);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .episode-gap-stat > div { display: grid; min-width: 0; }
@@ -171,6 +209,50 @@
   font-size: 1.35rem;
   line-height: 1.05;
   letter-spacing: -0.04em;
+  transition: color 160ms ease, text-shadow 160ms ease;
+}
+
+@media (hover: hover) {
+  .episode-gaps-overview:hover {
+    border-color: color-mix(in oklab, var(--gap-tone) 22%, transparent);
+    box-shadow: 0 14px 34px rgb(0 0 0 / 0.1), 0 0 0 1px color-mix(in oklab, var(--gap-tone) 5%, transparent);
+  }
+
+  .episode-gaps-overview:hover::before {
+    inset-block: 0.8rem;
+    width: 3px;
+    box-shadow: 0 0 1rem color-mix(in oklab, var(--gap-tone) 42%, transparent);
+  }
+
+  .episode-gaps-overview:hover::after {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .episode-gaps-overview:hover .episode-gaps-overview-icon {
+    border-color: color-mix(in oklab, var(--gap-tone) 36%, transparent);
+    background: color-mix(in oklab, var(--gap-tone) 13%, transparent);
+    box-shadow: 0 0.55rem 1.4rem color-mix(in oklab, var(--gap-tone) 14%, transparent);
+    transform: translateY(-2px) scale(1.03);
+  }
+
+  .episode-gaps-overview:hover .episode-gaps-overview-icon svg {
+    filter: drop-shadow(0 0 0.3rem color-mix(in oklab, var(--gap-tone) 34%, transparent));
+    transform: scale(1.06);
+  }
+
+  .episode-gap-stat:hover { background: color-mix(in oklab, var(--stat-tone) 4%, transparent); }
+
+  .episode-gap-stat:hover > svg {
+    background: color-mix(in oklab, var(--stat-tone) 12%, transparent);
+    box-shadow: 0 0.4rem 1rem color-mix(in oklab, var(--stat-tone) 13%, transparent);
+    transform: translateY(-1px) scale(1.06);
+  }
+
+  .episode-gap-stat:hover strong {
+    color: color-mix(in oklab, var(--stat-tone) 72%, var(--color-base-content));
+    text-shadow: 0 0 0.7rem color-mix(in oklab, var(--stat-tone) 22%, transparent);
+  }
 }
 
 .episode-gap-stat small {
@@ -178,69 +260,6 @@
   color: color-mix(in oklab, var(--color-base-content) 42%, transparent);
   font-size: 0.62rem;
   line-height: 1.3;
-}
-
-.episode-gaps-scope {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
-  border-color: color-mix(in oklab, var(--color-base-content) 8%, transparent);
-  background: color-mix(in oklab, var(--color-base-200) 66%, transparent);
-}
-
-.episode-gaps-scope p {
-  margin: 0;
-  color: color-mix(in oklab, var(--color-base-content) 59%, transparent);
-  font-size: 0.76rem;
-  line-height: 1.5;
-}
-
-.episode-gaps-scope p strong { color: var(--color-base-content); }
-
-.episode-gaps-scope-sequence {
-  display: flex;
-  align-items: center;
-  gap: 0.28rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.episode-gaps-scope-sequence span {
-  display: grid;
-  min-width: 1.8rem;
-  height: 1.65rem;
-  place-items: center;
-  border-radius: 0.45rem;
-  color: color-mix(in oklab, var(--present-tone) 65%, var(--color-base-content));
-  background: color-mix(in oklab, var(--present-tone) 12%, transparent);
-  font-size: 0.61rem;
-  font-weight: 800;
-}
-
-.episode-gaps-scope-sequence .is-gap {
-  border: 1px solid color-mix(in oklab, var(--gap-tone) 48%, transparent);
-  color: var(--gap-tone);
-  background: color-mix(in oklab, var(--gap-tone) 9%, transparent);
-}
-
-.episode-gaps-legend {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  color: color-mix(in oklab, var(--color-base-content) 43%, transparent);
-  font-size: 0.61rem;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.episode-gaps-legend span { display: flex; align-items: center; gap: 0.3rem; }
-.episode-gaps-legend i { width: 0.65rem; height: 0.35rem; border-radius: 2px; }
-.episode-gaps-legend .is-present { background: color-mix(in oklab, var(--present-tone) 46%, transparent); }
-
-.episode-gaps-legend .is-missing {
-  border: 1px solid color-mix(in oklab, var(--gap-tone) 72%, transparent);
-  background: color-mix(in oklab, var(--gap-tone) 10%, transparent);
 }
 
 .episode-gaps-stale {
@@ -777,13 +796,6 @@
     padding: 1.1rem;
   }
 
-  .episode-gaps-scope { grid-template-columns: 1fr; }
-
-  .episode-gaps-legend {
-    padding-top: 0.7rem;
-    border-top: 1px solid color-mix(in oklab, var(--color-base-content) 7%, transparent);
-  }
-
   .episode-gaps-filters { grid-template-columns: 1fr 1fr; }
   .episode-gaps-search { grid-column: 1 / -1; }
   .episode-gaps-status { grid-column: 1 / -1; }
@@ -824,9 +836,21 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .episode-gaps-overview,
+  .episode-gaps-overview::before,
+  .episode-gaps-overview::after,
+  .episode-gaps-overview-icon,
+  .episode-gaps-overview-icon svg,
+  .episode-gap-stat,
+  .episode-gap-stat > svg,
+  .episode-gap-stat strong,
   .episode-gap-row,
   .episode-gap-row::before,
   .episode-gap-row-ambient { transition: none; }
+  .episode-gaps-overview:hover,
+  .episode-gaps-overview:hover .episode-gaps-overview-icon,
+  .episode-gaps-overview:hover .episode-gaps-overview-icon svg,
+  .episode-gap-stat:hover > svg { transform: none; }
   .episode-gap-row-ambient { animation: none; }
   .episode-strip.is-cells .episode-strip-visual > span,
   .episode-strip.is-track .episode-strip-gap,

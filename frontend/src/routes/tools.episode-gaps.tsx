@@ -196,7 +196,15 @@ function EpisodeGapsPage() {
         eyebrow="Library health tool"
         title="Episode Gaps"
         icon={ScanLine}
-        description="Find the holes hiding between episodes already in your TV library."
+        description={
+          <>
+            Find the holes hiding between episodes already in your TV library.
+            <span className="episode-gaps-scope-note">
+              Checks gaps between Plex's first and last known episode; missing season starts or
+              endings aren't detected.
+            </span>
+          </>
+        }
         actions={
           <div className="episode-gaps-refresh">
             <Clock3 />{" "}
@@ -219,29 +227,6 @@ function EpisodeGapsPage() {
       )}
 
       <Summary data={data} loading={isLoading} />
-      <div role="note">
-        <DataSurface className="episode-gaps-scope">
-          <div className="episode-gaps-scope-sequence" aria-hidden="true">
-            <span>E3</span>
-            <span>E4</span>
-            <span className="is-gap">—</span>
-            <span>E6</span>
-          </div>
-          <p>
-            <strong>Internal gaps only.</strong>{" "}
-            This inspects numbering between the first and last episode Plex already shows. It does
-            not verify episodes before or after that range.
-          </p>
-          <div className="episode-gaps-legend" aria-label="Episode range legend">
-            <span>
-              <i className="is-present" /> Present
-            </span>
-            <span>
-              <i className="is-missing" /> Missing
-            </span>
-          </div>
-        </DataSurface>
-      </div>
       {data?.libraryAudits.some((audit) =>
         audit.episodeAuditSyncedAt === null
       ) && !unaudited && (
@@ -361,6 +346,8 @@ function Summary(
     loading: boolean;
   },
 ) {
+  const irregularCount = data?.summary.irregularSeasonCount;
+  const auditClean = !loading && irregularCount === 0;
   return (
     <section className="episode-gaps-summary" aria-label="Episode audit summary">
       <DataSurface className="episode-gaps-overview">
@@ -393,14 +380,14 @@ function Summary(
               <small>TV libraries checked</small>
             </div>
           </div>
-          <div className="episode-gap-stat is-irregular">
-            <AlertTriangle />
+          <div className={`episode-gap-stat is-irregular ${auditClean ? "is-clear" : ""}`}>
+            {auditClean ? <CheckCircle2 /> : <AlertTriangle />}
             <div>
-              <span>Needs review</span>
+              <span>{auditClean ? "Audit clean" : "Needs review"}</span>
               {loading
                 ? <span className="skeleton h-6 w-10" />
-                : <strong>{data?.summary.irregularSeasonCount.toLocaleString() ?? "—"}</strong>}
-              <small>Irregular seasons</small>
+                : <strong>{irregularCount?.toLocaleString() ?? "—"}</strong>}
+              <small>{auditClean ? "No irregular seasons" : "Irregular seasons"}</small>
             </div>
           </div>
         </div>
