@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { derivePosterPalette } from "./posterPalette.ts";
 
-Deno.test("poster palette samples four regions and normalizes them for dark text-safe fields", () => {
+Deno.test("derivePosterPalette samples and normalizes four poster regions", () => {
   const width = 4;
   const height = 4;
   const pixels = new Uint8ClampedArray(width * height * 4);
@@ -30,6 +30,6 @@ Deno.test("poster palette samples four regions and normalizes them for dark text
   });
 });
 
-Deno.test("poster palette rejects unusable pixel buffers", () => {
+Deno.test("derivePosterPalette rejects unusable pixel buffers", () => {
   assertEquals(derivePosterPalette(new Uint8ClampedArray(), 0, 0), null);
 });

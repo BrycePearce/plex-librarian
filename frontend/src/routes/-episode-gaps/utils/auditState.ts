@@ -1,5 +1,6 @@
 import type { EpisodeGapsResponse } from "@shared/types";
 
+/** Keeps retained findings visible while a replacement audit is incomplete. */
 export function hasRetainedEpisodeAuditFindings(data: EpisodeGapsResponse): boolean {
   return data.rows.length > 0 || data.summary.gapSeasonCount > 0 ||
     data.summary.irregularSeasonCount > 0;

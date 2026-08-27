@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { cleanEpisodeGapFixture, episodeGapFixture } from "./fixtures.ts";
-import { isEpisodeAuditUninitialized } from "./state.ts";
+import { cleanEpisodeGapFixture, episodeGapFixture } from "../fixtures.ts";
+import { isEpisodeAuditUninitialized } from "./auditState.ts";
 
 Deno.test("retained episode findings stay visible while every audit marker is null", () => {
   const refreshing = {

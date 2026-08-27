@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 
+/** Darkened poster colors used by the ambient row background. */
 export interface PosterPalette {
   topLeft: string;
   topRight: string;
