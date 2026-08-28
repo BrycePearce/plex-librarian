@@ -1,5 +1,6 @@
-import { ArrowDownUp, Search } from "lucide-react";
+import { ArrowDownUp } from "lucide-react";
 import type { EpisodeGapsSort } from "@shared/types";
+import { ExpandableSearch } from "../../../components/ExpandableSearch.tsx";
 import type { EpisodeGapsSearch } from "../types/index.ts";
 
 export function EpisodeGapsFilters(
@@ -12,16 +13,13 @@ export function EpisodeGapsFilters(
 ) {
   return (
     <div className="episode-gaps-filters" aria-label="Gap filters">
-      <label className="episode-gaps-search">
-        <Search />
-        <span className="sr-only">Search by show title</span>
-        <input
-          value={search.search ?? ""}
-          onChange={(event) => update({ search: event.target.value })}
-          placeholder="Search show title…"
-        />
-        {pending && <span className="loading loading-spinner loading-xs" />}
-      </label>
+      <ExpandableSearch
+        search={search.search ?? ""}
+        pending={pending}
+        onSearchChange={(value) => update({ search: value })}
+        label="Search by show title"
+        placeholder="Search show titles..."
+      />
       <label>
         <span>Library</span>
         <select
