@@ -2,8 +2,10 @@ import type { EpisodeGapsResponse } from "@shared/types";
 
 /** Keeps retained findings visible while a replacement audit is incomplete. */
 export function hasRetainedEpisodeAuditFindings(data: EpisodeGapsResponse): boolean {
-  return data.rows.length > 0 || data.summary.gapSeasonCount > 0 ||
-    data.summary.irregularSeasonCount > 0;
+  return data.rows.length > 0 ||
+    (data.scope === "episode"
+      ? data.summary.gapSeasonCount > 0 || data.summary.irregularSeasonCount > 0
+      : data.summary.gapShowCount > 0 || data.summary.irregularShowCount > 0);
 }
 
 export function isEpisodeAuditUninitialized(data: EpisodeGapsResponse): boolean {

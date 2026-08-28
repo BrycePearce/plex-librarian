@@ -28,6 +28,23 @@ export interface EpisodeRangeAudit {
   gapRanges: EpisodeRange[] | null;
 }
 
+export type SeasonAuditReason =
+  | 'invalid_season_index'
+  | 'season_index_too_large'
+  | 'range_limit_exceeded'
+  | 'conflicting_season_identity'
+  | 'no_numbered_seasons';
+
+export interface SeasonRangeAudit {
+  status: 'ok' | 'gaps' | 'irregular' | 'excluded';
+  reason: SeasonAuditReason | null;
+  firstIndex: number | null;
+  lastIndex: number | null;
+  presentCount: number | null;
+  gapCount: number | null;
+  gapRanges: EpisodeRange[] | null;
+}
+
 export class EpisodeRangeSet {
   private ranges: EpisodeRange[] = [];
   private failure: EpisodeAuditReason | null = null;
@@ -89,44 +106,102 @@ export class EpisodeRangeSet {
     }
     if (this.ranges.length === 0) return emptyAudit('irregular', 'invalid_episode_index');
 
-    let presentCount = 0;
-    const gaps: EpisodeRange[] = [];
-    let gapCount = 0;
-    for (let i = 0; i < this.ranges.length; i++) {
-      const range = this.ranges[i]!;
-      const width = range.end - range.start + 1;
-      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(presentCount + width)) {
-        return emptyAudit('irregular', 'range_limit_exceeded');
-      }
-      presentCount += width;
-      const next = this.ranges[i + 1];
-      if (!next) continue;
-      const missing = next.start - range.end - 1;
-      if (!Number.isSafeInteger(missing) || !Number.isSafeInteger(gapCount + missing)) {
-        return emptyAudit('irregular', 'range_limit_exceeded');
-      }
-      gapCount += missing;
-      gaps.push({ start: range.end + 1, end: next.start - 1 });
-      if (gaps.length > MAX_MISSING_RANGES) {
-        return emptyAudit('irregular', 'range_limit_exceeded');
-      }
-    }
+    const result = auditInternalRanges(this.ranges);
+    if (!result) return emptyAudit('irregular', 'range_limit_exceeded');
     return {
-      status: gapCount > 0 ? 'gaps' : 'ok',
+      status: result.gapCount > 0 ? 'gaps' : 'ok',
       reason: null,
       firstIndex: this.ranges[0]!.start,
       lastIndex: this.ranges.at(-1)!.end,
-      presentCount,
-      gapCount,
-      gapRanges: gaps,
+      presentCount: result.presentCount,
+      gapCount: result.gapCount,
+      gapRanges: result.gapRanges,
     };
   }
+}
+
+export function auditSeasonIndexes(
+  rawIndexes: Iterable<number>,
+  conflictingIdentity = false,
+): SeasonRangeAudit {
+  if (conflictingIdentity) return emptySeasonAudit('irregular', 'conflicting_season_identity');
+  const indexes = new Set<number>();
+  for (const rawIndex of rawIndexes) {
+    if (rawIndex === 0) continue;
+    if (!Number.isSafeInteger(rawIndex) || rawIndex < 0) {
+      return emptySeasonAudit('irregular', 'invalid_season_index');
+    }
+    if (rawIndex > MAX_SEASON_INDEX) {
+      return emptySeasonAudit('irregular', 'season_index_too_large');
+    }
+    indexes.add(rawIndex);
+  }
+  if (indexes.size === 0) return emptySeasonAudit('excluded', 'no_numbered_seasons');
+  const ranges: EpisodeRange[] = [];
+  for (const index of [...indexes].sort((a, b) => a - b)) {
+    const last = ranges.at(-1);
+    if (last && last.end + 1 === index) last.end = index;
+    else ranges.push({ start: index, end: index });
+    if (ranges.length > MAX_PRESENT_RANGES) {
+      return emptySeasonAudit('irregular', 'range_limit_exceeded');
+    }
+  }
+  const result = auditInternalRanges(ranges);
+  if (!result) return emptySeasonAudit('irregular', 'range_limit_exceeded');
+  return {
+    status: result.gapCount > 0 ? 'gaps' : 'ok',
+    reason: null,
+    firstIndex: ranges[0]!.start,
+    lastIndex: ranges.at(-1)!.end,
+    presentCount: result.presentCount,
+    gapCount: result.gapCount,
+    gapRanges: result.gapRanges,
+  };
+}
+
+function auditInternalRanges(ranges: EpisodeRange[]): {
+  presentCount: number;
+  gapCount: number;
+  gapRanges: EpisodeRange[];
+} | null {
+  let presentCount = 0;
+  const gapRanges: EpisodeRange[] = [];
+  let gapCount = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    const range = ranges[i]!;
+    const width = range.end - range.start + 1;
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(presentCount + width)) return null;
+    presentCount += width;
+    const next = ranges[i + 1];
+    if (!next) continue;
+    const missing = next.start - range.end - 1;
+    if (!Number.isSafeInteger(missing) || !Number.isSafeInteger(gapCount + missing)) return null;
+    gapCount += missing;
+    gapRanges.push({ start: range.end + 1, end: next.start - 1 });
+    if (gapRanges.length > MAX_MISSING_RANGES) return null;
+  }
+  return { presentCount, gapCount, gapRanges };
 }
 
 function emptyAudit(
   status: 'irregular' | 'excluded',
   reason: EpisodeAuditReason,
 ): EpisodeRangeAudit {
+  return {
+    status,
+    reason,
+    firstIndex: null,
+    lastIndex: null,
+    presentCount: null,
+    gapCount: null,
+    gapRanges: null,
+  };
+}
+
+function emptySeasonAudit(
+  status: 'irregular' | 'excluded',
+  reason: SeasonAuditReason,
+): SeasonRangeAudit {
   return {
     status,
     reason,

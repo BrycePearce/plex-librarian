@@ -1,14 +1,14 @@
-import { and, lt, notInArray, sql } from 'drizzle-orm';
-import { sqliteWriteBatches } from '../../db/batch.ts';
+import { and, asc, eq, gt, lt, notInArray, sql } from 'drizzle-orm';
+import { SQLITE_WRITE_BATCH_ROWS, sqliteWriteBatches } from '../../db/batch.ts';
 import { db, withTransaction } from '../../db/index.ts';
-import { episodeMediaVersions, seasons } from '../../db/schema.ts';
+import { episodeMediaVersions, items, seasons } from '../../db/schema.ts';
 import { episodeVersionsByLibrary, seasonsByLibrary } from '../../db/scope.ts';
 import type {
   PlexClient,
   PlexEpisodeMediaVersion,
   PlexLibrary,
 } from '../../integrations/plex/index.ts';
-import { EpisodeRangeSet } from './episodeRanges.ts';
+import { auditSeasonIndexes, EpisodeRangeSet } from './episodeRanges.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 
@@ -53,6 +53,7 @@ export async function syncShowSizes(
   // is bounded by shows × avg-seasons (not episode count) — for a 10k-show library with
   // ~5 seasons each that's ~50k entries, well within acceptable memory.
   const seasonMap = new Map<string, SeasonAgg>();
+  const conflictingShowRatingKeys = new Set<string>();
   // Already filtered to genuine duplicates (2+ valid Media entries) by
   // mapEpisodeMediaVersions — stays small (bounded by duplicate-episode count, not
   // total episode count) so accumulating the whole thing in memory is cheap, unlike
@@ -68,6 +69,8 @@ export async function syncShowSizes(
       if (agg) {
         if (agg.showRatingKey !== ep.showRatingKey || agg.seasonIndex !== ep.seasonIndex) {
           agg.episodeRanges.invalidate('conflicting_season_identity');
+          conflictingShowRatingKeys.add(agg.showRatingKey);
+          conflictingShowRatingKeys.add(ep.showRatingKey);
         } else {
           agg.episodeRanges.insert(ep.episodeIndex);
         }
@@ -162,6 +165,54 @@ export async function syncShowSizes(
           updatedAt: excl(seasons.updatedAt),
         },
       });
+  }
+
+  const seasonIndexesByShow = new Map<string, number[]>();
+  for (const [, agg] of entries) {
+    const indexes = seasonIndexesByShow.get(agg.showRatingKey) ?? [];
+    indexes.push(agg.seasonIndex);
+    seasonIndexesByShow.set(agg.showRatingKey, indexes);
+  }
+  const protectedShows = new Set(protectedShowRatingKeys);
+  let afterRatingKey: string | null = null;
+  while (true) {
+    const currentShows = await db.select({ ratingKey: items.ratingKey }).from(items).where(and(
+      eq(items.serverId, serverId),
+      eq(items.libraryKey, lib.key),
+      eq(items.type, 'show'),
+      eq(items.updatedAt, now),
+      afterRatingKey === null ? undefined : gt(items.ratingKey, afterRatingKey),
+    )).orderBy(asc(items.ratingKey)).limit(SQLITE_WRITE_BATCH_ROWS);
+    if (currentShows.length === 0) break;
+    withTransaction((client) => {
+      const statement = client.prepare(`
+        UPDATE items SET
+          season_first_index = ?, season_last_index = ?, season_present_count = ?,
+          season_gap_count = ?, season_gap_ranges_json = ?, season_audit_status = ?,
+          season_audit_reason = ?
+        WHERE server_id = ? AND library_key = ? AND rating_key = ? AND type = 'show'
+      `);
+      for (const show of currentShows) {
+        if (suppressAllProjectionPruning || protectedShows.has(show.ratingKey)) continue;
+        const audit = auditSeasonIndexes(
+          seasonIndexesByShow.get(show.ratingKey) ?? [],
+          conflictingShowRatingKeys.has(show.ratingKey),
+        );
+        statement.run(
+          audit.firstIndex,
+          audit.lastIndex,
+          audit.presentCount,
+          audit.gapCount,
+          audit.gapRanges ? JSON.stringify(audit.gapRanges) : null,
+          audit.status,
+          audit.reason,
+          serverId,
+          lib.key,
+          show.ratingKey,
+        );
+      }
+    });
+    afterRatingKey = currentShows.at(-1)!.ratingKey;
   }
 
   // Only reached once the parent season rows above are guaranteed to exist (this

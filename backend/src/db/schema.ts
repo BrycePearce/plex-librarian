@@ -72,6 +72,13 @@ export const items = sqliteTable(
     year: integer('year'),
     tmdbId: integer('tmdb_id'),
     tvdbId: integer('tvdb_id'),
+    seasonFirstIndex: integer('season_first_index'),
+    seasonLastIndex: integer('season_last_index'),
+    seasonPresentCount: integer('season_present_count'),
+    seasonGapCount: integer('season_gap_count'),
+    seasonGapRangesJson: text('season_gap_ranges_json'),
+    seasonAuditStatus: text('season_audit_status'),
+    seasonAuditReason: text('season_audit_reason'),
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
@@ -97,6 +104,12 @@ export const items = sqliteTable(
     tvdbIdIdx: index('items_server_tvdb_id_idx').on(table.serverId, table.tvdbId).where(
       sql`${table.tvdbId} IS NOT NULL`,
     ),
+    seasonGapIdx: index('items_season_gaps_idx')
+      .on(table.serverId, table.seasonGapCount)
+      .where(sql`${table.seasonAuditStatus} = 'gaps'`),
+    librarySeasonGapIdx: index('items_season_gaps_library_idx')
+      .on(table.serverId, table.libraryKey, table.seasonGapCount)
+      .where(sql`${table.seasonAuditStatus} = 'gaps'`),
   }),
 );
 

@@ -1,5 +1,10 @@
 import { assertEquals } from '@std/assert';
-import { decodeEpisodeGapProjection, type EpisodeGapProjectionRow } from './projection.ts';
+import {
+  decodeEpisodeGapProjection,
+  decodeSeasonGapProjection,
+  type EpisodeGapProjectionRow,
+  type SeasonGapProjectionRow,
+} from './projection.ts';
 
 const base: EpisodeGapProjectionRow = {
   libraryKey: 'tv',
@@ -35,5 +40,29 @@ Deno.test('episode gap projection decoder validates ranges and scalar agreement'
       presentCount: 2,
     }).status,
     'irregular',
+  );
+});
+
+Deno.test('season gap projection decoder validates ranges and scalar agreement', () => {
+  const season: SeasonGapProjectionRow = {
+    libraryKey: 'tv',
+    libraryTitle: 'TV',
+    showRatingKey: 'show',
+    showTitle: 'Show',
+    showThumb: null,
+    firstSeasonIndex: 1,
+    lastSeasonIndex: 4,
+    presentCount: 3,
+    missingCount: 1,
+    missingRangesJson: '[{"start":3,"end":3}]',
+    status: 'gaps',
+    reason: null,
+    episodeAuditSyncedAt: 100,
+  };
+  assertEquals(decodeSeasonGapProjection(season).missingRanges, [{ start: 3, end: 3 }]);
+  assertEquals(decodeSeasonGapProjection({ ...season, missingCount: 2 }).status, 'irregular');
+  assertEquals(
+    decodeSeasonGapProjection({ ...season, missingRangesJson: 'broken' }).reason,
+    'invalid_projection',
   );
 });

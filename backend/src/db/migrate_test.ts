@@ -29,6 +29,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'deletion_operations_request_unique',
         'deletion_targets',
         'download_file_delete_attempts',
+        'items_season_gaps_idx',
+        'items_season_gaps_library_idx',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'media_removals',
@@ -66,6 +68,8 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
         'deletion_operations_request_unique',
         'deletion_targets',
         'download_file_delete_attempts',
+        'items_season_gaps_idx',
+        'items_season_gaps_library_idx',
         'items_server_tmdb_id_idx',
         'items_server_tvdb_id_idx',
         'media_removals',
@@ -145,6 +149,22 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
       ],
     );
     removalColumns.finalize();
+    const itemColumns = sqlite.prepare("PRAGMA table_info('items')");
+    assertEquals(
+      itemColumns.values().map((column) => column[1]).filter((name) =>
+        String(name).startsWith('season_')
+      ),
+      [
+        'season_first_index',
+        'season_last_index',
+        'season_present_count',
+        'season_gap_count',
+        'season_gap_ranges_json',
+        'season_audit_status',
+        'season_audit_reason',
+      ],
+    );
+    itemColumns.finalize();
     const requestColumns = sqlite.prepare("PRAGMA table_info('seerr_requests')");
     assertEquals(
       requestColumns.values().map((column) => column[1]).filter((name) =>
@@ -168,6 +188,24 @@ Deno.test('full migration chain creates current tables, columns, and indexes', a
     // directory will clean that disposable fixture without making the test flaky.
     if (Deno.build.os !== 'windows') await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test('0056 resets TV gap-audit confidence until season projections are synced', async () => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`
+    CREATE TABLE libraries (type TEXT NOT NULL, episode_audit_synced_at INTEGER);
+    CREATE TABLE items (server_id INTEGER NOT NULL, library_key TEXT NOT NULL);
+    INSERT INTO libraries VALUES ('show', 100), ('movie', 200);
+  `);
+  runMigrationSql(
+    sqlite,
+    await Deno.readTextFile(resolve(migrationsDir, '0056_silky_power_man.sql')),
+  );
+  assertEquals(
+    sqlite.prepare('SELECT type, episode_audit_synced_at FROM libraries ORDER BY type').values(),
+    [['movie', 200], ['show', null]],
+  );
+  sqlite.close();
 });
 
 Deno.test('0052 invalidates existing TV history confidence until season dates are synced', async () => {

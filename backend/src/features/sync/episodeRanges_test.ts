@@ -1,5 +1,6 @@
 import { assertEquals } from '@std/assert';
 import {
+  auditSeasonIndexes,
   EpisodeRangeSet,
   MAX_EPISODE_INDEX,
   MAX_MISSING_RANGES,
@@ -86,4 +87,54 @@ Deno.test('episode ranges never infer leading or trailing gaps', () => {
   assertEquals(result.firstIndex, 2);
   assertEquals(result.lastIndex, 8);
   assertEquals(result.gapCount, 0);
+});
+
+Deno.test('season indexes report only internal gaps and deduplicate observations', () => {
+  assertEquals(auditSeasonIndexes([1, 2, 2, 4, 5]), {
+    status: 'gaps',
+    reason: null,
+    firstIndex: 1,
+    lastIndex: 5,
+    presentCount: 4,
+    gapCount: 1,
+    gapRanges: [{ start: 3, end: 3 }],
+  });
+  assertEquals(auditSeasonIndexes([1, 2, 5]), {
+    status: 'gaps',
+    reason: null,
+    firstIndex: 1,
+    lastIndex: 5,
+    presentCount: 3,
+    gapCount: 2,
+    gapRanges: [{ start: 3, end: 4 }],
+  });
+  assertEquals(auditSeasonIndexes([2, 3, 4]).gapCount, 0);
+  assertEquals(auditSeasonIndexes([1, 2, 3]).gapCount, 0);
+});
+
+Deno.test('season indexes ignore specials and reject unsafe or bounded-invalid values', () => {
+  assertEquals(auditSeasonIndexes([0]), {
+    status: 'excluded',
+    reason: 'no_numbered_seasons',
+    firstIndex: null,
+    lastIndex: null,
+    presentCount: null,
+    gapCount: null,
+    gapRanges: null,
+  });
+  assertEquals(auditSeasonIndexes([0, 1, 3]).gapCount, 1);
+  assertEquals(auditSeasonIndexes([-1]).reason, 'invalid_season_index');
+  assertEquals(auditSeasonIndexes([Number.MAX_SAFE_INTEGER + 1]).reason, 'invalid_season_index');
+  assertEquals(auditSeasonIndexes([MAX_SEASON_INDEX + 1]).reason, 'season_index_too_large');
+  assertEquals(auditSeasonIndexes([1, 3], true).reason, 'conflicting_season_identity');
+  assertEquals(
+    auditSeasonIndexes(Array.from({ length: MAX_PRESENT_RANGES + 1 }, (_, index) => index + 1))
+      .status,
+    'ok',
+  );
+  assertEquals(
+    auditSeasonIndexes(Array.from({ length: MAX_PRESENT_RANGES + 1 }, (_, index) => index * 2 + 1))
+      .reason,
+    'range_limit_exceeded',
+  );
 });

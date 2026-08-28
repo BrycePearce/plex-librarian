@@ -3,7 +3,13 @@ import type { EpisodeGapsResponse } from "@shared/types";
 import { api } from "../../../lib/api.ts";
 import { queryKeys } from "../../../lib/queryKeys.ts";
 import type { EpisodeGapSonarrTarget, EpisodeGapsSearch } from "../types/index.ts";
-import { cleanEpisodeGapFixture, episodeGapFixture, largeEpisodeGapFixture } from "../fixtures.ts";
+import {
+  cleanEpisodeGapFixture,
+  cleanSeasonGapFixture,
+  episodeGapFixture,
+  largeEpisodeGapFixture,
+  seasonGapFixture,
+} from "../fixtures.ts";
 import { EPISODE_GAPS_PAGE_SIZE } from "../utils/search.ts";
 
 export function useEpisodeGapsData(search: EpisodeGapsSearch, isSyncing: boolean) {
@@ -12,7 +18,7 @@ export function useEpisodeGapsData(search: EpisodeGapsSearch, isSyncing: boolean
   const query = useQuery({
     queryKey: queryKeys.episodeGaps.list(params),
     queryFn: () => api.tools.episodeGaps(params),
-    placeholderData: (previous) => previous,
+    placeholderData: (previous) => previous?.scope === search.scope ? previous : undefined,
     enabled: (entry) => !fixture && (!isSyncing || entry.state.data === undefined),
   });
   const { data: arrSettings } = useQuery({
@@ -21,33 +27,37 @@ export function useEpisodeGapsData(search: EpisodeGapsSearch, isSyncing: boolean
     enabled: !fixture,
   });
 
+  const scopedFixture = search.scope === "season" ? seasonGapFixture : episodeGapFixture;
+  const scopedCleanFixture = search.scope === "season"
+    ? cleanSeasonGapFixture
+    : cleanEpisodeGapFixture;
   const fixtureData: EpisodeGapsResponse | undefined = fixture === "gaps" || fixture === "error"
-    ? episodeGapFixture
+    ? scopedFixture
     : fixture === "syncing"
     ? {
-      ...episodeGapFixture,
-      libraryAudits: episodeGapFixture.libraryAudits.map((audit) => ({
+      ...scopedFixture,
+      libraryAudits: scopedFixture.libraryAudits.map((audit) => ({
         ...audit,
         episodeAuditSyncedAt: null,
       })),
-      rows: episodeGapFixture.rows.map((row) => ({ ...row, episodeAuditSyncedAt: null })),
-      summary: { ...episodeGapFixture.summary, checkedLibraryCount: 0 },
-    }
+      rows: scopedFixture.rows.map((row) => ({ ...row, episodeAuditSyncedAt: null })),
+      summary: { ...scopedFixture.summary, checkedLibraryCount: 0 },
+    } as EpisodeGapsResponse
     : fixture === "large"
-    ? largeEpisodeGapFixture
+    ? search.scope === "episode" ? largeEpisodeGapFixture : seasonGapFixture
     : fixture === "clean"
-    ? cleanEpisodeGapFixture
+    ? scopedCleanFixture
     : fixture === "no-tv"
-    ? { ...cleanEpisodeGapFixture, libraryAudits: [] }
+    ? { ...scopedCleanFixture, libraryAudits: [] } as EpisodeGapsResponse
     : fixture === "unaudited"
     ? {
-      ...cleanEpisodeGapFixture,
-      libraryAudits: cleanEpisodeGapFixture.libraryAudits.map((audit) => ({
+      ...scopedCleanFixture,
+      libraryAudits: scopedCleanFixture.libraryAudits.map((audit) => ({
         ...audit,
         episodeAuditSyncedAt: null,
       })),
-      summary: { ...cleanEpisodeGapFixture.summary, checkedLibraryCount: 0 },
-    }
+      summary: { ...scopedCleanFixture.summary, checkedLibraryCount: 0 },
+    } as EpisodeGapsResponse
     : undefined;
 
   const sonarrInstances = new Map(
@@ -67,8 +77,9 @@ export function useEpisodeGapsData(search: EpisodeGapsSearch, isSyncing: boolean
   }
 
   return {
-    data: fixtureData ?? query.data,
-    isLoading: fixture === "loading" || (!fixture && query.isLoading),
+    data: fixtureData ?? (query.data?.scope === search.scope ? query.data : undefined),
+    isLoading: fixture === "loading" ||
+      (!fixture && (query.isLoading || query.data?.scope !== search.scope)),
     query,
     sonarrTargetsByLibrary,
   };

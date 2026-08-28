@@ -7,6 +7,7 @@ import { Pagination } from "../components/Pagination.tsx";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { SyncDataNotice } from "../components/SyncDataNotice.tsx";
 import { EpisodeGapRow } from "./-episode-gaps/components/EpisodeGapRow.tsx";
+import { SeasonGapRow } from "./-episode-gaps/components/SeasonGapRow.tsx";
 import { EpisodeGapsFilters } from "./-episode-gaps/components/EpisodeGapsFilters.tsx";
 import {
   EpisodeGapsEmpty,
@@ -16,7 +17,11 @@ import { EpisodeGapsSummary } from "./-episode-gaps/components/EpisodeGapsSummar
 import { useEpisodeGapsData } from "./-episode-gaps/hooks/useEpisodeGapsData.ts";
 import type { EpisodeGapsSearch } from "./-episode-gaps/types/index.ts";
 import { formatEpisodeAuditTime } from "./-episode-gaps/utils/formatters.ts";
-import { EPISODE_GAPS_PAGE_SIZE, validateEpisodeGapsSearch } from "./-episode-gaps/utils/search.ts";
+import {
+  EPISODE_GAPS_PAGE_SIZE,
+  switchEpisodeGapsScope,
+  validateEpisodeGapsSearch,
+} from "./-episode-gaps/utils/search.ts";
 import {
   hasRetainedEpisodeAuditFindings,
   isEpisodeAuditUninitialized,
@@ -28,6 +33,7 @@ export const Route = createFileRoute("/tools/episode-gaps")({
   search: {
     middlewares: [
       stripSearchParams({
+        scope: "episode",
         status: "gaps",
         sort: "missingCount",
         order: "desc",
@@ -68,19 +74,46 @@ function EpisodeGapsPage() {
   const unaudited = data ? isEpisodeAuditUninitialized(data) : false;
   const hasRetainedAudit = data ? hasRetainedEpisodeAuditFindings(data) : false;
   const filtered = Boolean(search.search || search.libraryKey || search.status !== "gaps");
+  const seasonScope = search.scope === "season";
+  const switchScope = (scope: "episode" | "season") =>
+    void navigate({
+      search: switchEpisodeGapsScope(search, scope),
+      replace: true,
+    });
 
   return (
     <div className={`episode-gaps-page workspace-page ${workspaceToneClass("cobalt")} space-y-6`}>
       <PageHeader
         eyebrow="Library health tool"
-        title="Episode Gaps"
+        title={
+          <span className="episode-gaps-title-row">
+            <span>{seasonScope ? "Season Gaps" : "Episode Gaps"}</span>
+            <span className="episode-gaps-scope-switch" role="tablist" aria-label="Gap scope">
+              {(["episode", "season"] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  role="tab"
+                  aria-selected={search.scope === scope}
+                  className={search.scope === scope ? "is-active" : ""}
+                  onClick={() => switchScope(scope)}
+                >
+                  {scope === "episode" ? "Episodes" : "Seasons"}
+                </button>
+              ))}
+            </span>
+          </span>
+        }
         icon={ScanLine}
         description={
           <>
-            Find the holes hiding between episodes already in your TV library.
+            {seasonScope
+              ? "Find internal holes between numbered seasons already in each Plex show."
+              : "Find the holes hiding between episodes already in a Plex season."}
             <span className="episode-gaps-scope-note">
-              Checks gaps between Plex's first and last known episode; missing season starts or
-              endings aren't detected.
+              {seasonScope
+                ? "This is not a complete-series check; leading and trailing season gaps aren't inferred."
+                : "Checks between Plex's first and last known episode; leading and trailing episode gaps aren't inferred."}
             </span>
           </>
         }
@@ -100,12 +133,12 @@ function EpisodeGapsPage() {
 
       {isSyncing && (
         <SyncDataNotice>
-          Episode audits are refreshing with the current Plex sync. Settled findings remain visible
+          Gap audits are refreshing with the current Plex sync. Settled findings remain visible
           until the full library audit completes.
         </SyncDataNotice>
       )}
 
-      <EpisodeGapsSummary data={data} loading={isLoading} />
+      <EpisodeGapsSummary data={data} loading={isLoading} scope={search.scope} />
       {data?.libraryAudits.some((audit) =>
         audit.episodeAuditSyncedAt === null
       ) && !unaudited && (
@@ -118,7 +151,7 @@ function EpisodeGapsPage() {
 
       <div className="episode-gaps-sticky-controls workspace-sticky-header sticky top-0 z-20">
         <CollectionToolbar
-          eyebrow="Season findings"
+          eyebrow={seasonScope ? "Show findings" : "Season findings"}
           title="Inspected ranges"
           meta={data
             ? `${data.total.toLocaleString()} result${data.total === 1 ? "" : "s"}`
@@ -136,10 +169,10 @@ function EpisodeGapsPage() {
         ? (
           <ErrorAlert
             message={search.fixture === "error"
-              ? "The saved episode audit could not be loaded."
+              ? `The saved ${seasonScope ? "season" : "episode"} audit could not be loaded.`
               : query.error instanceof Error
               ? query.error.message
-              : "Failed to load episode gaps"}
+              : `Failed to load ${seasonScope ? "season" : "episode"} gaps`}
             onRetry={() => void query.refetch()}
           />
         )
@@ -150,15 +183,17 @@ function EpisodeGapsPage() {
           <EpisodeGapsEmpty
             icon={Tv2}
             title="TV libraries required"
-            description="Connect and sync at least one Plex TV library to audit episode numbering."
+            description={`Connect and sync at least one Plex TV library to audit ${
+              seasonScope ? "season" : "episode"
+            } numbering.`}
           />
         )
         : unaudited
         ? (
           <EpisodeGapsEmpty
             icon={Clock3}
-            title="Episode audit not ready"
-            description="Your TV libraries are known, but none has completed an episode audit yet. A successful full sync will populate this tool."
+            title="Gap audit not ready"
+            description="Your TV libraries are known, but none has completed a gap audit yet. A successful full sync will populate this tool."
           />
         )
         : data?.rows.length === 0
@@ -190,21 +225,33 @@ function EpisodeGapsPage() {
             <EpisodeGapsEmpty
               icon={CheckCircle2}
               title="No internal gaps found"
-              description={data.summary.irregularSeasonCount > 0
-                ? "No trustworthy internal gaps were found in the current results. Irregular seasons still need review, and this does not claim seasons are complete."
+              description={seasonScope
+                ? data.scope === "season" && data.summary.irregularShowCount > 0
+                  ? "No trustworthy internal season gaps were found. Irregular show or season-numbering metadata still needs review."
+                  : "No internal gaps were found between the first and last numbered season in each audited show. This does not claim each series is complete."
+                : data.scope === "episode" && data.summary.irregularSeasonCount > 0
+                ? "No trustworthy internal episode gaps were found. Irregular seasons still need review."
                 : "No internal gaps were found between the first and last episode in each audited season. This does not claim the seasons are complete."}
               celebrate
             />
           )
         : (
           <div className="episode-gaps-results">
-            {data?.rows.map((row) => (
-              <EpisodeGapRow
-                key={`${row.libraryKey}:${row.seasonRatingKey}`}
-                row={row}
-                sonarrTargets={sonarrTargetsByLibrary.get(row.libraryKey) ?? []}
-              />
-            ))}
+            {data?.scope === "episode"
+              ? data.rows.map((row) => (
+                <EpisodeGapRow
+                  key={`${row.libraryKey}:${row.seasonRatingKey}`}
+                  row={row}
+                  sonarrTargets={sonarrTargetsByLibrary.get(row.libraryKey) ?? []}
+                />
+              ))
+              : data?.rows.map((row) => (
+                <SeasonGapRow
+                  key={`${row.libraryKey}:${row.showRatingKey}`}
+                  row={row}
+                  sonarrTargets={sonarrTargetsByLibrary.get(row.libraryKey) ?? []}
+                />
+              ))}
           </div>
         )}
 

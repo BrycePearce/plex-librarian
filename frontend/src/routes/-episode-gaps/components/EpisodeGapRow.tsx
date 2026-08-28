@@ -66,7 +66,16 @@ export function EpisodeGapRow(
               row.presentCount + row.missingCount
             } episodes present · inspected E${row.firstEpisodeIndex}–E${row.lastEpisodeIndex}`}
         </p>
-        {!irregular && <EpisodeStrip row={row} highlightedRange={highlightedRange} />}
+        {!irregular && (
+          <NumberedRangeStrip
+            first={row.firstEpisodeIndex!}
+            last={row.lastEpisodeIndex!}
+            missingRanges={row.missingRanges}
+            highlightedRange={highlightedRange}
+            prefix="E"
+            noun="episode"
+          />
+        )}
         <div className="episode-gap-tokens" aria-label={irregular ? undefined : "Missing episodes"}>
           {irregular
             ? <span className="episode-gap-token">Irregular metadata</span>
@@ -116,19 +125,25 @@ export function EpisodeGapRow(
   );
 }
 
-function EpisodeStrip({
-  row,
+export function NumberedRangeStrip({
+  first,
+  last,
+  missingRanges,
   highlightedRange,
+  prefix,
+  noun,
 }: {
-  row: EpisodeGapSeason;
+  first: number;
+  last: number;
+  missingRanges: Array<{ start: number; end: number }>;
   highlightedRange: { start: number; end: number } | null;
+  prefix: "E" | "S";
+  noun: "episode" | "season";
 }) {
-  const first = row.firstEpisodeIndex!;
-  const last = row.lastEpisodeIndex!;
   const width = last - first + 1;
   const [hoveredEpisode, setHoveredEpisode] = useState<number | null>(null);
   const missing = (index: number) =>
-    row.missingRanges.some((range) => index >= range.start && index <= range.end);
+    missingRanges.some((range) => index >= range.start && index <= range.end);
   const highlighted = (index: number) =>
     highlightedRange !== null &&
     index >= highlightedRange.start &&
@@ -139,11 +154,11 @@ function EpisodeStrip({
   const tooltipMissing = hoveredEpisode !== null
     ? missing(hoveredEpisode)
     : highlightedRange !== null;
-  const label = `Episodes ${first} through ${last}; missing ${
-    row.missingRanges.map((range) =>
+  const label = `${noun === "episode" ? "Episodes" : "Seasons"} ${first} through ${last}; missing ${
+    missingRanges.map((range) =>
       range.start === range.end
-        ? `episode ${range.start}`
-        : `episodes ${range.start} through ${range.end}`
+        ? `${noun} ${range.start}`
+        : `${noun}s ${range.start} through ${range.end}`
     ).join(", ")
   }`;
 
@@ -166,14 +181,15 @@ function EpisodeStrip({
             </span>
           ))}
         </div>
-        <EpisodeStripTooltip
+        <NumberedRangeStripTooltip
           range={tooltipRange}
           first={first}
           width={width}
           missing={tooltipMissing}
+          prefix={prefix}
         />
-        <small>E{first}</small>
-        <small>E{last}</small>
+        <small>{prefix}{first}</small>
+        <small>{prefix}{last}</small>
       </div>
     );
   }
@@ -190,7 +206,7 @@ function EpisodeStrip({
         }}
         onPointerLeave={() => setHoveredEpisode(null)}
       >
-        {row.missingRanges.map((range) => (
+        {missingRanges.map((range) => (
           <span
             className={`episode-strip-gap ${
               highlightedRange?.start === range.start && highlightedRange.end === range.end
@@ -214,41 +230,44 @@ function EpisodeStrip({
           />
         )}
       </div>
-      <EpisodeStripTooltip
+      <NumberedRangeStripTooltip
         range={tooltipRange}
         first={first}
         width={width}
         missing={tooltipMissing}
+        prefix={prefix}
       />
-      <small>E{first}</small>
-      <small>E{last}</small>
+      <small>{prefix}{first}</small>
+      <small>{prefix}{last}</small>
     </div>
   );
 }
 
-function EpisodeStripTooltip({
+function NumberedRangeStripTooltip({
   range,
   first,
   width,
   missing,
+  prefix,
 }: {
   range: { start: number; end: number } | null;
   first: number;
   width: number;
   missing: boolean;
+  prefix: "E" | "S";
 }) {
   if (range === null) return null;
   const position = (((range.start + range.end) / 2 - first + 0.5) / width) * 100;
-  const episodeLabel = range.start === range.end
-    ? `E${range.start}`
-    : `E${range.start}–E${range.end}`;
+  const rangeLabel = range.start === range.end
+    ? `${prefix}${range.start}`
+    : `${prefix}${range.start}–${prefix}${range.end}`;
   return (
     <span
       aria-hidden="true"
       className={`episode-strip-tooltip ${missing ? "is-gap" : ""}`}
       style={{ left: `${Math.min(Math.max(position, 7), 93)}%` }}
     >
-      {episodeLabel} <i aria-hidden /> {missing ? "Missing" : "Present"}
+      {rangeLabel} <i aria-hidden /> {missing ? "Missing" : "Present"}
     </span>
   );
 }

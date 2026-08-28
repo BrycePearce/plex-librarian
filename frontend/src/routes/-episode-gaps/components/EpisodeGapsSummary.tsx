@@ -1,14 +1,20 @@
 import { AlertTriangle, CheckCircle2, Library, ScanLine } from "lucide-react";
 import type { EpisodeGapsResponse } from "@shared/types";
 import { DataSurface } from "../../../components/Workspace.tsx";
+import { episodeGapsSummaryPresentation } from "../utils/summaryPresentation.ts";
 
 export function EpisodeGapsSummary(
-  { data, loading }: { data: EpisodeGapsResponse | undefined; loading: boolean },
+  { data, loading, scope }: {
+    data: EpisodeGapsResponse | undefined;
+    loading: boolean;
+    scope: "episode" | "season";
+  },
 ) {
-  const irregularCount = data?.summary.irregularSeasonCount;
+  const presentation = episodeGapsSummaryPresentation(data, scope);
+  const { irregularCount, missingCount, gapContainerCount } = presentation;
   const auditClean = !loading && irregularCount === 0;
   return (
-    <section className="episode-gaps-summary" aria-label="Episode audit summary">
+    <section className="episode-gaps-summary" aria-label="Gap audit summary">
       <DataSurface className="episode-gaps-overview">
         <div className="episode-gaps-overview-main">
           <span className="episode-gaps-overview-icon">
@@ -19,12 +25,12 @@ export function EpisodeGapsSummary(
             <div className="episode-gaps-overview-value">
               {loading
                 ? <span className="skeleton h-9 w-20" />
-                : <strong>{data?.summary.missingEpisodeCount.toLocaleString() ?? "—"}</strong>}
-              <span>episodes missing</span>
+                : <strong>{missingCount?.toLocaleString() ?? "—"}</strong>}
+              <span>{presentation.missingNoun} missing</span>
             </div>
             <p>
-              Across {loading ? "—" : data?.summary.gapSeasonCount.toLocaleString() ?? "—"}{" "}
-              seasons with internal gaps
+              Across {loading ? "—" : gapContainerCount?.toLocaleString() ?? "—"}{" "}
+              {presentation.containerNoun} with internal gaps
             </p>
           </div>
         </div>
@@ -46,7 +52,11 @@ export function EpisodeGapsSummary(
               {loading
                 ? <span className="skeleton h-6 w-10" />
                 : <strong>{irregularCount?.toLocaleString() ?? "—"}</strong>}
-              <small>{auditClean ? "No irregular seasons" : "Irregular seasons"}</small>
+              <small>
+                {auditClean
+                  ? `No irregular ${presentation.irregularNoun}`
+                  : `Irregular ${presentation.irregularNoun}`}
+              </small>
             </div>
           </div>
         </div>

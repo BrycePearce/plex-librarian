@@ -1,6 +1,11 @@
-import type { EpisodeGapsResponse } from "@shared/types";
+import type {
+  EpisodeGapsEpisodeResponse,
+  EpisodeGapsSeasonResponse,
+  SeasonGapShow,
+} from "@shared/types";
 
-export const episodeGapFixture: EpisodeGapsResponse = {
+export const episodeGapFixture: EpisodeGapsEpisodeResponse = {
+  scope: "episode",
   summary: {
     gapSeasonCount: 12,
     missingEpisodeCount: 31,
@@ -83,7 +88,7 @@ function row(
   };
 }
 
-export const cleanEpisodeGapFixture: EpisodeGapsResponse = {
+export const cleanEpisodeGapFixture: EpisodeGapsEpisodeResponse = {
   ...episodeGapFixture,
   summary: {
     ...episodeGapFixture.summary,
@@ -95,7 +100,7 @@ export const cleanEpisodeGapFixture: EpisodeGapsResponse = {
   rows: [],
 };
 
-export const largeEpisodeGapFixture: EpisodeGapsResponse = {
+export const largeEpisodeGapFixture: EpisodeGapsEpisodeResponse = {
   ...episodeGapFixture,
   total: 50,
   rows: Array.from({ length: 50 }, (_, index) => {
@@ -108,4 +113,64 @@ export const largeEpisodeGapFixture: EpisodeGapsResponse = {
       seasonRatingKey: `${template.seasonRatingKey}-${ordinal}`,
     };
   }),
+};
+
+const seasonRows: SeasonGapShow[] = [
+  {
+    libraryKey: "tv",
+    libraryTitle: "TV Shows",
+    showRatingKey: "station-eleven",
+    showTitle: "Station Eleven",
+    showThumb: null,
+    firstSeasonIndex: 1,
+    lastSeasonIndex: 5,
+    presentCount: 4,
+    missingCount: 1,
+    missingRanges: [{ start: 3, end: 3 }],
+    status: "gaps",
+    reason: null,
+    episodeAuditSyncedAt: 1_786_850_800,
+  },
+  {
+    libraryKey: "archive",
+    libraryTitle: "Television Archive",
+    showRatingKey: "irregular-seasons",
+    showTitle: "Archive Mysteries",
+    showThumb: null,
+    firstSeasonIndex: null,
+    lastSeasonIndex: null,
+    presentCount: 0,
+    missingCount: 0,
+    missingRanges: [],
+    status: "irregular",
+    reason: "invalid_season_index",
+    episodeAuditSyncedAt: null,
+  },
+];
+
+export const seasonGapFixture: EpisodeGapsSeasonResponse = {
+  scope: "season",
+  summary: {
+    gapShowCount: 1,
+    missingSeasonCount: 1,
+    checkedLibraryCount: 2,
+    irregularShowCount: 1,
+  },
+  total: seasonRows.length,
+  limit: 50,
+  offset: 0,
+  libraryAudits: episodeGapFixture.libraryAudits,
+  rows: seasonRows,
+};
+
+export const cleanSeasonGapFixture: EpisodeGapsSeasonResponse = {
+  ...seasonGapFixture,
+  summary: {
+    gapShowCount: 0,
+    missingSeasonCount: 0,
+    checkedLibraryCount: 3,
+    irregularShowCount: 0,
+  },
+  total: 0,
+  rows: [],
 };

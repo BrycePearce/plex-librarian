@@ -1,7 +1,7 @@
 import type { EpisodeGapsParams } from "@shared/types";
 
 export type EpisodeGapsSearch =
-  & Required<Pick<EpisodeGapsParams, "status" | "sort" | "order">>
+  & Required<Pick<EpisodeGapsParams, "scope" | "status" | "sort" | "order">>
   & Pick<EpisodeGapsParams, "libraryKey" | "search">
   & {
     offset: number;

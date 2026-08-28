@@ -13,10 +13,11 @@ import { ArrClient } from '../../integrations/arr/client.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
   EpisodeGapsResponse,
+  EpisodeGapsScope,
   EpisodeGapsSort,
   EpisodeGapsStatusFilter,
 } from '@plex-librarian/shared/types.ts';
-import { decodeEpisodeGapProjection } from './projection.ts';
+import { decodeEpisodeGapProjection, decodeSeasonGapProjection } from './projection.ts';
 import { contentIsNotIgnored } from '../../db/scope.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -133,8 +134,47 @@ const validNormal = sql`(
         and json_array_length(${seasons.episodeGapRangesJson}) = 0))
 )`;
 const invalidNormal = sql`(${seasons.episodeAuditStatus} in ('ok', 'gaps') and not ${validNormal})`;
+const validSeasonNormal = sql`(
+  ${items.seasonAuditStatus} in ('ok', 'gaps')
+  and ${items.seasonFirstIndex} between 1 and 10000
+  and ${items.seasonLastIndex} between ${items.seasonFirstIndex} and 10000
+  and ${items.seasonPresentCount} > 0
+  and ${items.seasonGapCount} >= 0
+  and ${items.seasonLastIndex} - ${items.seasonFirstIndex} + 1 =
+      ${items.seasonPresentCount} + ${items.seasonGapCount}
+  and json_valid(${items.seasonGapRangesJson})
+  and json_type(${items.seasonGapRangesJson}) = 'array'
+  and json_array_length(${items.seasonGapRangesJson}) <= 256
+  and not exists (
+    select 1 from json_each(${items.seasonGapRangesJson}) r
+    where json_type(r.value) <> 'object'
+      or json_type(r.value, '$.start') <> 'integer'
+      or json_type(r.value, '$.end') <> 'integer'
+      or json_extract(r.value, '$.start') <= ${items.seasonFirstIndex}
+      or json_extract(r.value, '$.end') >= ${items.seasonLastIndex}
+      or json_extract(r.value, '$.end') < json_extract(r.value, '$.start')
+      or (cast(r.key as integer) > 0 and json_extract(r.value, '$.start') <=
+          json_extract(${items.seasonGapRangesJson}, '$[' || (cast(r.key as integer) - 1) || '].end'))
+  )
+  and coalesce((select sum(json_extract(r.value, '$.end') - json_extract(r.value, '$.start') + 1)
+                from json_each(${items.seasonGapRangesJson}) r), 0) = ${items.seasonGapCount}
+  and ((${items.seasonAuditStatus} = 'gaps' and ${items.seasonGapCount} > 0)
+    or (${items.seasonAuditStatus} = 'ok' and ${items.seasonGapCount} = 0
+        and json_array_length(${items.seasonGapRangesJson}) = 0))
+)`;
+const invalidSeasonNormal =
+  sql`(${items.seasonAuditStatus} in ('ok', 'gaps') and not ${validSeasonNormal})`;
+const unexpectedSeasonStatus = sql`(
+  ${items.seasonAuditStatus} is not null
+  and ${items.seasonAuditStatus} not in ('ok', 'gaps', 'irregular', 'excluded')
+)`;
 
 router.get('/', async (c) => {
+  const rawScope = c.req.query('scope') ?? 'episode';
+  if (rawScope !== 'episode' && rawScope !== 'season') {
+    return c.json({ error: 'invalid scope' }, 400);
+  }
+  const gapScope = rawScope as EpisodeGapsScope;
   const libraryKey = c.req.query('libraryKey')?.trim() || undefined;
   const search = (c.req.query('search') ?? '').trim();
   if (search.length > 200) return c.json({ error: 'search must be 200 characters or fewer' }, 400);
@@ -148,6 +188,9 @@ router.get('/', async (c) => {
     return c.json({ error: 'invalid sort' }, 400);
   }
   const sort = rawSort as EpisodeGapsSort;
+  if (gapScope === 'season' && sort === 'seasonIndex') {
+    return c.json({ error: 'seasonIndex sort is only valid for episode scope' }, 400);
+  }
   const rawOrder = c.req.query('order') ?? 'desc';
   if (rawOrder !== 'asc' && rawOrder !== 'desc') return c.json({ error: 'invalid order' }, 400);
   const limitValue = Number(c.req.query('limit') ?? 50);
@@ -161,7 +204,12 @@ router.get('/', async (c) => {
   const limit = Math.min(limitValue, 100);
   const offset = offsetValue;
   const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json(emptyResponse(limit, offset));
+  if (serverId === null) return c.json(emptyResponse(gapScope, limit, offset));
+  if (gapScope === 'season') {
+    return c.json(
+      await seasonResponse(serverId, libraryKey, search, status, sort, rawOrder, limit, offset),
+    );
+  }
 
   const scope = [
     eq(seasons.serverId, serverId),
@@ -259,6 +307,7 @@ router.get('/', async (c) => {
 
   return c.json(
     {
+      scope: 'episode',
       summary: {
         gapSeasonCount: summary?.gapSeasonCount ?? 0,
         missingEpisodeCount: Number(summary?.missingEpisodeCount ?? 0),
@@ -274,20 +323,126 @@ router.get('/', async (c) => {
   );
 });
 
-function emptyResponse(limit: number, offset: number): EpisodeGapsResponse {
+async function seasonResponse(
+  serverId: number,
+  libraryKey: string | undefined,
+  search: string,
+  status: EpisodeGapsStatusFilter,
+  sort: EpisodeGapsSort,
+  rawOrder: string,
+  limit: number,
+  offset: number,
+): Promise<EpisodeGapsResponse> {
+  const scope = [
+    eq(items.serverId, serverId),
+    eq(items.type, 'show'),
+    contentIsNotIgnored(serverId, items.ratingKey),
+  ];
+  if (libraryKey) scope.push(eq(items.libraryKey, libraryKey));
+  if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
+  const statusCondition = status === 'gaps'
+    ? and(eq(items.seasonAuditStatus, 'gaps'), validSeasonNormal)
+    : status === 'irregular'
+    ? or(eq(items.seasonAuditStatus, 'irregular'), invalidSeasonNormal, unexpectedSeasonStatus)
+    : or(
+      sql`${items.seasonAuditStatus} in ('ok', 'gaps', 'irregular')`,
+      unexpectedSeasonStatus,
+    );
+  const where = and(...scope, statusCondition);
+  const direction = rawOrder === 'asc' ? asc : desc;
+  const primary = sort === 'title'
+    ? items.title
+    : sort === 'auditSyncedAt'
+    ? libraries.episodeAuditSyncedAt
+    : items.seasonGapCount;
+  const base = db.select({
+    libraryKey: items.libraryKey,
+    libraryTitle: libraries.title,
+    showRatingKey: items.ratingKey,
+    showTitle: items.title,
+    showThumb: items.thumb,
+    firstSeasonIndex: items.seasonFirstIndex,
+    lastSeasonIndex: items.seasonLastIndex,
+    presentCount: items.seasonPresentCount,
+    missingCount: items.seasonGapCount,
+    missingRangesJson: items.seasonGapRangesJson,
+    status: items.seasonAuditStatus,
+    reason: items.seasonAuditReason,
+    episodeAuditSyncedAt: libraries.episodeAuditSyncedAt,
+  }).from(items).innerJoin(
+    libraries,
+    and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
+  );
+  const rows = await base.where(where).orderBy(direction(primary), asc(items.title)).limit(limit)
+    .offset(offset);
+  const [{ total }] = await db.select({ total: sql<number>`count(*)` }).from(items).innerJoin(
+    libraries,
+    and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
+  ).where(where);
+  const [summary] = await db.select({
+    gapShowCount: sql<
+      number
+    >`sum(case when ${items.seasonAuditStatus} = 'gaps' and ${validSeasonNormal} then 1 else 0 end)`,
+    missingSeasonCount: sql<
+      string
+    >`cast(coalesce(sum(case when ${items.seasonAuditStatus} = 'gaps' and ${validSeasonNormal} then ${items.seasonGapCount} else 0 end), 0) as text)`,
+    irregularShowCount: sql<
+      number
+    >`sum(case when ${items.seasonAuditStatus} = 'irregular' or ${invalidSeasonNormal} or ${unexpectedSeasonStatus} then 1 else 0 end)`,
+  }).from(items).where(and(...scope));
+  const libraryAudits = await db.select({
+    libraryKey: libraries.key,
+    libraryTitle: libraries.title,
+    episodeAuditSyncedAt: libraries.episodeAuditSyncedAt,
+  }).from(libraries).where(and(
+    eq(libraries.serverId, serverId),
+    eq(libraries.type, 'show'),
+    libraryKey ? eq(libraries.key, libraryKey) : undefined,
+  )).orderBy(asc(libraries.title));
   return {
+    scope: 'season',
     summary: {
-      gapSeasonCount: 0,
-      missingEpisodeCount: 0,
-      checkedLibraryCount: 0,
-      irregularSeasonCount: 0,
+      gapShowCount: summary?.gapShowCount ?? 0,
+      missingSeasonCount: Number(summary?.missingSeasonCount ?? 0),
+      checkedLibraryCount:
+        libraryAudits.filter((audit) => audit.episodeAuditSyncedAt !== null).length,
+      irregularShowCount: summary?.irregularShowCount ?? 0,
     },
-    total: 0,
+    total: total ?? 0,
     limit,
     offset,
-    libraryAudits: [],
-    rows: [],
+    libraryAudits,
+    rows: rows.map(decodeSeasonGapProjection),
   };
+}
+
+function emptyResponse(
+  scope: EpisodeGapsScope,
+  limit: number,
+  offset: number,
+): EpisodeGapsResponse {
+  const common = { total: 0, limit, offset, libraryAudits: [], rows: [] };
+  return scope === 'episode'
+    ? {
+      scope: 'episode',
+      summary: {
+        gapSeasonCount: 0,
+        missingEpisodeCount: 0,
+        checkedLibraryCount: 0,
+        irregularSeasonCount: 0,
+      },
+      ...common,
+    }
+    : {
+      scope: 'season',
+      summary: {
+        gapShowCount: 0,
+        missingSeasonCount: 0,
+        checkedLibraryCount: 0,
+        irregularShowCount: 0,
+      },
+      ...common,
+    };
 }
 
 export default router;

@@ -11,7 +11,7 @@ export function EpisodeGapsFilters(
   },
 ) {
   return (
-    <div className="episode-gaps-filters" aria-label="Episode gap filters">
+    <div className="episode-gaps-filters" aria-label="Gap filters">
       <label className="episode-gaps-search">
         <Search />
         <span className="sr-only">Search by show title</span>
@@ -57,7 +57,7 @@ export function EpisodeGapsFilters(
         >
           <option value="missingCount">Most missing</option>
           <option value="title">Show title</option>
-          <option value="seasonIndex">Season number</option>
+          {search.scope === "episode" && <option value="seasonIndex">Season number</option>}
           <option value="auditSyncedAt">Recently synced</option>
         </select>
       </label>

@@ -1,5 +1,6 @@
 export type EpisodeGapsStatusFilter = 'gaps' | 'irregular' | 'all';
 export type EpisodeGapsSort = 'missingCount' | 'title' | 'seasonIndex' | 'auditSyncedAt';
+export type EpisodeGapsScope = 'episode' | 'season';
 export type SortOrder = 'asc' | 'desc';
 
 export interface EpisodeGapRange {
@@ -26,7 +27,30 @@ export interface EpisodeGapSeason {
   episodeAuditSyncedAt: number | null;
 }
 
-export interface EpisodeGapsResponse {
+export interface SeasonGapShow {
+  libraryKey: string;
+  libraryTitle: string;
+  showRatingKey: string;
+  showTitle: string;
+  showThumb: string | null;
+  firstSeasonIndex: number | null;
+  lastSeasonIndex: number | null;
+  presentCount: number;
+  missingCount: number;
+  missingRanges: EpisodeGapRange[];
+  status: 'gaps' | 'irregular' | 'ok';
+  reason: string | null;
+  episodeAuditSyncedAt: number | null;
+}
+
+export interface EpisodeGapLibraryAudit {
+  libraryKey: string;
+  libraryTitle: string;
+  episodeAuditSyncedAt: number | null;
+}
+
+export interface EpisodeGapsEpisodeResponse {
+  scope: 'episode';
   summary: {
     gapSeasonCount: number;
     missingEpisodeCount: number;
@@ -36,15 +60,29 @@ export interface EpisodeGapsResponse {
   total: number;
   limit: number;
   offset: number;
-  libraryAudits: Array<{
-    libraryKey: string;
-    libraryTitle: string;
-    episodeAuditSyncedAt: number | null;
-  }>;
+  libraryAudits: EpisodeGapLibraryAudit[];
   rows: EpisodeGapSeason[];
 }
 
+export interface EpisodeGapsSeasonResponse {
+  scope: 'season';
+  summary: {
+    gapShowCount: number;
+    missingSeasonCount: number;
+    checkedLibraryCount: number;
+    irregularShowCount: number;
+  };
+  total: number;
+  limit: number;
+  offset: number;
+  libraryAudits: EpisodeGapLibraryAudit[];
+  rows: SeasonGapShow[];
+}
+
+export type EpisodeGapsResponse = EpisodeGapsEpisodeResponse | EpisodeGapsSeasonResponse;
+
 export interface EpisodeGapsParams {
+  scope?: EpisodeGapsScope;
   libraryKey?: string;
   status?: EpisodeGapsStatusFilter;
   search?: string;

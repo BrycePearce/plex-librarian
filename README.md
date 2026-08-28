@@ -23,7 +23,7 @@
 <p align="center">
   <a href="assets/screenshots/stale-analysis.png">Stale analysis</a> ·
   <a href="assets/screenshots/duplicates.png">Duplicates</a> ·
-  <a href="assets/screenshots/episode-gaps.png">Episode Gaps</a> ·
+  <a href="assets/screenshots/episode-gaps.png">Episode &amp; Season Gaps</a> ·
   <a href="assets/screenshots/activity.png">Activity</a>
 </p>
 
@@ -40,7 +40,7 @@ terabytes of storage in as few clicks as possible, using sensible defaults.
 | --- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, TV seasons, and music; filter and sort by age, size, play count, and more.                                                                               |
 | 💾  | **Duplicate detection**          | Surface duplicate movie and episode versions and see how much space each copy consumes.                                                                                                                  |
-| 🔎  | **Episode Gaps**                 | Audit TV seasons for missing numbers between the first and last episode already present in Plex, with irregular metadata called out separately.                                                          |
+| 🔎  | **Episode & Season Gaps**        | Find internal episode or season-number gaps bounded by content already present in Plex, with irregular metadata called out separately.                                                                  |
 | 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing.                                                                                                               |
 | 🔗  | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported.                                                                                   |
 | 🌱  | **Hardlink & torrent cleanup**   | Delete verified qBittorrent files and the library hardlink created by an Arr import in one guided workflow. Plex Librarian can also clean up orphaned download-side hardlinks after the torrent is gone. |
