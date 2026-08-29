@@ -472,7 +472,7 @@ function DashboardInner() {
             librariesData.libraries.length > 0 && (
             <StatsStrip
               libraries={librariesData.libraries}
-              verifiedHardlinkDataRemoved={mediaRemovalSummary?.verifiedHardlinkDataRemoved ?? 0}
+              mediaSizeRemoved={mediaRemovalSummary?.mediaSizeRemoved ?? 0}
             />
           )}
 
@@ -588,10 +588,10 @@ function useCountUp(target: number, duration = 800, skipAnimation = false) {
 
 function StatsStrip({
   libraries,
-  verifiedHardlinkDataRemoved,
+  mediaSizeRemoved,
 }: {
   libraries: Library[];
-  verifiedHardlinkDataRemoved: number;
+  mediaSizeRemoved: number;
 }) {
   const totals = libraries.reduce(
     (acc, lib) => {
@@ -605,7 +605,7 @@ function StatsStrip({
 
   const animatedItems = useCountUp(totals.items, 900);
   const animatedSize = useCountUp(totals.size, 900);
-  const animatedRemovedSize = useCountUp(verifiedHardlinkDataRemoved, 900);
+  const animatedRemovedSize = useCountUp(mediaSizeRemoved, 900);
 
   return (
     <motion.div
@@ -630,9 +630,9 @@ function StatsStrip({
         icon={<Trash2 className="w-5 h-5" />}
         iconClass="bg-primary/20 text-primary"
         tone="primary"
-        label="Verified hardlink data removed"
+        label="Media removed"
         value={formatKilobytes(animatedRemovedSize)}
-        title="Verified two-link namespace removals. Snapshots or open file handles may delay free-space recovery."
+        title="Logical media size explicitly deleted through Plex Librarian and confirmed absent from Plex. Actual disk space recovered can differ because of hardlinks, snapshots, open file handles, compression, or deduplication."
       />
       <StatTile
         icon={<Clock className="w-5 h-5" />}
