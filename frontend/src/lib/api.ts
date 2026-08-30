@@ -44,6 +44,7 @@ import type {
   SeerrInstance,
   SeerrIntegrationSettings,
   Settings,
+  SharingRiskTrendResponse,
   ShowDetail,
   SmartDuplicateAnalysisResponse,
   SmartDuplicateCleanupResponse,
@@ -122,6 +123,8 @@ export type {
   SeerrInstance,
   SeerrIntegrationSettings,
   Settings,
+  SharingRiskTrendPoint,
+  SharingRiskTrendResponse,
   ShowDetail,
   SmartDuplicateAnalysisResponse,
   SmartDuplicateCandidate,
@@ -787,6 +790,8 @@ export const api = {
       apiFetch<RequestFollowThroughDetailsResponse>(
         `/users/${accountId}/request-follow-through?limit=${limit}`,
       ),
+    sharingRiskTrend: (accountId: number) =>
+      apiFetch<SharingRiskTrendResponse>(`/users/${accountId}/sharing-risk-trend`),
     remove: (accountId: number) =>
       apiFetch<RemoveUserResponse>(`/users/${accountId}`, { method: "DELETE" }),
   },

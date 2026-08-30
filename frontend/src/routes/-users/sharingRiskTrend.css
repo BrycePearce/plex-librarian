@@ -1,0 +1,65 @@
+.sharing-trend-card {
+  box-shadow: 0 12px 34px color-mix(in oklch, black 10%, transparent);
+}
+.trend-band {
+  opacity: .075;
+}
+.trend-review {
+  fill: var(--color-error);
+}
+.trend-watch {
+  fill: var(--color-warning);
+}
+.trend-low {
+  fill: var(--color-success);
+}
+.trend-grid {
+  stroke: color-mix(in oklch, var(--color-base-content) 12%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+.trend-axis {
+  fill: color-mix(in oklch, var(--color-base-content) 45%, transparent);
+  font-size: 10px;
+}
+.trend-line {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 3px 5px color-mix(in oklch, var(--color-primary) 25%, transparent));
+}
+.trend-point {
+  cursor: pointer;
+  stroke: var(--color-base-100);
+  stroke-width: 2.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: r 120ms ease-out;
+}
+.trend-point:focus-visible {
+  outline: none;
+  filter: drop-shadow(0 0 5px currentColor);
+}
+.trend-insufficient_data {
+  fill: var(--color-neutral);
+  color: var(--color-neutral);
+}
+.trend-low {
+  fill: var(--color-success);
+  color: var(--color-success);
+}
+.trend-watch {
+  fill: var(--color-warning);
+  color: var(--color-warning);
+}
+.trend-review {
+  fill: var(--color-error);
+  color: var(--color-error);
+}
+@media (prefers-reduced-motion: reduce) {
+  .trend-point {
+    transition: none;
+  }
+}

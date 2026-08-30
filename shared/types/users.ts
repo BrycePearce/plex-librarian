@@ -102,6 +102,22 @@ export interface SharingRiskAssessment {
   signals: SharingRiskSignal[];
 }
 
+export interface SharingRiskTrendPoint {
+  periodStart: number;
+  periodEnd: number;
+  assessment: SharingRiskAssessment | null;
+}
+
+export interface SharingRiskTrendResponse {
+  windowDays: number;
+  intervalDays: number;
+  observedSince: number | null;
+  lastObservedAt: number | null;
+  trendStart: number;
+  trendEnd: number;
+  points: SharingRiskTrendPoint[];
+}
+
 export interface SessionMonitorHealth {
   status: 'starting' | 'connected' | 'polling' | 'disconnected';
   lastSnapshotAt: number | null;

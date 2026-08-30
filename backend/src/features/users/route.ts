@@ -23,6 +23,7 @@ import type {
   PlexUser,
   RemoveUserResponse,
   RequestFollowThroughDetailsResponse,
+  SharingRiskTrendResponse,
   UsersActivityFilter,
   UsersResponse,
   UsersRiskFilter,
@@ -39,6 +40,12 @@ import {
   queryRequestFollowThrough,
   queryRequestFollowThroughDetails,
 } from './requestFollowThroughQuery.ts';
+import {
+  buildSharingRiskTrend,
+  SHARING_RISK_TREND_INTERVAL_DAYS,
+  SHARING_RISK_TREND_LOOKBACK_DAYS,
+  SHARING_RISK_WINDOW_DAYS,
+} from './sharingRiskTrend.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -392,6 +399,63 @@ router.get('/', async (c) => {
       monitor: getSessionMonitorHealth(),
       users: page,
     } satisfies UsersResponse,
+  );
+});
+
+// Loaded only when the sharing-risk detail dialog opens. The query stays bounded to one display year
+// even when an administrator retains observations forever; one extra assessment window
+// is included so the oldest plotted point can still use a complete 30-day sample.
+router.get('/:accountId/sharing-risk-trend', async (c) => {
+  const accountId = Number(c.req.param('accountId'));
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+    return c.json({ error: 'accountId must be a positive integer' }, 400);
+  }
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'user not found' }, 404);
+
+  const [target] = await db.select({ accountId: users.accountId }).from(users)
+    .where(userByAccountId(serverId, accountId)).limit(1);
+  if (!target) return c.json({ error: 'user not found' }, 404);
+
+  const observation = userPlayObservations;
+  const [history] = await db.select({
+    observedSince: sql<number | null>`min(${observation.observedAt})`,
+    lastObservedAt: sql<number | null>`max(${observation.observedAt})`,
+  }).from(observation).where(and(
+    eq(observation.serverId, serverId),
+    eq(observation.accountId, accountId),
+  ));
+
+  const now = Math.floor(Date.now() / 1000);
+  const oldestDisplayed = now - SHARING_RISK_TREND_LOOKBACK_DAYS * 86_400;
+  const observedSince = history?.observedSince ?? null;
+  const lastObservedAt = history?.lastObservedAt ?? null;
+  const trendStart = observedSince === null ? now : Math.max(oldestDisplayed, observedSince);
+  const queryStart = trendStart - SHARING_RISK_WINDOW_DAYS * 86_400;
+  const rows = observedSince === null ? [] : await db.select({
+    accountId: observation.accountId,
+    observedAt: observation.observedAt,
+    event: observation.event,
+    ip: observation.ip,
+    networkKey: observation.networkKey,
+    playerUuid: observation.playerUuid,
+    isLocal: observation.isLocal,
+  }).from(observation).where(and(
+    eq(observation.serverId, serverId),
+    eq(observation.accountId, accountId),
+    gte(observation.observedAt, queryStart),
+  )).orderBy(asc(observation.observedAt), asc(observation.id));
+
+  return c.json(
+    {
+      windowDays: SHARING_RISK_WINDOW_DAYS,
+      intervalDays: SHARING_RISK_TREND_INTERVAL_DAYS,
+      observedSince,
+      lastObservedAt,
+      trendStart,
+      trendEnd: now,
+      points: observedSince === null ? [] : buildSharingRiskTrend(accountId, rows, trendStart, now),
+    } satisfies SharingRiskTrendResponse,
   );
 });
 
