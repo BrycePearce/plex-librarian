@@ -25,7 +25,6 @@ import {
   workspaceToneClass,
 } from "../components/Workspace.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
-import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 import { useDeletionOperationTracker } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
 import { formatKilobytes } from "../lib/format.ts";
@@ -349,29 +348,22 @@ function DuplicatesPage() {
                     <option value="movie">Movies</option>
                     <option value="tv">TV</option>
                   </select>
-                  <span className="duplicates-comparison-filter inline-flex items-center gap-1.5">
-                    <select
-                      className="select select-bordered select-sm w-44 max-w-full"
-                      value={comparison}
-                      onChange={(e) =>
-                        setComparison(e.target.value as DuplicateComparisonFilter)}
-                      aria-label="Filter by technical comparison"
-                    >
-                      <option value="all">All comparisons</option>
-                      <option value="same-profile">Same technical profile</option>
-                      <option value="different">Meaningful differences</option>
-                      <option value="unknown">Needs review</option>
-                    </select>
-                    <InfoTip text="Compares Plex-reported resolution, codec, HDR, and audio/subtitle tracks across a group's versions. “Same technical profile” means those fields match, not that the files are byte-identical. “Needs review” means Plex didn't report enough fields to compare." />
-                  </span>
+                  <select
+                    className="select select-bordered select-sm w-44 max-w-full"
+                    value={comparison}
+                    onChange={(e) =>
+                      setComparison(e.target.value as DuplicateComparisonFilter)}
+                    aria-label="Filter by technical comparison"
+                  >
+                    <option value="all">All comparisons</option>
+                    <option value="same-profile">Same technical profile</option>
+                    <option value="different">Meaningful differences</option>
+                    <option value="unknown">Needs review</option>
+                  </select>
                 </>
               }
-              meta={data
-                ? search
-                  ? `${data.duplicateGroupTotal.toLocaleString()} match${
-                    data.duplicateGroupTotal === 1 ? "" : "es"
-                  } in ${data.total.toLocaleString()} movie/season rows`
-                  : `${data.duplicateGroupTotal.toLocaleString()} duplicate groups · ${data.total.toLocaleString()} movie/season rows`
+              meta={data && (search || type !== "all" || comparison !== "all")
+                ? `${data.total.toLocaleString()} result${data.total === 1 ? "" : "s"}`
                 : undefined}
             />
 
