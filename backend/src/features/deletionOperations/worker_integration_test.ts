@@ -844,19 +844,30 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.pathname === '/api/v3/command' && init?.method === 'POST') {
-      const command = JSON.parse(String(init.body)) as { name?: string };
+      const command = JSON.parse(String(init.body)) as {
+        name?: string;
+        files?: Array<{ path?: string }>;
+      };
       sonarrRescanCount++;
       if (command.name === 'ManualImport' && rejectSonarrManualImportStatus !== null) {
         return Promise.resolve(
           new Response('manual import rejected', { status: rejectSonarrManualImportStatus }),
         );
       }
-      if (sonarrRescanTargetPath) {
+      const manualImportPath = command.name === 'ManualImport'
+        ? command.files?.[0]?.path ?? null
+        : null;
+      if (
+        sonarrRescanTargetPath &&
+        (manualImportPath === null || manualImportPath === sonarrRescanTargetPath)
+      ) {
         sonarrManagedPath = sonarrRescanTargetPath;
         sonarrManagedFileId++;
         sonarrManagedFilePresent = true;
       }
       for (const episode of additionalSonarrEpisodes) {
+        if (manualImportPath !== null && manualImportPath !== episode.retainedPath) continue;
+        if (episode.managedFilePresent) sonarrEpisodeFileDeleteHook?.(episode.managedFileId);
         episode.managedPath = episode.retainedPath;
         episode.managedFileId++;
         episode.managedFilePresent = true;
@@ -878,14 +889,20 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     if (url.pathname === '/api/v2/app/version') return Promise.resolve(new Response('5.1.2'));
     if (url.pathname === '/api/v2/torrents/info') {
       if (qbitJobsOverride !== null) {
-        return Promise.resolve(Response.json(qbitJobsOverride.map((job) => ({
-          hash: job.hash,
-          name: job.name,
-          size: job.size,
-          total_size: job.files.reduce((sum, file) => sum + file.size, 0),
-          content_path: job.contentPath,
-          save_path: job.savePath,
-        }))));
+        const requestedHash = url.searchParams.get('hashes');
+        return Promise.resolve(
+          Response.json(
+            qbitJobsOverride.filter((job) => requestedHash === null || job.hash === requestedHash)
+              .map((job) => ({
+                hash: job.hash,
+                name: job.name,
+                size: job.size,
+                total_size: job.files.reduce((sum, file) => sum + file.size, 0),
+                content_path: job.contentPath,
+                save_path: job.savePath,
+              })),
+          ),
+        );
       }
       return Promise.resolve(Response.json(
         qbitPresent
@@ -3862,7 +3879,11 @@ Deno.test({
       const { operationId } = await response.json() as { operationId: string };
 
       await settle();
-      assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+      assertEquals(
+        getDeletionOperation(operationId, 1)?.status,
+        'completed',
+        JSON.stringify(getDeletionOperation(operationId, 1)),
+      );
       assertEquals(qbitDeleteCount, 0);
       assertEquals(qbitPresent, true);
       assertEquals((await Deno.lstat(downloadPath)).isFile, true);
@@ -3896,12 +3917,14 @@ Deno.test({
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
     const libraryPath = `${libraryRoot}/show-1-21.mkv`;
+    const retainedLibraryPath = `${libraryRoot}/show-1-22.mkv`;
     const downloadPath = `${downloadRoot}/release/old.mkv`;
     const differentHash = 'b'.repeat(40);
     try {
       await Deno.mkdir(libraryRoot, { recursive: true });
       await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
       await Deno.writeFile(libraryPath, new Uint8Array(40_000));
+      await Deno.writeFile(retainedLibraryPath, new Uint8Array(40_000));
       await Deno.link(libraryPath, downloadPath);
       qbitJobsOverride = [{
         hash: differentHash,
@@ -4602,8 +4625,12 @@ Deno.test({
     configureSonarr();
     seasonPackQbit = true;
     sonarrManagedMediaId = 21;
-    sonarrManagedPath = '/tv/show-1-21.mkv';
-    sonarrRescanTargetPath = '/tv/show-1-22.mkv';
+    sonarrManagedPath = '/tv/Show/Season 01/show-1-21.mkv';
+    sonarrRescanTargetPath = '/tv/Show/Season 01/show-1-22.mkv';
+    live.get('episode-1')!.Media = [
+      { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+      { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+    ];
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
@@ -4617,7 +4644,7 @@ Deno.test({
       sonarrEpisodeFileDeleteHook = () => Deno.removeSync(libraryPath);
       withTransaction((client) => {
         client.prepare(
-          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv/Show/Season 01', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
       });
 
@@ -4646,7 +4673,11 @@ Deno.test({
       const { operationId } = await response.json() as { operationId: string };
 
       await settle();
-      assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+      assertEquals(
+        getDeletionOperation(operationId, 1)?.status,
+        'completed',
+        JSON.stringify(getDeletionOperation(operationId, 1)),
+      );
       assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
       await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
@@ -6480,8 +6511,12 @@ Deno.test({
     configureSonarr();
     seasonPackQbit = true;
     sonarrManagedMediaId = 21;
-    sonarrManagedPath = '/tv/show-1-21.mkv';
-    sonarrRescanTargetPath = '/tv/show-1-22.mkv';
+    sonarrManagedPath = '/tv/Show/Season 01/show-1-21.mkv';
+    sonarrRescanTargetPath = '/tv/Show/Season 01/show-1-22.mkv';
+    live.get('episode-1')!.Media = [
+      { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+      { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+    ];
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
@@ -6495,7 +6530,7 @@ Deno.test({
       sonarrEpisodeFileDeleteHook = () => Deno.removeSync(libraryPath);
       withTransaction((client) => {
         client.prepare(
-          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv/Show/Season 01', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
       });
       const selections = [{ episodeRatingKey: 'episode-1', mediaIds: [21] }];

@@ -928,6 +928,48 @@ Deno.test('an already absent attempted orphan reruns its durable confirmation ca
   assertEquals(result.deletedOrphanFiles, []);
 });
 
+Deno.test('a confirmed selected payload absence authorizes its exact orphan without rediscovery', async () => {
+  const calls: string[] = [];
+  const cleanup = {
+    downloadJobs: [],
+    orphanFiles: [{
+      path: '/downloads/release/movie.idx',
+      ownershipJobs: [{
+        provider: 'qbittorrent',
+        instanceKey: 'db:1',
+        jobId: hash,
+        selected: true,
+      }],
+    }],
+  } as unknown as ResolvedCleanupItem;
+
+  const result = await executeDownloadedFileCleanup(
+    cleanup,
+    new Set([`db:1:${hash}`]),
+    new Set(),
+    undefined,
+    () => Promise.reject(new Deno.errors.NotFound('removed with payload')),
+    (file) => {
+      calls.push(`mark:${file.path}`);
+      return Promise.resolve();
+    },
+    (file) => {
+      calls.push(`confirm:${file.path}`);
+      return Promise.resolve();
+    },
+    () => {
+      calls.push('authorize');
+      return Promise.resolve(false);
+    },
+  );
+
+  assertEquals(calls, [
+    'mark:/downloads/release/movie.idx',
+    'confirm:/downloads/release/movie.idx',
+  ]);
+  assertEquals(result.deletedOrphanFiles, ['/downloads/release/movie.idx']);
+});
+
 Deno.test('cleanup errors retain mutations completed by earlier stages', async () => {
   const cleanup = {
     downloadJobs: [{

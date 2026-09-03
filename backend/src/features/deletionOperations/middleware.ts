@@ -389,7 +389,13 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
                   cleanup.downloadJobs.length === 0)))
           ) {
             return c.json({
-              error: cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
+              error: cleanup &&
+                  !sonarrOwnedRatingKeys.has(ratingKey) &&
+                  cleanup.sonarrReclamation !== undefined &&
+                  cleanup.orphanFiles.length > 0 &&
+                  cleanup.downloadJobs.length === 0
+                ? 'Verified orphan hardlink cleanup requires coordinated Sonarr deletion'
+                : cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
             }, 409);
           }
           if (sonarrOwnedRatingKeys.has(ratingKey) && cleanup.status === 'error') {
