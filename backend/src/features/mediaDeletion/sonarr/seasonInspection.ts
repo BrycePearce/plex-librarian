@@ -1,5 +1,5 @@
-import type { ArrDeleteTarget } from '../arr/delete.ts';
-import type { PersistedArrMappingIdentity } from './arrReassignmentPlanning/types.ts';
+import type { ArrDeleteTarget } from '../../arr/delete.ts';
+import type { PersistedArrMappingIdentity } from '../arrReassignmentPlanning/types.ts';
 
 export interface InspectedSonarrSeasonTarget {
   target: ArrDeleteTarget;

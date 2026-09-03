@@ -1,8 +1,11 @@
-import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
-import { downloadJobManifestFingerprint, downloadJobSummaryFingerprint } from './downloadClient.ts';
-import { directDiscoveryCandidates } from '../qbittorrent/directDiscovery.ts';
-import type { VerifiedOrphanFile } from './hardlinks.ts';
-import { downloadJobOwnsPath } from './ownership.ts';
+import type { DownloadClientTarget, DownloadJob } from '../downloadClient.ts';
+import {
+  downloadJobManifestFingerprint,
+  downloadJobSummaryFingerprint,
+} from '../downloadClient.ts';
+import { directDiscoveryCandidates } from '../../qbittorrent/directDiscovery.ts';
+import type { VerifiedOrphanFile } from '../hardlinks.ts';
+import { downloadJobOwnsPath } from '../ownership.ts';
 
 export type SonarrPathOwnershipDisposition =
   | 'delete'
