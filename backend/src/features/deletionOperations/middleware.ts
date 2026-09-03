@@ -17,7 +17,11 @@ import {
 import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import type { StaleQuickCleanupCandidate } from '@plex-librarian/shared/types.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import {
+  buildVersionDeletionPlan,
+  episodeVersionSonarrPlanFingerprint,
+  selectVersionDownloadCleanup,
+} from '../mediaDeletion/versionPlanning.ts';
 import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning/types.ts';
 import {
   assertDownloadJobSelectionConsistent,
@@ -27,13 +31,18 @@ import {
   resolveWholeItemDownloadCleanupBatch,
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
+import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 import {
+  bindSonarrPathOwnership,
   cleanupAuthorizationFingerprint,
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
   persistResolvedCleanupIdentity,
+  publicSonarrHistoricalPaths,
   reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
+  resolveDownloadCleanup,
+  scopeSonarrReclamation,
 } from '../mediaDeletion/cleanup.ts';
 
 const QUICK_CLEANUP_LIVE_READ_CONCURRENCY = 3;
@@ -176,12 +185,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       const cleanupPreviewFingerprints = body.cleanupPreviewFingerprints as
         | Record<string, string>
         | undefined;
-      if (
-        cleanupDownloadRatingKeys.size > 0 &&
-        (!cleanupPreviewFingerprints ||
-          Object.keys(cleanupPreviewFingerprints).length !== cleanupDownloadRatingKeys.size ||
-          [...cleanupDownloadRatingKeys].some((key) => !cleanupPreviewFingerprints[key]))
-      ) {
+      if (cleanupDownloadRatingKeys.size > 0 && !cleanupPreviewFingerprints) {
         return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
       }
       if (
@@ -198,7 +202,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         coordinatedRatingKeys: [...coordinated].sort(),
         cleanupDownloadRatingKeys: [...cleanupDownloadRatingKeys].sort(),
         cleanupPreviewFingerprints: Object.fromEntries(
-          [...cleanupDownloadRatingKeys].sort().map((key) => [
+          Object.keys(cleanupPreviewFingerprints ?? {}).sort().map((key) => [
             key,
             cleanupPreviewFingerprints![key],
           ]),
@@ -303,7 +307,23 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         return c.json({ error: 'one or more items were not found in this library' }, 404);
       }
       let acceptedCleanups = new Map<string, ResolvedCleanupItem>();
-      if (cleanupDownloadRatingKeys.size > 0) {
+      const sonarrOwnedRatingKeys = new Set(
+        rows.flatMap((row) =>
+          row!.item[1] === 'show' && coordinated.has(row!.ratingKey) ? [row!.ratingKey] : []
+        ),
+      );
+      const cleanupInspectionKeys = new Set([
+        ...cleanupDownloadRatingKeys,
+        ...sonarrOwnedRatingKeys,
+      ]);
+      const submittedFingerprintKeys = Object.keys(cleanupPreviewFingerprints ?? {});
+      if (
+        submittedFingerprintKeys.length !== cleanupInspectionKeys.size ||
+        submittedFingerprintKeys.some((key) => !cleanupInspectionKeys.has(key))
+      ) {
+        return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
+      }
+      if (cleanupInspectionKeys.size > 0) {
         const selectedItems = rows.map((row) => ({
           ratingKey: row!.ratingKey,
           title: row!.item[0],
@@ -344,28 +364,50 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           );
         }
         const reconciled = reconcileSharedDownloadCleanups(rawCleanups);
-        acceptedCleanups = new Map(reconciled.map((cleanup) => [cleanup.ratingKey, cleanup]));
-        for (const ratingKey of cleanupDownloadRatingKeys) {
+        acceptedCleanups = new Map(
+          await Promise.all(reconciled.map(async (cleanup) =>
+            [
+              cleanup.ratingKey,
+              rows.find((row) => row!.ratingKey === cleanup.ratingKey)!.item[1] === 'show'
+                ? await bindSonarrPathOwnership(
+                  cleanup,
+                  downloadTargets,
+                  cleanupDownloadRatingKeys.has(cleanup.ratingKey),
+                )
+                : cleanup,
+            ] as const
+          )),
+        );
+        for (const ratingKey of cleanupInspectionKeys) {
           const cleanup = acceptedCleanups.get(ratingKey);
-          if (!cleanup || !cleanupIsEligible(cleanup)) {
+          if (
+            !cleanup ||
+            (cleanupDownloadRatingKeys.has(ratingKey) &&
+              (!cleanupIsEligible(cleanup) ||
+                (!sonarrOwnedRatingKeys.has(ratingKey) &&
+                  rows.find((row) => row!.ratingKey === ratingKey)!.item[1] === 'show' &&
+                  cleanup.downloadJobs.length === 0)))
+          ) {
             return c.json({
               error: cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
             }, 409);
           }
+          if (sonarrOwnedRatingKeys.has(ratingKey) && cleanup.status === 'error') {
+            return c.json({ error: cleanup.reason ?? 'Sonarr path ownership is unsafe' }, 409);
+          }
           if (
             await cleanupAuthorizationFingerprint(cleanup) !==
-              cleanupPreviewFingerprints![ratingKey]
+              cleanupPreviewFingerprints?.[ratingKey]
           ) {
             return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
           }
-          if (
-            cleanup.sonarrReclamation?.proofs.length && !coordinated.has(ratingKey)
-          ) {
-            return c.json({
-              error: 'verified Sonarr hardlink cleanup requires coordinated Sonarr deletion',
-            }, 409);
-          }
         }
+        acceptedCleanups = new Map([...acceptedCleanups].map(([ratingKey, cleanup]) => {
+          const row = rows.find((candidate) => candidate!.ratingKey === ratingKey)!;
+          return row.item[1] === 'show' && !sonarrOwnedRatingKeys.has(ratingKey)
+            ? [ratingKey, { ...cleanup, orphanFiles: [], sonarrReclamation: undefined }]
+            : [ratingKey, cleanup];
+        }));
       }
       const sortedCleanupKeys = [...cleanupDownloadRatingKeys].sort();
       const targets: NewDeletionTarget[] = rows.map((row) => {
@@ -373,7 +415,8 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         const mode = coordinated.has(found.ratingKey) ? 'coordinated' : 'plex-only';
         const quickCleanupCandidate = quickCleanupCandidates?.get(found.ratingKey);
         const acceptedCleanup = acceptedCleanups.get(found.ratingKey);
-        const persistAcceptedCleanup = cleanupDownloadRatingKeys.has(found.ratingKey) &&
+        const persistAcceptedCleanup = (cleanupDownloadRatingKeys.has(found.ratingKey) ||
+          sonarrOwnedRatingKeys.has(found.ratingKey)) &&
           acceptedCleanup !== undefined && cleanupHasDurableAcceptedIdentity(acceptedCleanup);
         return {
           kind: 'whole_item',
@@ -400,6 +443,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
                   acceptedCleanup,
                 ),
               }
+              : {}),
+            ...(sonarrOwnedRatingKeys.has(found.ratingKey) && acceptedCleanup
+              ? { sonarrHistoricalPaths: publicSonarrHistoricalPaths(acceptedCleanup) }
               : {}),
             ...(quickCleanupCandidate
               ? {
@@ -652,6 +698,11 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     }
     let acceptedPlan: Awaited<ReturnType<typeof buildVersionDeletionPlan>> | null = null;
     let acceptedReassignments: PersistedArrReassignment[] = [];
+    const episodeCleanups = new Map<number, ReturnType<typeof persistResolvedCleanupIdentity>>();
+    const episodeHistoricalPaths = new Map<
+      number,
+      ReturnType<typeof publicSonarrHistoricalPaths>
+    >();
     if (kind === 'movie_version') {
       const activeMovies = activeWholeItemRatingKeys(
         new Set([ratingKey]),
@@ -822,11 +873,123 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           }
         }
       }
-    } else if (
-      requestedPlanFingerprint || allowRadarrMovieRemoval ||
-      allowRadarrRetainedPathManagement
-    ) {
-      return c.json({ error: 'Radarr path adoption is unavailable for Sonarr episodes' }, 400);
+    } else {
+      if (allowRadarrMovieRemoval || allowRadarrRetainedPathManagement) {
+        return c.json({ error: 'Radarr path adoption is unavailable for Sonarr episodes' }, 400);
+      }
+      const item = enriched[0]!;
+      const [liveVersions, arrTargets, downloadTargets] = await Promise.all([
+        activeServer.client.mediaVersionPathPreviews(ratingKey),
+        getArrDeleteTargets(serverId, libraryKey),
+        getDownloadClientTargets(serverId),
+      ]);
+      const planInput = {
+        mediaType: 'episode' as const,
+        item,
+        selectedMediaIds: new Set(mediaIds),
+        liveVersions,
+        arrTargets,
+        cleanupConfigured: downloadTargets.length > 0,
+        allowPartialCoverage: true,
+        allowEpisodeDownloadCleanup: true,
+        episodeIdentity: {
+          seasonNumber: item.seasonIndex!,
+          episodeNumber: item.episodeIndex!,
+        },
+      };
+      const ownershipPlan = await buildVersionDeletionPlan({
+        ...planInput,
+        resolvedCleanup: null,
+      });
+      const managedByMedia = new Map<number, Set<number>>();
+      const managedPathsByMedia = new Map<number, Set<string>>();
+      for (const ownership of ownershipPlan.arrOwnerships) {
+        if (
+          ownership.managedMediaId === null || ownership.managedFileId === null ||
+          !mediaIds.includes(ownership.managedMediaId)
+        ) continue;
+        const ids = managedByMedia.get(ownership.managedMediaId) ?? new Set<number>();
+        ids.add(ownership.managedFileId);
+        managedByMedia.set(ownership.managedMediaId, ids);
+        if (ownership.managedPath !== null) {
+          const paths = managedPathsByMedia.get(ownership.managedMediaId) ?? new Set<string>();
+          paths.add(ownership.managedPath);
+          managedPathsByMedia.set(ownership.managedMediaId, paths);
+        }
+      }
+      let acceptedCleanup: ResolvedCleanupItem | null = null;
+      if (managedByMedia.size > 0) {
+        const raw = await resolveDownloadCleanup(
+          item.showRatingKey!,
+          {
+            title: item.showTitle ?? item.title,
+            type: 'show',
+            tmdbId: null,
+            tvdbId: item.tvdbId,
+          },
+          arrTargets,
+          downloadTargets,
+        );
+        const allManagedIds = new Set([...managedByMedia.values()].flatMap((ids) => [...ids]));
+        const selectedPaths = new Set(
+          liveVersions.flatMap((version) =>
+            cleanupMediaIds.has(version.mediaId)
+              ? version.paths.flatMap((path) => {
+                const normalized = normalizeRemoteAbsolute(path)?.comparison;
+                return normalized ? [normalized] : [];
+              })
+              : []
+          ),
+        );
+        const qbitScoped = selectVersionDownloadCleanup(raw, selectedPaths, true);
+        const allManagedPaths = new Set(
+          [...managedPathsByMedia.values()].flatMap((paths) => [...paths]),
+        );
+        acceptedCleanup = await bindSonarrPathOwnership(
+          scopeSonarrReclamation(
+            {
+              ...raw,
+              downloadJobs: qbitScoped?.downloadJobs ?? [],
+              sources: qbitScoped?.sources ?? raw.sources,
+            },
+            allManagedIds,
+            allManagedPaths,
+          ),
+          downloadTargets,
+          [...managedByMedia.keys()].some((mediaId) => cleanupMediaIds.has(mediaId)),
+        );
+        if (acceptedCleanup.status !== 'resolved') {
+          return c.json({
+            error: acceptedCleanup.reason ?? 'qBittorrent cleanup could not be verified',
+          }, 409);
+        }
+        for (const [mediaId, managedIds] of managedByMedia) {
+          const scoped = scopeSonarrReclamation(
+            acceptedCleanup,
+            managedIds,
+            managedPathsByMedia.get(mediaId),
+          );
+          episodeHistoricalPaths.set(mediaId, publicSonarrHistoricalPaths(scoped));
+          if (scoped.downloadJobs.length > 0 || scoped.sonarrReclamation) {
+            episodeCleanups.set(mediaId, persistResolvedCleanupIdentity(scoped));
+          }
+        }
+      } else if (requestedPlanFingerprint !== null) {
+        return c.json({ error: 'the accepted Sonarr coordination decision changed' }, 409);
+      }
+      acceptedPlan = await buildVersionDeletionPlan({
+        ...planInput,
+        resolvedCleanup: acceptedCleanup,
+      });
+      if (
+        managedByMedia.size > 0 &&
+        requestedPlanFingerprint !== await episodeVersionSonarrPlanFingerprint(acceptedPlan)
+      ) {
+        return c.json(
+          { error: 'the accepted Sonarr plan changed; review the deletion again' },
+          409,
+        );
+      }
     }
     const targets: NewDeletionTarget[] = enriched.map((target) => {
       const reassignment = acceptedReassignments.find(
@@ -888,6 +1051,18 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
               arrReassignmentMappings: acceptedPlan.arrMappingIdentities,
               arrOwnerships: acceptedPlan.arrOwnerships,
               radarrRemovalFallback: removalFallback,
+            }
+            : {}),
+          ...(kind === 'episode_version' && acceptedPlan
+            ? {
+              arrReassignmentMappings: acceptedPlan.arrMappingIdentities,
+              arrOwnerships: acceptedPlan.arrOwnerships,
+              ...(episodeCleanups.has(target.mediaId)
+                ? { seasonDownloadCleanup: episodeCleanups.get(target.mediaId) }
+                : {}),
+              ...(episodeHistoricalPaths.has(target.mediaId)
+                ? { sonarrHistoricalPaths: episodeHistoricalPaths.get(target.mediaId) }
+                : {}),
             }
             : {}),
         },

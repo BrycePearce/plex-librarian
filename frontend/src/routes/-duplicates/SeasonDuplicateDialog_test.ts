@@ -17,7 +17,9 @@ import {
   seasonDeletionPreviewIsUsable,
   seasonDestinationChoice,
   seasonDownloadCleanupVisible,
+  seasonDuplicateHistoricalPaths,
   seasonLaneMatchBasisLabel,
+  seasonLogicalMediaSizeLabel,
   seasonProfilesDeletionPlan,
   seasonProfileSelection,
   seasonSelectedDestinationServices,
@@ -72,6 +74,11 @@ function episode(key: string, mediaIds: number[]): DuplicateEpisodeGroup {
     versions: mediaIds.map(version),
   };
 }
+
+Deno.test("season headline labels selected bytes as logical media", () => {
+  assertEquals(seasonLogicalMediaSizeLabel(1024), "1000 KB logical media");
+  assertEquals(seasonLogicalMediaSizeLabel(null), "Logical media size unknown");
+});
 
 function profile(id: string, members: SeasonVersionProfile["members"]): SeasonVersionProfile {
   return {
@@ -389,6 +396,20 @@ Deno.test("season Sonarr destination requires an actionable aligned version", ()
   assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: false }), false);
   assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: true }), true);
   assertEquals(seasonSonarrVisible("selection-b", { key: "selection-a", sonarr: true }), false);
+});
+
+Deno.test("duplicate-season Sonarr wiring exposes every classified historical path", () => {
+  const paths = [{
+    path: "/downloads/episode.mkv",
+    managedPath: "/library/episode.mkv",
+    size: 100,
+    disposition: "retain_live_qbittorrent" as const,
+    reason: "live owner",
+  }];
+  const preview = { sonarrHistoricalPaths: paths } as SeasonDeletionPreviewResponse;
+  assertEquals(seasonDuplicateHistoricalPaths(preview, "none"), []);
+  assertEquals(seasonDuplicateHistoricalPaths(preview, "adopt_retained"), paths);
+  assertEquals(seasonDuplicateHistoricalPaths(preview, "remove_and_unmonitor"), paths);
 });
 
 Deno.test("season destinations are independently authorized for only the exact selection", () => {

@@ -25,8 +25,11 @@ import type {
 import { seasonDeletionPreviewExpiry } from './seasonDeletionFingerprint.ts';
 import { SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
 import {
+  bindSonarrPathOwnership,
   type PersistedResolvedCleanupItem,
   persistResolvedCleanupIdentity,
+  publicSonarrHistoricalPaths,
+  scopeSonarrReclamation,
 } from '../mediaDeletion/cleanup.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import {
@@ -141,6 +144,7 @@ export interface AuthoritativeSeasonPlan {
     mediaId: number;
     cleanup: PersistedResolvedCleanupItem;
   }>;
+  sonarrHistoricalPaths: SeasonDeletionPreviewResponse['sonarrHistoricalPaths'];
   preview: SeasonDeletionPreviewResponse;
 }
 
@@ -820,68 +824,167 @@ export async function buildAuthoritativeSeasonPlan(input: {
       (prepared.kind === 'plex_only' ? prepared.child.retainedMedia : prepared.retainedMedia)
         .map((media) => ({ plexPath: media.path, size: media.byteSize }))
     ),
-    inspect: input.inspectDownloadCleanup === true,
+    inspect: input.inspectDownloadCleanup === true || sonarrMutationRequested,
   });
   const cleanupEligibleMedia: AuthoritativeSeasonPlan['cleanupEligibleMedia'] = [];
   const cleanupPlans: AuthoritativeSeasonPlan['cleanupPlans'] = [];
+  const sonarrHistoricalPaths = new Map<
+    string,
+    NonNullable<SeasonDeletionPreviewResponse['sonarrHistoricalPaths']>[number]
+  >();
+  const ownershipBlockers: string[] = [];
   if (seriesCleanup) {
     const selectedCleanup = selectVersionDownloadCleanup(
       seriesCleanup,
       new Set(selectedEntries.map((entry) => entry.path)),
       true,
     );
-    if (selectedCleanup) {
-      const selectedJobIds = new Set(selectedCleanup.downloadJobs.map((job) => job.jobId));
-      const assignments = seasonDownloadJobAssignments(
-        selectedEntries.map((entry) => ({
-          targetKey: `${entry.episodeRatingKey}:${entry.media.mediaId}`,
-          episodeRatingKey: entry.episodeRatingKey,
-          episodeNumber: entry.episodeNumber,
-          mediaId: entry.media.mediaId,
-          path: entry.path,
-          automaticAdoption: entry.automaticAdoption,
-        })),
-        selectedCleanup.sources,
-        true,
-      );
-      const cleanupEligibleKeys = new Set(assignments.coveredTargetKeys);
-      for (const entry of selectedEntries) {
-        if (
-          selectedCleanup.orphanFiles.some((file) =>
-            normalizeRemoteAbsolute(file.importedPath)?.comparison === entry.path
-          )
-        ) cleanupEligibleKeys.add(`${entry.episodeRatingKey}:${entry.media.mediaId}`);
-      }
-      for (const entry of selectedEntries) {
-        const targetKey = `${entry.episodeRatingKey}:${entry.media.mediaId}`;
-        if (cleanupEligibleKeys.has(targetKey)) {
-          cleanupEligibleMedia.push({
-            episodeRatingKey: entry.episodeRatingKey,
-            mediaId: entry.media.mediaId,
-          });
+    const managedScopeByTarget = new Map<string, {
+      fileIds: Set<number>;
+      paths: Set<string>;
+    }>();
+    for (const entry of selectedEntries) {
+      const targetKey = `${entry.episodeRatingKey}:${entry.media.mediaId}`;
+      const scope = { fileIds: new Set<number>(), paths: new Set<string>() };
+      for (const prepared of preparedSelections) {
+        const episodeRatingKey = prepared.kind === 'plex_only'
+          ? prepared.child.episodeRatingKey
+          : prepared.selection.episodeRatingKey;
+        if (episodeRatingKey !== entry.episodeRatingKey) continue;
+        for (const ownership of prepared.arrOwnerships) {
+          if (ownership.managedMediaId !== entry.media.mediaId) continue;
+          if (ownership.managedFileId !== null) scope.fileIds.add(ownership.managedFileId);
+          if (ownership.managedPath !== null) scope.paths.add(ownership.managedPath);
         }
-        const ownedJobIds = new Set(
-          [...assignments.owners].flatMap(([jobId, owner]) => owner === targetKey ? [jobId] : []),
+      }
+      managedScopeByTarget.set(targetKey, scope);
+    }
+    const allManagedFileIds = new Set(
+      [...managedScopeByTarget.values()].flatMap((scope) => [...scope.fileIds]),
+    );
+    const allManagedPaths = new Set(
+      [...managedScopeByTarget.values()].flatMap((scope) => [...scope.paths]),
+    );
+    let boundSeriesCleanup = scopeSonarrReclamation(
+      {
+        ...seriesCleanup,
+        status: 'resolved' as const,
+        reason: undefined,
+        downloadJobs: input.cleanupDownloads ? selectedCleanup?.downloadJobs ?? [] : [],
+        sources: seriesCleanup.sources,
+      },
+      allManagedFileIds,
+      allManagedPaths,
+    );
+    if (sonarrMutationRequested && allManagedFileIds.size > 0) {
+      // Classify the complete authorized season scope before splitting it into
+      // durable targets. This lets a different-hash multi-file job prove its
+      // complete payload across more than one selected episode/version.
+      boundSeriesCleanup = await bindSonarrPathOwnership(
+        boundSeriesCleanup,
+        downloadTargets,
+        input.cleanupDownloads === true,
+      );
+      if (boundSeriesCleanup.status === 'error') {
+        ownershipBlockers.push(
+          boundSeriesCleanup.reason ?? 'Sonarr path ownership is unsafe',
         );
-        const sources = selectedCleanup.sources.filter((source) =>
-          selectedJobIds.has(source.downloadId) && ownedJobIds.has(source.downloadId)
-        );
-        const orphanFiles = selectedCleanup.orphanFiles.filter((file) =>
-          normalizeRemoteAbsolute(file.importedPath)?.comparison === entry.path
-        );
-        if (ownedJobIds.size === 0 && orphanFiles.length === 0) continue;
-        const scopedCleanup = {
-          ...selectedCleanup,
-          downloadJobs: selectedCleanup.downloadJobs.filter((job) => ownedJobIds.has(job.jobId)),
-          sources,
-          orphanFiles,
-        };
-        cleanupPlans.push({
+      }
+    }
+    const assignmentSources = boundSeriesCleanup.downloadJobs.flatMap((job) => {
+      const jobKey = `${job.instanceKey}:${job.jobId}`;
+      const authorizedPaths = new Set(job.authorizedSourcePaths.flatMap((path) => {
+        const normalized = normalizeRemoteAbsolute(path)?.comparison;
+        return normalized ? [normalized] : [];
+      }));
+      const importedPaths = [
+        ...(job.directPlexPathEvidence?.map((entry) => entry.plexPath) ?? []),
+        ...boundSeriesCleanup.sources.flatMap((source) => {
+          if (source.downloadId !== job.jobId || source.importedPath === null) return [];
+          const sourcePaths = [source.path, source.localPath].flatMap((path) => {
+            const normalized = path ? normalizeRemoteAbsolute(path)?.comparison : undefined;
+            return normalized ? [normalized] : [];
+          });
+          return sourcePaths.some((path) => authorizedPaths.has(path)) ? [source.importedPath] : [];
+        }),
+        ...(boundSeriesCleanup.sonarrReclamation?.proofs.flatMap((proof) =>
+          proof.ownershipJobs?.some((owner) =>
+              owner.selected && `${owner.instanceKey}:${owner.jobId}` === jobKey
+            )
+            ? [proof.importedPath]
+            : []
+        ) ?? []),
+      ];
+      return [...new Set(importedPaths)].map((importedPath) => ({
+        instanceKey: job.instanceKey,
+        jobId: job.jobId,
+        importedPath,
+      }));
+    });
+    const assignments = seasonDownloadJobAssignments(
+      selectedEntries.map((entry) => ({
+        targetKey: `${entry.episodeRatingKey}:${entry.media.mediaId}`,
+        episodeRatingKey: entry.episodeRatingKey,
+        episodeNumber: entry.episodeNumber,
+        mediaId: entry.media.mediaId,
+        path: entry.path,
+        automaticAdoption: entry.automaticAdoption,
+      })),
+      assignmentSources,
+      true,
+    );
+    const cleanupEligibleKeys = new Set(assignments.coveredTargetKeys);
+    for (const entry of selectedEntries) {
+      const targetKey = `${entry.episodeRatingKey}:${entry.media.mediaId}`;
+      if (cleanupEligibleKeys.has(targetKey)) {
+        cleanupEligibleMedia.push({
           episodeRatingKey: entry.episodeRatingKey,
           mediaId: entry.media.mediaId,
-          cleanup: persistResolvedCleanupIdentity(scopedCleanup),
         });
       }
+      const managedScope = managedScopeByTarget.get(targetKey)!;
+      const ownedJobKeys = new Set([
+        [...assignments.owners].flatMap(([jobKey, owner]) => owner === targetKey ? [jobKey] : []),
+        ...(boundSeriesCleanup.sonarrReclamation?.proofs.flatMap((proof) =>
+          managedScope.fileIds.has(proof.managedFileId)
+            ? proof.ownershipJobs?.flatMap((owner) =>
+              owner.selected ? [`${owner.instanceKey}:${owner.jobId}`] : []
+            ) ?? []
+            : []
+        ) ?? []),
+      ].flat());
+      let scopedCleanup = scopeSonarrReclamation(
+        {
+          ...boundSeriesCleanup,
+          downloadJobs: input.cleanupDownloads
+            ? boundSeriesCleanup.downloadJobs.filter((job) =>
+              ownedJobKeys.has(`${job.instanceKey}:${job.jobId}`)
+            )
+            : [],
+        },
+        managedScope.fileIds,
+        managedScope.paths,
+      );
+      if (!sonarrMutationRequested) {
+        scopedCleanup = {
+          ...scopedCleanup,
+          orphanFiles: [],
+          sonarrReclamation: undefined,
+        };
+      }
+      for (const historical of publicSonarrHistoricalPaths(scopedCleanup)) {
+        sonarrHistoricalPaths.set(historical.path, historical);
+      }
+      if (scopedCleanup.status === 'error') continue;
+      if (
+        scopedCleanup.downloadJobs.length === 0 && scopedCleanup.orphanFiles.length === 0 &&
+        !scopedCleanup.sonarrReclamation
+      ) continue;
+      cleanupPlans.push({
+        episodeRatingKey: entry.episodeRatingKey,
+        mediaId: entry.media.mediaId,
+        cleanup: persistResolvedCleanupIdentity(scopedCleanup),
+      });
     }
   }
   const targetEvidence: AuthoritativeSeasonPlan['targetEvidence'] = preparedSelections.flatMap(
@@ -939,6 +1042,8 @@ export async function buildAuthoritativeSeasonPlan(input: {
     cleanupDownloads: input.cleanupDownloads === true,
     cleanupEligibleMedia,
     cleanupPlans,
+    sonarrHistoricalPaths: [...sonarrHistoricalPaths.values()],
+    ownershipBlockers: [...new Set(ownershipBlockers)],
     targetEvidence,
     plexOnlyChildren,
     managedGroups: [...managedGroups.values()].map((entry) => ({
@@ -1043,7 +1148,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
       members.filter((entry) => entry.outcome === 'automatic_adoption').length,
     removedAndUnmonitoredCount:
       members.filter((entry) => entry.outcome === 'removed_and_unmonitored').length,
-    blockers: [],
+    blockers: [...new Set(ownershipBlockers)],
     members,
     sonarrAvailable: sonarrMutationAvailable,
     sonarrConfigured: targets.length > 0,
@@ -1056,6 +1161,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
     sonarrAdoptionTargets,
     sonarrDestinations,
     downloadDestinations,
+    sonarrHistoricalPaths: [...sonarrHistoricalPaths.values()],
     breakGlassAvailable: adoptionUnavailable || acceptedBreakGlass,
     adoptionUnavailableReason: adoptionUnavailable || acceptedBreakGlass
       ? 'Sonarr could not verify an exact eligible retained file for every managed episode. Break-glass removal permanently unmonitors the affected episode.'
@@ -1144,11 +1250,18 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
         entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
       );
       if (!accepted) throw new Error('authoritative season coordination evidence is incomplete');
-      const cleanup = plan.cleanupDownloads
-        ? plan.cleanupPlans.find((entry) =>
-          entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
-        )
-        : undefined;
+      const cleanup = plan.cleanupPlans.find((entry) =>
+        entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
+      );
+      const selectedPathComparisons = new Set([selected.path, selected.arrPath].flatMap((path) => {
+        const normalized = normalizeRemoteAbsolute(path)?.comparison;
+        return normalized ? [normalized] : [];
+      }));
+      const targetHistoricalPaths = plan.sonarrHistoricalPaths?.filter((entry) => {
+        if (entry.managedPath === null) return true;
+        const normalized = normalizeRemoteAbsolute(entry.managedPath)?.comparison;
+        return normalized !== undefined && selectedPathComparisons.has(normalized);
+      }) ?? [];
       const selectedTechnical = technicalSnapshot(selected.version);
       const expectedRetainedVersions = retained.map((entry) => {
         const retainedTechnical = technicalSnapshot(entry.version);
@@ -1193,7 +1306,8 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
           episodeIndex: child.episodeNumber,
           seasonCleanup: true,
           skipArrCoordination: plan.sonarrMode === 'none',
-          cleanupDownloads: cleanup !== undefined,
+          cleanupDownloads: plan.cleanupDownloads &&
+            (cleanup?.cleanup.downloadJobs.length ?? 0) > 0,
           expectedPlexPath: selected.path,
           selectedMediaIds: [selected.mediaId],
           operationMediaIds,
@@ -1232,6 +1346,7 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
             }
             : {}),
           ...(cleanup ? { seasonDownloadCleanup: cleanup.cleanup } : {}),
+          sonarrHistoricalPaths: targetHistoricalPaths,
         },
         reservation: {
           mediaKind: 'episode' as const,

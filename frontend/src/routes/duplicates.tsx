@@ -174,7 +174,10 @@ function DuplicatesPage() {
           },
         );
       }
-      return await api.duplicates.deleteEpisodeMediaVersions(group.episodeRatingKey, mediaIds);
+      return await api.duplicates.deleteEpisodeMediaVersions(group.episodeRatingKey, mediaIds, {
+        cleanupMediaIds,
+        ...(planFingerprint ? { planFingerprint } : {}),
+      });
     },
     onSuccess: (res) => {
       trackDeletionOperation(res.operationId, [

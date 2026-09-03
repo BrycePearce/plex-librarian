@@ -56,6 +56,33 @@ Deno.test("movie version deletion serializes explicit Plex-only intent", async (
   assertEquals(typeof body.clientRequestId, "string");
 });
 
+Deno.test("episode version deletion binds automatic Sonarr proof and independent qBittorrent intent", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };
+  globalThis.fetch = (input, init) => {
+    captured.input = input;
+    captured.init = init;
+    return Promise.resolve(Response.json({ operationId: "operation-1", status: "queued" }, {
+      status: 202,
+    }));
+  };
+
+  try {
+    await api.duplicates.deleteEpisodeMediaVersions("episode-1", [21], {
+      cleanupMediaIds: [21],
+      planFingerprint: "b".repeat(64),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(captured.input, "/api/duplicates/episodes/episode-1/media");
+  const body = JSON.parse(String(captured.init?.body));
+  assertEquals(body.mediaIds, [21]);
+  assertEquals(body.cleanupMediaIds, [21]);
+  assertEquals(body.planFingerprint, "b".repeat(64));
+});
+
 Deno.test("season cleanup serializes selections as episode media", async () => {
   const originalFetch = globalThis.fetch;
   const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };

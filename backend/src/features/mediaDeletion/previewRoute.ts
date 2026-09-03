@@ -7,6 +7,7 @@ import { type ActiveServerVariables, withActiveServerId } from '../../middleware
 import type { DownloadCleanupPreviewResponse } from '@plex-librarian/shared/types.ts';
 import { findAmbiguousExternalIds, getArrDeleteTargets } from '../arr/delete.ts';
 import {
+  bindSonarrPathOwnership,
   cleanupAuthorizationFingerprint,
   cleanupIsEligible,
   publicCleanupItem,
@@ -124,11 +125,34 @@ export function createDownloadCleanupPreviewRouter(
           ...pathPreview,
         };
       }
+      const sonarrBound = item.type === 'show' && resolved.arrStatus === 'resolved'
+        ? await bindSonarrPathOwnership(resolved, downloadTargets, false)
+        : null;
+      const qbitBound = item.type === 'show' && resolved.arrStatus === 'resolved'
+        ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
+        : resolved;
+      const publicQbit = publicCleanupItem(qbitBound);
+      const publicSonarr = sonarrBound ? publicCleanupItem(sonarrBound) : null;
       return {
-        ...publicCleanupItem(resolved),
+        ...publicQbit,
+        ...(publicSonarr
+          ? {
+            sonarrCleanupStatus: publicSonarr.status,
+            ...(publicSonarr.reason ? { sonarrCleanupReason: publicSonarr.reason } : {}),
+            orphanFiles: publicSonarr.orphanFiles,
+            retainedPaths: publicSonarr.retainedPaths,
+            sonarrHistoricalPaths: publicSonarr.sonarrHistoricalPaths,
+            qbittorrentOrphanFiles: publicQbit.orphanFiles,
+            qbittorrentRetainedPaths: publicQbit.retainedPaths,
+            qbittorrentSonarrHistoricalPaths: publicQbit.sonarrHistoricalPaths,
+          }
+          : {}),
         ...pathPreview,
-        ...(cleanupIsEligible(resolved)
-          ? { cleanupFingerprint: await cleanupAuthorizationFingerprint(resolved) }
+        ...(cleanupIsEligible(qbitBound)
+          ? { cleanupFingerprint: await cleanupAuthorizationFingerprint(qbitBound) }
+          : {}),
+        ...(sonarrBound?.status === 'resolved'
+          ? { sonarrCleanupFingerprint: await cleanupAuthorizationFingerprint(sonarrBound) }
           : {}),
       };
     }));

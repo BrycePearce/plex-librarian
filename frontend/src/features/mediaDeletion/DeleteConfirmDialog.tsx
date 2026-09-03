@@ -15,8 +15,9 @@ import {
   downloadCleanupDestinationVisible,
   effectiveArrSelection,
   eligibleDownloadCleanupItems,
-  shouldDefaultOrphanOnlyCleanup,
+  selectedSonarrOwnershipProblems,
   shouldUseArrByDefault,
+  SONARR_OWNED_PATH_COPY,
 } from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
 import { deletionImpact } from "./deletionImpact.ts";
@@ -87,7 +88,6 @@ export function DeleteConfirmDialog({
     () => new Map(preview.data?.items.map((item) => [item.ratingKey, item]) ?? []),
     [preview.data],
   );
-  const allowOrphanOnlyCleanup = items.every((item) => item.type === "show");
   const coordinatedRatingKeys = preview.data?.coordinatedConfigured
     ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((
       item,
@@ -103,19 +103,16 @@ export function DeleteConfirmDialog({
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
   const cleanupEligibleItems = eligibleDownloadCleanupItems(
     preview.data,
-    allowOrphanOnlyCleanup,
-    effectiveDeleteFromArr,
+    false,
+    false,
   );
   const cleanupEligibleCount = cleanupEligibleItems.length;
-  const hasLiveJobCleanup = cleanupEligibleItems.some((item) => item.downloadJobs.length > 0);
-  const hasOrphanCleanup = cleanupEligibleItems.some((item) => item.orphanFiles.length > 0);
   const cleanupDestinationVisible = downloadCleanupDestinationVisible(
     preview.data,
-    allowOrphanOnlyCleanup && effectiveDeleteFromArr,
+    false,
   );
-  const defaultOrphanOnlyCleanup = allowOrphanOnlyCleanup &&
-    shouldDefaultOrphanOnlyCleanup(preview.data);
-  const orphanOnlyDestination = hasOrphanCleanup && !hasLiveJobCleanup;
+  const defaultOrphanOnlyCleanup = false;
+  const orphanOnlyDestination = false;
   const cleanupAuthorizationKey = cleanupEligibleCount > 0 &&
       cleanupEligibleItems.every((item) => item.cleanupFingerprint)
     ? JSON.stringify(
@@ -124,11 +121,14 @@ export function DeleteConfirmDialog({
     : null;
   const effectiveCleanupDownloads = cleanupDownloads && cleanupAuthorizationKey !== null &&
     acceptedCleanupKeyRef.current === cleanupAuthorizationKey;
-  const cleanupProblems = preview.data?.items.filter((item) =>
-    item.status !== "resolved" ||
-    (item.downloadJobs.length === 0 &&
-      (!allowOrphanOnlyCleanup || !effectiveDeleteFromArr || item.orphanFiles.length === 0))
-  ) ?? [];
+  const cleanupProblems =
+    preview.data?.items.filter((item) =>
+      item.status !== "resolved" || item.downloadJobs.length === 0
+    ) ?? [];
+  const sonarrOwnershipProblems = selectedSonarrOwnershipProblems(
+    preview.data,
+    effectiveDeleteFromArr && arrService === "sonarr",
+  );
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     acceptedCleanupKeyRef.current = null;
@@ -198,6 +198,7 @@ export function DeleteConfirmDialog({
     pending,
     hasSelection: items.length > 0,
     preview: preview.isLoading ? "loading" : preview.isError ? "error" : "ready",
+    semanticBlock: sonarrOwnershipProblems.length > 0,
   });
 
   return (
@@ -210,14 +211,16 @@ export function DeleteConfirmDialog({
       summary={
         <>
           <span className="font-semibold text-base-content">
-            {formatKilobytes(totalSize)}
+            {formatKilobytes(totalSize)} logical media selected
           </span>{" "}
           {unknownSizeCount > 0 && (
             <>
               plus {unknownSizeCount} unknown-size {unknownSizeCount === 1 ? "item" : "items"}
             </>
           )}
-          will be permanently removed. This cannot be undone.
+          The selected items will be permanently removed. Actual disk space recovered may differ.
+          {" "}
+          This cannot be undone.
         </>
       }
     >
@@ -230,7 +233,9 @@ export function DeleteConfirmDialog({
               </p>
             )}
             <DeletionPreviewStatus
-              error={preview.isError ? preview.error.message : null}
+              error={preview.isError
+                ? preview.error.message
+                : sonarrOwnershipProblems[0]?.sonarrCleanupReason ?? null}
               onRetry={() => void preview.refetch()}
               retrying={preview.isFetching}
               warnings={[
@@ -352,7 +357,9 @@ export function DeleteConfirmDialog({
                   id: "arr" as const,
                   service: arrService,
                   label: arrLabel,
-                  info: `Deletes the managed title and its files through ${arrLabel}.`,
+                  info: arrService === "sonarr"
+                    ? SONARR_OWNED_PATH_COPY
+                    : `Deletes the managed title and its files through ${arrLabel}.`,
                   checked: effectiveDeleteFromArr,
                   disabled: pending || preview.isLoading,
                   warning: arrProblems.length > 0,
@@ -396,13 +403,19 @@ export function DeleteConfirmDialog({
                 cleanupDownloadRatingKeys: effectiveCleanupDownloads
                   ? cleanupEligibleItems.map((item) => item.ratingKey)
                   : [],
-                cleanupPreviewFingerprints: effectiveCleanupDownloads
-                  ? Object.fromEntries(
-                    cleanupEligibleItems.flatMap((item) =>
-                      item.cleanupFingerprint ? [[item.ratingKey, item.cleanupFingerprint]] : []
-                    ),
-                  )
-                  : {},
+                cleanupPreviewFingerprints: Object.fromEntries(
+                  items.flatMap((item) => {
+                    const itemPreview = previewByRatingKey.get(item.ratingKey);
+                    if (effectiveCleanupDownloads && itemPreview?.cleanupFingerprint) {
+                      return [[item.ratingKey, itemPreview.cleanupFingerprint]];
+                    }
+                    if (
+                      effectiveDeleteFromArr && item.type === "show" &&
+                      itemPreview?.sonarrCleanupFingerprint
+                    ) return [[item.ratingKey, itemPreview.sonarrCleanupFingerprint]];
+                    return [];
+                  }),
+                ),
               })}
           />
         }

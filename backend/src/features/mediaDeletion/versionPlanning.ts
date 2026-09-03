@@ -12,7 +12,11 @@ import {
 } from '@plex-librarian/shared/mediaVersionRanking.ts';
 import type { ArrExtraFile, ArrMediaRecord } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
-import { publicCleanupItem, type ResolvedCleanupItem } from './cleanup.ts';
+import {
+  cleanupAuthorizationFingerprint,
+  publicCleanupItem,
+  type ResolvedCleanupItem,
+} from './cleanup.ts';
 import { normalizeRemoteAbsolute } from './hardlinks.ts';
 import { appendRemotePath } from './ownership.ts';
 import {
@@ -51,6 +55,45 @@ export interface VersionDeletionPlan {
   cleanup: ResolvedCleanupItem | null;
   radarrRemovalFallback?: Omit<PersistedRadarrRemovalFallback, 'userAuthorizedRadarrRemoval'>;
   radarrPathOverride?: RadarrPathAdoptionPreview;
+}
+
+/** Bind an episode submission to the exact backend Sonarr reassignment and cleanup decision. */
+export async function episodeVersionSonarrPlanFingerprint(
+  plan: VersionDeletionPlan,
+): Promise<string> {
+  const reassignments = plan.eligibleArrReassignments.map((entry) => ({
+    instanceId: entry.target.instanceId,
+    instanceType: entry.target.instanceType,
+    instanceUrl: entry.target.instanceUrl,
+    configurationUpdatedAt: entry.target.configurationUpdatedAt,
+    mappingIdentity: entry.target.mappingIdentity,
+    recordId: entry.recordId,
+    recordPath: entry.recordPath,
+    episodeId: entry.episodeId,
+    managedFileId: entry.managedFileId,
+    managedFileSize: entry.managedFileSize,
+    managedPath: entry.managedPath,
+    managedMediaId: entry.managedMediaId,
+    monitored: entry.monitored,
+    candidatePaths: [...entry.candidatePaths].sort(([left], [right]) => left - right),
+    candidateRecordPaths: [...entry.candidateRecordPaths].sort(([left], [right]) => left - right),
+    candidateFileSizes: [...entry.candidateFileSizes].sort(([left], [right]) => left - right),
+    alreadyReassigned: entry.alreadyReassigned,
+  })).sort((left, right) =>
+    left.instanceId - right.instanceId || left.recordId - right.recordId ||
+    (left.episodeId ?? -1) - (right.episodeId ?? -1)
+  );
+  return await stableFingerprint({
+    preview: plan.preview,
+    arrMappingIdentities: plan.arrMappingIdentities,
+    arrOwnerships: plan.arrOwnerships,
+    arrOwnershipValid: plan.arrOwnershipValid,
+    arrOwnershipReason: plan.arrOwnershipReason,
+    arrManagedMediaIds: plan.arrManagedMediaIds,
+    arrReassignCandidateMediaIds: plan.arrReassignCandidateMediaIds,
+    reassignments,
+    cleanupFingerprint: plan.cleanup ? await cleanupAuthorizationFingerprint(plan.cleanup) : null,
+  });
 }
 
 async function stableFingerprint(value: unknown): Promise<string> {
@@ -116,6 +159,17 @@ export function selectVersionDownloadCleanup(
   allowPartialCoverage = false,
 ): ResolvedCleanupItem | null {
   if (!cleanup || selectedPaths.size === 0 || cleanup.status === 'error') return null;
+  const scopedSonarrReclamation = cleanup.sonarrReclamation !== undefined &&
+    cleanup.sonarrReclamation.proofs.length > 0 &&
+    cleanup.sonarrReclamation.proofs.every((proof) => {
+      const managedPath = normalizedComparison(proof.managedPath);
+      return managedPath !== null && selectedPaths.has(managedPath);
+    });
+  const scopedSonarrProofsByPath = new Map(
+    scopedSonarrReclamation
+      ? cleanup.sonarrReclamation!.proofs.map((proof) => [proof.path, proof])
+      : [],
+  );
   if (
     cleanup.status === 'resolved' &&
     cleanup.downloadJobs.length === 0 &&
@@ -138,13 +192,25 @@ export function selectVersionDownloadCleanup(
     return eligible;
   });
   const orphanFiles = cleanup.orphanFiles.filter((file) => {
+    const sonarrProof = scopedSonarrProofsByPath.get(file.path);
+    if (sonarrProof) {
+      const managedPath = normalizedComparison(sonarrProof.managedPath);
+      if (managedPath) coveredPaths.add(managedPath);
+      return true;
+    }
     const importedPath = normalizedComparison(file.importedPath);
     const eligible = importedPath !== null && selectedPaths.has(importedPath);
     if (eligible) coveredPaths.add(importedPath);
     return eligible;
   });
+  if (scopedSonarrReclamation) {
+    for (const proof of cleanup.sonarrReclamation!.proofs) {
+      const managedPath = normalizedComparison(proof.managedPath);
+      if (managedPath) coveredPaths.add(managedPath);
+    }
+  }
   if (
-    (downloadJobs.length === 0 && orphanFiles.length === 0) ||
+    (downloadJobs.length === 0 && orphanFiles.length === 0 && !scopedSonarrReclamation) ||
     (!allowPartialCoverage && [...selectedPaths].some((path) => !coveredPaths.has(path)))
   ) {
     return null;
@@ -479,7 +545,11 @@ export async function buildVersionDeletionPlan({
   const cleanup = pathsComplete && (mediaType === 'movie' || allowEpisodeDownloadCleanup)
     ? selectVersionDownloadCleanup(resolvedCleanup, selectedPaths, allowPartialCoverage)
     : null;
-  const publicCleanup = cleanup ? publicCleanupItem(cleanup) : null;
+  const publicCleanup = cleanup
+    ? publicCleanupItem(cleanup)
+    : resolvedCleanup?.sonarrReclamation
+    ? publicCleanupItem(resolvedCleanup)
+    : null;
   const arrStatus = eligibleArrTargets.length > 0
     ? ('resolved' as const)
     : arrErrors.length > 0
@@ -596,6 +666,7 @@ export async function buildVersionDeletionPlan({
       downloadJobs: publicCleanup?.downloadJobs ?? [],
       orphanFiles: publicCleanup?.orphanFiles ?? [],
       retainedPaths: publicCleanup?.retainedPaths ?? [],
+      sonarrHistoricalPaths: publicCleanup?.sonarrHistoricalPaths ?? [],
     },
   };
 }

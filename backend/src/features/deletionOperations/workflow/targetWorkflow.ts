@@ -28,6 +28,7 @@ import {
   rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
+  revalidateAcceptedSonarrPathOwnership,
   selectVerifiedDownloadCleanups,
 } from '../../mediaDeletion/cleanup.ts';
 import {
@@ -43,6 +44,7 @@ import {
   deriveHardlinkStorageAggregate,
   HARDLINK_OUTCOME_REASON,
   type PersistedSonarrReclamation,
+  sonarrReclamationAccountingFileCount,
   unlinkConfirmedReclamationProofs,
 } from '../../mediaDeletion/reclamation.ts';
 import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarrSeasonInspection.ts';
@@ -576,6 +578,37 @@ async function markArrAttempt(
     });
 }
 
+export function canConfirmOrphanAbsenceForCleanup(
+  cleanup: Pick<ResolvedCleanupItem, 'sonarrReclamation'>,
+  path: string,
+): boolean {
+  return !cleanup.sonarrReclamation ||
+    cleanup.sonarrReclamation.proofs.some((proof) =>
+      proof.path === path && proof.unlinkAttemptedAt !== undefined
+    );
+}
+
+async function confirmedAttemptedOrphanAbsences(
+  serverId: number,
+  attemptRatingKey: string,
+  cleanup: ResolvedCleanupItem,
+): Promise<Set<string>> {
+  const attemptedByItem = await loadAttemptedOrphanFilesByItem(serverId, [attemptRatingKey]);
+  const configuredRoots = new Set(cleanup.orphanFiles.map((file) => file.root));
+  const acceptedPaths = new Set(cleanup.orphanFiles.map((file) => file.path));
+  const confirmed = new Set<string>();
+  for (const attempt of attemptedByItem.get(attemptRatingKey) ?? []) {
+    if (
+      acceptedPaths.has(attempt.path) &&
+      canConfirmOrphanAbsenceForCleanup(cleanup, attempt.path) &&
+      await completedOrphanFileAttempt(attempt, configuredRoots)
+    ) {
+      confirmed.add(attempt.path);
+    }
+  }
+  return confirmed;
+}
+
 async function executeCleanup(
   serverId: number,
   associations: ReadonlyMap<string, ResolvedCleanupItem>,
@@ -583,6 +616,9 @@ async function executeCleanup(
   attemptParentRatingKey?: string,
   reconcileAttemptedAbsence = false,
   callbacks: {
+    authorizeOrphanDelete?: (
+      file: import('../../mediaDeletion/hardlinks.ts').VerifiedOrphanFile,
+    ) => Promise<boolean>;
     beforeOrphanDelete?: (
       file: import('../../mediaDeletion/hardlinks.ts').VerifiedOrphanFile,
     ) => Promise<void>;
@@ -595,23 +631,15 @@ async function executeCleanup(
   const confirmedJobAbsences = new Set<string>();
   const confirmedOrphanAbsences = new Set<string>();
   if (reconcileAttemptedAbsence) {
-    const [attemptedJobsByItem, attemptedOrphansByItem] = await Promise.all([
+    const [attemptedJobsByItem, confirmedOrphans] = await Promise.all([
       loadAttemptedDownloadJobKeysByItem(serverId, [attemptRatingKey]),
-      loadAttemptedOrphanFilesByItem(serverId, [attemptRatingKey]),
+      confirmedAttemptedOrphanAbsences(serverId, attemptRatingKey, cleanup),
     ]);
     const attemptedJobs = attemptedJobsByItem.get(attemptRatingKey) ?? new Set<string>();
     for (const key of await confirmedAttemptedDownloadJobAbsences(cleanup, attemptedJobs)) {
       confirmedJobAbsences.add(key);
     }
-    const configuredRoots = new Set(cleanup.orphanFiles.map((file) => file.root));
-    for (const attempt of attemptedOrphansByItem.get(attemptRatingKey) ?? []) {
-      if (
-        cleanup.orphanFiles.some((file) => file.path === attempt.path) &&
-        await completedOrphanFileAttempt(attempt, configuredRoots)
-      ) {
-        confirmedOrphanAbsences.add(attempt.path);
-      }
-    }
+    for (const path of confirmedOrphans) confirmedOrphanAbsences.add(path);
   }
   await executeDownloadedFileCleanup(
     cleanup,
@@ -680,20 +708,29 @@ async function executeCleanup(
       await callbacks.beforeOrphanDelete?.(file);
     },
     async (file) => await callbacks.afterOrphanDelete?.(file),
+    async (file) => await callbacks.authorizeOrphanDelete?.(file) ?? true,
   );
 }
 
 function updateReclamationSnapshot(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
-  update: (accepted: PersistedSonarrReclamation) => void,
+  update: (
+    accepted: PersistedSonarrReclamation,
+    cleanup: NonNullable<
+      | DurableTargetSnapshot['wholeItemDownloadCleanup']
+      | DurableTargetSnapshot['seasonDownloadCleanup']
+    >,
+  ) => void,
 ): void {
   const before = JSON.stringify(snapshot);
   const next = structuredClone(snapshot);
-  if (!next.wholeItemDownloadCleanup?.sonarrReclamation) {
+  const cleanup = next.wholeItemDownloadCleanup ?? next.seasonDownloadCleanup;
+  const reclamation = cleanup?.sonarrReclamation;
+  if (!reclamation) {
     throw new DeletionConvergenceError('The accepted Sonarr hardlink proof is missing');
   }
-  update(next.wholeItemDownloadCleanup.sonarrReclamation);
+  update(reclamation, cleanup);
   const now = Math.floor(Date.now() / 1000);
   const changed = withTransaction((client) =>
     client.prepare(
@@ -705,6 +742,18 @@ function updateReclamationSnapshot(
   }
   Object.assign(snapshot, next);
   target.snapshot = JSON.stringify(next);
+}
+
+function persistRevalidatedSonarrOwnership(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+  cleanup: ResolvedCleanupItem,
+): void {
+  updateReclamationSnapshot(target, snapshot, (current, persistedCleanup) => {
+    current.proofs = structuredClone(cleanup.sonarrReclamation!.proofs);
+    persistedCleanup.orphanFiles = structuredClone(cleanup.orphanFiles);
+    persistedCleanup.retainedPaths = structuredClone(cleanup.retainedPaths);
+  });
 }
 
 async function acceptedSonarrReclamationTarget(
@@ -806,7 +855,7 @@ function persistStorageOutcome(
 
 function persistUnknownStorageOutcome(
   target: DeletionWorkTarget,
-  reason: string,
+  reason: string | readonly string[],
   accepted?: PersistedSonarrReclamation,
   advanceToPlexReconciliation = false,
 ): void {
@@ -814,9 +863,51 @@ function persistUnknownStorageOutcome(
     outcome: 'unknown',
     verifiedHardlinkDataSize: 0,
     verifiedFileCount: accepted ? 0 : null,
-    unknownFileCount: accepted?.inventory.length ?? null,
-    reasons: [reason],
+    unknownFileCount: accepted ? sonarrReclamationAccountingFileCount(accepted) : null,
+    reasons: [...new Set(Array.isArray(reason) ? reason : [reason])],
   }, advanceToPlexReconciliation);
+}
+
+function sonarrHistoricalOutcomeReasons(
+  snapshot: DurableTargetSnapshot,
+  accepted?: PersistedSonarrReclamation,
+): string[] {
+  return [
+    ...new Set(
+      [
+        ...(snapshot.sonarrHistoricalPaths ?? []).flatMap((entry) =>
+          entry.disposition === 'delete' ? [] : [entry.reason]
+        ),
+        ...(accepted?.proofs.flatMap((proof) =>
+          proof.ownershipDisposition !== 'delete' && proof.ownershipReason
+            ? [proof.ownershipReason]
+            : []
+        ) ?? []),
+      ],
+    ),
+  ];
+}
+
+async function finalizeScopedSonarrReclamation(
+  target: DeletionWorkTarget,
+  snapshot: DurableTargetSnapshot,
+): Promise<void> {
+  const accepted = snapshot.seasonDownloadCleanup?.sonarrReclamation;
+  const historicalReasons = sonarrHistoricalOutcomeReasons(snapshot, accepted);
+  if (!accepted) {
+    if (historicalReasons.length > 0) persistUnknownStorageOutcome(target, historicalReasons);
+    return;
+  }
+  for (const proof of unlinkConfirmedReclamationProofs(accepted)) {
+    await assertVerifiedLibraryPathAbsent(proof);
+  }
+  persistStorageOutcome(
+    target,
+    deriveHardlinkStorageAggregate(
+      accepted,
+      historicalReasons,
+    ),
+  );
 }
 
 function recordReclamationGateFailure(
@@ -859,7 +950,7 @@ async function ensureWholeItemDeleted(
     : [];
 
   if (
-    snapshot.cleanupDownloads &&
+    (snapshot.cleanupDownloads || snapshot.wholeItemDownloadCleanup?.sonarrReclamation) &&
     (target.phase === 'validating' || target.phase === 'download_cleanup')
   ) {
     if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
@@ -895,10 +986,23 @@ async function ensureWholeItemDeleted(
       attemptedByItem,
     );
     if (snapshot.wholeItemDownloadCleanup) {
-      const accepted = rehydrateResolvedCleanup(
+      let accepted = rehydrateResolvedCleanup(
         snapshot.wholeItemDownloadCleanup,
         downloadTargets,
       );
+      if (accepted.sonarrReclamation) {
+        const confirmedAbsences = await confirmedAttemptedOrphanAbsences(
+          target.serverId,
+          snapshot.ratingKey,
+          accepted,
+        );
+        accepted = await revalidateAcceptedSonarrPathOwnership(
+          accepted,
+          downloadTargets,
+          confirmedAbsences,
+        );
+        persistRevalidatedSonarrOwnership(target, snapshot, accepted);
+      }
       const index = rawCleanups.findIndex((cleanup) => cleanup.ratingKey === snapshot.ratingKey);
       if (index >= 0) {
         if (accepted.downloadJobs.some((job) => job.authorizationMode === 'whole_show_hash')) {
@@ -908,10 +1012,10 @@ async function ensureWholeItemDeleted(
             attemptedJobs.get(snapshot.ratingKey) ?? new Set(),
           );
           if (accepted.sonarrReclamation) {
-            rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+            rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted, true);
           }
         } else {
-          rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted);
+          rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted, true);
         }
       } else rawCleanups.push(accepted);
     }
@@ -921,13 +1025,15 @@ async function ensureWholeItemDeleted(
     );
     const cleanup = cleanups.get(snapshot.ratingKey);
     if (
-      !cleanup || (!cleanupIsEligible(cleanup) && !cleanup.reason?.includes('previously started'))
+      !cleanup ||
+      (!cleanupIsEligible(cleanup) && !cleanup.reason?.includes('previously started') &&
+        !snapshot.wholeItemDownloadCleanup?.sonarrReclamation)
     ) {
       throw new Error(
         cleanup?.reason ?? 'no verified download job or orphan hardlink is available',
       );
     }
-    const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
+    let accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
     if (accepted) {
       try {
         await acceptedSonarrReclamationTarget(
@@ -945,6 +1051,7 @@ async function ensureWholeItemDeleted(
         throw error;
       }
     }
+    let latestOwnershipCleanup = cleanup;
     try {
       await executeCleanup(
         target.serverId,
@@ -954,6 +1061,14 @@ async function ensureWholeItemDeleted(
         snapshot.wholeItemDownloadCleanup !== undefined,
         accepted
           ? {
+            authorizeOrphanDelete: async (file) => {
+              latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
+                latestOwnershipCleanup,
+                downloadTargets,
+              );
+              persistRevalidatedSonarrOwnership(target, snapshot, latestOwnershipCleanup);
+              return latestOwnershipCleanup.orphanFiles.some((entry) => entry.path === file.path);
+            },
             beforeOrphanDelete: (file) => {
               updateReclamationSnapshot(
                 target,
@@ -984,6 +1099,11 @@ async function ensureWholeItemDeleted(
           }
           : {},
       );
+      // Progress callbacks replace the nested cleanup in the durable snapshot.
+      // Keep subsequent Sonarr gates and accounting on that current object so
+      // confirmed unlinks and ownership downgrades are not read from the stale
+      // pre-cleanup reference.
+      accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
     } catch (error) {
       const current = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
       if (current && unlinkConfirmedReclamationProofs(current).length > 0) {
@@ -1139,9 +1259,12 @@ async function ensureWholeItemDeleted(
       }
       aggregate = deriveHardlinkStorageAggregate(accepted, [
         ...(accepted.proofs.length === 0 ? [HARDLINK_OUTCOME_REASON.incompleteProof] : []),
-        ...(snapshot.wholeItemDownloadCleanup!.downloadJobs.length > 0
-          ? [HARDLINK_OUTCOME_REASON.liveJobOnly]
-          : []),
+        ...sonarrHistoricalOutcomeReasons(snapshot, accepted),
+        ...accepted.proofs.flatMap((proof) =>
+          proof.ownershipDisposition !== 'delete' && proof.ownershipReason
+            ? [proof.ownershipReason]
+            : []
+        ),
       ]);
     } catch (error) {
       updateReclamationSnapshot(target, snapshot, (current) => {
@@ -1161,11 +1284,10 @@ async function ensureWholeItemDeleted(
     // checkpoint failure must retry without permanently disqualifying a valid proof.
     persistStorageOutcome(target, aggregate, true);
   } else if (snapshot.type === 'show') {
+    const historicalReasons = sonarrHistoricalOutcomeReasons(snapshot);
     persistUnknownStorageOutcome(
       target,
-      snapshot.cleanupDownloads
-        ? HARDLINK_OUTCOME_REASON.liveJobOnly
-        : HARDLINK_OUTCOME_REASON.cleanupUnselected,
+      historicalReasons.length > 0 ? historicalReasons : HARDLINK_OUTCOME_REASON.incompleteProof,
       undefined,
       true,
     );
@@ -1177,7 +1299,7 @@ async function ensureWholeItemDeleted(
 async function assertWholeSeasonSonarrPostcondition(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
-  mutate: boolean,
+  mode: 'preflight' | 'mutate' | 'confirm',
 ): Promise<void> {
   const plan = snapshot.wholeSeasonRemoval;
   if (!plan) throw new Error('durable whole-season evidence is missing');
@@ -1231,7 +1353,8 @@ async function assertWholeSeasonSonarrPostcondition(
             JSON.stringify([...file.episodeIds].sort((a, b) => a - b)))
       ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
     }
-    if (mutate) {
+    if (mode === 'preflight') continue;
+    if (mode === 'mutate') {
       for (const episode of expected.episodes) {
         const live = current.episodes.find((candidate) => candidate.id === episode.episodeId)!;
         if (live.monitored) {
@@ -1325,25 +1448,94 @@ async function ensureWholeSeasonDeleted(
     ) throw new Error('cannot delete a season with active episode playback');
   }
   if (
-    snapshot.cleanupDownloads && snapshot.seasonDownloadCleanup &&
+    snapshot.mode === 'coordinated' &&
+    (target.phase === 'validating' || target.phase === 'download_cleanup')
+  ) {
+    // Complete the accepted Sonarr identity, membership, file, and activity checks
+    // before qBittorrent data or historical links can be mutated.
+    await assertWholeSeasonSonarrPostcondition(target, snapshot, 'preflight');
+  }
+  if (
+    snapshot.seasonDownloadCleanup &&
+    (snapshot.cleanupDownloads || snapshot.seasonDownloadCleanup.sonarrReclamation) &&
     (target.phase === 'validating' || target.phase === 'download_cleanup')
   ) {
     if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
-    const cleanup = rehydrateResolvedCleanup(
+    let cleanup = rehydrateResolvedCleanup(
       snapshot.seasonDownloadCleanup,
       await getDownloadClientTargets(target.serverId),
     );
+    const accepted = cleanup.sonarrReclamation;
+    const downloadTargets = accepted ? await getDownloadClientTargets(target.serverId) : [];
+    if (accepted) {
+      const confirmedAbsences = await confirmedAttemptedOrphanAbsences(
+        target.serverId,
+        snapshot.showRatingKey!,
+        cleanup,
+      );
+      cleanup = await revalidateAcceptedSonarrPathOwnership(
+        cleanup,
+        downloadTargets,
+        confirmedAbsences,
+      );
+      persistRevalidatedSonarrOwnership(target, snapshot, cleanup);
+    }
+    let latestOwnershipCleanup = cleanup;
     await executeCleanup(
       target.serverId,
       new Map([[snapshot.showRatingKey!, cleanup]]),
       cleanup,
       snapshot.showRatingKey!,
       true,
+      accepted
+        ? {
+          authorizeOrphanDelete: async (file) => {
+            latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
+              latestOwnershipCleanup,
+              downloadTargets,
+            );
+            persistRevalidatedSonarrOwnership(target, snapshot, latestOwnershipCleanup);
+            return latestOwnershipCleanup.orphanFiles.some((entry) => entry.path === file.path);
+          },
+          beforeOrphanDelete: (file) => {
+            updateReclamationSnapshot(target, snapshot, (current) => {
+              const proof = current.proofs.find((entry) => entry.path === file.path);
+              if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+              proof.unlinkAttemptedAt ??= Math.floor(Date.now() / 1000);
+            });
+            return Promise.resolve();
+          },
+          afterOrphanDelete: async (file) => {
+            await assertVerifiedLibrarySurvivor(file);
+            updateReclamationSnapshot(target, snapshot, (current) => {
+              const proof = current.proofs.find((entry) => entry.path === file.path);
+              if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+              proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
+            });
+          },
+        }
+        : {},
     );
     await assertWholeSeasonPlexMembership(client, snapshot);
   }
   if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
-  await assertWholeSeasonSonarrPostcondition(target, snapshot, true);
+  await assertWholeSeasonSonarrPostcondition(target, snapshot, 'mutate');
+  const reclamation = snapshot.seasonDownloadCleanup?.sonarrReclamation;
+  const historicalReasons = sonarrHistoricalOutcomeReasons(snapshot, reclamation);
+  if (reclamation) {
+    for (const proof of unlinkConfirmedReclamationProofs(reclamation)) {
+      await assertVerifiedLibraryPathAbsent(proof);
+    }
+    persistStorageOutcome(
+      target,
+      deriveHardlinkStorageAggregate(
+        reclamation,
+        historicalReasons,
+      ),
+    );
+  } else if (historicalReasons.length > 0) {
+    persistUnknownStorageOutcome(target, historicalReasons);
+  }
   advancePhase(target, 'plex_reconciliation');
   await reconcilePlexTarget(target, snapshot);
 }
@@ -1475,6 +1667,7 @@ async function ensureVersionDeleted(
     await waitForSonarrManagedPath(target, null, snapshot, client, retainedMediaId!);
     confirmReassignedRemoval(target);
     await reconcileArrReassignmentFinalState(target, snapshot, client);
+    await finalizeScopedSonarrReclamation(target, snapshot);
     await reconcilePlexTarget(target, snapshot);
     return;
   }
@@ -1485,6 +1678,7 @@ async function ensureVersionDeleted(
   ) {
     if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
     await completeBreakGlassRemoval(target, snapshot);
+    await finalizeScopedSonarrReclamation(target, snapshot);
     advancePhase(target, 'plex_reconciliation');
     await reconcilePlexTarget(target, snapshot);
     return;
@@ -1737,7 +1931,7 @@ async function ensureVersionDeleted(
 
   if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
     await protectBreakGlassEpisode(target, snapshot);
-    if (!snapshot.cleanupDownloads) {
+    if (!snapshot.cleanupDownloads && !snapshot.seasonDownloadCleanup?.sonarrReclamation) {
       if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
       await completeBreakGlassRemoval(target, snapshot);
       advancePhase(target, 'plex_reconciliation');
@@ -1746,8 +1940,14 @@ async function ensureVersionDeleted(
     }
   }
 
-  if (snapshot.cleanupDownloads || retainedMediaId !== null) {
-    if (snapshot.cleanupDownloads && target.phase === 'validating') {
+  if (
+    snapshot.cleanupDownloads || retainedMediaId !== null ||
+    snapshot.seasonDownloadCleanup?.sonarrReclamation
+  ) {
+    if (
+      (snapshot.cleanupDownloads || snapshot.seasonDownloadCleanup?.sonarrReclamation) &&
+      target.phase === 'validating'
+    ) {
       advancePhase(target, 'download_cleanup');
     }
     const item: CoordinatedDeleteItem = snapshot;
@@ -1757,7 +1957,8 @@ async function ensureVersionDeleted(
     const attemptRatingKey = target.targetKind === 'episode_version'
       ? snapshot.showRatingKey!
       : snapshot.ratingKey;
-    const inspectDownloadCleanup = snapshot.cleanupDownloads === true;
+    const inspectDownloadCleanup = snapshot.cleanupDownloads === true ||
+      snapshot.seasonDownloadCleanup?.sonarrReclamation !== undefined;
     const [liveVersions, arrTargets, downloadTargets, attemptedJobs, attemptedOrphans] =
       await Promise.all([
         client.mediaVersionPathPreviews(snapshot.ratingKey),
@@ -1780,6 +1981,19 @@ async function ensureVersionDeleted(
           snapshot.seasonDownloadCleanup,
           downloadTargets,
         );
+        if (resolvedCleanup.sonarrReclamation) {
+          const confirmedAbsences = await confirmedAttemptedOrphanAbsences(
+            target.serverId,
+            attemptRatingKey,
+            resolvedCleanup,
+          );
+          resolvedCleanup = await revalidateAcceptedSonarrPathOwnership(
+            resolvedCleanup,
+            downloadTargets,
+            confirmedAbsences,
+          );
+          persistRevalidatedSonarrOwnership(target, snapshot, resolvedCleanup);
+        }
       } else {
         resolvedCleanup = await resolveDownloadCleanup(
           attemptRatingKey,
@@ -1804,7 +2018,8 @@ async function ensureVersionDeleted(
       arrTargets,
       resolvedCleanup,
       cleanupConfigured: inspectDownloadCleanup && downloadTargets.length > 0,
-      allowEpisodeDownloadCleanup: snapshot.seasonCleanup === true,
+      allowEpisodeDownloadCleanup: snapshot.seasonCleanup === true ||
+        snapshot.seasonDownloadCleanup !== undefined,
       attemptedArrInstanceIds: attemptedArr.get(snapshot.ratingKey),
       excludedReassignMediaIds: excludedReassignIds,
       requiredMappingIdentities: snapshot.arrReassignmentMappings,
@@ -1829,7 +2044,7 @@ async function ensureVersionDeleted(
     });
     assertAcceptedSeasonCoordination(snapshot, plan);
     if (
-      snapshot.cleanupDownloads &&
+      (snapshot.cleanupDownloads || snapshot.seasonDownloadCleanup?.sonarrReclamation) &&
       (target.phase === 'validating' || target.phase === 'download_cleanup' ||
         target.phase === 'arr_coordination')
     ) {
@@ -1849,6 +2064,7 @@ async function ensureVersionDeleted(
           retainedMediaId,
         );
       }
+      let latestOwnershipCleanup = plan.cleanup;
       try {
         await assertVersionIsNotPlaying(client, snapshot.ratingKey);
         await executeCleanup(
@@ -1857,6 +2073,34 @@ async function ensureVersionDeleted(
           plan.cleanup,
           attemptRatingKey,
           snapshot.seasonDownloadCleanup !== undefined,
+          plan.cleanup.sonarrReclamation
+            ? {
+              authorizeOrphanDelete: async (file) => {
+                latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
+                  latestOwnershipCleanup,
+                  downloadTargets,
+                );
+                persistRevalidatedSonarrOwnership(target, snapshot, latestOwnershipCleanup);
+                return latestOwnershipCleanup.orphanFiles.some((entry) => entry.path === file.path);
+              },
+              beforeOrphanDelete: (file) => {
+                updateReclamationSnapshot(target, snapshot, (current) => {
+                  const proof = current.proofs.find((entry) => entry.path === file.path);
+                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+                  proof.unlinkAttemptedAt ??= Math.floor(Date.now() / 1000);
+                });
+                return Promise.resolve();
+              },
+              afterOrphanDelete: async (file) => {
+                await assertVerifiedLibrarySurvivor(file);
+                updateReclamationSnapshot(target, snapshot, (current) => {
+                  const proof = current.proofs.find((entry) => entry.path === file.path);
+                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
+                  proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
+                });
+              },
+            }
+            : {},
         );
       } catch (error) {
         if (
@@ -1881,6 +2125,7 @@ async function ensureVersionDeleted(
       if (snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored') {
         if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
         await completeBreakGlassRemoval(target, snapshot);
+        await finalizeScopedSonarrReclamation(target, snapshot);
         advancePhase(target, 'plex_reconciliation');
         await reconcilePlexTarget(target, snapshot);
         return;
@@ -1934,6 +2179,7 @@ async function ensureVersionDeleted(
         await waitForSonarrManagedPath(target, plan, snapshot, client, retainedMediaId);
         confirmReassignedRemoval(target);
         await reconcileArrReassignmentFinalState(target, snapshot, client);
+        await finalizeScopedSonarrReclamation(target, snapshot);
         await reconcilePlexTarget(target, snapshot);
       }
       return;
@@ -2019,6 +2265,7 @@ async function ensureVersionDeleted(
           await waitForSonarrManagedPath(target, finalPlan, snapshot, client, candidateMediaId);
           confirmReassignedRemoval(target);
           await reconcileArrReassignmentFinalState(target, snapshot, client);
+          await finalizeScopedSonarrReclamation(target, snapshot);
           await reconcilePlexTarget(target, snapshot);
         }
         return;
@@ -2048,7 +2295,7 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
     const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
     if (target.phase === 'plex_reconciliation') {
       if (snapshot.type === 'season') {
-        await assertWholeSeasonSonarrPostcondition(target, snapshot, false);
+        await assertWholeSeasonSonarrPostcondition(target, snapshot, 'confirm');
       }
       if ((snapshot.arrReassignments?.length ?? 0) > 0) {
         const validation = await validateDeletionTarget(target.serverId, target);
