@@ -68,6 +68,26 @@ Deno.test('verified hardlink aggregation deduplicates bytes and rounds the targe
   });
 });
 
+Deno.test('scoped reclamation accounting excludes out-of-scope Sonarr inventory', async () => {
+  const value = await accepted();
+  value.inventory.push({ id: 11, path: '/tv/Show/other-season.mkv', size: 9_000 });
+  value.accountingManagedFileIds = [10];
+  assertPersistedSonarrReclamation(value, value.proofs);
+  assertEquals(deriveHardlinkStorageAggregate(value), {
+    outcome: 'verified',
+    verifiedHardlinkDataSize: 2,
+    verifiedFileCount: 1,
+    unknownFileCount: 0,
+    reasons: [],
+  });
+  value.accountingManagedFileIds = [11, 10];
+  assertThrows(
+    () => assertPersistedSonarrReclamation(value, value.proofs),
+    Error,
+    'reclamation identity is malformed',
+  );
+});
+
 Deno.test('verified accounting checkpoint is idempotent and independent of logical attribution', () => {
   const sqlite = new Database(':memory:');
   try {

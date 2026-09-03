@@ -41,6 +41,7 @@ import {
   type PersistedSonarrReclamation,
   sonarrInventoryIdentity,
 } from './reclamation.ts';
+import { classifySonarrOwnedPaths } from './sonarrPathOwnership.ts';
 
 export interface DirectPlexPathEvidence {
   serverId: number;
@@ -121,6 +122,350 @@ export interface PersistedResolvedCleanupItem
   downloadJobs: PersistedResolvedDownloadJob[];
 }
 
+export function publicSonarrHistoricalPaths(cleanup: ResolvedCleanupItem) {
+  const classified = cleanup.sonarrReclamation?.proofs.map((proof) => ({
+    path: proof.path,
+    managedPath: proof.managedPath,
+    size: proof.size,
+    disposition: proof.ownershipDisposition ?? 'unverified',
+    reason: proof.ownershipReason ?? 'Live qBittorrent ownership was not durably classified',
+  })) ?? [];
+  const classifiedPaths = new Set(classified.map((entry) => entry.path));
+  const sonarrInstances = new Set(
+    cleanup.arrTargets.filter((target) => target.type === 'sonarr').map((target) =>
+      target.instanceName
+    ),
+  );
+  const unavailable = cleanup.sources.flatMap((source) => {
+    if (
+      !sonarrInstances.has(source.instanceName) || source.verification !== 'unverified' ||
+      !source.reason
+    ) return [];
+    const path = source.localPath ?? source.path;
+    if (!path || classifiedPaths.has(path)) return [];
+    return [{
+      path,
+      managedPath: source.importedPath,
+      size: null,
+      disposition: 'unverified' as const,
+      reason: `${source.instanceName}: ${source.reason}`,
+    }];
+  });
+  return [...new Map([...classified, ...unavailable].map((entry) => [entry.path, entry])).values()]
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
+/** Bind Sonarr historical unlink authority independently from qBittorrent intent. */
+export async function bindSonarrPathOwnership(
+  cleanup: ResolvedCleanupItem,
+  downloadTargets: readonly DownloadClientTarget[],
+  selectQbittorrent: boolean,
+): Promise<ResolvedCleanupItem> {
+  const reclamation = cleanup.sonarrReclamation;
+  if (!reclamation) {
+    return {
+      ...cleanup,
+      status: selectQbittorrent && cleanup.status === 'error' ? 'error' : 'resolved',
+      downloadJobs: selectQbittorrent ? cleanup.downloadJobs : [],
+      orphanFiles: [],
+    };
+  }
+  const initiallyClassified = await classifySonarrOwnedPaths({
+    files: reclamation.proofs,
+    downloadTargets,
+    selectedJobKeys: new Set(),
+  });
+  const existingJobKeys = new Set(
+    cleanup.downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`),
+  );
+  const discoveredOwners = new Map<string, {
+    target: DownloadClientTarget;
+    job: NonNullable<
+      NonNullable<(typeof initiallyClassified)[number]['ownershipJobs']>[number]['job']
+    >;
+    sourcePaths: Set<string>;
+    importedPaths: Set<string>;
+  }>();
+  for (const proof of initiallyClassified) {
+    for (const owner of proof.ownershipJobs ?? []) {
+      if (!owner.job) continue;
+      const target = downloadTargets.find((candidate) =>
+        candidate.instanceKey === owner.instanceKey
+      );
+      if (!target) continue;
+      const key = `${owner.instanceKey}:${owner.jobId}`;
+      const current = discoveredOwners.get(key) ?? {
+        target,
+        job: owner.job,
+        sourcePaths: new Set<string>(),
+        importedPaths: new Set<string>(),
+      };
+      for (const path of owner.authorizedSourcePaths ?? []) current.sourcePaths.add(path);
+      // Version planners compare this association to Plex/Sonarr's remote library
+      // path. The proof's importedPath is the mapped local filesystem path.
+      current.importedPaths.add(proof.managedPath);
+      discoveredOwners.set(key, current);
+    }
+  }
+  const discoveredJobs: ResolvedDownloadJob[] = [];
+  for (const [key, owner] of discoveredOwners) {
+    if (
+      existingJobKeys.has(key) ||
+      !downloadPayloadIsExclusivelyOwned(owner.job, owner.sourcePaths)
+    ) continue;
+    const { id: _id, ...publicJob } = owner.job;
+    discoveredJobs.push({
+      ...publicJob,
+      provider: owner.target.provider,
+      jobId: owner.job.id,
+      instanceKey: owner.target.instanceKey,
+      instanceName: owner.target.instanceName,
+      sourcePath: [...owner.sourcePaths].sort()[0] ?? null,
+      authorizedSourcePaths: [...owner.sourcePaths].sort(),
+      provenance: 'arr_history',
+      authorizationMode: 'manifest_paths',
+      target: owner.target,
+    });
+  }
+  const selectableJobs = [...cleanup.downloadJobs, ...discoveredJobs].sort((a, b) =>
+    a.instanceKey.localeCompare(b.instanceKey) || a.jobId.localeCompare(b.jobId)
+  );
+  const discoveredSources = [...discoveredOwners.values()].flatMap((owner) =>
+    [...owner.importedPaths].map((importedPath) => ({
+      instanceName: owner.target.instanceName,
+      downloadId: owner.job.id,
+      path: [...owner.sourcePaths].sort()[0] ?? owner.job.contentPath,
+      importedPath,
+      verification: 'hardlink' as const,
+    }))
+  );
+  const sources = [...new Map(
+    [...cleanup.sources, ...discoveredSources].map((source) => [
+      `${source.instanceName}\0${source.downloadId}\0${source.path}\0${source.importedPath ?? ''}`,
+      source,
+    ]),
+  ).values()];
+  const selectedJobKeys = new Set(
+    (selectQbittorrent ? selectableJobs : []).map((job) => `${job.instanceKey}:${job.jobId}`),
+  );
+  const proofs = selectQbittorrent && selectedJobKeys.size > 0
+    ? await classifySonarrOwnedPaths({
+      files: reclamation.proofs,
+      downloadTargets,
+      selectedJobKeys,
+    })
+    : initiallyClassified;
+  if (proofs.length === 0) {
+    // A Sonarr inventory without an accepted two-link proof is still useful for
+    // preview diagnostics, but it is not a reclamation operation. Persisting the
+    // empty shell would make an ordinary Sonarr deletion fail durable rehydration,
+    // whose invariant correctly requires at least one exact proof.
+    const { sonarrReclamation: _sonarrReclamation, ...withoutReclamation } = cleanup;
+    return {
+      ...withoutReclamation,
+      status: selectQbittorrent && cleanup.status === 'error' ? 'error' : 'resolved',
+      downloadJobs: selectQbittorrent ? selectableJobs : [],
+      sources,
+      orphanFiles: [],
+    };
+  }
+  const automatic = proofs.filter((proof) => proof.ownershipDisposition === 'delete');
+  const blockedSelectedPayload = proofs.find((proof) =>
+    proof.ownershipDisposition !== 'delete' &&
+    proof.ownershipJobs.some((owner) => owner.selected)
+  );
+  const blockingProof = proofs.find((proof) => proof.sonarrMutationUnsafe) ??
+    blockedSelectedPayload;
+  const retainedPaths = [...new Map([
+    ...cleanup.retainedPaths,
+    ...proofs.filter((proof) => proof.ownershipDisposition !== 'delete').map((proof) => ({
+      path: proof.path,
+      reason: proof.ownershipReason,
+    })),
+  ].map((entry) => [entry.path, entry])).values()];
+  return {
+    ...cleanup,
+    status: blockingProof !== undefined ||
+        selectQbittorrent && cleanup.status === 'error'
+      ? 'error'
+      : 'resolved',
+    ...(blockingProof?.ownershipReason ? { reason: blockingProof.ownershipReason } : {}),
+    downloadJobs: selectQbittorrent ? selectableJobs : [],
+    sources,
+    orphanFiles: automatic,
+    retainedPaths,
+    sonarrReclamation: { ...reclamation, proofs },
+  };
+}
+
+/** Final execution check: accepted deletions may be downgraded but never expanded. */
+export async function revalidateAcceptedSonarrPathOwnership(
+  accepted: ResolvedCleanupItem,
+  downloadTargets: readonly DownloadClientTarget[],
+  confirmedAttemptedAbsences: ReadonlySet<string> = new Set(),
+): Promise<ResolvedCleanupItem> {
+  if (!accepted.sonarrReclamation) return accepted;
+  const acceptedPaths = new Set(accepted.orphanFiles.map((file) => file.path));
+  const selectedJobKeys = new Set(
+    accepted.downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`),
+  );
+  const checked = (await classifySonarrOwnedPaths({
+    files: accepted.sonarrReclamation.proofs,
+    downloadTargets,
+    selectedJobKeys,
+  })).map((proof) => {
+    const prior = accepted.sonarrReclamation!.proofs.find((entry) => entry.path === proof.path);
+    const priorSelected = prior?.ownershipJobs?.filter((owner) => owner.selected) ?? [];
+    const currentInspections = new Map(
+      proof.ownershipInspections.map((inspection) => [inspection.instanceKey, inspection]),
+    );
+    const lostInspections = (prior?.ownershipInspections ?? []).filter((inspection) => {
+      const current = currentInspections.get(inspection.instanceKey);
+      return !current || current.configurationIdentity !== inspection.configurationIdentity;
+    });
+    if (
+      prior?.unlinkAttemptedAt !== undefined && confirmedAttemptedAbsences.has(proof.path)
+    ) {
+      const lostManagedInspection = lostInspections.find((inspection) =>
+        inspection.managedPathCovered !== false
+      );
+      const mutationReason = proof.sonarrMutationUnsafe
+        ? proof.ownershipReason
+        : lostManagedInspection
+        ? `${lostManagedInspection.instanceName}: the accepted qBittorrent ownership inspection is no longer valid`
+        : undefined;
+      return {
+        ...prior,
+        ownershipJobs: [...new Map([
+          ...(prior.ownershipJobs ?? []),
+          ...priorSelected,
+        ].map((owner) => [`${owner.instanceKey}:${owner.jobId}`, owner])).values()],
+        ...(mutationReason
+          ? { ownershipReason: mutationReason, sonarrMutationUnsafe: true as const }
+          : {}),
+      };
+    }
+    if (lostInspections.length > 0) {
+      const reason = lostInspections.map((inspection) =>
+        `${inspection.instanceName}: the accepted qBittorrent ownership inspection is no longer valid`
+      ).join('; ');
+      return {
+        ...proof,
+        ownershipDisposition: 'unverified' as const,
+        ownershipReason: reason,
+        ...(lostInspections.some((inspection) => inspection.managedPathCovered !== false)
+          ? { sonarrMutationUnsafe: true as const }
+          : {}),
+        ownershipJobs: [...new Map([
+          ...proof.ownershipJobs,
+          ...priorSelected,
+        ].map((owner) => [`${owner.instanceKey}:${owner.jobId}`, owner])).values()],
+      };
+    }
+    return {
+      ...proof,
+      ownershipJobs: [...new Map([
+        ...proof.ownershipJobs,
+        ...priorSelected,
+      ].map((owner) => [`${owner.instanceKey}:${owner.jobId}`, owner])).values()],
+    };
+  });
+  const unsafe = checked.find((proof) => proof.sonarrMutationUnsafe);
+  if (unsafe) throw new Error(unsafe.ownershipReason);
+  const blockedSelectedPayload = checked.find((proof) =>
+    proof.ownershipDisposition !== 'delete' &&
+    proof.ownershipJobs.some((owner) => owner.selected)
+  );
+  if (blockedSelectedPayload) throw new Error(blockedSelectedPayload.ownershipReason);
+  const byPath = new Map(checked.map((proof) => [proof.path, proof]));
+  const proofs = accepted.sonarrReclamation.proofs.map((proof) => {
+    const current = byPath.get(proof.path);
+    if (!current) return proof;
+    // Execution may remove previously accepted authority, but it must never promote
+    // a retained or unverified preview entry into a new deletion target.
+    if (!acceptedPaths.has(proof.path)) {
+      return current.ownershipDisposition === 'delete' ? proof : current;
+    }
+    return current;
+  });
+  const orphanFiles = checked.filter((proof) =>
+    acceptedPaths.has(proof.path) && proof.ownershipDisposition === 'delete'
+  );
+  const downgraded = proofs.filter((proof) => proof.ownershipDisposition !== 'delete');
+  return {
+    ...accepted,
+    orphanFiles,
+    retainedPaths: [...new Map([
+      ...accepted.retainedPaths,
+      ...downgraded.map((proof) => ({
+        path: proof.path,
+        reason: proof.ownershipReason ?? 'Live qBittorrent ownership could not be verified',
+      })),
+    ].map((entry) => [entry.path, entry])).values()],
+    sonarrReclamation: { ...accepted.sonarrReclamation, proofs },
+  };
+}
+
+export function scopeSonarrReclamation(
+  cleanup: ResolvedCleanupItem,
+  managedFileIds: ReadonlySet<number>,
+  managedPaths: ReadonlySet<string> = new Set(),
+): ResolvedCleanupItem {
+  const managedPathComparisons = new Set([...managedPaths].flatMap((path) => {
+    const normalized = normalizeRemoteAbsolute(path)?.comparison;
+    return normalized ? [normalized] : [];
+  }));
+  const sourceIsInScope = (source: ResolvedCleanupItem['sources'][number]) => {
+    if (!source.importedPath || managedPathComparisons.size === 0) return false;
+    const normalized = normalizeRemoteAbsolute(source.importedPath)?.comparison;
+    return normalized !== undefined && managedPathComparisons.has(normalized);
+  };
+  if (!cleanup.sonarrReclamation) {
+    return managedPathComparisons.size === 0
+      ? cleanup
+      : { ...cleanup, sources: cleanup.sources.filter(sourceIsInScope) };
+  }
+  const proofs = cleanup.sonarrReclamation.proofs.filter((proof) =>
+    managedFileIds.has(proof.managedFileId)
+  );
+  if (proofs.length === 0) {
+    return {
+      ...cleanup,
+      sources: cleanup.sources.filter(sourceIsInScope),
+      orphanFiles: [],
+      retainedPaths: [],
+      sonarrReclamation: undefined,
+    };
+  }
+  const paths = new Set(proofs.map((proof) => proof.path));
+  const sourceBindings = new Set(proofs.flatMap((proof) => [
+    `${proof.hash}\0${normalizeRemoteAbsolute(proof.path)?.comparison ?? proof.path}`,
+    `${proof.hash}\0${normalizeRemoteAbsolute(proof.remotePath)?.comparison ?? proof.remotePath}`,
+    `${proof.hash}\0${normalizeRemoteAbsolute(proof.managedPath)?.comparison ?? proof.managedPath}`,
+  ]));
+  const scopedSources = cleanup.sources.filter((source) =>
+    sourceIsInScope(source) ||
+    [source.localPath, source.path, source.importedPath].some((path) =>
+      path && sourceBindings.has(
+        `${source.downloadId}\0${normalizeRemoteAbsolute(path)?.comparison ?? path}`,
+      )
+    )
+  );
+  return {
+    ...cleanup,
+    sources: scopedSources,
+    orphanFiles: cleanup.orphanFiles.filter((file) => paths.has(file.path)),
+    retainedPaths: cleanup.retainedPaths.filter((entry) => paths.has(entry.path)),
+    sonarrReclamation: {
+      ...cleanup.sonarrReclamation,
+      accountingManagedFileIds: [...managedFileIds]
+        .filter((id) => cleanup.sonarrReclamation!.inventory.some((file) => file.id === id))
+        .sort((left, right) => left - right),
+      proofs,
+    },
+  };
+}
+
 function canonicalAuthorizationValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalAuthorizationValue).sort((left, right) =>
@@ -165,6 +510,9 @@ export async function cleanupAuthorizationFingerprint(
     })),
     orphanFiles: accepted.orphanFiles,
     sonarrReclamation: accepted.sonarrReclamation,
+    retainedPaths: accepted.retainedPaths,
+    sources: accepted.sources,
+    reason: accepted.reason,
   };
   const digest = await crypto.subtle.digest(
     'SHA-256',
@@ -326,9 +674,11 @@ export function rehydrateResolvedCleanup(
 export function mergeAcceptedSonarrCleanup(
   current: ResolvedCleanupItem,
   accepted: ResolvedCleanupItem,
+  ownershipRevalidated = false,
 ): ResolvedCleanupItem {
   if (!accepted.sonarrReclamation) return accepted;
   if (current.status !== 'resolved') {
+    if (ownershipRevalidated && accepted.downloadJobs.length === 0) return accepted;
     throw new Error(
       current.reason ?? 'Arr-history download cleanup could not be revalidated',
     );
@@ -350,7 +700,9 @@ export function mergeAcceptedSonarrCleanup(
     // Newly discovered history can change live-job eligibility, but it must never
     // authorize a replacement orphan path after the user accepted the preview. A
     // reappeared live job also suppresses direct unlink even when it cannot be deleted.
-    orphanFiles: accepted.orphanFiles.filter((file) => !observedLiveHashes.has(file.hash)),
+    orphanFiles: ownershipRevalidated
+      ? accepted.orphanFiles
+      : accepted.orphanFiles.filter((file) => !observedLiveHashes.has(file.hash)),
     sonarrReclamation: accepted.sonarrReclamation,
   };
 }
@@ -598,6 +950,8 @@ export async function executeDownloadedFileCleanup(
   deleteOrphanFile: (file: VerifiedOrphanFile) => Promise<void> = deleteVerifiedOrphanFile,
   beforeOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
   afterOrphanDelete: (file: VerifiedOrphanFile) => Promise<void> = () => Promise.resolve(),
+  authorizeOrphanDelete: (file: VerifiedOrphanFile) => Promise<boolean> = () =>
+    Promise.resolve(true),
 ): Promise<DownloadedFileCleanupResult> {
   const result: DownloadedFileCleanupResult = {
     deletedJobs: [],
@@ -701,9 +1055,25 @@ export async function executeDownloadedFileCleanup(
       result.alreadyRemovedOrphanFiles.push(orphanFile.path);
       continue;
     }
+    const ownershipJobs = (orphanFile as Partial<
+      import('./sonarrPathOwnership.ts').ClassifiedSonarrPath
+    >).ownershipJobs ?? [];
+    const selectedOwnerWasDeleted = ownershipJobs.some((owner) =>
+      owner.selected && deletedDownloadJobKeys.has(`${owner.instanceKey}:${owner.jobId}`)
+    );
+    // Sonarr-owned paths receive their final live-owner check immediately before
+    // an unattempted unlink. A previously attempted, now-confirmed-absent selected
+    // payload is already authoritative for paths in its exact accepted manifest.
+    if (!selectedOwnerWasDeleted && !await authorizeOrphanDelete(orphanFile)) continue;
     try {
       await beforeOrphanDelete(orphanFile);
-      await deleteOrphanFile(orphanFile);
+      try {
+        await deleteOrphanFile(orphanFile);
+      } catch (error) {
+        // The selected exact payload deletion runs first. Its removal of this
+        // snapshotted entry is attributable only after this path's own attempt marker.
+        if (!(error instanceof Deno.errors.NotFound) || !selectedOwnerWasDeleted) throw error;
+      }
       await afterOrphanDelete(orphanFile);
       deletedOrphanPaths.add(orphanFile.path);
       result.deletedOrphanFiles.push(orphanFile.path);
@@ -1188,13 +1558,7 @@ export async function resolveDownloadCleanup(
   // payload could not be attributed. A download client could otherwise restore the file, and
   // the user would still have an active job with a partially removed payload.
   const directOrphanFiles = selectDirectOrphanFiles(orphanFiles, ownedLiveJobs);
-  const directOrphanPaths = new Set(directOrphanFiles.map((file) => file.path));
-  const executableReclamation = sonarrReclamation
-    ? {
-      ...sonarrReclamation,
-      proofs: sonarrReclamation.proofs.filter((proof) => directOrphanPaths.has(proof.path)),
-    }
-    : undefined;
+  const executableReclamation = sonarrReclamation;
   const retainedPaths = [...new Map([
     ...inspectionWarnings.values(),
     ...await findRetainedSiblingPaths(
@@ -1296,5 +1660,6 @@ export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithout
     sources: item.sources,
     orphanFiles: item.orphanFiles.map(({ path, size, method }) => ({ path, size, method })),
     retainedPaths: item.retainedPaths,
+    sonarrHistoricalPaths: publicSonarrHistoricalPaths(item),
   };
 }

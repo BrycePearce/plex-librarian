@@ -36,11 +36,13 @@ import { cleanupConsentInvalidated } from "../../features/mediaDeletion/deletion
 import {
   defaultVersionSelection,
   versionArrDestinationCopy,
+  versionCleanupReassignmentLocked,
   versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
   versionRadarrPathOverride,
   versionSelectionSemantics,
+  versionSonarrOwnershipBlocked,
 } from "./versionDeletionState.ts";
 import "../../components/dataSurfaces.css";
 
@@ -293,7 +295,15 @@ export function VersionPickerDialog({
     ? versionPlexFallbackWarning(preview.data)
     : preview.data?.arrSelectionMatched === true || arrReassignAvailable;
   const reassignActive = preview.data?.arrReassignStatus === "resolved";
-  const pathReassignmentActive = reassignActive || useRadarrPathOverride;
+  const sonarrOwnershipBlocked = versionSonarrOwnershipBlocked(
+    preview.data,
+    effectiveDeleteFromArr,
+  );
+  const pathReassignmentActive = versionCleanupReassignmentLocked(
+    item.mediaType,
+    reassignActive,
+    useRadarrPathOverride,
+  );
   const arrDestinationCopy = versionArrDestinationCopy(
     preview.data,
     arrLabel,
@@ -303,7 +313,7 @@ export function VersionPickerDialog({
     item.versions.length - selectedVersions.length,
   );
   const cleanupMediaIds = !selection.deleteWholeItem && cleanupDownloads && cleanupAvailable &&
-      !pathReassignmentActive
+      (item.mediaType === "episode" || !pathReassignmentActive)
     ? (preview.data?.versions
       .filter(
         (version) =>
@@ -327,7 +337,7 @@ export function VersionPickerDialog({
       : preview.isLoading || !preview.data
       ? "loading"
       : "ready",
-    semanticBlock: selection.blocked,
+    semanticBlock: selection.blocked || (!selection.deleteWholeItem && sonarrOwnershipBlocked),
   }) ||
     (cleanupDownloads && !cleanupAvailable);
   const activePreviewError = selection.deleteWholeItem ? wholeItemPreview.error : preview.error;
@@ -542,7 +552,7 @@ export function VersionPickerDialog({
                   disabled: pending ||
                     (selection.deleteWholeItem
                       ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
-                      : !deleteFromArr || pathReassignmentActive),
+                      : !effectiveDeleteFromArr || pathReassignmentActive),
                   warning: !cleanupAvailable ||
                     (!selection.deleteWholeItem && pathReassignmentActive),
                   onChange: (checked: boolean) => {
@@ -581,6 +591,8 @@ export function VersionPickerDialog({
       <DeletionPreviewStatus
         error={activePreviewError && blockingOperationId === null
           ? activePreviewError.message
+          : !selection.deleteWholeItem && sonarrOwnershipBlocked
+          ? preview.data?.sonarrCleanupReason ?? "Sonarr historical path ownership is unsafe"
           : null}
         onRetry={blockingOperationId === null
           ? () => void (selection.deleteWholeItem ? wholeItemPreview.refetch() : preview.refetch())
@@ -632,7 +644,7 @@ export function VersionPickerDialog({
         confirmLabel={
           <>
             Delete {checkedCount} version{checkedCount === 1 ? "" : "s"} (
-            {formatKilobytes(freedSize)})
+            {formatKilobytes(freedSize)} logical media)
           </>
         }
         onCancel={onCancel}
@@ -654,6 +666,16 @@ export function VersionPickerDialog({
               ? {
                 planFingerprint: (useRadarrPathOverride ? pathOverride : pathAdoption)!
                   .planFingerprint,
+              }
+              : {}),
+            ...(item.mediaType === "episode" && effectiveDeleteFromArr &&
+                (cleanupDownloads
+                  ? preview.data?.qbittorrentPlanFingerprint
+                  : preview.data?.planFingerprint)
+              ? {
+                planFingerprint: cleanupDownloads
+                  ? preview.data!.qbittorrentPlanFingerprint
+                  : preview.data!.planFingerprint,
               }
               : {}),
             ...(effectiveDeleteFromArr && useRadarrPathOverride

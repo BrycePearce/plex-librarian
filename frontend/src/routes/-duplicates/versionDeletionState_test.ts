@@ -4,6 +4,7 @@ import {
   defaultVersionSelection,
   versionArrDeletionActive,
   versionArrDestinationCopy,
+  versionCleanupReassignmentLocked,
   versionDeletionExecutionTarget,
   versionDeletionPresentation,
   versionDestinationOptionVisibility,
@@ -12,7 +13,24 @@ import {
   versionPlexFallbackWarning,
   versionRadarrPathOverride,
   versionSelectionSemantics,
+  versionSonarrOwnershipBlocked,
 } from "./versionDeletionState.ts";
+
+Deno.test("Sonarr reassignment does not lock independent qBittorrent selection", () => {
+  assertEquals(versionCleanupReassignmentLocked("episode", true, false), false);
+  assertEquals(versionCleanupReassignmentLocked("movie", true, false), true);
+  assertEquals(versionCleanupReassignmentLocked("movie", false, true), true);
+});
+
+Deno.test("unsafe episode Sonarr ownership blocks only while Sonarr is selected", () => {
+  const preview = {
+    mediaType: "episode",
+    sonarrCleanupStatus: "error",
+    sonarrCleanupReason: "managed entry is owned",
+  } as VersionDeletionPreviewResponse;
+  assertEquals(versionSonarrOwnershipBlocked(preview, true), true);
+  assertEquals(versionSonarrOwnershipBlocked(preview, false), false);
+});
 
 Deno.test("selected unavailable version preserves its precise Plex reason", () => {
   const previews = versionPathPreviewsByMediaId(
@@ -247,6 +265,89 @@ Deno.test("advanced keeps Plex paths alongside selected deletion services", () =
   assertEquals(selected.showPlexPaths, true);
 });
 
+Deno.test("Sonarr implies its automatic historical unlink without selecting qBittorrent", () => {
+  const selected = versionDeletionPresentation(
+    preview({
+      arrService: "sonarr",
+      arrConfigured: true,
+      arrStatus: "resolved",
+      arrTargets: [{
+        instanceName: "Sonarr",
+        type: "sonarr",
+        title: "Show",
+        path: "/tv/Show",
+        seasons: [],
+        mediaFiles: [],
+        extraFiles: [],
+      }],
+      cleanupStatus: "resolved",
+      orphanFiles: [{ path: "/downloads/episode.mkv", size: 1_000, method: "hardlink" }],
+    }),
+    true,
+    false,
+  );
+  assertEquals(selected.orphanFiles.length, 1);
+  assertEquals(selected.downloadJobs.length, 0);
+});
+
+Deno.test("Sonarr preview switches historical ownership only with qBittorrent selection", () => {
+  const value = preview({
+    arrService: "sonarr",
+    arrConfigured: true,
+    arrStatus: "resolved",
+    cleanupStatus: "resolved",
+    downloadJobs: [{
+      provider: "qbittorrent",
+      instanceKey: "qb:1",
+      instanceName: "qBittorrent",
+      jobId: "a".repeat(40),
+      name: "release",
+      state: "uploading",
+      size: 1_000,
+      uploaded: 0,
+      ratio: null,
+      seedingTime: 0,
+      completedAt: null,
+      contentPath: "/downloads/episode.mkv",
+      savePath: "/downloads",
+      trackerHost: null,
+      fileCount: 1,
+      files: [{ path: "episode.mkv", size: 1_000 }],
+      filesTruncated: false,
+      sourcePath: "/downloads/episode.mkv",
+    }],
+    orphanFiles: [],
+    sonarrHistoricalPaths: [{
+      path: "/downloads/episode.mkv",
+      managedPath: "/library/episode.mkv",
+      size: 1_000,
+      disposition: "retain_live_qbittorrent",
+      reason: "live owner",
+    }],
+    qbittorrentOrphanFiles: [{
+      path: "/downloads/episode.mkv",
+      size: 1_000,
+      method: "hardlink",
+    }],
+    qbittorrentSonarrHistoricalPaths: [{
+      path: "/downloads/episode.mkv",
+      managedPath: "/library/episode.mkv",
+      size: 1_000,
+      disposition: "delete",
+      reason: "selected owner",
+    }],
+  });
+  const sonarrOnly = versionDeletionPresentation(value, true, false);
+  assertEquals(sonarrOnly.orphanFiles, []);
+  assertEquals(sonarrOnly.sonarrHistoricalPaths[0]?.disposition, "retain_live_qbittorrent");
+
+  const coordinated = versionDeletionPresentation(value, true, true);
+  assertEquals(coordinated.orphanFiles.length, 0);
+  assertEquals(coordinated.sonarrHistoricalPaths[0]?.disposition, "delete");
+  assertEquals(coordinated.sonarrHistoricalPaths[0]?.reason, "selected owner");
+  assertEquals(coordinated.downloadJobs.length, 1);
+});
+
 Deno.test("cleanup cannot appear without a verified qBittorrent job", () => {
   assertEquals(
     versionDestinationState(preview({ cleanupStatus: "resolved" })).cleanupVisible,
@@ -342,7 +443,7 @@ Deno.test("Arr destination labels and explanations match their strategy", () => 
   assertEquals(versionArrDestinationCopy(preview({}), "Sonarr", true, false), {
     label: "Switch Sonarr to remaining version",
     info:
-      "Required to keep the record: Sonarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Sonarr adopt the remaining version and preserve the existing monitoring state.",
+      "Required to keep the record: Sonarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Sonarr adopt the remaining version and preserve the existing monitoring state. Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.",
   });
   assertEquals(versionArrDestinationCopy(preview({}), "Radarr", true, true, false), {
     label: "Switch Radarr to remaining version",

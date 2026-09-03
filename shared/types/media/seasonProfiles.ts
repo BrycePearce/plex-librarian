@@ -1,5 +1,6 @@
 import type { DuplicateEpisodeGroup } from './duplicates.ts';
 import type { DeletionOperationStatus } from '../deletion/operations.ts';
+import type { SonarrHistoricalPathPreview } from '../deletion/cleanup.ts';
 
 export interface SeasonVersionProfileMember {
   episodeRatingKey: string;
@@ -142,4 +143,5 @@ export interface SeasonDeletionPreviewResponse {
   breakGlassAvailable?: boolean;
   fingerprint: string;
   expiresAt: number;
+  sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
 }

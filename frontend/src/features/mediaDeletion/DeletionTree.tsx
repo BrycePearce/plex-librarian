@@ -323,8 +323,12 @@ export function DeletionServiceMarks({
   const arrActive = deleteFromArr && preview?.arrStatus === "resolved" &&
     preview.arrTargets.length > 0;
   const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
-    (preview.downloadJobs.length > 0 ||
-      (item.type === "show" && preview.orphanFiles.length > 0));
+    preview.downloadJobs.length > 0;
+  const selectedOrphanFiles = item.type === "show" && cleanupDownloads
+    ? preview?.qbittorrentOrphanFiles ?? preview?.orphanFiles ?? []
+    : preview?.orphanFiles ?? [];
+  const hardlinkSelected = selectedOrphanFiles.length > 0 &&
+    (item.type === "show" ? arrActive : preview?.status === "resolved" && cleanupDownloads);
   const qbitActive = itemCleanupSelected;
   return (
     <span className="flex shrink-0 items-center gap-1">
@@ -347,7 +351,7 @@ export function DeletionServiceMarks({
         arrStatus={preview?.arrStatus}
         arrReason={preview?.arrReason}
         downloadJobCount={itemCleanupSelected ? preview.downloadJobs.length : 0}
-        hardlinkFileCount={itemCleanupSelected ? preview.orphanFiles.length : 0}
+        hardlinkFileCount={hardlinkSelected ? selectedOrphanFiles.length : 0}
         downloadCleanupResuming={Boolean(
           itemCleanupSelected &&
             preview.downloadJobs.length === 0 &&
@@ -356,10 +360,46 @@ export function DeletionServiceMarks({
         cleanupDownloads={itemCleanupSelected}
         cleanupStatus={preview?.status}
         cleanupReason={preview?.reason}
-        hardlinkVerificationSkipped={item.type === "show" && arrActive && !itemCleanupSelected}
+        hardlinkVerificationSkipped={false}
       />
     </span>
   );
+}
+
+export function wholeItemSonarrHistoricalPaths(
+  itemType: WholeItemDeletionCandidate["type"],
+  preview: DownloadCleanupPreviewItem | undefined,
+  arrSelected: boolean,
+  cleanupDownloads: boolean,
+) {
+  if (itemType !== "show" || !arrSelected) return [];
+  return cleanupDownloads
+    ? preview?.qbittorrentSonarrHistoricalPaths ?? preview?.sonarrHistoricalPaths ?? []
+    : preview?.sonarrHistoricalPaths ?? [];
+}
+
+export function wholeItemOrphanFiles(
+  itemType: WholeItemDeletionCandidate["type"],
+  preview: DownloadCleanupPreviewItem | undefined,
+  arrSelected: boolean,
+  cleanupDownloads: boolean,
+) {
+  if (!cleanupDownloads || preview?.status !== "resolved") return [];
+  if (itemType !== "show") return preview.orphanFiles;
+  if (!arrSelected) return [];
+  return preview.qbittorrentOrphanFiles ?? preview.orphanFiles;
+}
+
+export function wholeItemRetainedPaths(
+  itemType: WholeItemDeletionCandidate["type"],
+  preview: DownloadCleanupPreviewItem | undefined,
+  arrSelected: boolean,
+  cleanupDownloads: boolean,
+) {
+  if (itemType === "show" && !arrSelected) return [];
+  return itemType === "show" && cleanupDownloads
+    ? preview?.qbittorrentRetainedPaths ?? preview?.retainedPaths ?? []
+    : preview?.retainedPaths ?? [];
 }
 
 export function AdvancedDeletionTree({
@@ -377,14 +417,30 @@ export function AdvancedDeletionTree({
 }) {
   const plans = items.map((item) => {
     const preview = plexPreviews.get(item.ratingKey);
-    const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
-      (preview.downloadJobs.length > 0 ||
-        (item.type === "show" && preview.orphanFiles.length > 0));
     const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
+    const itemCleanupSelected = cleanupDownloads && preview?.status === "resolved" &&
+      preview.downloadJobs.length > 0;
     const plexEntries = arrTargets.length === 0 ? plexPreviewPathEntries([item], plexPreviews) : [];
     const downloadJobs = itemCleanupSelected ? preview.downloadJobs : [];
-    const orphanFiles = itemCleanupSelected ? preview.orphanFiles : [];
-    const retainedPaths = preview?.retainedPaths ?? [];
+    const historicalPaths = wholeItemSonarrHistoricalPaths(
+      item.type,
+      preview,
+      arrTargets.length > 0,
+      cleanupDownloads,
+    );
+    const historicalPathSet = new Set(historicalPaths.map((entry) => entry.path));
+    const orphanFiles = wholeItemOrphanFiles(
+      item.type,
+      preview,
+      arrTargets.length > 0,
+      cleanupDownloads,
+    ).filter((entry) => !historicalPathSet.has(entry.path));
+    const retainedPaths = wholeItemRetainedPaths(
+      item.type,
+      preview,
+      arrTargets.length > 0,
+      cleanupDownloads,
+    ).filter((entry) => !historicalPathSet.has(entry.path));
     const retainedJobs = !itemCleanupSelected && preview?.status === "resolved"
       ? preview.downloadJobs
       : [];
@@ -394,6 +450,7 @@ export function AdvancedDeletionTree({
       plexEntries,
       downloadJobs,
       orphanFiles,
+      historicalPaths,
       retainedPaths,
       retainedJobs,
     };
@@ -402,7 +459,7 @@ export function AdvancedDeletionTree({
     (count, plan) =>
       count + plan.arrTargets.length + plan.plexEntries.length +
       plan.downloadJobs.length + plan.orphanFiles.length + plan.retainedPaths.length +
-      plan.retainedJobs.length,
+      plan.historicalPaths.length + plan.retainedJobs.length,
     0,
   );
 
@@ -423,7 +480,8 @@ export function AdvancedDeletionTree({
         {plans.map((plan) => {
           const hasPaths = plan.arrTargets.length > 0 ||
             plan.plexEntries.length > 0 || plan.downloadJobs.length > 0 ||
-            plan.orphanFiles.length > 0 || plan.retainedPaths.length > 0 ||
+            plan.orphanFiles.length > 0 || plan.historicalPaths.length > 0 ||
+            plan.retainedPaths.length > 0 ||
             plan.retainedJobs.length > 0;
           return (
             <section
@@ -498,6 +556,21 @@ export function AdvancedDeletionTree({
                       size: file.size,
                     }]}
                     note="Reverified before removal"
+                  />
+                ))}
+                {plan.historicalPaths.map((entry) => (
+                  <PathTreeRoot
+                    key={`historical:${entry.path}`}
+                    path={entry.path}
+                    source="Sonarr import history"
+                    note={`${
+                      entry.disposition === "delete"
+                        ? "Automatic unlink"
+                        : entry.disposition === "retain_live_qbittorrent"
+                        ? "Retained — live qBittorrent owner"
+                        : "Unverified"
+                    }: ${entry.reason}`}
+                    warning={entry.disposition !== "delete"}
                   />
                 ))}
                 {plan.retainedJobs.map((job) => (

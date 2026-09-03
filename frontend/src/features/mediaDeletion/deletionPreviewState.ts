@@ -1,5 +1,8 @@
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
 
+export const SONARR_OWNED_PATH_COPY =
+  "Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.";
+
 export function arrDestinationState(
   preview: DownloadCleanupPreviewResponse | undefined,
 ) {
@@ -21,6 +24,15 @@ export function effectiveArrSelection(
   preview: DownloadCleanupPreviewResponse | undefined,
 ): boolean {
   return selected && shouldUseArrByDefault(preview);
+}
+
+export function selectedSonarrOwnershipProblems(
+  preview: DownloadCleanupPreviewResponse | undefined,
+  selected: boolean,
+) {
+  return selected
+    ? preview?.items.filter((item) => item.sonarrCleanupStatus === "error") ?? []
+    : [];
 }
 
 export function downloadCleanupDestinationVisible(
