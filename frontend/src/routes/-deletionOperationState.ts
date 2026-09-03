@@ -80,6 +80,49 @@ export function hardlinkOutcomeSummary(outcome: {
   return uncertainTargets > 0 ? "Hardlink data removal not verified" : null;
 }
 
+export function noVerifiedDiskSpaceReclaimed(outcome: {
+  status: string;
+  removalConfirmedCount: number;
+  verifiedHardlinkDataRemoved?: number;
+  verifiedTargetCount?: number;
+  unknownTargetCount?: number;
+  mixedTargetCount?: number;
+}): boolean {
+  return (outcome.status === "completed" || outcome.status === "completed_with_warning") &&
+    outcome.removalConfirmedCount > 0 &&
+    (outcome.verifiedHardlinkDataRemoved ?? 0) === 0 &&
+    (outcome.unknownTargetCount ?? 0) > 0 &&
+    (outcome.verifiedTargetCount ?? 0) === 0 &&
+    (outcome.mixedTargetCount ?? 0) === 0;
+}
+
+const storageOutcomeReasonCopy: Readonly<Record<string, string>> = {
+  cleanup_unselected: "Verified hardlink cleanup was not selected for this deletion.",
+  live_download_job_only:
+    "Only a live download job was eligible for cleanup; no historical hardlink removal was verified.",
+  incomplete_two_link_proof:
+    "Plex Librarian could not establish and confirm the required two-link hardlink identity.",
+  ambiguous_sonarr_instance:
+    "More than one Sonarr instance matched this media, so historical hardlink cleanup was not authorized.",
+  unlink_confirmation_missing:
+    "Hardlink removal may have started, but completion was not confirmed after an interruption.",
+};
+
+export function storageOutcomeExplanations(
+  targets: ReadonlyArray<{ storageOutcomeReasons?: readonly string[] }>,
+): string[] {
+  const explanations = new Set<string>();
+  for (const target of targets) {
+    for (const reason of target.storageOutcomeReasons ?? []) {
+      explanations.add(
+        storageOutcomeReasonCopy[reason] ??
+          "Plex Librarian could not verify storage reclamation for at least one target.",
+      );
+    }
+  }
+  return [...explanations];
+}
+
 export function retryableRelocationSafeTargetCount(
   targets: ReadonlyArray<{
     status: string;

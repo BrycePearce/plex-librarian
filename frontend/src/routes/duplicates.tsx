@@ -233,6 +233,7 @@ function DuplicatesPage() {
       deleteFromArr: boolean;
       cleanupDownloads: boolean;
       cleanupMediaIds: number[];
+      cleanupPreviewFingerprint?: string;
       planFingerprint?: string;
       allowRadarrRetainedPathManagement?: boolean;
       allowRadarrMovieRemoval?: boolean;
@@ -249,6 +250,9 @@ function DuplicatesPage() {
           ratingKeys: [group.ratingKey],
           coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
           cleanupDownloadRatingKeys: plan.cleanupDownloads ? [group.ratingKey] : [],
+          cleanupPreviewFingerprints: plan.cleanupDownloads && plan.cleanupPreviewFingerprint
+            ? { [group.ratingKey]: plan.cleanupPreviewFingerprint }
+            : {},
           unmonitorRatingKeys: [],
         },
         {

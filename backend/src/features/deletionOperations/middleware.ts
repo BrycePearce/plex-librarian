@@ -28,6 +28,7 @@ import {
 } from '../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import {
+  cleanupAuthorizationFingerprint,
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
   persistResolvedCleanupIdentity,
@@ -118,6 +119,20 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         return c.json({ error: 'cleanupDownloadRatingKeys must be an array of strings' }, 400);
       }
       if (
+        body.cleanupPreviewFingerprints !== undefined &&
+        (body.cleanupPreviewFingerprints === null ||
+          Array.isArray(body.cleanupPreviewFingerprints) ||
+          typeof body.cleanupPreviewFingerprints !== 'object' ||
+          Object.values(body.cleanupPreviewFingerprints).some((value) =>
+            typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)
+          ))
+      ) {
+        return c.json(
+          { error: 'cleanupPreviewFingerprints must map rating keys to fingerprints' },
+          400,
+        );
+      }
+      if (
         body.coordinatedRatingKeys !== undefined &&
         (!Array.isArray(body.coordinatedRatingKeys) ||
           !body.coordinatedRatingKeys.every((key) => typeof key === 'string'))
@@ -158,6 +173,17 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           ? body.cleanupDownloadRatingKeys.filter((key): key is string => typeof key === 'string')
           : [],
       );
+      const cleanupPreviewFingerprints = body.cleanupPreviewFingerprints as
+        | Record<string, string>
+        | undefined;
+      if (
+        cleanupDownloadRatingKeys.size > 0 &&
+        (!cleanupPreviewFingerprints ||
+          Object.keys(cleanupPreviewFingerprints).length !== cleanupDownloadRatingKeys.size ||
+          [...cleanupDownloadRatingKeys].some((key) => !cleanupPreviewFingerprints[key]))
+      ) {
+        return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
+      }
       if (
         [...coordinated, ...unmonitor, ...cleanupDownloadRatingKeys].some((key) =>
           !ratingKeys.includes(key)
@@ -171,6 +197,12 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         ratingKeys,
         coordinatedRatingKeys: [...coordinated].sort(),
         cleanupDownloadRatingKeys: [...cleanupDownloadRatingKeys].sort(),
+        cleanupPreviewFingerprints: Object.fromEntries(
+          [...cleanupDownloadRatingKeys].sort().map((key) => [
+            key,
+            cleanupPreviewFingerprints![key],
+          ]),
+        ),
         unmonitorRatingKeys: [...unmonitor].sort(),
         ...(quickCleanupDays !== null ? { quickCleanupThresholdDays: quickCleanupDays } : {}),
       };
@@ -318,6 +350,19 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           if (!cleanup || !cleanupIsEligible(cleanup)) {
             return c.json({
               error: cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
+            }, 409);
+          }
+          if (
+            await cleanupAuthorizationFingerprint(cleanup) !==
+              cleanupPreviewFingerprints![ratingKey]
+          ) {
+            return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
+          }
+          if (
+            cleanup.sonarrReclamation?.proofs.length && !coordinated.has(ratingKey)
+          ) {
+            return c.json({
+              error: 'verified Sonarr hardlink cleanup requires coordinated Sonarr deletion',
             }, 409);
           }
         }

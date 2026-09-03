@@ -304,13 +304,18 @@ export function QuickCleanupPanel({
         items={selectedItems}
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
-        onConfirm={({ coordinatedRatingKeys, cleanupDownloadRatingKeys }) =>
+        onConfirm={({
+          coordinatedRatingKeys,
+          cleanupDownloadRatingKeys,
+          cleanupPreviewFingerprints,
+        }) =>
           deleteMutation.mutate(
             {
               libraryKey,
               ratingKeys: selectedItems.map((item) => item.ratingKey),
               coordinatedRatingKeys,
               cleanupDownloadRatingKeys,
+              cleanupPreviewFingerprints,
               quickCleanupThresholdDays: thresholdDays,
             },
             {

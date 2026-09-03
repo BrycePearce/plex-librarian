@@ -6,7 +6,12 @@ import { itemsByLibrary } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type { DownloadCleanupPreviewResponse } from '@plex-librarian/shared/types.ts';
 import { findAmbiguousExternalIds, getArrDeleteTargets } from '../arr/delete.ts';
-import { publicCleanupItem, reconcileSharedDownloadCleanups } from './cleanup.ts';
+import {
+  cleanupAuthorizationFingerprint,
+  cleanupIsEligible,
+  publicCleanupItem,
+  reconcileSharedDownloadCleanups,
+} from './cleanup.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
@@ -87,7 +92,7 @@ export function createDownloadCleanupPreviewRouter(
       )
     );
     const plexPaths = await plexPathsPromise;
-    const previews = reconcileSharedDownloadCleanups(
+    const resolvedCleanups = reconcileSharedDownloadCleanups(
       await resolveWholeItemDownloadCleanupBatch(
         serverId,
         key,
@@ -99,7 +104,8 @@ export function createDownloadCleanupPreviewRouter(
         attemptedOrphans,
         attemptedArrInstances,
       ),
-    ).map((resolved) => {
+    );
+    const previews = await Promise.all(resolvedCleanups.map(async (resolved) => {
       const item = owned.find((candidate) => candidate.ratingKey === resolved.ratingKey)!;
       const pathPreview = plexPaths.get(resolved.ratingKey)!;
       if (item.type === 'movie' && item.tmdbId !== null && ambiguousMovieIds.has(item.tmdbId)) {
@@ -118,8 +124,14 @@ export function createDownloadCleanupPreviewRouter(
           ...pathPreview,
         };
       }
-      return { ...publicCleanupItem(resolved), ...pathPreview };
-    });
+      return {
+        ...publicCleanupItem(resolved),
+        ...pathPreview,
+        ...(cleanupIsEligible(resolved)
+          ? { cleanupFingerprint: await cleanupAuthorizationFingerprint(resolved) }
+          : {}),
+      };
+    }));
     for (const ratingKey of ratingKeys) {
       if (owned.some((item) => item.ratingKey === ratingKey)) continue;
       previews.push({

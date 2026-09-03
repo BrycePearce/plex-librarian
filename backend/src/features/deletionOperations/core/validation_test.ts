@@ -126,6 +126,16 @@ Deno.test('whole-show hash evidence is accepted only for a well-formed whole-ite
   }
 });
 
+Deno.test('whole-show orphan proof requires coordinated Sonarr deletion', () => {
+  const snapshot = wholeShowHashSnapshot();
+  snapshot.wholeItemDownloadCleanup!.sonarrReclamation = { proofs: [{}] } as never;
+  assertThrows(
+    () => validateArrMonitoringEvidence(snapshot),
+    DeletionValidationError,
+    'requires coordinated deletion',
+  );
+});
+
 function removalSnapshot(mappingIdentity: string): DurableTargetSnapshot {
   return {
     machineIdentifier: 'plex-machine',

@@ -121,6 +121,60 @@ export interface PersistedResolvedCleanupItem
   downloadJobs: PersistedResolvedDownloadJob[];
 }
 
+function canonicalAuthorizationValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalAuthorizationValue).sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right))
+    );
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalAuthorizationValue(entry)]),
+    );
+  }
+  return value;
+}
+
+/** Opaque binding between the destructive paths/jobs shown in preview and acceptance. */
+export async function cleanupAuthorizationFingerprint(
+  cleanup: ResolvedCleanupItem,
+): Promise<string> {
+  const accepted = persistResolvedCleanupIdentity(cleanup);
+  const authorization = {
+    ratingKey: accepted.ratingKey,
+    downloadJobs: accepted.downloadJobs.map((job) => ({
+      provider: job.provider,
+      instanceKey: job.instanceKey,
+      instanceName: job.instanceName,
+      jobId: job.jobId,
+      targetIdentity: job.targetIdentity,
+      authorizedSourcePaths: job.authorizedSourcePaths,
+      provenance: job.provenance,
+      authorizationMode: job.authorizationMode,
+      sonarrAssociations: job.sonarrAssociations,
+      discoverySummaryFingerprint: job.discoverySummaryFingerprint,
+      ownershipSummaryFingerprint: job.ownershipSummaryFingerprint,
+      manifestFingerprint: job.manifestFingerprint,
+      directPathEvidence: job.directPathEvidence,
+      directPlexPathEvidence: job.directPlexPathEvidence,
+      directRetainedPathEvidence: job.directRetainedPathEvidence,
+      directDiscoveryCandidates: job.directDiscoveryCandidates,
+      directPathMappings: job.directPathMappings,
+    })),
+    orphanFiles: accepted.orphanFiles,
+    sonarrReclamation: accepted.sonarrReclamation,
+  };
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(canonicalAuthorizationValue(authorization))),
+  );
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join(
+    '',
+  );
+}
+
 export function cleanupIsEligible(
   cleanup: Pick<
     ResolvedCleanupItem,
@@ -266,9 +320,8 @@ export function rehydrateResolvedCleanup(
 }
 
 /**
- * Sonarr orphan proofs are accepted filesystem authority, but Arr-history jobs are not.
- * Keep the accepted paths while taking history-derived live jobs from the current bounded
- * resolution so new cross-title associations still retain a shared payload.
+ * Sonarr orphan proofs and selected job IDs are accepted authority. Current history may
+ * suppress an unlink, but must never expand that authority to a newly appeared live job.
  */
 export function mergeAcceptedSonarrCleanup(
   current: ResolvedCleanupItem,
@@ -283,11 +336,16 @@ export function mergeAcceptedSonarrCleanup(
   const observedLiveHashes = new Set(
     [...(current.observedDownloadJobKeys ?? [])].map((key) => key.slice(key.lastIndexOf(':') + 1)),
   );
+  const acceptedHistoryJobs = new Set(
+    accepted.downloadJobs.filter((job) => job.provenance === 'arr_history').map(wholeShowJobKey),
+  );
   return {
     ...current,
     downloadJobs: [
       ...accepted.downloadJobs.filter((job) => job.provenance === 'direct_manifest'),
-      ...current.downloadJobs.filter((job) => job.provenance === 'arr_history'),
+      ...current.downloadJobs.filter((job) =>
+        job.provenance === 'arr_history' && acceptedHistoryJobs.has(wholeShowJobKey(job))
+      ),
     ],
     // Newly discovered history can change live-job eligibility, but it must never
     // authorize a replacement orphan path after the user accepted the preview. A
@@ -636,6 +694,10 @@ export async function executeDownloadedFileCleanup(
   }
   for (const orphanFile of cleanup.orphanFiles) {
     if (deletedOrphanPaths.has(orphanFile.path)) {
+      // A prior attempt can have completed the unlink but crashed before its
+      // durable confirmation callback. Let the caller re-establish that
+      // postcondition before treating the absence as completed.
+      await afterOrphanDelete(orphanFile);
       result.alreadyRemovedOrphanFiles.push(orphanFile.path);
       continue;
     }

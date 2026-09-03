@@ -10,6 +10,7 @@ import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapte
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
   assertAcceptedWholeShowHashCleanup,
+  cleanupAuthorizationFingerprint,
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
@@ -366,7 +367,7 @@ Deno.test('qBittorrent selection cannot split one associated job across a reques
   assertDownloadJobSelectionConsistent(cleanups, new Set(['selected', 'unselected']));
 });
 
-Deno.test('accepted Sonarr proof uses fresh Arr-history jobs and retains accepted orphan paths', () => {
+Deno.test('accepted Sonarr proof retains only accepted Arr-history jobs and orphan paths', () => {
   const acceptedOrphan = { path: '/downloads/accepted.mkv', hash: 'accepted' };
   const replacementOrphan = { path: '/downloads/replacement.mkv' };
   const accepted = {
@@ -379,16 +380,16 @@ Deno.test('accepted Sonarr proof uses fresh Arr-history jobs and retains accepte
   const current = {
     ratingKey: 'show',
     status: 'resolved',
-    downloadJobs: [{ instanceKey: 'qb:1', jobId: 'current', provenance: 'arr_history' }],
+    downloadJobs: [{ instanceKey: 'qb:1', jobId: 'old', provenance: 'arr_history' }],
     orphanFiles: [replacementOrphan],
-    observedDownloadJobKeys: new Set(['qb:1:current']),
+    observedDownloadJobKeys: new Set(['qb:1:old']),
   } as unknown as ResolvedCleanupItem;
 
   const merged = mergeAcceptedSonarrCleanup(current, accepted);
-  assertEquals(merged.downloadJobs.map((job) => job.jobId), ['current']);
+  assertEquals(merged.downloadJobs.map((job) => job.jobId), ['old']);
   assert(merged.orphanFiles[0] === acceptedOrphan);
   assert(merged.sonarrReclamation === accepted.sonarrReclamation);
-  assertEquals(merged.observedDownloadJobKeys, new Set(['qb:1:current']));
+  assertEquals(merged.observedDownloadJobKeys, new Set(['qb:1:old']));
 });
 
 Deno.test('accepted orphan-only Sonarr cleanup suppresses unlink beneath a reappeared job', () => {
@@ -413,8 +414,31 @@ Deno.test('accepted orphan-only Sonarr cleanup suppresses unlink beneath a reapp
   } as unknown as ResolvedCleanupItem;
 
   const merged = mergeAcceptedSonarrCleanup(current, accepted);
-  assertEquals(merged.downloadJobs.map((job) => job.jobId), ['reappeared']);
+  assertEquals(merged.downloadJobs, []);
   assertEquals(merged.orphanFiles, []);
+});
+
+Deno.test('cleanup authorization fingerprints bind the accepted destructive evidence', async () => {
+  const cleanup = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [],
+    sources: [],
+    orphanFiles: [{ path: '/downloads/accepted.mkv' }],
+    retainedPaths: [],
+    sonarrReclamation: { inventoryIdentity: 'accepted' },
+  } as unknown as ResolvedCleanupItem;
+
+  const accepted = await cleanupAuthorizationFingerprint(cleanup);
+  const changed = await cleanupAuthorizationFingerprint({
+    ...cleanup,
+    orphanFiles: [{ path: '/downloads/replacement.mkv' }],
+  } as ResolvedCleanupItem);
+
+  assertEquals(accepted.length, 64);
+  assert(accepted !== changed);
 });
 
 Deno.test('accepted Sonarr cleanup does not replace a failed Arr-history revalidation', () => {
@@ -572,6 +596,31 @@ Deno.test('complete downloaded-file execution marks and deletes torrents before 
   ]);
   assertEquals(result.deletedJobs.map((job) => job.jobId), [hash]);
   assertEquals(result.deletedOrphanFiles, ['/downloads/release/movie.idx']);
+});
+
+Deno.test('an already absent attempted orphan reruns its durable confirmation callback', async () => {
+  const calls: string[] = [];
+  const cleanup = {
+    downloadJobs: [],
+    orphanFiles: [{ path: '/downloads/release/movie.idx' }],
+  } as unknown as ResolvedCleanupItem;
+
+  const result = await executeDownloadedFileCleanup(
+    cleanup,
+    new Set(),
+    new Set(['/downloads/release/movie.idx']),
+    undefined,
+    () => Promise.reject(new Error('already absent orphan must not be unlinked again')),
+    undefined,
+    (file) => {
+      calls.push(`confirm:${file.path}`);
+      return Promise.resolve();
+    },
+  );
+
+  assertEquals(calls, ['confirm:/downloads/release/movie.idx']);
+  assertEquals(result.alreadyRemovedOrphanFiles, ['/downloads/release/movie.idx']);
+  assertEquals(result.deletedOrphanFiles, []);
 });
 
 Deno.test('cleanup errors retain mutations completed by earlier stages', async () => {

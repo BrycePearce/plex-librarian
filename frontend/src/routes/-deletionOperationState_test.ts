@@ -7,7 +7,9 @@ import {
   hardlinkOutcomeSummary,
   isRelocationGuidanceActive,
   nonSupersededCancelledCount,
+  noVerifiedDiskSpaceReclaimed,
   retryableRelocationSafeTargetCount,
+  storageOutcomeExplanations,
 } from "./-deletionOperationState.ts";
 
 Deno.test("deletion operation UI polls only while work can still change", () => {
@@ -106,4 +108,54 @@ Deno.test("hardlink outcomes use durable counts instead of a rounded byte total"
     "Hardlink data removal not verified",
   );
   assertEquals(hardlinkOutcomeSummary({}), null);
+});
+
+Deno.test("completed removals call out an entirely unverified storage outcome", () => {
+  assertEquals(
+    noVerifiedDiskSpaceReclaimed({
+      status: "completed",
+      removalConfirmedCount: 1,
+      verifiedHardlinkDataRemoved: 0,
+      verifiedTargetCount: 0,
+      unknownTargetCount: 1,
+      mixedTargetCount: 0,
+    }),
+    true,
+  );
+  assertEquals(
+    noVerifiedDiskSpaceReclaimed({
+      status: "completed",
+      removalConfirmedCount: 1,
+      verifiedHardlinkDataRemoved: 40,
+      verifiedTargetCount: 1,
+      unknownTargetCount: 0,
+      mixedTargetCount: 0,
+    }),
+    false,
+  );
+});
+
+Deno.test("storage outcome reasons are readable, unique, and forward compatible", () => {
+  assertEquals(
+    storageOutcomeExplanations([
+      {
+        storageOutcomeReasons: [
+          "incomplete_two_link_proof",
+          "ambiguous_sonarr_instance",
+        ],
+      },
+      {
+        storageOutcomeReasons: [
+          "incomplete_two_link_proof",
+          "future_reason",
+          "another_future_reason",
+        ],
+      },
+    ]),
+    [
+      "Plex Librarian could not establish and confirm the required two-link hardlink identity.",
+      "More than one Sonarr instance matched this media, so historical hardlink cleanup was not authorized.",
+      "Plex Librarian could not verify storage reclamation for at least one target.",
+    ],
+  );
 });

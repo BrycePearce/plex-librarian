@@ -966,7 +966,11 @@ async function ensureWholeItemDeleted(
               );
               return Promise.resolve();
             },
-            afterOrphanDelete: (file) => {
+            afterOrphanDelete: async (file) => {
+              // This callback also runs when a prior unlink attempt is now
+              // confirmed absent. Re-prove the exact one-link library survivor
+              // before durably crediting that interrupted unlink.
+              await assertVerifiedLibrarySurvivor(file);
               updateReclamationSnapshot(
                 target,
                 snapshot,
@@ -976,7 +980,6 @@ async function ensureWholeItemDeleted(
                   proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
                 },
               );
-              return Promise.resolve();
             },
           }
           : {},

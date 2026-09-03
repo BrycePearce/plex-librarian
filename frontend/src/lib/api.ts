@@ -333,6 +333,7 @@ export const api = {
       ratingKeys: string[],
       coordinatedRatingKeys: string[],
       cleanupDownloadRatingKeys: string[] = [],
+      cleanupPreviewFingerprints: Record<string, string> = {},
       unmonitorRatingKeys: string[] = [],
       quickCleanupThresholdDays?: number,
     ) =>
@@ -343,6 +344,7 @@ export const api = {
           ratingKeys,
           coordinatedRatingKeys,
           cleanupDownloadRatingKeys,
+          cleanupPreviewFingerprints,
           unmonitorRatingKeys,
           quickCleanupThresholdDays,
         }),

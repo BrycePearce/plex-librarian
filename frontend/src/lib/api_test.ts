@@ -16,6 +16,7 @@ Deno.test("whole-item deletion serializes independent Arr and qBittorrent select
       ["arr-only", "qbit-only"],
       ["arr-only"],
       ["qbit-only"],
+      { "qbit-only": "a".repeat(64) },
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -24,6 +25,7 @@ Deno.test("whole-item deletion serializes independent Arr and qBittorrent select
   assertEquals(body.ratingKeys, ["arr-only", "qbit-only"]);
   assertEquals(body.coordinatedRatingKeys, ["arr-only"]);
   assertEquals(body.cleanupDownloadRatingKeys, ["qbit-only"]);
+  assertEquals(body.cleanupPreviewFingerprints, { "qbit-only": "a".repeat(64) });
   assertEquals(Object.hasOwn(body, "cleanupDownloads"), false);
 });
 

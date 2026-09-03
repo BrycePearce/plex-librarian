@@ -11,8 +11,11 @@ import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
 import {
   arrDestinationState,
+  cleanupConsentInvalidated,
   downloadCleanupDestinationVisible,
   effectiveArrSelection,
+  eligibleDownloadCleanupItems,
+  shouldDefaultOrphanOnlyCleanup,
   shouldUseArrByDefault,
 } from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
@@ -50,13 +53,16 @@ export function DeleteConfirmDialog({
   onConfirm: (plan: {
     coordinatedRatingKeys: string[];
     cleanupDownloadRatingKeys: string[];
+    cleanupPreviewFingerprints: Record<string, string>;
   }) => void;
   onCancel: () => void;
 }) {
   const [deleteFromArr, setDeleteFromArr] = useState(true);
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [cleanupConsentChanged, setCleanupConsentChanged] = useState(false);
   const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
   const cleanupDefaultsKeyRef = useRef<string | null>(null);
+  const acceptedCleanupKeyRef = useRef<string | null>(null);
   const ratingKeys = useMemo(
     () => items.map((item) => item.ratingKey),
     [items],
@@ -82,12 +88,6 @@ export function DeleteConfirmDialog({
     [preview.data],
   );
   const allowOrphanOnlyCleanup = items.every((item) => item.type === "show");
-  const cleanupEligibleItems = preview.data?.items.filter((item) =>
-    item.status === "resolved" &&
-    (item.downloadJobs.length > 0 ||
-      (allowOrphanOnlyCleanup && item.orphanFiles.length > 0))
-  ) ?? [];
-  const cleanupEligibleCount = cleanupEligibleItems.length;
   const coordinatedRatingKeys = preview.data?.coordinatedConfigured
     ? preview.data.items.filter((item) => item.arrStatus === "resolved").map((
       item,
@@ -95,25 +95,46 @@ export function DeleteConfirmDialog({
     : [];
   const arrDestination = arrDestinationState(preview.data);
   const arrProblems = arrDestination.problems;
-  const cleanupProblems = preview.data?.items.filter((item) =>
-    item.status !== "resolved" ||
-    (item.downloadJobs.length === 0 &&
-      (!allowOrphanOnlyCleanup || item.orphanFiles.length === 0))
-  ) ?? [];
   const arrService: ServiceIconName = items[0]?.type === "show" ? "sonarr" : "radarr";
   const arrLabel = arrService === "sonarr" ? "Sonarr" : "Radarr";
   // Query results and effects commit in separate renders. Suppress an obsolete Arr
   // selection immediately when no coordinated destination exists so the displayed
   // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
-  const cleanupDestinationVisible = downloadCleanupDestinationVisible(
+  const cleanupEligibleItems = eligibleDownloadCleanupItems(
     preview.data,
     allowOrphanOnlyCleanup,
+    effectiveDeleteFromArr,
   );
+  const cleanupEligibleCount = cleanupEligibleItems.length;
+  const hasLiveJobCleanup = cleanupEligibleItems.some((item) => item.downloadJobs.length > 0);
+  const hasOrphanCleanup = cleanupEligibleItems.some((item) => item.orphanFiles.length > 0);
+  const cleanupDestinationVisible = downloadCleanupDestinationVisible(
+    preview.data,
+    allowOrphanOnlyCleanup && effectiveDeleteFromArr,
+  );
+  const defaultOrphanOnlyCleanup = allowOrphanOnlyCleanup &&
+    shouldDefaultOrphanOnlyCleanup(preview.data);
+  const orphanOnlyDestination = hasOrphanCleanup && !hasLiveJobCleanup;
+  const cleanupAuthorizationKey = cleanupEligibleCount > 0 &&
+      cleanupEligibleItems.every((item) => item.cleanupFingerprint)
+    ? JSON.stringify(
+      cleanupEligibleItems.map((item) => [item.ratingKey, item.cleanupFingerprint]).sort(),
+    )
+    : null;
+  const effectiveCleanupDownloads = cleanupDownloads && cleanupAuthorizationKey !== null &&
+    acceptedCleanupKeyRef.current === cleanupAuthorizationKey;
+  const cleanupProblems = preview.data?.items.filter((item) =>
+    item.status !== "resolved" ||
+    (item.downloadJobs.length === 0 &&
+      (!allowOrphanOnlyCleanup || !effectiveDeleteFromArr || item.orphanFiles.length === 0))
+  ) ?? [];
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
+    acceptedCleanupKeyRef.current = null;
     setDeleteFromArr(true);
     setCleanupDownloads(false);
+    setCleanupConsentChanged(false);
     setPreviewMode("basic");
   }, [selectionKey]);
   useEffect(() => {
@@ -129,15 +150,40 @@ export function DeleteConfirmDialog({
     if (!preview.data) return;
     if (cleanupDefaultsKeyRef.current !== selectionKey) {
       cleanupDefaultsKeyRef.current = selectionKey;
+      if (defaultOrphanOnlyCleanup && effectiveDeleteFromArr) {
+        acceptedCleanupKeyRef.current = cleanupAuthorizationKey;
+        setCleanupDownloads(true);
+      }
       return;
     }
-    // A refetch may invalidate a destination, but must not silently reverse a
-    // user's explicit choice while that destination remains available.
-    if (cleanupEligibleCount === 0) setCleanupDownloads(false);
-  }, [preview.data, cleanupEligibleCount, selectionKey]);
+    // Consent is bound to the exact previewed paths and jobs. A materially changed
+    // refetch requires another explicit choice; unchanged refetches preserve it.
+    if (
+      cleanupConsentInvalidated(
+        cleanupDownloads,
+        cleanupAuthorizationKey,
+        acceptedCleanupKeyRef.current,
+      )
+    ) {
+      acceptedCleanupKeyRef.current = null;
+      setCleanupDownloads(false);
+      setCleanupConsentChanged(true);
+    }
+  }, [
+    preview.data,
+    cleanupEligibleCount,
+    cleanupAuthorizationKey,
+    cleanupDownloads,
+    selectionKey,
+    defaultOrphanOnlyCleanup,
+    effectiveDeleteFromArr,
+  ]);
   const cancel = () => {
+    cleanupDefaultsKeyRef.current = null;
+    acceptedCleanupKeyRef.current = null;
     setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
     setCleanupDownloads(false);
+    setCleanupConsentChanged(false);
     onCancel();
   };
   const { totalSize, unknownSizeCount } = deletionImpact(items);
@@ -199,11 +245,23 @@ export function DeleteConfirmDialog({
                     } monitored.`,
                   ]
                   : []),
-                ...(cleanupDownloads && cleanupProblems.length > 0
+                ...(effectiveCleanupDownloads && cleanupProblems.length > 0
                   ? [
-                    `qBittorrent cleanup could not be verified for ${cleanupProblems.length} ${
+                    `${
+                      orphanOnlyDestination ? "Verified hardlink cleanup" : "Download cleanup"
+                    } could not be verified for ${cleanupProblems.length} ${
                       cleanupProblems.length === 1 ? "item" : "items"
-                    }: ${cleanupProblems[0]?.reason ?? "No verified qBittorrent job is available"}`,
+                    }: ${
+                      cleanupProblems[0]?.reason ??
+                        (orphanOnlyDestination
+                          ? "No verified historical Sonarr hardlink is available"
+                          : "No verified qBittorrent job is available")
+                    }`,
+                  ]
+                  : []),
+                ...(cleanupConsentChanged
+                  ? [
+                    "Preview updated. Review the cleanup option before continuing.",
                   ]
                   : []),
               ]}
@@ -251,7 +309,7 @@ export function DeleteConfirmDialog({
                             item={item}
                             preview={previewItem}
                             deleteFromArr={effectiveDeleteFromArr}
-                            cleanupDownloads={cleanupDownloads}
+                            cleanupDownloads={effectiveCleanupDownloads}
                           />
                         }
                         size={item.fileSize != null ? formatKilobytes(item.fileSize) : "—"}
@@ -265,7 +323,7 @@ export function DeleteConfirmDialog({
                   items={items}
                   plexPreviews={previewByRatingKey}
                   deleteFromArr={effectiveDeleteFromArr}
-                  cleanupDownloads={cleanupDownloads}
+                  cleanupDownloads={effectiveCleanupDownloads}
                   loading={preview.isLoading}
                 />
               }
@@ -306,14 +364,19 @@ export function DeleteConfirmDialog({
               ...(cleanupDestinationVisible
                 ? [{
                   id: "cleanup" as const,
-                  service: "qbittorrent" as const,
-                  label: "Download cleanup",
-                  info:
-                    "Removes verified qBittorrent jobs and verified orphan hardlinks. Orphan-only cleanup remains available after the download job is gone.",
-                  checked: cleanupDownloads,
+                  service: orphanOnlyDestination ? "sonarr" as const : "qbittorrent" as const,
+                  label: orphanOnlyDestination ? "Verified hardlink cleanup" : "Download cleanup",
+                  info: orphanOnlyDestination
+                    ? "Removes verified historical Sonarr import hardlinks. This remains available after the download job is gone and is included by default with whole-show Sonarr deletion."
+                    : "Removes verified qBittorrent jobs and verified orphan hardlinks. Orphan-only cleanup remains available after the download job is gone.",
+                  checked: effectiveCleanupDownloads,
                   disabled: pending || preview.isLoading,
-                  warning: cleanupDownloads && cleanupProblems.length > 0,
-                  onChange: setCleanupDownloads,
+                  warning: effectiveCleanupDownloads && cleanupProblems.length > 0,
+                  onChange: (checked: boolean) => {
+                    acceptedCleanupKeyRef.current = checked ? cleanupAuthorizationKey : null;
+                    setCleanupDownloads(checked);
+                    setCleanupConsentChanged(false);
+                  },
                 }]
                 : []),
             ]}
@@ -330,9 +393,16 @@ export function DeleteConfirmDialog({
             onConfirm={() =>
               onConfirm({
                 coordinatedRatingKeys: effectiveDeleteFromArr ? coordinatedRatingKeys : [],
-                cleanupDownloadRatingKeys: cleanupDownloads
+                cleanupDownloadRatingKeys: effectiveCleanupDownloads
                   ? cleanupEligibleItems.map((item) => item.ratingKey)
                   : [],
+                cleanupPreviewFingerprints: effectiveCleanupDownloads
+                  ? Object.fromEntries(
+                    cleanupEligibleItems.flatMap((item) =>
+                      item.cleanupFingerprint ? [[item.ratingKey, item.cleanupFingerprint]] : []
+                    ),
+                  )
+                  : {},
               })}
           />
         }

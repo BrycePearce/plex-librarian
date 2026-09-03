@@ -51,7 +51,7 @@
     Target="/media"
     Default=""
     Mode="ro"
-    Description="Optional. Read-only library mount used to verify Radarr orphan-download hardlinks. After adding it, configure the matching Radarr and local roots under Settings > Media connections."
+    Description="Optional. Read-only library mount used to verify Sonarr/Radarr orphan-download hardlinks. After adding it, configure the matching Arr and local roots under Settings > Media connections."
     Type="Path"
     Display="advanced"
     Required="false"

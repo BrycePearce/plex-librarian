@@ -4,6 +4,7 @@ export interface DeleteItemsRequest {
   ratingKeys: string[];
   coordinatedRatingKeys: string[];
   cleanupDownloadRatingKeys: string[];
+  cleanupPreviewFingerprints: Record<string, string>;
 }
 
 export interface DownloadCleanupJob {
@@ -94,6 +95,7 @@ export interface DownloadCleanupPreviewItem {
   sources: ArrCleanupSource[];
   orphanFiles: ArrCleanupFile[];
   retainedPaths: ArrCleanupRetainedPath[];
+  cleanupFingerprint?: string;
 }
 
 export interface DownloadCleanupPreviewResponse {

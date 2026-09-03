@@ -369,6 +369,7 @@ function StalePage() {
   function closeConfirm() {
     dialogRef.current?.close();
     seasonDialogRef.current?.close();
+    setConfirmItems([]);
     setConfirmSeason(null);
   }
 
@@ -679,13 +680,18 @@ function StalePage() {
         items={confirmItems}
         pending={deleteMutation.isPending}
         error={deleteMutation.error}
-        onConfirm={({ coordinatedRatingKeys, cleanupDownloadRatingKeys }) =>
+        onConfirm={({
+          coordinatedRatingKeys,
+          cleanupDownloadRatingKeys,
+          cleanupPreviewFingerprints,
+        }) =>
           deleteMutation.mutate(
             {
               libraryKey: key,
               ratingKeys: confirmItems.map((i) => i.ratingKey),
               coordinatedRatingKeys,
               cleanupDownloadRatingKeys,
+              cleanupPreviewFingerprints,
             },
             {
               onSuccess: () => {

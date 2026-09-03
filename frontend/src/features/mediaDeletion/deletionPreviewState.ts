@@ -33,3 +33,38 @@ export function downloadCleanupDestinationVisible(
       (preview.downloadClientsConfigured === true && item.downloadJobs.length > 0))
   ) ?? false;
 }
+
+export function eligibleDownloadCleanupItems(
+  preview: DownloadCleanupPreviewResponse | undefined,
+  allowOrphanOnly: boolean,
+  coordinateArr: boolean,
+) {
+  return preview?.items.filter((item) =>
+    item.status === "resolved" &&
+    (item.downloadJobs.length > 0 ||
+      (allowOrphanOnly && coordinateArr && item.orphanFiles.length > 0))
+  ) ?? [];
+}
+
+/**
+ * Whole-show Sonarr deletion can reclaim an orphaned import hardlink even after
+ * its download job has disappeared. Default only that narrow cleanup case on;
+ * a live download job must continue to require an explicit user choice.
+ */
+export function shouldDefaultOrphanOnlyCleanup(
+  preview: DownloadCleanupPreviewResponse | undefined,
+): boolean {
+  if (!preview) return false;
+  const resolved = preview.items.filter((item) => item.status === "resolved");
+  return resolved.some((item) =>
+    item.downloadJobs.length === 0 && (item.orphanFiles?.length ?? 0) > 0
+  ) && resolved.every((item) => item.downloadJobs.length === 0);
+}
+
+export function cleanupConsentInvalidated(
+  selected: boolean,
+  currentAuthorizationKey: string | null,
+  acceptedAuthorizationKey: string | null,
+): boolean {
+  return selected && currentAuthorizationKey !== acceptedAuthorizationKey;
+}

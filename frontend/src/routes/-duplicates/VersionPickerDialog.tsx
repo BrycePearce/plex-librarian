@@ -32,6 +32,7 @@ import {
   useDeletionDialogCancelFocus,
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
+import { cleanupConsentInvalidated } from "../../features/mediaDeletion/deletionPreviewState.ts";
 import {
   defaultVersionSelection,
   versionArrDestinationCopy,
@@ -61,6 +62,7 @@ export function VersionPickerDialog({
     deleteFromArr: boolean;
     cleanupDownloads: boolean;
     cleanupMediaIds: number[];
+    cleanupPreviewFingerprint?: string;
     planFingerprint?: string;
     allowRadarrRetainedPathManagement?: boolean;
     allowRadarrMovieRemoval?: boolean;
@@ -91,6 +93,7 @@ export function VersionPickerDialog({
   const [cleanupDownloads, setCleanupDownloads] = useState(false);
   const [useRadarrPathOverride, setUseRadarrPathOverride] = useState(false);
   const wholeItemDefaultsKeyRef = useRef<string | null>(null);
+  const acceptedWholeItemCleanupFingerprintRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
 
   useLayoutEffect(() => {
@@ -187,6 +190,13 @@ export function VersionPickerDialog({
   const wholeItemPreviewEntry = wholeItemPreview.data?.items[0];
   const wholeItemCleanupAvailable = wholeItemPreviewEntry?.status === "resolved" &&
     wholeItemPreviewEntry.downloadJobs.length > 0;
+  const wholeItemCleanupFingerprint = wholeItemCleanupAvailable
+    ? wholeItemPreviewEntry?.cleanupFingerprint ?? null
+    : null;
+  const effectiveCleanupDownloads = selection.deleteWholeItem
+    ? cleanupDownloads && wholeItemCleanupFingerprint !== null &&
+      acceptedWholeItemCleanupFingerprintRef.current === wholeItemCleanupFingerprint
+    : cleanupDownloads;
   const wholeItemArrAvailable = wholeItemPreviewEntry?.arrStatus === "resolved" &&
     wholeItemPreviewEntry.arrTargets.length > 0;
   const showWholeItemPreviewLoading = useDelayedFlag(wholeItemPreview.isLoading, 250);
@@ -194,24 +204,35 @@ export function VersionPickerDialog({
   useEffect(() => {
     if (!wholeItemDefaultsKey) {
       wholeItemDefaultsKeyRef.current = null;
+      acceptedWholeItemCleanupFingerprintRef.current = null;
       return;
     }
     if (!wholeItemPreview.data) return;
     if (wholeItemDefaultsKeyRef.current !== wholeItemDefaultsKey) {
       wholeItemDefaultsKeyRef.current = wholeItemDefaultsKey;
-      setCleanupDownloads(wholeItemCleanupAvailable);
+      acceptedWholeItemCleanupFingerprintRef.current = wholeItemCleanupFingerprint;
+      setCleanupDownloads(wholeItemCleanupFingerprint !== null);
       setDeleteFromArr(wholeItemArrAvailable);
       return;
     }
-    // Preserve explicit unchecks across refetches, while still failing closed if
-    // current evidence makes a previously selected destination unavailable.
-    if (!wholeItemCleanupAvailable) setCleanupDownloads(false);
+    if (
+      cleanupConsentInvalidated(
+        cleanupDownloads,
+        wholeItemCleanupFingerprint,
+        acceptedWholeItemCleanupFingerprintRef.current,
+      )
+    ) {
+      acceptedWholeItemCleanupFingerprintRef.current = null;
+      setCleanupDownloads(false);
+    }
     if (!wholeItemArrAvailable) setDeleteFromArr(false);
   }, [
     wholeItemDefaultsKey,
     wholeItemPreview.data,
     wholeItemCleanupAvailable,
+    wholeItemCleanupFingerprint,
     wholeItemArrAvailable,
+    cleanupDownloads,
   ]);
 
   if (!item) {
@@ -384,7 +405,7 @@ export function VersionPickerDialog({
                             item={wholeItemCandidate}
                             preview={wholeItemPreviewEntry}
                             deleteFromArr={effectiveDeleteFromArr}
-                            cleanupDownloads={cleanupDownloads}
+                            cleanupDownloads={effectiveCleanupDownloads}
                           />
                         )
                         : (
@@ -392,7 +413,7 @@ export function VersionPickerDialog({
                             preview={preview.data}
                             mediaId={version.mediaId}
                             deleteFromArr={effectiveDeleteFromArr}
-                            cleanupDownloads={cleanupDownloads}
+                            cleanupDownloads={effectiveCleanupDownloads}
                           />
                         )
                     )
@@ -411,7 +432,7 @@ export function VersionPickerDialog({
                 wholeItemPreviewEntry ? [[ratingKey, wholeItemPreviewEntry]] : [],
               )}
               deleteFromArr={effectiveDeleteFromArr}
-              cleanupDownloads={cleanupDownloads}
+              cleanupDownloads={effectiveCleanupDownloads}
               loading={wholeItemPreview.isLoading}
             />
           )
@@ -436,7 +457,7 @@ export function VersionPickerDialog({
               preview={preview.data}
               availableVersions={availableVersionPaths}
               deleteFromArr={effectiveDeleteFromArr}
-              cleanupDownloads={cleanupDownloads}
+              cleanupDownloads={effectiveCleanupDownloads}
               loading={preview.isLoading}
               onToggleVersion={toggle}
             />
@@ -513,14 +534,21 @@ export function VersionPickerDialog({
                     ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
                     : "Deletes the verified qBittorrent job and its downloaded files along with " +
                       "the selected Plex version.",
-                  checked: cleanupDownloads,
+                  checked: effectiveCleanupDownloads,
                   disabled: pending ||
                     (selection.deleteWholeItem
                       ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
                       : !deleteFromArr || pathReassignmentActive),
                   warning: !cleanupAvailable ||
                     (!selection.deleteWholeItem && pathReassignmentActive),
-                  onChange: setCleanupDownloads,
+                  onChange: (checked: boolean) => {
+                    if (selection.deleteWholeItem) {
+                      acceptedWholeItemCleanupFingerprintRef.current = checked
+                        ? wholeItemCleanupFingerprint
+                        : null;
+                    }
+                    setCleanupDownloads(checked);
+                  },
                 },
               ]
               : []),
@@ -610,9 +638,13 @@ export function VersionPickerDialog({
             deleteWholeItem: selection.deleteWholeItem,
             deleteFromArr: effectiveDeleteFromArr && effectiveArrAvailable,
             cleanupDownloads: selection.deleteWholeItem
-              ? cleanupDownloads && wholeItemCleanupAvailable
+              ? effectiveCleanupDownloads
               : effectiveDeleteFromArr && arrAvailable && cleanupDownloads,
             cleanupMediaIds,
+            ...(selection.deleteWholeItem && effectiveCleanupDownloads &&
+                wholeItemCleanupFingerprint
+              ? { cleanupPreviewFingerprint: wholeItemCleanupFingerprint }
+              : {}),
             ...(effectiveDeleteFromArr &&
                 (useRadarrPathOverride ? pathOverride : pathAdoption)?.planFingerprint
               ? {

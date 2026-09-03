@@ -16,7 +16,9 @@ import {
   deletionOperationTitle,
   hardlinkOutcomeSummary,
   nonSupersededCancelledCount,
+  noVerifiedDiskSpaceReclaimed,
   retryableRelocationSafeTargetCount,
+  storageOutcomeExplanations,
 } from "./-deletionOperationState.ts";
 
 export const Route = createFileRoute("/deletion-operations/$id")({
@@ -125,6 +127,7 @@ function DeletionOperationPage() {
   const reassignmentRetryTarget = operation.targets.find((target) =>
     target.seasonReassignmentRetryAvailable === true
   );
+  const unverifiedStorageExplanations = storageOutcomeExplanations(operation.targets);
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl w-full mx-auto">
@@ -196,6 +199,25 @@ function DeletionOperationPage() {
             />
             <Stat label="Superseded" value={String(operation.supersededCount)} />
           </div>
+          {noVerifiedDiskSpaceReclaimed(operation) && (
+            <div className="alert alert-warning items-start text-sm">
+              <AlertTriangle className="size-5 shrink-0" />
+              <div>
+                <span className="badge badge-warning mb-2">No verified disk space reclaimed</span>
+                <p>
+                  The media was removed successfully, but Plex Librarian did not verify removal of
+                  its underlying hardlink data.
+                </p>
+                {unverifiedStorageExplanations.length > 0 && (
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-base-content/70">
+                    {unverifiedStorageExplanations.map((explanation) => (
+                      <li key={explanation}>{explanation}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
           {operation.status === "needs_attention" &&
             operation.targets.some((target) => target.status === "queued") && (
             <div className="alert alert-warning text-sm">

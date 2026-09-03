@@ -3438,6 +3438,20 @@ Deno.test('whole-show preview exposes an exact Sonarr-associated job with partia
   assertEquals(preview.items[0].downloadJobs.length, 1, JSON.stringify(preview));
   assertEquals(preview.items[0].downloadJobs[0].fileCount, 2);
 
+  const stalePreviewResponse = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: ['show-1'],
+      cleanupPreviewFingerprints: { 'show-1': '0'.repeat(64) },
+    }),
+  });
+  assertEquals(stalePreviewResponse.status, 409, await stalePreviewResponse.clone().text());
+  assertStringIncludes((await stalePreviewResponse.json()).error, 'cleanup preview changed');
+
   const acceptedResponse = await app.request('/api/libraries/shows/items', {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
@@ -3446,6 +3460,7 @@ Deno.test('whole-show preview exposes an exact Sonarr-associated job with partia
       ratingKeys: ['show-1'],
       coordinatedRatingKeys: [],
       cleanupDownloadRatingKeys: ['show-1'],
+      cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
     }),
   });
   assertEquals(acceptedResponse.status, 202, await acceptedResponse.clone().text());
@@ -3582,6 +3597,24 @@ Deno.test({
       assertEquals(preview.items[0].downloadJobs.length, 0);
       assertEquals(preview.items[0].orphanFiles.length, 1);
 
+      const plexOnlyResponse = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: [],
+          cleanupDownloadRatingKeys: ['show-1'],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+        }),
+      });
+      assertEquals(plexOnlyResponse.status, 409, await plexOnlyResponse.clone().text());
+      assertStringIncludes(
+        (await plexOnlyResponse.json()).error,
+        'requires coordinated Sonarr deletion',
+      );
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
+
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
@@ -3590,6 +3623,7 @@ Deno.test({
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
           cleanupDownloadRatingKeys: ['show-1'],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -3640,6 +3674,14 @@ Deno.test({
         ).run(libraryRoot, downloadRoot);
       });
 
+      const preview = await (await app.request(
+        '/api/libraries/shows/items/download-cleanup-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: ['show-1'] }),
+        },
+      )).json();
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
@@ -3648,6 +3690,7 @@ Deno.test({
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
           cleanupDownloadRatingKeys: ['show-1'],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -3700,6 +3743,14 @@ Deno.test({
         ).run(libraryRoot, downloadRoot);
       });
 
+      const preview = await (await app.request(
+        '/api/libraries/shows/items/download-cleanup-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: ['show-1'] }),
+        },
+      )).json();
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
@@ -3708,6 +3759,7 @@ Deno.test({
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
           cleanupDownloadRatingKeys: ['show-1'],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -3759,6 +3811,14 @@ Deno.test({
         ).run(libraryRoot, downloadRoot);
       });
 
+      const preview = await (await app.request(
+        '/api/libraries/shows/items/download-cleanup-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: ['show-1'] }),
+        },
+      )).json();
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
@@ -3767,6 +3827,7 @@ Deno.test({
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
           cleanupDownloadRatingKeys: ['show-1'],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -3872,6 +3933,9 @@ Deno.test('whole-item direct-manifest cleanup converges after a lost delete resp
       ratingKeys: ['direct-whole-item'],
       coordinatedRatingKeys: [],
       cleanupDownloadRatingKeys: ['direct-whole-item'],
+      cleanupPreviewFingerprints: {
+        'direct-whole-item': preview.items[0].cleanupFingerprint,
+      },
     }),
   });
   assertEquals(response.status, 202, await response.clone().text());
@@ -3923,6 +3987,7 @@ Deno.test('whole-item acceptance rejects a shared job split across cleanup selec
       ratingKeys: ['shared-selected', 'shared-unselected'],
       coordinatedRatingKeys: [],
       cleanupDownloadRatingKeys: ['shared-selected'],
+      cleanupPreviewFingerprints: { 'shared-selected': 'a'.repeat(64) },
     }),
   });
 

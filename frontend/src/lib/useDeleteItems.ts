@@ -20,6 +20,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         ratingKeys,
         mode,
         cleanupDownloadRatingKeys,
+        cleanupPreviewFingerprints,
         coordinatedRatingKeys,
         unmonitorRatingKeys,
         quickCleanupThresholdDays,
@@ -28,6 +29,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         ratingKeys: string[];
         mode?: "coordinated" | "plex-only";
         cleanupDownloadRatingKeys?: string[];
+        cleanupPreviewFingerprints?: Record<string, string>;
         coordinatedRatingKeys?: string[];
         unmonitorRatingKeys?: string[];
         quickCleanupThresholdDays?: number;
@@ -40,6 +42,7 @@ export function useDeleteItems(invalidateQueryKeys: QueryKey[]) {
         ratingKeys,
         coordinated,
         cleanupDownloadRatingKeys,
+        cleanupPreviewFingerprints,
         unmonitorRatingKeys,
         quickCleanupThresholdDays,
       );

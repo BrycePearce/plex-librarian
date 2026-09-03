@@ -243,6 +243,11 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
     throw new DeletionValidationError('durable whole-item cleanup selection is missing');
   }
   if (wholeItemCleanup !== undefined) {
+    if (wholeItemCleanup.sonarrReclamation?.proofs.length && snapshot.mode !== 'coordinated') {
+      throw new DeletionValidationError(
+        'durable Sonarr hardlink cleanup requires coordinated deletion',
+      );
+    }
     if (
       snapshot.mediaId !== undefined || snapshot.seasonCleanup === true ||
       snapshot.cleanupDownloads !== true || wholeItemCleanup.status !== 'resolved' ||
