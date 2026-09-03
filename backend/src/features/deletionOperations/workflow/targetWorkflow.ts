@@ -46,8 +46,8 @@ import {
   type PersistedSonarrReclamation,
   sonarrReclamationAccountingFileCount,
   unlinkConfirmedReclamationProofs,
-} from '../../mediaDeletion/reclamation.ts';
-import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarrSeasonInspection.ts';
+} from '../../mediaDeletion/sonarr/reclamation.ts';
+import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarr/seasonInspection.ts';
 import {
   assertDownloadJobSelectionConsistent,
   loadAttemptedArrInstancesByItem,
@@ -2015,7 +2015,7 @@ async function ensureVersionDeleted(
           for (const key of confirmedJobAbsences) confirmedAcceptedJobAbsences.add(key);
           for (const file of resolvedCleanup.orphanFiles) {
             const ownershipJobs = (file as Partial<
-              import('../../mediaDeletion/sonarrPathOwnership.ts').ClassifiedSonarrPath
+              import('../../mediaDeletion/sonarr/pathOwnership.ts').ClassifiedSonarrPath
             >).ownershipJobs ?? [];
             if (
               ownershipJobs.some((owner) =>

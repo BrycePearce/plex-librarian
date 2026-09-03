@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { sonarrActivityConflictMessage } from './sonarrSeasonInspection.ts';
+import { sonarrActivityConflictMessage } from './seasonInspection.ts';
 
 Deno.test('Sonarr activity conflicts explain transient refreshes in plain language', () => {
   assertEquals(

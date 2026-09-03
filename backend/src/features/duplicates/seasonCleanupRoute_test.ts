@@ -10,7 +10,7 @@ import { managedEpisodesNeedBreakGlass } from './seasonDeletionPlanner.ts';
 import {
   downloadCleanupEvidenceAgrees,
   seasonDownloadJobAssignments,
-} from '../mediaDeletion/seasonDownloadCleanup.ts';
+} from '../mediaDeletion/sonarr/seasonDownloadCleanup.ts';
 import type { ResolvedCleanupItem } from '../mediaDeletion/cleanup.ts';
 
 const fingerprint = 'a'.repeat(64);

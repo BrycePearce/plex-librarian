@@ -17,8 +17,8 @@ import {
   scopeSonarrReclamation,
 } from '../mediaDeletion/cleanup.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
-import { resolveSeasonDownloadCleanup } from '../mediaDeletion/seasonDownloadCleanup.ts';
-import { inspectSonarrSeason } from '../mediaDeletion/sonarrSeasonInspection.ts';
+import { resolveSeasonDownloadCleanup } from '../mediaDeletion/sonarr/seasonDownloadCleanup.ts';
+import { inspectSonarrSeason } from '../mediaDeletion/sonarr/seasonInspection.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { selectVersionDownloadCleanup } from '../mediaDeletion/versionPlanning.ts';
 
