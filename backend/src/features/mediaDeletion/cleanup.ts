@@ -1055,20 +1055,21 @@ export async function executeDownloadedFileCleanup(
       result.alreadyRemovedOrphanFiles.push(orphanFile.path);
       continue;
     }
-    // Sonarr-owned paths receive their final live-owner check after selected
-    // qBittorrent payload deletion and immediately before this unattempted unlink.
-    if (!await authorizeOrphanDelete(orphanFile)) continue;
+    const ownershipJobs = (orphanFile as Partial<
+      import('./sonarrPathOwnership.ts').ClassifiedSonarrPath
+    >).ownershipJobs ?? [];
+    const selectedOwnerWasDeleted = ownershipJobs.some((owner) =>
+      owner.selected && deletedDownloadJobKeys.has(`${owner.instanceKey}:${owner.jobId}`)
+    );
+    // Sonarr-owned paths receive their final live-owner check immediately before
+    // an unattempted unlink. A previously attempted, now-confirmed-absent selected
+    // payload is already authoritative for paths in its exact accepted manifest.
+    if (!selectedOwnerWasDeleted && !await authorizeOrphanDelete(orphanFile)) continue;
     try {
       await beforeOrphanDelete(orphanFile);
       try {
         await deleteOrphanFile(orphanFile);
       } catch (error) {
-        const ownershipJobs = (orphanFile as Partial<
-          import('./sonarrPathOwnership.ts').ClassifiedSonarrPath
-        >).ownershipJobs ?? [];
-        const selectedOwnerWasDeleted = ownershipJobs.some((owner) =>
-          owner.selected && deletedDownloadJobKeys.has(`${owner.instanceKey}:${owner.jobId}`)
-        );
         // The selected exact payload deletion runs first. Its removal of this
         // snapshotted entry is attributable only after this path's own attempt marker.
         if (!(error instanceof Deno.errors.NotFound) || !selectedOwnerWasDeleted) throw error;

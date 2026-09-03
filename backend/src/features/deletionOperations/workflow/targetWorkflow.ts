@@ -389,6 +389,9 @@ async function protectSeasonPayloadTargetsBeforeDownloadCleanup(
       : normalizeRemoteAbsolute(source.importedPath)?.comparison;
     return path ? [path] : [];
   }));
+  const cleanupJobKeys = new Set(
+    cleanup.downloadJobs.map((job) => `${job.provider}\u0000${job.instanceKey}\u0000${job.jobId}`),
+  );
   if (payloadPaths.size === 0) {
     throw new Error('The shared season download payload has no exact Plex path ownership');
   }
@@ -403,7 +406,23 @@ async function protectSeasonPayloadTargetsBeforeDownloadCleanup(
       const selectedPath = snapshot.expectedPlexPath === undefined
         ? null
         : normalizeRemoteAbsolute(snapshot.expectedPlexPath)?.comparison ?? null;
-      if (!selectedPath || !payloadPaths.has(selectedPath)) continue;
+      const siblingCleanup = snapshot.seasonDownloadCleanup;
+      const sharedJobIds = new Set(
+        siblingCleanup?.downloadJobs.filter((job) =>
+          cleanupJobKeys.has(`${job.provider}\u0000${job.instanceKey}\u0000${job.jobId}`)
+        ).map((job) => job.jobId) ?? [],
+      );
+      const selectedPathBelongsToSharedJob = selectedPath !== null &&
+        siblingCleanup?.sources.some((source) =>
+            sharedJobIds.has(source.downloadId) &&
+            source.importedPath !== null &&
+            normalizeRemoteAbsolute(source.importedPath)?.comparison === selectedPath
+          ) === true;
+      if (
+        !selectedPath ||
+        (!payloadPaths.has(selectedPath) && !selectedPathBelongsToSharedJob)
+      ) continue;
+      if (selectedPathBelongsToSharedJob) payloadPaths.add(selectedPath);
       matchedPaths.add(selectedPath);
       if (
         snapshot.seasonCoordinationOutcome !== 'automatic_adoption' &&
@@ -616,6 +635,7 @@ async function executeCleanup(
   attemptParentRatingKey?: string,
   reconcileAttemptedAbsence = false,
   callbacks: {
+    confirmedDownloadJobKeys?: ReadonlySet<string>;
     authorizeOrphanDelete?: (
       file: import('../../mediaDeletion/hardlinks.ts').VerifiedOrphanFile,
     ) => Promise<boolean>;
@@ -628,7 +648,7 @@ async function executeCleanup(
   } = {},
 ): Promise<void> {
   const attemptRatingKey = attemptParentRatingKey ?? cleanup.ratingKey;
-  const confirmedJobAbsences = new Set<string>();
+  const confirmedJobAbsences = new Set(callbacks.confirmedDownloadJobKeys ?? []);
   const confirmedOrphanAbsences = new Set<string>();
   if (reconcileAttemptedAbsence) {
     const [attemptedJobsByItem, confirmedOrphans] = await Promise.all([
@@ -1972,6 +1992,7 @@ async function ensureVersionDeleted(
           : Promise.resolve(new Map()),
       ]);
     let resolvedCleanup: ResolvedCleanupItem | null = null;
+    const confirmedAcceptedJobAbsences = new Set<string>();
     if (inspectDownloadCleanup) {
       if (snapshot.seasonDownloadCleanup) {
         if (snapshot.seasonDownloadCleanup.ratingKey !== attemptRatingKey) {
@@ -1987,6 +2008,24 @@ async function ensureVersionDeleted(
             attemptRatingKey,
             resolvedCleanup,
           );
+          const confirmedJobAbsences = await confirmedAttemptedDownloadJobAbsences(
+            resolvedCleanup,
+            attemptedJobs.get(attemptRatingKey) ?? new Set(),
+          );
+          for (const key of confirmedJobAbsences) confirmedAcceptedJobAbsences.add(key);
+          for (const file of resolvedCleanup.orphanFiles) {
+            const ownershipJobs = (file as Partial<
+              import('../../mediaDeletion/sonarrPathOwnership.ts').ClassifiedSonarrPath
+            >).ownershipJobs ?? [];
+            if (
+              ownershipJobs.some((owner) =>
+                owner.selected &&
+                confirmedJobAbsences.has(`${owner.instanceKey}:${owner.jobId}`)
+              )
+            ) {
+              confirmedAbsences.add(file.path);
+            }
+          }
           resolvedCleanup = await revalidateAcceptedSonarrPathOwnership(
             resolvedCleanup,
             downloadTargets,
@@ -2075,6 +2114,7 @@ async function ensureVersionDeleted(
           snapshot.seasonDownloadCleanup !== undefined,
           plan.cleanup.sonarrReclamation
             ? {
+              confirmedDownloadJobKeys: confirmedAcceptedJobAbsences,
               authorizeOrphanDelete: async (file) => {
                 latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
                   latestOwnershipCleanup,

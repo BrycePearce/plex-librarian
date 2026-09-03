@@ -382,7 +382,6 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
   if (snapshot.seasonDownloadCleanup !== undefined) {
     if (
       !snapshot.seasonDownloadCleanup || typeof snapshot.seasonDownloadCleanup !== 'object' ||
-      snapshot.seasonCleanup !== true ||
       (snapshot.cleanupDownloads !== true &&
         snapshot.seasonDownloadCleanup.sonarrReclamation === undefined) ||
       snapshot.seasonDownloadCleanup.status !== 'resolved' ||
