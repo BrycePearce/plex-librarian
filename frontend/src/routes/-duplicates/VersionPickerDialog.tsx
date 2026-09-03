@@ -106,8 +106,13 @@ export function VersionPickerDialog({
   }, [defaultChecked, itemKey]);
 
   const mediaIds = useMemo(() => [...checked].sort((a, b) => a - b), [checked]);
-  const deletingWholeMovie = item?.mediaType === "movie" &&
-    mediaIds.length === item.versions.length;
+  const selection = item ? versionSelectionSemantics(item.mediaType, item.versions, checked) : {
+    selectedVersions: [],
+    wouldDeleteAll: false,
+    deleteWholeItem: false,
+    blocked: false,
+  };
+  const deletingWholeMovie = selection.deleteWholeItem;
   const ratingKey = item?.mediaType === "movie" ? item.ratingKey : (item?.episodeRatingKey ?? "");
   const cancelButtonRef = useDeletionDialogCancelFocus(
     dialogRef,
@@ -246,7 +251,6 @@ export function VersionPickerDialog({
     setSelectionState({ itemKey, checked: next });
   }
 
-  const selection = versionSelectionSemantics(item.mediaType, item.versions, checked);
   const wholeItemCandidate = item.mediaType === "movie"
     ? duplicateMovieDeletionCandidate(item)
     : null;
