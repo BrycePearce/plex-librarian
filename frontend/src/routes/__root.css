@@ -118,7 +118,10 @@ html[data-theme="nord"] .app-shell {
   min-width: 0;
   flex-direction: column;
   padding: 18px 14px 14px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .sidebar-brand {

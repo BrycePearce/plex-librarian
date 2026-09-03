@@ -200,18 +200,34 @@ function DeletionOperationPage() {
             <Stat label="Superseded" value={String(operation.supersededCount)} />
           </div>
           {noVerifiedDiskSpaceReclaimed(operation) && (
-            <div className="alert alert-warning items-start text-sm">
-              <AlertTriangle className="size-5 shrink-0" />
-              <div>
-                <span className="badge badge-warning mb-2">No verified disk space reclaimed</span>
-                <p>
-                  The media was removed successfully, but Plex Librarian did not verify removal of
-                  its underlying hardlink data.
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning/5 p-4 text-sm"
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-warning/10 text-warning">
+                <AlertTriangle className="size-[18px]" />
+              </span>
+              <div className="min-w-0 pt-0.5">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-warning/80">
+                  Storage outcome
+                </p>
+                <p className="mt-1 font-semibold text-base-content">
+                  Disk space recovery wasn&apos;t verified
+                </p>
+                <p className="mt-1 leading-relaxed text-base-content/65">
+                  The media was removed successfully, but Plex Librarian couldn&apos;t confirm that
+                  its underlying hardlink data was removed from disk.
                 </p>
                 {unverifiedStorageExplanations.length > 0 && (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-base-content/70">
+                  <ul className="mt-3 space-y-1.5 border-t border-warning/15 pt-3 text-xs leading-relaxed text-base-content/55">
                     {unverifiedStorageExplanations.map((explanation) => (
-                      <li key={explanation}>{explanation}</li>
+                      <li key={explanation} className="flex gap-2">
+                        <span
+                          aria-hidden="true"
+                          className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-warning/60"
+                        />
+                        <span>{explanation}</span>
+                      </li>
                     ))}
                   </ul>
                 )}
