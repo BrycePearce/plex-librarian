@@ -43,11 +43,11 @@ import { bestMediaVersionCandidate } from '@plex-librarian/shared/mediaVersionRa
 import {
   resolveSeasonDownloadCleanup,
   seasonDownloadJobAssignments,
-} from '../mediaDeletion/seasonDownloadCleanup.ts';
+} from '../mediaDeletion/sonarr/seasonDownloadCleanup.ts';
 import {
   type InspectedSonarrSeasonTarget,
   inspectSonarrSeason,
-} from '../mediaDeletion/sonarrSeasonInspection.ts';
+} from '../mediaDeletion/sonarr/seasonInspection.ts';
 import {
   type SonarrManualImportCandidate,
   supportedSonarrSeasonMutationVersion,

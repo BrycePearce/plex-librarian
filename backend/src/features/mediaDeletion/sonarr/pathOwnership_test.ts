@@ -1,13 +1,13 @@
 import { assertEquals } from '@std/assert';
-import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
-import type { VerifiedOrphanFile } from './hardlinks.ts';
+import type { DownloadClientTarget, DownloadJob } from '../downloadClient.ts';
+import type { VerifiedOrphanFile } from '../hardlinks.ts';
 import {
   bindSonarrPathOwnership,
   type ResolvedCleanupItem,
   revalidateAcceptedSonarrPathOwnership,
-} from './cleanup.ts';
-import { selectVersionDownloadCleanup } from './versionPlanning.ts';
-import { classifySonarrOwnedPaths } from './sonarrPathOwnership.ts';
+} from '../cleanup.ts';
+import { selectVersionDownloadCleanup } from '../versionPlanning.ts';
+import { classifySonarrOwnedPaths } from './pathOwnership.ts';
 
 const hashA = 'a'.repeat(40);
 const hashB = 'b'.repeat(40);

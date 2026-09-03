@@ -1,7 +1,3 @@
-import type {
-  DownloadCleanupJob,
-  DownloadCleanupPreviewItem,
-} from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import type { ArrExtraFile, ArrManagedFile } from '../../integrations/arr/client.ts';
 import { and, eq } from 'drizzle-orm';
@@ -9,7 +5,6 @@ import { db } from '../../db/index.ts';
 import { plexPathMappings } from '../../db/schema.ts';
 import {
   type DownloadClientTarget,
-  type DownloadDiscoveryCandidate,
   downloadJobManifestFingerprint,
   downloadJobSummaryFingerprint,
 } from './downloadClient.ts';
@@ -40,87 +35,25 @@ import {
   canonicalSonarrInventory,
   type PersistedSonarrReclamation,
   sonarrInventoryIdentity,
-} from './reclamation.ts';
-import { classifySonarrOwnedPaths } from './sonarrPathOwnership.ts';
-
-export interface DirectPlexPathEvidence {
-  serverId: number;
-  libraryKey: string;
-  plexPath: string;
-  localPath: string;
-  mappingId: number;
-  mappingRevision: number;
-  mappingPlexPath: string;
-  mappingLocalPath: string;
-  mappingCaseSensitive: boolean;
-}
-
-export interface DirectRetainedPathEvidence extends DirectPlexPathEvidence {
-  size: number;
-  device: string;
-  inode: string;
-  canonicalPath: string;
-}
-
-export interface ResolvedDownloadJob extends DownloadCleanupJob {
-  target: DownloadClientTarget;
-  manifestFiles: Array<{ path: string; size: number | null }>;
-  authorizedSourcePaths: string[];
-  directPathEvidence?: Array<{
-    remotePath: string;
-    localPath: string;
-    size: number;
-    device: string;
-    inode: string;
-    canonicalPath: string;
-  }>;
-  directPlexPathEvidence?: DirectPlexPathEvidence[];
-  directRetainedPathEvidence?: DirectRetainedPathEvidence[];
-  provenance?: 'arr_history' | 'direct_manifest';
-  /** Missing means the legacy strict per-manifest-path authority. */
-  authorizationMode?: 'manifest_paths' | 'whole_show_hash';
-  sonarrAssociations?: Array<{
-    instanceId: number;
-    instanceUrl: string;
-    configurationUpdatedAt: number;
-    seriesId: number;
-    hash: string;
-    sourcePaths: string[];
-  }>;
-  discoverySummaryFingerprint?: string;
-  ownershipSummaryFingerprint?: string;
-  manifestFingerprint?: string;
-  directDiscoveryCandidates?: DownloadDiscoveryCandidate[];
-  directPathMappings?: Array<{
-    id: number;
-    qbittorrentPath: string;
-    localPath: string;
-    caseSensitive: boolean;
-    revision: number;
-  }>;
-}
-
-type CleanupItemWithoutPlexPaths = Omit<
-  DownloadCleanupPreviewItem,
-  'plexPaths' | 'plexPathStatus' | 'plexPathReason' | 'plexPathsTruncated'
->;
-
-export interface ResolvedCleanupItem extends CleanupItemWithoutPlexPaths {
-  downloadJobs: ResolvedDownloadJob[];
-  orphanFiles: VerifiedOrphanFile[];
-  /** Every live job whose manifest owned one of this title's historical paths. */
-  observedDownloadJobKeys?: Set<string>;
-  sonarrReclamation?: PersistedSonarrReclamation;
-}
-
-export interface PersistedResolvedDownloadJob extends Omit<ResolvedDownloadJob, 'target'> {
-  targetIdentity: Omit<DownloadClientTarget, 'client'>;
-}
-
-export interface PersistedResolvedCleanupItem
-  extends Omit<ResolvedCleanupItem, 'downloadJobs' | 'observedDownloadJobKeys'> {
-  downloadJobs: PersistedResolvedDownloadJob[];
-}
+} from './sonarr/reclamation.ts';
+import { classifySonarrOwnedPaths } from './sonarr/pathOwnership.ts';
+import type {
+  CleanupItemWithoutPlexPaths,
+  DirectPlexPathEvidence,
+  DirectRetainedPathEvidence,
+  PersistedResolvedCleanupItem,
+  ResolvedCleanupItem,
+  ResolvedDownloadJob,
+} from './cleanup/types.ts';
+export type {
+  CleanupItemWithoutPlexPaths,
+  DirectPlexPathEvidence,
+  DirectRetainedPathEvidence,
+  PersistedResolvedCleanupItem,
+  PersistedResolvedDownloadJob,
+  ResolvedCleanupItem,
+  ResolvedDownloadJob,
+} from './cleanup/types.ts';
 
 export function publicSonarrHistoricalPaths(cleanup: ResolvedCleanupItem) {
   const classified = cleanup.sonarrReclamation?.proofs.map((proof) => ({
@@ -1056,7 +989,7 @@ export async function executeDownloadedFileCleanup(
       continue;
     }
     const ownershipJobs = (orphanFile as Partial<
-      import('./sonarrPathOwnership.ts').ClassifiedSonarrPath
+      import('./sonarr/pathOwnership.ts').ClassifiedSonarrPath
     >).ownershipJobs ?? [];
     const selectedOwnerWasDeleted = ownershipJobs.some((owner) =>
       owner.selected && deletedDownloadJobKeys.has(`${owner.instanceKey}:${owner.jobId}`)

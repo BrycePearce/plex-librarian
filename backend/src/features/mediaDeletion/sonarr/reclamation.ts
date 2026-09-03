@@ -1,8 +1,8 @@
-import type { SqliteClient } from '../../db/index.ts';
-import type { ArrDeleteTarget } from '../arr/delete.ts';
-import type { SonarrSeriesSnapshot } from '../../integrations/arr/client.ts';
-import type { VerifiedOrphanFile } from './hardlinks.ts';
-import type { ClassifiedSonarrPath } from './sonarrPathOwnership.ts';
+import type { SqliteClient } from '../../../db/index.ts';
+import type { ArrDeleteTarget } from '../../arr/delete.ts';
+import type { SonarrSeriesSnapshot } from '../../../integrations/arr/client.ts';
+import type { VerifiedOrphanFile } from '../hardlinks.ts';
+import type { ClassifiedSonarrPath } from './pathOwnership.ts';
 
 export type HardlinkStorageOutcome = 'verified' | 'unknown' | 'mixed';
 

@@ -1,8 +1,8 @@
-import type { ArrDeleteTarget } from '../arr/delete.ts';
-import { resolveDirectQbittorrentCleanup } from '../qbittorrent/directDiscovery.ts';
-import { type ResolvedCleanupItem, resolveDownloadCleanup } from './cleanup.ts';
-import type { DownloadClientTarget } from './downloadClient.ts';
-import { normalizeRemoteAbsolute } from './hardlinks.ts';
+import type { ArrDeleteTarget } from '../../arr/delete.ts';
+import { resolveDirectQbittorrentCleanup } from '../../qbittorrent/directDiscovery.ts';
+import { type ResolvedCleanupItem, resolveDownloadCleanup } from '../cleanup.ts';
+import type { DownloadClientTarget } from '../downloadClient.ts';
+import { normalizeRemoteAbsolute } from '../hardlinks.ts';
 
 export interface SeasonDownloadSelection {
   plexPath: string;
