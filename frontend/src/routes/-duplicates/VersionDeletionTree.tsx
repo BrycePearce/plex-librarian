@@ -66,8 +66,10 @@ export function VersionDeletionServiceMarks({
   const cleanupResolved = cleanupDownloads && effectiveArrStatus === "resolved" &&
     cleanupStatus === "resolved";
   const qbitActive = cleanupResolved && (preview?.downloadJobs.length ?? 0) > 0;
-  const hardlinkActive = cleanupResolved &&
-    (preview?.orphanFiles.length ?? 0) > 0;
+  const hardlinkActive = arrActive && (
+    presentation.orphanFiles.length > 0 ||
+    presentation.sonarrHistoricalPaths.some((entry) => entry.disposition === "delete")
+  );
   const downloadCleanupResuming = Boolean(
     cleanupDownloads && preview?.cleanupStatus === "resolved" &&
       presentation.downloadJobs.length === 0 &&
@@ -137,6 +139,7 @@ export function AdvancedVersionDeletionTree({
   const {
     downloadJobs,
     orphanFiles,
+    sonarrHistoricalPaths,
     showPlexPaths,
   } = presentation;
   const plexPathCount = showPlexPaths
@@ -145,7 +148,8 @@ export function AdvancedVersionDeletionTree({
       0,
     )
     : 0;
-  const pathCount = plexPathCount + downloadJobs.length + orphanFiles.length;
+  const pathCount = plexPathCount + downloadJobs.length + orphanFiles.length +
+    sonarrHistoricalPaths.length;
 
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-base-300 bg-base-200/25">
@@ -264,6 +268,21 @@ export function AdvancedVersionDeletionTree({
                   size: file.size,
                 }]}
                 note="Reverified before removal"
+              />
+            ))}
+            {sonarrHistoricalPaths.map((entry) => (
+              <PathTreeRoot
+                key={`historical:${entry.path}`}
+                path={entry.path}
+                source="Sonarr import history"
+                note={`${
+                  entry.disposition === "delete"
+                    ? "Automatic unlink"
+                    : entry.disposition === "retain_live_qbittorrent"
+                    ? "Retained — live qBittorrent owner"
+                    : "Unverified"
+                }: ${entry.reason}`}
+                warning={entry.disposition !== "delete"}
               />
             ))}
             {loading && (

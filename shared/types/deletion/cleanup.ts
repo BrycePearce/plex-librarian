@@ -80,6 +80,14 @@ export interface ArrCleanupRetainedPath {
   reason: string;
 }
 
+export interface SonarrHistoricalPathPreview {
+  path: string;
+  managedPath: string | null;
+  size: number | null;
+  disposition: 'delete' | 'retain_live_qbittorrent' | 'unverified';
+  reason: string;
+}
+
 export interface DownloadCleanupPreviewItem {
   ratingKey: string;
   plexPaths: string[];
@@ -96,6 +104,15 @@ export interface DownloadCleanupPreviewItem {
   orphanFiles: ArrCleanupFile[];
   retainedPaths: ArrCleanupRetainedPath[];
   cleanupFingerprint?: string;
+  /** Fingerprint for Sonarr-owned historical paths with qBittorrent unselected. */
+  sonarrCleanupFingerprint?: string;
+  sonarrCleanupStatus?: 'resolved' | 'unavailable' | 'error';
+  sonarrCleanupReason?: string;
+  sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
+  /** Sonarr historical-path projection when the shown qBittorrent jobs are selected. */
+  qbittorrentOrphanFiles?: ArrCleanupFile[];
+  qbittorrentRetainedPaths?: ArrCleanupRetainedPath[];
+  qbittorrentSonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
 }
 
 export interface DownloadCleanupPreviewResponse {

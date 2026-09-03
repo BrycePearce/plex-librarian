@@ -3,6 +3,7 @@ import type {
   MediaVersionPathPreview,
   VersionDeletionPreviewResponse,
 } from "../../lib/api.ts";
+import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
 
 export function versionPathPreviewsByMediaId(
   availableVersions: readonly MediaVersionPathPreview[],
@@ -99,6 +100,21 @@ export function versionPlexFallbackWarning(
   );
 }
 
+export function versionCleanupReassignmentLocked(
+  mediaType: VersionDeletionPreviewResponse["mediaType"] | undefined,
+  reassignActive: boolean,
+  useRadarrPathOverride: boolean,
+): boolean {
+  return mediaType === "movie" && (reassignActive || useRadarrPathOverride);
+}
+
+export function versionSonarrOwnershipBlocked(
+  preview: VersionDeletionPreviewResponse | undefined,
+  selected: boolean,
+): boolean {
+  return selected && preview?.mediaType === "episode" && preview.sonarrCleanupStatus === "error";
+}
+
 export function versionRadarrPathOverride(
   preview: VersionDeletionPreviewResponse | undefined,
 ): VersionDeletionPreviewResponse["radarrPathAdoption"] | null {
@@ -146,7 +162,7 @@ export function versionArrDestinationCopy(
               ? ` ${arrLabel} switches to only the highest-ranked eligible survivor; other ` +
                 `remaining Plex versions stay unchanged.`
               : ""
-          }`
+          }${arrLabel === "Sonarr" ? ` ${SONARR_OWNED_PATH_COPY}` : ""}`
         : plexOnlyInfo,
     }
     : {
@@ -162,12 +178,19 @@ export function versionDeletionPresentation(
   deleteFromArr: boolean,
   cleanupDownloads: boolean,
 ) {
+  const selectedOrphanFiles = cleanupDownloads
+    ? preview?.qbittorrentOrphanFiles ?? preview?.orphanFiles ?? []
+    : preview?.orphanFiles ?? [];
+  const selectedHistoricalPaths = cleanupDownloads
+    ? preview?.qbittorrentSonarrHistoricalPaths ?? preview?.sonarrHistoricalPaths ?? []
+    : preview?.sonarrHistoricalPaths ?? [];
+  const historicalPathSet = new Set(selectedHistoricalPaths.map((entry) => entry.path));
   const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
   const downloadJobs = deleteFromArr && cleanupDownloads && preview?.cleanupStatus === "resolved"
     ? preview.downloadJobs
     : [];
-  const orphanFiles = deleteFromArr && cleanupDownloads && preview?.cleanupStatus === "resolved"
-    ? preview.orphanFiles
+  const orphanFiles = deleteFromArr
+    ? selectedOrphanFiles.filter((entry) => !historicalPathSet.has(entry.path))
     : [];
   return {
     services: [
@@ -178,6 +201,7 @@ export function versionDeletionPresentation(
     arrTargets,
     downloadJobs,
     orphanFiles,
+    sonarrHistoricalPaths: deleteFromArr ? selectedHistoricalPaths : [],
     // Advanced mode should always retain Plex's view of the selected files. Arr and
     // qBittorrent paths explain additional actions; they do not replace the Plex paths.
     showPlexPaths: true,

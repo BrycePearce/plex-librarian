@@ -174,6 +174,9 @@ export async function submitSeasonCleanup(
   if (plan.preview.fingerprint !== parsed.previewFingerprint) {
     return { changed: true, preview: plan.preview };
   }
+  if (plan.preview.blockers.length > 0) {
+    throw new DeletionConflictError(plan.preview.blockers[0]!);
+  }
   if (parsed.cleanupDownloads && plan.cleanupPlans.length === 0) {
     throw new DeletionConflictError(
       plan.preview.cleanupReason ?? 'no verified downloads can be cleaned up',

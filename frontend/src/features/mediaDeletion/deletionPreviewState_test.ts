@@ -6,9 +6,31 @@ import {
   downloadCleanupDestinationVisible,
   effectiveArrSelection,
   eligibleDownloadCleanupItems,
+  selectedSonarrOwnershipProblems,
   shouldDefaultOrphanOnlyCleanup,
   shouldUseArrByDefault,
+  SONARR_OWNED_PATH_COPY,
 } from "./deletionPreviewState.ts";
+
+Deno.test("Sonarr destinations share the automatic historical-path contract copy", () => {
+  assertEquals(
+    SONARR_OWNED_PATH_COPY,
+    "Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.",
+  );
+});
+
+Deno.test("selected whole-show Sonarr ownership errors block with their exact reason", () => {
+  const unsafe = {
+    items: [{ sonarrCleanupStatus: "error", sonarrCleanupReason: "managed entry is owned" }],
+  } as never;
+  assertEquals(
+    selectedSonarrOwnershipProblems(unsafe, true).map((item) => item.sonarrCleanupReason),
+    [
+      "managed entry is owned",
+    ],
+  );
+  assertEquals(selectedSonarrOwnershipProblems(unsafe, false), []);
+});
 
 Deno.test("configured Arr remains visible when every selected item is unavailable", () => {
   const preview = {

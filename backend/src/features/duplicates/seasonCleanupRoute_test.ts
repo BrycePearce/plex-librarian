@@ -62,22 +62,22 @@ Deno.test('season download jobs have one deterministic durable owner', () => {
   ];
   assertEquals(
     seasonDownloadJobAssignments(entries, [
-      { downloadId: 'single', importedPath: '/shows/e1.mkv' },
-      { downloadId: 'pack', importedPath: '/shows/e1.mkv' },
-      { downloadId: 'pack', importedPath: '/shows/e2.mkv' },
+      { instanceKey: 'db:1', jobId: 'single', importedPath: '/shows/e1.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/e1.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/e2.mkv' },
     ], false),
     {
-      owners: new Map([['single', 'episode-z:11']]),
+      owners: new Map([['db:1:single', 'episode-z:11']]),
       coveredTargetKeys: new Set(['episode-z:11']),
     },
   );
   assertEquals(
     seasonDownloadJobAssignments(entries, [
-      { downloadId: 'pack', importedPath: '/shows/e1.mkv' },
-      { downloadId: 'pack', importedPath: '/shows/e2.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/e1.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/e2.mkv' },
     ], true),
     {
-      owners: new Map([['pack', 'episode-z:11']]),
+      owners: new Map([['db:1:pack', 'episode-z:11']]),
       coveredTargetKeys: new Set(['episode-z:11', 'episode-a:21']),
     },
   );
@@ -104,10 +104,42 @@ Deno.test('shared download jobs use the same ordering as durable season targets'
   ];
   assertEquals(
     seasonDownloadJobAssignments(entries, [
-      { downloadId: 'pack', importedPath: '/shows/managed.mkv' },
-      { downloadId: 'pack', importedPath: '/shows/plex-only.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/managed.mkv' },
+      { instanceKey: 'db:1', jobId: 'pack', importedPath: '/shows/plex-only.mkv' },
     ], true).owners,
-    new Map([['pack', 'episode-1:20']]),
+    new Map([['db:1:pack', 'episode-1:20']]),
+  );
+});
+
+Deno.test('season download assignment keeps identical hashes separate by client', () => {
+  const entries = [
+    {
+      targetKey: 'episode-1:11',
+      episodeRatingKey: 'episode-1',
+      episodeNumber: 1,
+      mediaId: 11,
+      path: '/shows/e1.mkv',
+    },
+    {
+      targetKey: 'episode-2:21',
+      episodeRatingKey: 'episode-2',
+      episodeNumber: 2,
+      mediaId: 21,
+      path: '/shows/e2.mkv',
+    },
+  ];
+  assertEquals(
+    seasonDownloadJobAssignments(entries, [
+      { instanceKey: 'db:1', jobId: 'same-hash', importedPath: '/shows/e1.mkv' },
+      { instanceKey: 'db:2', jobId: 'same-hash', importedPath: '/shows/e2.mkv' },
+    ], true),
+    {
+      owners: new Map([
+        ['db:1:same-hash', 'episode-1:11'],
+        ['db:2:same-hash', 'episode-2:21'],
+      ]),
+      coveredTargetKeys: new Set(['episode-1:11', 'episode-2:21']),
+    },
   );
 });
 

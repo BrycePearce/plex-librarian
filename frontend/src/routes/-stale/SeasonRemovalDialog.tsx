@@ -22,11 +22,23 @@ import {
   useDelayedFlag,
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import type { SeasonRemovalPreviewResponse } from "@shared/types";
+import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
 
 export interface SeasonRemovalChoice {
   previewFingerprint: string;
   coordinated: boolean;
   cleanupDownloads: boolean;
+}
+
+export function seasonSonarrOptionInfo(reason?: string): string {
+  return reason ? `${SONARR_OWNED_PATH_COPY} Warning: ${reason}` : SONARR_OWNED_PATH_COPY;
+}
+
+export function seasonRemovalHistoricalPaths(
+  preview: SeasonRemovalPreviewResponse | undefined,
+  coordinated: boolean,
+) {
+  return coordinated ? preview?.sonarrHistoricalPaths ?? [] : [];
 }
 
 export function seasonCleanupAvailable(
@@ -106,9 +118,10 @@ function SeasonRemovalDeletionTree({
       : []),
   ]);
   const downloadJobs = cleanupDownloads ? preview?.downloadJobs ?? [] : [];
+  const historicalPaths = seasonRemovalHistoricalPaths(preview, coordinated);
   const pathCount = (preview?.plexFiles.length ?? 0) +
     (coordinated ? preview?.sonarrFiles.length ?? 0 : 0) +
-    downloadJobs.reduce((total, job) => total + job.fileCount, 0);
+    downloadJobs.reduce((total, job) => total + job.fileCount, 0) + historicalPaths.length;
 
   return (
     <DeletionPreviewDisclosure
@@ -156,6 +169,29 @@ function SeasonRemovalDeletionTree({
             files={downloadJobFiles(job)}
             totalFiles={job.fileCount}
             info={downloadJobInfo(job)}
+          />
+        ))}
+        {historicalPaths.map((entry) => (
+          <PathTreeRoot
+            key={`historical:${entry.path}`}
+            path={entry.path}
+            source="Sonarr import history"
+            marks={
+              <span
+                className={`badge badge-xs ${
+                  entry.disposition === "delete" ? "badge-error" : "badge-warning"
+                }`}
+              >
+                {entry.disposition === "delete"
+                  ? "automatic unlink"
+                  : entry.disposition === "retain_live_qbittorrent"
+                  ? "retained live job"
+                  : "unverified"}
+              </span>
+            }
+            files={[]}
+            totalFiles={1}
+            info={entry.reason}
           />
         ))}
         {loading && (
@@ -314,7 +350,7 @@ export function SeasonRemovalDialog({
                 <span className="inline-flex items-center gap-2">
                   <HardDrive className="size-4 text-base-content/40" />
                   <strong className="font-semibold text-base-content">
-                    {formatKilobytes(item.fileSize ?? 0)}
+                    {formatKilobytes(item.fileSize ?? 0)} logical media
                   </strong>
                 </span>
               </div>
@@ -350,8 +386,7 @@ export function SeasonRemovalDialog({
                     id: "arr" as const,
                     service: "sonarr" as const,
                     label: "Update Sonarr",
-                    info: value?.sonarrReason ??
-                      "Keep the series, unmonitor this season's monitored episodes, and delete only their exact EpisodeFiles.",
+                    info: seasonSonarrOptionInfo(value?.sonarrReason),
                     checked: coordinated,
                     disabled: pending || preview.isFetching,
                     warning: coordinated && value?.sonarrStatus !== "resolved",

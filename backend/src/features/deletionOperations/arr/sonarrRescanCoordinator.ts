@@ -18,6 +18,7 @@ import {
   persistedArrOwnershipMap,
   restoreArrReassignmentAfterSafeDownloadFailure,
   restoreArrReassignmentMonitoring,
+  revalidateArrReassignment,
 } from './arrReassignment.ts';
 import {
   findAuthorizedSonarrCandidate,
@@ -229,6 +230,31 @@ async function reconcileProtectedRescanTargets(
         context.snapshot,
         context.client,
         context.persisted,
+      );
+      const liveReassignment = await revalidateArrReassignment(
+        context.target,
+        context.snapshot,
+        context.client,
+        context.persisted.instanceId,
+      );
+      if (
+        await liveReassignment.target.client.fileVisibility(context.persisted.managedPath) !==
+          'folder'
+      ) {
+        throw new DeletionConvergenceError(
+          'Sonarr adopted a retained sibling but the old managed path is still visible',
+        );
+      }
+      persistSonarrTransition(
+        context.target,
+        context.snapshot,
+        context.persisted.instanceId,
+        (entry) => {
+          entry.sonarrTransition!.oldFileRemovalConfirmedAt ??= Math.floor(Date.now() / 1000);
+        },
+      );
+      context.persisted.sonarrTransition!.oldFileRemovalConfirmedAt ??= Math.floor(
+        Date.now() / 1000,
       );
     } else {
       await restoreArrReassignmentAfterSafeDownloadFailure(
