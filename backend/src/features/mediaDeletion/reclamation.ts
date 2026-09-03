@@ -2,6 +2,7 @@ import type { SqliteClient } from '../../db/index.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { SonarrSeriesSnapshot } from '../../integrations/arr/client.ts';
 import type { VerifiedOrphanFile } from './hardlinks.ts';
+import type { ClassifiedSonarrPath } from './sonarrPathOwnership.ts';
 
 export type HardlinkStorageOutcome = 'verified' | 'unknown' | 'mixed';
 
@@ -21,10 +22,12 @@ export interface PersistedSonarrReclamation {
   tvdbId: number;
   inventory: SonarrInventoryFile[];
   inventoryIdentity: string;
+  /** Snapshot-only accounting scope. Full inventory remains bound by inventoryIdentity. */
+  accountingManagedFileIds?: number[];
   /** Durable intent for this target's Sonarr series deletion, written immediately before it. */
   arrDeleteAttemptedAt?: number;
   proofs: Array<
-    VerifiedOrphanFile & {
+    ClassifiedSonarrPath & {
       managedFileId: number;
       managedFileSize: number;
       managedPath: string;
@@ -49,7 +52,11 @@ export function assertPersistedSonarrReclamation(
 ): void {
   const positiveIds = [accepted.instanceId, accepted.seriesId, accepted.tvdbId];
   const inventory = accepted.inventory;
-  const proofPaths = accepted.proofs.map((proof) => proof.path).sort();
+  const accountingIds = accepted.accountingManagedFileIds;
+  const proofPaths = accepted.proofs.filter((proof) =>
+    proof.ownershipDisposition === undefined || proof.ownershipDisposition === 'delete'
+  )
+    .map((proof) => proof.path).sort();
   const orphanPaths = orphanFiles.filter((file) => file.strictTwoLinkProof).map((file) => file.path)
     .sort();
   if (
@@ -60,6 +67,12 @@ export function assertPersistedSonarrReclamation(
       (!Number.isSafeInteger(accepted.arrDeleteAttemptedAt) ||
         accepted.arrDeleteAttemptedAt <= 0)) ||
     !/^[a-f0-9]{64}$/.test(accepted.inventoryIdentity) || inventory.length === 0 ||
+    (accountingIds !== undefined &&
+      (accountingIds.length === 0 ||
+        accountingIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        JSON.stringify(accountingIds) !==
+          JSON.stringify([...new Set(accountingIds)].sort((left, right) => left - right)) ||
+        accountingIds.some((id) => !inventory.some((file) => file.id === id)))) ||
     JSON.stringify(inventory) !==
       JSON.stringify(
         [...inventory].sort((left, right) =>
@@ -74,7 +87,12 @@ export function assertPersistedSonarrReclamation(
     if (
       !managed || boundIds.has(proof.managedFileId) || managed.path !== proof.managedPath ||
       managed.size !== proof.managedFileSize || proof.size !== proof.managedFileSize ||
+      (accountingIds !== undefined && !accountingIds.includes(proof.managedFileId)) ||
       proof.nlink !== 2 || proof.strictTwoLinkProof !== true || !proof.path ||
+      (proof.ownershipDisposition !== undefined &&
+        !['delete', 'retain_live_qbittorrent', 'unverified'].includes(
+          proof.ownershipDisposition,
+        )) ||
       !proof.importedPath || !proof.root || !proof.importedRoot ||
       !proof.rootDevice || !proof.rootInode || !proof.importedRootDevice ||
       !proof.importedRootInode || !proof.managedPath || !Number.isSafeInteger(proof.dev) ||
@@ -125,6 +143,10 @@ export function buildSonarrReclamation(
       file.managedFileId! > 0 && file.managedFileSize === file.size && file.managedPath
       ? [{
         ...file,
+        ownershipDisposition: 'unverified' as const,
+        ownershipReason: 'Live qBittorrent ownership has not been inspected',
+        ownershipInspections: [],
+        ownershipJobs: [],
         managedFileId: file.managedFileId!,
         managedFileSize: file.managedFileSize!,
         managedPath: file.managedPath,
@@ -192,9 +214,16 @@ export function deriveHardlinkStorageAggregate(
     }
     bytes += size;
   }
-  const verifiedIds = new Set(verified.map((proof) => proof.managedFileId));
+  const accountingIds = accepted.accountingManagedFileIds === undefined
+    ? new Set(accepted.inventory.map((file) => file.id))
+    : new Set(accepted.accountingManagedFileIds);
+  const verifiedIds = new Set(
+    verified.flatMap((proof) =>
+      accountingIds.has(proof.managedFileId) ? [proof.managedFileId] : []
+    ),
+  );
   const verifiedFileCount = identities.size;
-  const unknownFileCount = accepted.inventory.filter((file) => !verifiedIds.has(file.id)).length;
+  const unknownFileCount = [...accountingIds].filter((id) => !verifiedIds.has(id)).length;
   return {
     outcome: verifiedFileCount === 0 ? 'unknown' : unknownFileCount === 0 ? 'verified' : 'mixed',
     verifiedHardlinkDataSize: Math.round(bytes / 1000),
@@ -202,6 +231,12 @@ export function deriveHardlinkStorageAggregate(
     unknownFileCount,
     reasons: [...new Set(reasons)],
   };
+}
+
+export function sonarrReclamationAccountingFileCount(
+  accepted: PersistedSonarrReclamation,
+): number {
+  return accepted.accountingManagedFileIds?.length ?? accepted.inventory.length;
 }
 
 /**

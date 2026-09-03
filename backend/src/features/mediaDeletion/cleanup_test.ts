@@ -10,6 +10,7 @@ import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapte
 import { QbittorrentClient } from '../../integrations/qbittorrent/client.ts';
 import {
   assertAcceptedWholeShowHashCleanup,
+  bindSonarrPathOwnership,
   cleanupAuthorizationFingerprint,
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
@@ -24,6 +25,7 @@ import {
   rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
+  scopeSonarrReclamation,
   selectDirectOrphanFiles,
   selectVerifiedDownloadCleanups,
 } from './cleanup.ts';
@@ -31,6 +33,113 @@ import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './owners
 import { assertDownloadJobSelectionConsistent } from './planning.ts';
 
 const hash = 'a'.repeat(40);
+
+Deno.test('Sonarr reclamation scope excludes unrelated series evidence', () => {
+  const makeProof = (managedFileId: number, name: string) => ({
+    hash,
+    path: `/downloads/${name}.mkv`,
+    importedPath: `/library/show/${name}.mkv`,
+    importedRoot: '/library',
+    root: '/downloads',
+    boundary: '/downloads',
+    remotePath: `/remote/${name}.mkv`,
+    size: 100,
+    method: 'hardlink' as const,
+    dev: 1,
+    ino: managedFileId,
+    nlink: 2,
+    rootDevice: '1',
+    rootInode: '10',
+    importedRootDevice: '1',
+    importedRootInode: '11',
+    managedFileId,
+    managedFileSize: 100,
+    managedPath: `/sonarr/show/${name}.mkv`,
+    strictTwoLinkProof: true as const,
+  });
+  const selected = makeProof(1, 'selected');
+  const unrelated = makeProof(2, 'unrelated');
+  const cleanup = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [{
+      instanceName: 'Sonarr',
+      type: 'sonarr',
+      title: 'Show',
+      path: '/tv/Show',
+      seasons: [],
+      mediaFiles: [],
+      extraFiles: [],
+    }],
+    sources: [selected, unrelated].map((proof) => ({
+      instanceName: 'Sonarr',
+      downloadId: proof.hash,
+      path: proof.remotePath,
+      importedPath: proof.managedPath,
+      localPath: proof.path,
+      verification: 'hardlink' as const,
+    })),
+    orphanFiles: [selected, unrelated],
+    retainedPaths: [selected, unrelated].map((proof) => ({
+      path: proof.path,
+      reason: 'retained',
+    })),
+    sonarrReclamation: {
+      inventory: [selected, unrelated].map((proof) => ({
+        id: proof.managedFileId,
+        path: proof.managedPath,
+        size: proof.managedFileSize,
+      })),
+      proofs: [selected, unrelated],
+    },
+  } as unknown as ResolvedCleanupItem;
+
+  const scoped = scopeSonarrReclamation(cleanup, new Set([1]));
+  assertEquals(scoped.sonarrReclamation?.proofs.map((proof) => proof.managedFileId), [1]);
+  assertEquals(scoped.sonarrReclamation?.accountingManagedFileIds, [1]);
+  assertEquals(scoped.orphanFiles.map((file) => file.path), [selected.path]);
+  assertEquals(scoped.retainedPaths.map((entry) => entry.path), [selected.path]);
+  assertEquals(scoped.sources.map((source) => source.localPath), [selected.path]);
+
+  const empty = scopeSonarrReclamation(cleanup, new Set([99]));
+  assertEquals(empty.sonarrReclamation, undefined);
+  assertEquals(empty.orphanFiles, []);
+  assertEquals(empty.retainedPaths, []);
+  assertEquals(empty.sources, []);
+});
+
+Deno.test('empty Sonarr proof sets remain preview-only instead of becoming durable cleanup', async () => {
+  const cleanup = {
+    ratingKey: 'show',
+    status: 'unavailable',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [],
+    sources: [],
+    orphanFiles: [],
+    retainedPaths: [],
+    sonarrReclamation: {
+      instanceId: 1,
+      instanceName: 'Sonarr',
+      instanceUrl: 'http://sonarr',
+      configurationUpdatedAt: 1,
+      mappingIdentity: 'mapping',
+      seriesId: 1,
+      tvdbId: 1,
+      inventory: [{ id: 1, path: '/tv/show/episode.mkv', size: 10 }],
+      inventoryIdentity: 'a'.repeat(64),
+      proofs: [],
+    },
+  } satisfies ResolvedCleanupItem;
+
+  const bound = await bindSonarrPathOwnership(cleanup, [], false);
+
+  assertEquals(bound.status, 'resolved');
+  assertEquals(bound.sonarrReclamation, undefined);
+  assertEquals(cleanupHasDurableAcceptedIdentity(bound), false);
+});
 
 Deno.test('public cleanup projection strips durable Sonarr proof evidence', () => {
   const projected = publicCleanupItem({
@@ -87,6 +196,124 @@ Deno.test('public cleanup projection strips durable Sonarr proof evidence', () =
     size: 1_000,
     method: 'hardlink',
   }]);
+});
+
+Deno.test('public Sonarr history exposes an unavailable exact candidate and reason', () => {
+  const projected = publicCleanupItem({
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [{
+      instanceName: 'Sonarr',
+      type: 'sonarr',
+      title: 'Show',
+      path: '/tv/Show',
+      seasons: [],
+      mediaFiles: [],
+      extraFiles: [],
+    }],
+    sources: [{
+      instanceName: 'Sonarr',
+      downloadId: hash,
+      path: '/remote/release/episode.mkv',
+      importedPath: '/tv/Show/episode.mkv',
+      localPath: '/downloads/release/episode.mkv',
+      verification: 'unverified',
+      reason: 'Source is not the same hardlinked file as the managed file',
+    }],
+    orphanFiles: [],
+    retainedPaths: [],
+  });
+
+  assertEquals(projected.sonarrHistoricalPaths, [{
+    path: '/downloads/release/episode.mkv',
+    managedPath: '/tv/Show/episode.mkv',
+    size: null,
+    disposition: 'unverified',
+    reason: 'Sonarr: Source is not the same hardlinked file as the managed file',
+  }]);
+});
+
+Deno.test('Sonarr scope retains only unavailable candidates for authorized managed paths', () => {
+  const cleanup = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [{
+      instanceName: 'Sonarr',
+      type: 'sonarr' as const,
+      title: 'Show',
+      path: '/tv/Show',
+      seasons: [],
+      mediaFiles: [],
+      extraFiles: [],
+    }],
+    sources: [
+      {
+        instanceName: 'Sonarr',
+        downloadId: hash,
+        path: '/remote/selected.mkv',
+        importedPath: '/tv/Show/selected.mkv',
+        localPath: '/downloads/selected.mkv',
+        verification: 'unverified' as const,
+        reason: 'selected failure',
+      },
+      {
+        instanceName: 'Sonarr',
+        downloadId: hash,
+        path: '/remote/other.mkv',
+        importedPath: '/tv/Show/other.mkv',
+        localPath: '/downloads/other.mkv',
+        verification: 'unverified' as const,
+        reason: 'unrelated failure',
+      },
+    ],
+    orphanFiles: [],
+    retainedPaths: [],
+  } satisfies ResolvedCleanupItem;
+
+  const scoped = scopeSonarrReclamation(
+    cleanup,
+    new Set(),
+    new Set(['/tv/Show/selected.mkv']),
+  );
+  assertEquals(scoped.sources.map((source) => source.localPath), ['/downloads/selected.mkv']);
+  assertEquals(publicCleanupItem(scoped).sonarrHistoricalPaths?.map((entry) => entry.path), [
+    '/downloads/selected.mkv',
+  ]);
+});
+
+Deno.test('Radarr verification failures are not projected as Sonarr history', () => {
+  const projected = publicCleanupItem({
+    ratingKey: 'movie',
+    status: 'resolved',
+    downloadJobs: [],
+    arrStatus: 'resolved',
+    arrTargets: [{
+      instanceName: 'Radarr',
+      type: 'radarr',
+      title: 'Movie',
+      path: '/movies/Movie',
+      seasons: null,
+      mediaFiles: [],
+      extraFiles: [],
+    }],
+    sources: [{
+      instanceName: 'Radarr',
+      downloadId: hash,
+      path: '/remote/release/movie.mkv',
+      importedPath: '/movies/Movie/movie.mkv',
+      localPath: '/downloads/release/movie.mkv',
+      verification: 'unverified',
+      reason: 'No download path mapping covers this path',
+    }],
+    orphanFiles: [],
+    retainedPaths: [],
+  });
+
+  assertEquals(projected.sonarrHistoricalPaths, []);
 });
 
 Deno.test('only accepted filesystem or direct-manifest cleanup evidence is persisted', () => {
@@ -464,6 +691,33 @@ Deno.test('accepted Sonarr cleanup does not replace a failed Arr-history revalid
   );
 });
 
+Deno.test('revalidated Sonarr-only cleanup survives unrelated Arr-history failure', () => {
+  const accepted = {
+    ratingKey: 'show',
+    status: 'resolved',
+    downloadJobs: [],
+    orphanFiles: [],
+    retainedPaths: [{
+      path: '/downloads/accepted.mkv',
+      reason: 'The applicable qBittorrent client could not be inspected',
+    }],
+    sonarrReclamation: { inventoryIdentity: 'accepted' },
+  } as unknown as ResolvedCleanupItem;
+  const current = {
+    ratingKey: 'show',
+    status: 'error',
+    reason: 'Current Sonarr history is unavailable',
+    downloadJobs: [],
+    orphanFiles: [],
+  } as unknown as ResolvedCleanupItem;
+
+  const merged = mergeAcceptedSonarrCleanup(current, accepted, true);
+  assertEquals(merged.downloadJobs, []);
+  assertEquals(merged.orphanFiles, []);
+  assertEquals(merged.retainedPaths, accepted.retainedPaths);
+  assert(merged.sonarrReclamation === accepted.sonarrReclamation);
+});
+
 Deno.test('live torrent ownership requires an exact manifest path, not only the hash', () => {
   const torrent = {
     contentPath: '/downloads/new-release',
@@ -596,6 +850,57 @@ Deno.test('complete downloaded-file execution marks and deletes torrents before 
   ]);
   assertEquals(result.deletedJobs.map((job) => job.jobId), [hash]);
   assertEquals(result.deletedOrphanFiles, ['/downloads/release/movie.idx']);
+});
+
+Deno.test('final Sonarr ownership authorization runs after payload deletion and before unlink', async () => {
+  const calls: string[] = [];
+  const cleanup = {
+    downloadJobs: [{
+      provider: 'qbittorrent',
+      instanceKey: 'db:1',
+      jobId: hash,
+      contentPath: '/downloads/release',
+      savePath: '/downloads',
+      manifestFiles: [{ path: 'release/movie.mkv', size: 100 }],
+      authorizedSourcePaths: ['/downloads/release/movie.mkv'],
+      target: {
+        client: {
+          findJob: () =>
+            Promise.resolve({
+              id: hash,
+              contentPath: '/downloads/release',
+              savePath: '/downloads',
+              manifestFiles: [{ path: 'release/movie.mkv', size: 100 }],
+            }),
+          deleteJob: () => {
+            calls.push('torrent');
+            return Promise.resolve();
+          },
+        },
+      },
+    }],
+    orphanFiles: [{ path: '/downloads/release/movie.idx' }],
+  } as unknown as ResolvedCleanupItem;
+
+  const result = await executeDownloadedFileCleanup(
+    cleanup,
+    new Set(),
+    new Set(),
+    undefined,
+    (file) => {
+      calls.push(`orphan:${file.path}`);
+      return Promise.resolve();
+    },
+    undefined,
+    undefined,
+    (file) => {
+      calls.push(`authorize:${file.path}`);
+      return Promise.resolve(false);
+    },
+  );
+
+  assertEquals(calls, ['torrent', 'authorize:/downloads/release/movie.idx']);
+  assertEquals(result.deletedOrphanFiles, []);
 });
 
 Deno.test('an already absent attempted orphan reruns its durable confirmation callback', async () => {

@@ -11,14 +11,23 @@ import {
 import { createPlexClient } from '../../integrations/plex/index.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
-import { resolveDownloadCleanup } from '../mediaDeletion/cleanup.ts';
+import {
+  bindSonarrPathOwnership,
+  resolveDownloadCleanup,
+  scopeSonarrReclamation,
+} from '../mediaDeletion/cleanup.ts';
 import {
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
 } from '../mediaDeletion/planning.ts';
 import { downloadClientsConfigured, getDownloadClientTargets } from '../mediaDeletion/targets.ts';
-import { buildVersionDeletionPlan } from '../mediaDeletion/versionPlanning.ts';
+import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import {
+  buildVersionDeletionPlan,
+  episodeVersionSonarrPlanFingerprint,
+  selectVersionDownloadCleanup,
+} from '../mediaDeletion/versionPlanning.ts';
 import {
   assertRelocationWorkflowClear,
   RelocationConflictError,
@@ -177,8 +186,16 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
 
 router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
   const ratingKey = c.req.param('ratingKey');
-  const mediaIds = parseMediaIds(await c.req.json().catch(() => null));
+  const body = await c.req.json().catch(() => null);
+  const mediaIds = parseMediaIds(body);
   if (!mediaIds) return c.json({ error: 'mediaIds must contain between 1 and 50 integers' }, 400);
+  if (
+    body && typeof body === 'object' &&
+    (body as { inspectDownloadCleanup?: unknown }).inspectDownloadCleanup !== undefined &&
+    typeof (body as { inspectDownloadCleanup?: unknown }).inspectDownloadCleanup !== 'boolean'
+  ) return c.json({ error: 'inspectDownloadCleanup must be boolean' }, 400);
+  const inspectDownloadCleanup =
+    (body as { inspectDownloadCleanup?: boolean } | null)?.inspectDownloadCleanup === true;
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'episode not found' }, 404);
 
@@ -208,12 +225,13 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
 
   try {
     const client = await createPlexClient();
-    const [liveVersions, arrTargets, cleanupConfigured] = await Promise.all([
+    const [liveVersions, arrTargets, cleanupConfigured, downloadTargets] = await Promise.all([
       client.mediaVersionPathPreviews(ratingKey),
       getArrDeleteTargets(serverId, target.libraryKey),
       downloadClientsConfigured(serverId),
+      getDownloadClientTargets(serverId),
     ]);
-    const plan = await buildVersionDeletionPlan({
+    const ownershipPlan = await buildVersionDeletionPlan({
       mediaType: 'episode',
       item: show,
       selectedMediaIds: new Set(mediaIds),
@@ -227,7 +245,117 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
         episodeNumber: target.episodeIndex,
       },
     });
-    return c.json(plan.preview satisfies VersionDeletionPreviewResponse);
+    const managedFileIds = new Set(
+      ownershipPlan.arrOwnerships.flatMap((ownership) =>
+        ownership.managedMediaId !== null && mediaIds.includes(ownership.managedMediaId) &&
+          ownership.managedFileId !== null
+          ? [ownership.managedFileId]
+          : []
+      ),
+    );
+    const managedPaths = new Set(
+      ownershipPlan.arrOwnerships.flatMap((ownership) =>
+        ownership.managedMediaId !== null && mediaIds.includes(ownership.managedMediaId) &&
+          ownership.managedPath !== null
+          ? [ownership.managedPath]
+          : []
+      ),
+    );
+    const rawCleanup = await resolveDownloadCleanup(
+      target.showRatingKey,
+      show,
+      arrTargets,
+      downloadTargets,
+    );
+    const scoped = scopeSonarrReclamation(rawCleanup, managedFileIds, managedPaths);
+    const selectedPaths = new Set(
+      liveVersions.flatMap((version) =>
+        mediaIds.includes(version.mediaId)
+          ? version.paths.flatMap((path) => {
+            const normalized = normalizeRemoteAbsolute(path)?.comparison;
+            return normalized ? [normalized] : [];
+          })
+          : []
+      ),
+    );
+    const qbitScoped = selectVersionDownloadCleanup(rawCleanup, selectedPaths, true);
+    const qbitOwnershipScope = scopeSonarrReclamation(
+      {
+        ...rawCleanup,
+        downloadJobs: qbitScoped?.downloadJobs ?? [],
+        sources: qbitScoped?.sources ?? rawCleanup.sources,
+      },
+      managedFileIds,
+      managedPaths,
+    );
+    const acceptedCleanup = managedFileIds.size > 0
+      ? await bindSonarrPathOwnership(scoped, downloadTargets, false)
+      : null;
+    const qbitAcceptedCleanup = managedFileIds.size > 0
+      ? await bindSonarrPathOwnership(qbitOwnershipScope, downloadTargets, true)
+      : null;
+    const sonarrPlan = await buildVersionDeletionPlan({
+      mediaType: 'episode',
+      item: show,
+      selectedMediaIds: new Set(mediaIds),
+      liveVersions,
+      arrTargets,
+      resolvedCleanup: acceptedCleanup,
+      cleanupConfigured,
+      allowPartialCoverage: true,
+      allowEpisodeDownloadCleanup: true,
+      episodeIdentity: {
+        seasonNumber: target.seasonIndex,
+        episodeNumber: target.episodeIndex,
+      },
+    });
+    const qbitPlan = inspectDownloadCleanup
+      ? await buildVersionDeletionPlan({
+        mediaType: 'episode',
+        item: show,
+        selectedMediaIds: new Set(mediaIds),
+        liveVersions,
+        arrTargets,
+        resolvedCleanup: qbitAcceptedCleanup,
+        cleanupConfigured,
+        allowPartialCoverage: true,
+        allowEpisodeDownloadCleanup: true,
+        episodeIdentity: {
+          seasonNumber: target.seasonIndex,
+          episodeNumber: target.episodeIndex,
+        },
+      })
+      : sonarrPlan;
+    return c.json(
+      {
+        ...sonarrPlan.preview,
+        ...(inspectDownloadCleanup
+          ? {
+            versions: qbitPlan.preview.versions,
+            cleanupStatus: qbitPlan.preview.cleanupStatus,
+            cleanupReason: qbitPlan.preview.cleanupReason,
+            downloadJobs: qbitPlan.preview.downloadJobs,
+            qbittorrentOrphanFiles: qbitPlan.preview.orphanFiles,
+            qbittorrentRetainedPaths: qbitPlan.preview.retainedPaths,
+            qbittorrentSonarrHistoricalPaths: qbitPlan.preview.sonarrHistoricalPaths,
+          }
+          : {}),
+        ...(acceptedCleanup
+          ? {
+            sonarrCleanupStatus: acceptedCleanup.status,
+            ...(acceptedCleanup.reason ? { sonarrCleanupReason: acceptedCleanup.reason } : {}),
+          }
+          : {}),
+        ...(acceptedCleanup?.status === 'resolved'
+          ? { planFingerprint: await episodeVersionSonarrPlanFingerprint(sonarrPlan) }
+          : {}),
+        ...(qbitAcceptedCleanup
+          ? {
+            qbittorrentPlanFingerprint: await episodeVersionSonarrPlanFingerprint(qbitPlan),
+          }
+          : {}),
+      } satisfies VersionDeletionPreviewResponse,
+    );
   } catch (error) {
     return c.json({
       error: error instanceof Error ? error.message : 'could not build deletion preview',

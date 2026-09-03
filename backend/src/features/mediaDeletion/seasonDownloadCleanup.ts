@@ -18,6 +18,12 @@ export interface SeasonDownloadAssignmentEntry {
   automaticAdoption?: boolean;
 }
 
+export interface SeasonDownloadAssignmentSource {
+  instanceKey: string;
+  jobId: string;
+  importedPath: string;
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -116,7 +122,7 @@ export async function resolveSeasonDownloadCleanup(input: {
 
 export function seasonDownloadJobAssignments(
   selectedEntries: readonly SeasonDownloadAssignmentEntry[],
-  sources: readonly { downloadId: string; importedPath: string | null }[],
+  sources: readonly SeasonDownloadAssignmentSource[],
   allowCrossTarget: boolean,
 ): { owners: Map<string, string>; coveredTargetKeys: Set<string> } {
   const targetKeysByPath = new Map<string, Set<string>>();
@@ -134,19 +140,18 @@ export function seasonDownloadJobAssignments(
   }
   const jobTargetKeys = new Map<string, Set<string>>();
   for (const source of sources) {
-    const path = source.importedPath === null
-      ? null
-      : normalizeRemoteAbsolute(source.importedPath)?.comparison ?? null;
+    const path = normalizeRemoteAbsolute(source.importedPath)?.comparison ?? null;
     if (!path) continue;
     const targetsForPath = targetKeysByPath.get(path);
     if (!targetsForPath) continue;
-    const keys = jobTargetKeys.get(source.downloadId) ?? new Set<string>();
+    const jobKey = `${source.instanceKey}:${source.jobId}`;
+    const keys = jobTargetKeys.get(jobKey) ?? new Set<string>();
     for (const targetKey of targetsForPath) keys.add(targetKey);
-    jobTargetKeys.set(source.downloadId, keys);
+    jobTargetKeys.set(jobKey, keys);
   }
   const owners = new Map<string, string>();
   const coveredTargetKeys = new Set<string>();
-  for (const [jobId, targetKeys] of jobTargetKeys) {
+  for (const [jobKey, targetKeys] of jobTargetKeys) {
     if (targetKeys.size !== 1 && !allowCrossTarget) continue;
     const ordered = [...targetKeys].sort((left, right) => {
       const a = targetOrder.get(left)!;
@@ -154,7 +159,7 @@ export function seasonDownloadJobAssignments(
       return a[0] - b[0] || a[1].localeCompare(b[1]) || a[2] - b[2] || a[3] - b[3];
     });
     if (ordered.length === 0) continue;
-    owners.set(jobId, ordered[0]!);
+    owners.set(jobKey, ordered[0]!);
     for (const key of ordered) coveredTargetKeys.add(key);
   }
   return { owners, coveredTargetKeys };

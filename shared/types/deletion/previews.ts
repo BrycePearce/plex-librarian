@@ -4,6 +4,7 @@ import type {
   ArrCleanupRetainedPath,
   ArrCleanupTarget,
   DownloadCleanupJob,
+  SonarrHistoricalPathPreview,
 } from './cleanup.ts';
 
 export interface MediaVersionPathPreview {
@@ -43,6 +44,16 @@ export interface VersionDeletionPreviewResponse {
   downloadJobs: DownloadCleanupJob[];
   orphanFiles: ArrCleanupFile[];
   retainedPaths: ArrCleanupRetainedPath[];
+  /** Exact backend Sonarr/path decision accepted by an episode-version submission. */
+  planFingerprint?: string;
+  sonarrCleanupStatus?: 'resolved' | 'unavailable' | 'error';
+  sonarrCleanupReason?: string;
+  qbittorrentPlanFingerprint?: string;
+  sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
+  /** Historical-path projection when the shown qBittorrent jobs are selected. */
+  qbittorrentOrphanFiles?: ArrCleanupFile[];
+  qbittorrentRetainedPaths?: ArrCleanupRetainedPath[];
+  qbittorrentSonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
 }
 
 export type RadarrReassignmentMode =

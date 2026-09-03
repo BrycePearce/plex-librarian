@@ -1,4 +1,4 @@
-import type { DownloadCleanupJob } from './cleanup.ts';
+import type { DownloadCleanupJob, SonarrHistoricalPathPreview } from './cleanup.ts';
 import type { DeletionOperationCreated } from './operations.ts';
 
 export interface SeasonRemovalPreviewResponse {
@@ -26,6 +26,7 @@ export interface SeasonRemovalPreviewResponse {
   cleanupReason?: string;
   downloadJobs: DownloadCleanupJob[];
   blockers: string[];
+  sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
 }
 
 export interface SeasonRemovalRequest {

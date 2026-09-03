@@ -21,9 +21,17 @@ import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
 import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
+
+export function seasonDuplicateHistoricalPaths(
+  preview: SeasonDeletionPreviewResponse | undefined,
+  sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor",
+) {
+  return sonarrMode === "none" ? [] : preview?.sonarrHistoricalPaths ?? [];
+}
 
 export function initialSeasonReviewMode(
   season: Pick<DuplicateSeasonGroup, "duplicateGroupCount"> | null,
@@ -56,6 +64,10 @@ export function seasonSelectedDestinationServices(input: {
       ? ["qBittorrent" as const]
       : []),
   ];
+}
+
+export function seasonLogicalMediaSizeLabel(size: number | null): string {
+  return size === null ? "Logical media size unknown" : `${formatKilobytes(size)} logical media`;
 }
 
 function SeasonDestinationLinks({
@@ -972,8 +984,11 @@ export function SeasonDuplicateDialog({
   }
 
   const deletionPlanVerifying = selections.length > 0 && deletionPreview.isFetching;
+  const historicalPaths = seasonDuplicateHistoricalPaths(deletionPreview.data, sonarrMode);
   const destinationPreview = selections.length > 0 &&
-    ((deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 || breakGlassVisible) &&
+    ((deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 ||
+      historicalPaths.length > 0 ||
+      breakGlassVisible) &&
     (
       <div className="season-profile-note" aria-live="polite">
         {sonarrMode !== "none" && deletionPreview.data &&
@@ -1010,6 +1025,18 @@ export function SeasonDuplicateDialog({
             Sonarr removes and unmonitors {deletionPreview.data.removedAndUnmonitoredCount}
           </span>
         )}
+        {historicalPaths.map((entry) => (
+          <div key={entry.path} className="break-all text-xs text-base-content/65">
+            <span className="font-medium">
+              {entry.disposition === "delete"
+                ? "Automatic unlink"
+                : entry.disposition === "retain_live_qbittorrent"
+                ? "Retained — live qBittorrent owner"
+                : "Unverified"}:
+            </span>{" "}
+            {entry.path} · {entry.reason}
+          </div>
+        ))}
         {sonarrMode === "none" && deletionPreview.data?.breakGlassAvailable &&
           deletionPreview.data.adoptionUnavailableReason && (
           <span className="text-warning">
@@ -1038,7 +1065,7 @@ export function SeasonDuplicateDialog({
             service: "sonarr" as const,
             label: "Sonarr",
             info:
-              "For a Sonarr-managed episode file, Sonarr protects monitoring, removes only the old EpisodeFile, and first imports the exact retained path. A whole-series rescan is used only as a guarded fallback and may adopt another verified retained copy. Versions Sonarr does not manage are removed through Plex; the series itself is never removed.",
+              `${SONARR_OWNED_PATH_COPY} Sonarr protects monitoring and adopts the authorized retained version before removing the old EpisodeFile.`,
             checked: sonarrMode === "adopt_retained",
             disabled: pending || deletionPreview.isFetching,
             warning: false,
@@ -1079,7 +1106,7 @@ export function SeasonDuplicateDialog({
             service: "sonarr" as const,
             label: "Remove from Sonarr and unmonitor",
             info:
-              "Break glass: episodes without an eligible retained path have only their exact managed EpisodeFile removed and remain permanently unmonitored. Eligible episodes still adopt a verified retained copy. The series is never removed.",
+              `${SONARR_OWNED_PATH_COPY} Episodes without an eligible retained path remain permanently unmonitored.`,
             checked: sonarrMode === "remove_and_unmonitor",
             disabled: pending || deletionPreview.isFetching,
             warning: true,
@@ -1727,9 +1754,7 @@ export function SeasonDuplicateDialog({
           <div className="season-batch-total">
             <span>{selectedPlans.length} episodes · {deleteVersionCount} versions to delete</span>
             <strong>
-              {reclaimable === null
-                ? "Unknown savings"
-                : `${formatKilobytes(reclaimable)} reclaimable`}
+              {seasonLogicalMediaSizeLabel(reclaimable)}
             </strong>
           </div>
           <button

@@ -537,7 +537,11 @@ export const api = {
           body: JSON.stringify({ clientRequestId: uuidv4() }),
         },
       ),
-    deleteEpisodeMediaVersions: (episodeRatingKey: string, mediaIds: number[]) =>
+    deleteEpisodeMediaVersions: (
+      episodeRatingKey: string,
+      mediaIds: number[],
+      options: { cleanupMediaIds: number[]; planFingerprint?: string },
+    ) =>
       apiFetch<DeletionOperationCreated>(
         `/duplicates/episodes/${encodeURIComponent(episodeRatingKey)}/media`,
         {
@@ -545,6 +549,8 @@ export const api = {
           body: JSON.stringify({
             clientRequestId: uuidv4(),
             mediaIds,
+            cleanupMediaIds: options.cleanupMediaIds,
+            ...(options.planFingerprint ? { planFingerprint: options.planFingerprint } : {}),
           }),
         },
       ),

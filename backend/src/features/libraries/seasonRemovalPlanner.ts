@@ -10,8 +10,11 @@ import type { PlexSeasonDeletionEpisode } from '../../integrations/plex/types.ts
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { resolveArrPath } from '../mediaDeletion/arrPaths.ts';
 import {
+  bindSonarrPathOwnership,
   type PersistedResolvedCleanupItem,
   persistResolvedCleanupIdentity,
+  publicSonarrHistoricalPaths,
+  scopeSonarrReclamation,
 } from '../mediaDeletion/cleanup.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 import { resolveSeasonDownloadCleanup } from '../mediaDeletion/seasonDownloadCleanup.ts';
@@ -391,13 +394,50 @@ export async function buildWholeSeasonRemovalPlan(input: {
     inspect: true,
   });
   const availableCleanup = selectVersionDownloadCleanup(rawCleanup, selectedPaths, false);
-  const cleanup = input.cleanupDownloads ? availableCleanup : null;
-  if (input.cleanupDownloads && !cleanup) {
+  const scopedSonarr = rawCleanup && sonarrTargets.length === 1
+    ? scopeSonarrReclamation(
+      {
+        ...rawCleanup,
+        ...(availableCleanup
+          ? {
+            downloadJobs: availableCleanup.downloadJobs,
+            sources: availableCleanup.sources,
+          }
+          : { downloadJobs: [] }),
+      },
+      new Set(sonarrTargets[0]!.files.map((file) => file.id)),
+      new Set(sonarrTargets[0]!.files.map((file) => file.path)),
+    )
+    : null;
+  const sonarrCleanup = input.coordinated && scopedSonarr
+    ? await bindSonarrPathOwnership(scopedSonarr, downloadTargets, false)
+    : null;
+  const selectableCleanup = input.coordinated && scopedSonarr
+    ? await bindSonarrPathOwnership(scopedSonarr, downloadTargets, true)
+    : availableCleanup;
+  const qbittorrentCleanup = selectableCleanup && selectableCleanup.downloadJobs.length > 0
+    ? selectableCleanup
+    : null;
+  const qbittorrentOnlyCleanup = availableCleanup && availableCleanup.downloadJobs.length > 0
+    ? { ...availableCleanup, orphanFiles: [], sonarrReclamation: undefined }
+    : null;
+  const cleanup = input.coordinated
+    ? input.cleanupDownloads ? qbittorrentCleanup : sonarrCleanup
+    : input.cleanupDownloads
+    ? qbittorrentOnlyCleanup
+    : null;
+  if (input.cleanupDownloads && !qbittorrentCleanup) {
     blockers.push(rawCleanup?.reason ?? 'No exact qBittorrent cleanup owns every selected path.');
   }
-  const persistedCleanup: PersistedResolvedCleanupItem | undefined = cleanup
-    ? persistResolvedCleanupIdentity(cleanup)
-    : undefined;
+  if (input.coordinated && cleanup?.status === 'error') {
+    blockers.push(cleanup.reason ?? 'Sonarr path ownership is unsafe.');
+  }
+  const persistedCleanup: PersistedResolvedCleanupItem | undefined =
+    cleanup?.status === 'resolved' &&
+      (cleanup.downloadJobs.length > 0 || cleanup.sonarrReclamation !== undefined)
+      ? persistResolvedCleanupIdentity(cleanup)
+      : undefined;
+  const sonarrHistoricalPaths = cleanup ? publicSonarrHistoricalPaths(cleanup) : [];
   const durableSeason: DurableWholeSeasonRemoval = {
     episodeRatingKeys: episodes.map((episode) => episode.ratingKey).sort(),
     plexEpisodes: normalizeSeasonEpisodeEvidence(episodes),
@@ -412,9 +452,10 @@ export async function buildWholeSeasonRemovalPlan(input: {
     cleanupDownloads: input.cleanupDownloads,
     wholeSeasonRemoval: durableSeason,
     seasonDownloadCleanup: persistedCleanup,
+    sonarrHistoricalPaths,
   };
   const planFingerprint = await fingerprint(accepted);
-  const cleanupStatus = availableCleanup
+  const cleanupStatus = qbittorrentCleanup
     ? 'resolved' as const
     : rawCleanup?.status === 'error'
     ? 'error' as const
@@ -456,8 +497,9 @@ export async function buildWholeSeasonRemovalPlan(input: {
     ),
     cleanupConfigured: downloadTargets.length > 0,
     cleanupStatus,
-    ...(!availableCleanup && rawCleanup?.reason ? { cleanupReason: rawCleanup.reason } : {}),
-    downloadJobs: availableCleanup?.downloadJobs.map(publicDownloadJob) ?? [],
+    ...(!qbittorrentCleanup && rawCleanup?.reason ? { cleanupReason: rawCleanup.reason } : {}),
+    downloadJobs: qbittorrentCleanup?.downloadJobs.map(publicDownloadJob) ?? [],
+    sonarrHistoricalPaths,
     blockers,
   };
   return {
@@ -476,6 +518,7 @@ export async function buildWholeSeasonRemovalPlan(input: {
       cleanupDownloads: input.cleanupDownloads,
       seasonCleanup: true,
       seasonDownloadCleanup: persistedCleanup,
+      sonarrHistoricalPaths,
       showTitle: row.showTitle,
       showRatingKey: row.showRatingKey,
       seasonRatingKey: row.seasonRatingKey,

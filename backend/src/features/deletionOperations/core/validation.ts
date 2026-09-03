@@ -13,6 +13,7 @@ import type {
   PersistedRadarrRemovalFallback,
 } from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
 import type { PersistedResolvedCleanupItem } from '../../mediaDeletion/cleanup.ts';
+import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.ts';
 import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
@@ -62,6 +63,7 @@ export interface DurableTargetSnapshot {
     managedSelectedMediaIds: number[];
   };
   seasonDownloadCleanup?: PersistedResolvedCleanupItem;
+  sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
   seasonSelectedCandidateMediaId?: number;
   seasonSafeCandidateMediaIds?: number[];
   seasonSonarrVersion?: string;
@@ -250,11 +252,13 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
     }
     if (
       snapshot.mediaId !== undefined || snapshot.seasonCleanup === true ||
-      snapshot.cleanupDownloads !== true || wholeItemCleanup.status !== 'resolved' ||
+      (snapshot.cleanupDownloads !== true && wholeItemCleanup.sonarrReclamation === undefined) ||
+      wholeItemCleanup.status !== 'resolved' ||
       wholeItemCleanup.ratingKey !== snapshot.ratingKey ||
       !Array.isArray(wholeItemCleanup.downloadJobs) ||
       !Array.isArray(wholeItemCleanup.orphanFiles) ||
-      (wholeItemCleanup.downloadJobs.length === 0 && wholeItemCleanup.orphanFiles.length === 0) ||
+      (wholeItemCleanup.downloadJobs.length === 0 && wholeItemCleanup.orphanFiles.length === 0 &&
+        wholeItemCleanup.sonarrReclamation === undefined) ||
       (wholeItemCleanup.sonarrReclamation === undefined &&
         wholeItemCleanup.downloadJobs.some((job) =>
           job.provenance !== 'direct_manifest' && job.authorizationMode !== 'whole_show_hash'
@@ -378,7 +382,9 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
   if (snapshot.seasonDownloadCleanup !== undefined) {
     if (
       !snapshot.seasonDownloadCleanup || typeof snapshot.seasonDownloadCleanup !== 'object' ||
-      snapshot.seasonCleanup !== true || snapshot.cleanupDownloads !== true ||
+      snapshot.seasonCleanup !== true ||
+      (snapshot.cleanupDownloads !== true &&
+        snapshot.seasonDownloadCleanup.sonarrReclamation === undefined) ||
       snapshot.seasonDownloadCleanup.status !== 'resolved' ||
       snapshot.seasonDownloadCleanup.ratingKey !== snapshot.showRatingKey
     ) {
