@@ -82,7 +82,7 @@ function EpisodeGapsPage() {
     });
 
   return (
-    <div className={`episode-gaps-page workspace-page ${workspaceToneClass("cobalt")} space-y-6`}>
+    <div className={`episode-gaps-page workspace-page ${workspaceToneClass("info")} space-y-6`}>
       <PageHeader
         eyebrow="Library health tool"
         title={

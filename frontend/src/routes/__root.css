@@ -74,9 +74,9 @@
   --ambient-primary-color: var(--color-success);
 }
 
-.app-shell:has(.workspace-page.workspace-tone-cobalt),
-.app-shell:has(.stale-page.workspace-tone-cobalt) {
-  --ambient-primary-color: var(--workspace-cobalt);
+.app-shell:has(.workspace-page.workspace-tone-info),
+.app-shell:has(.stale-page.workspace-tone-info) {
+  --ambient-primary-color: var(--color-info);
 }
 
 html[data-theme="dark"] .app-shell,

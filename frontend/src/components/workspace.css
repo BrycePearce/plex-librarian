@@ -1,12 +1,9 @@
-:root { --workspace-cobalt: oklch(70% 0.19 252); }
-:root[data-theme="light"],
-:root[data-theme="nord"] { --workspace-cobalt: oklch(56% 0.2 252); }
 .workspace-page { --workspace-color: var(--color-primary); position: relative; isolation: isolate; padding-bottom: 3rem; }
 .workspace-tone-primary { --workspace-color: var(--color-primary); }
 .workspace-tone-secondary { --workspace-color: var(--color-secondary); }
 .workspace-tone-accent { --workspace-color: var(--color-accent); }
+.workspace-tone-info { --workspace-color: var(--color-info); }
 .workspace-tone-success { --workspace-color: var(--color-success); }
-.workspace-tone-cobalt { --workspace-color: var(--workspace-cobalt); }
 .workspace-page::before { content: ""; position: absolute; z-index: -1; top: -8rem; left: -6rem; width: 34rem; height: 22rem; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--workspace-color) 7%, transparent), transparent 68%); pointer-events: none; }
 .workspace-sticky-header { margin-inline: -1rem; padding: .5rem 1rem 1rem; border-bottom: 1px solid color-mix(in oklab, var(--color-base-content) 9%, transparent); background: radial-gradient(ellipse 32rem 18rem at 14% -35%, color-mix(in oklab, var(--workspace-color) 6%, transparent), transparent 70%), color-mix(in oklab, var(--color-base-100) 76%, transparent); backdrop-filter: blur(18px); }
 .workspace-page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; padding: .25rem 0 .5rem; }

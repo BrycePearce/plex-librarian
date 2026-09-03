@@ -8,8 +8,8 @@ export const WORKSPACE_TONE_CLASS = {
   primary: "workspace-tone-primary",
   secondary: "workspace-tone-secondary",
   accent: "workspace-tone-accent",
+  info: "workspace-tone-info",
   success: "workspace-tone-success",
-  cobalt: "workspace-tone-cobalt",
 } as const;
 
 export type WorkspaceTone = keyof typeof WORKSPACE_TONE_CLASS;
