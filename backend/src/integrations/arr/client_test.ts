@@ -1,5 +1,88 @@
 import { assertEquals, assertRejects } from '@std/assert';
-import { ArrApiError, ArrClient, normalizeArrUrl } from './client.ts';
+import {
+  ARR_ROOT_FOLDERS_MAX_BYTES,
+  ARR_ROOT_FOLDERS_MAX_RECORDS,
+  ArrApiError,
+  ArrClient,
+  normalizeArrUrl,
+} from './client.ts';
+
+Deno.test('ArrClient reads Sonarr and Radarr root folders in stable order with duplicates', async () => {
+  const response = [
+    { id: 2, path: ' /data/TV ' },
+    { id: 3, path: '/data/Anime' },
+    { id: 4, path: '/data/TV' },
+  ];
+  for (const type of ['sonarr', 'radarr'] as const) {
+    const requests: string[] = [];
+    const client = new ArrClient(
+      type,
+      `http://${type}`,
+      'secret',
+      ((input: string | URL | Request) => {
+        requests.push(String(input));
+        return Promise.resolve(Response.json(response));
+      }) as typeof fetch,
+    );
+    assertEquals(await client.rootFolders(), [
+      { id: 2, path: '/data/TV' },
+      { id: 3, path: '/data/Anime' },
+      { id: 4, path: '/data/TV' },
+    ]);
+    assertEquals(requests, [`http://${type}/api/v3/rootfolder`]);
+  }
+});
+
+Deno.test('ArrClient root-folder validation is all-or-nothing and bounded', async () => {
+  for (
+    const response of [
+      [{ id: 1, path: '/valid' }, { id: 0, path: '/invalid' }],
+      Array.from({ length: ARR_ROOT_FOLDERS_MAX_RECORDS + 1 }, (_, index) => ({
+        id: index + 1,
+        path: `/root/${index}`,
+      })),
+    ]
+  ) {
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr',
+      'secret',
+      (() => Promise.resolve(Response.json(response))) as typeof fetch,
+    );
+    await assertRejects(() => client.rootFolders(), ArrApiError);
+  }
+
+  const oversized = JSON.stringify([{ id: 1, path: `/${'x'.repeat(ARR_ROOT_FOLDERS_MAX_BYTES)}` }]);
+  const client = new ArrClient(
+    'radarr',
+    'http://radarr',
+    'secret',
+    (() => Promise.resolve(new Response(oversized))) as typeof fetch,
+  );
+  await assertRejects(() => client.rootFolders(), ArrApiError, 'byte safety limit');
+});
+
+Deno.test('radarrRootFolders remains a Radarr-only compatibility wrapper', async () => {
+  const radarr = new ArrClient(
+    'radarr',
+    'http://radarr',
+    'secret',
+    (() => Promise.resolve(Response.json([{ id: 7, path: '/movies' }]))) as typeof fetch,
+  );
+  assertEquals(await radarr.radarrRootFolders(), [{ id: 7, path: '/movies' }]);
+
+  const sonarr = new ArrClient(
+    'sonarr',
+    'http://sonarr',
+    'secret',
+    (() => Promise.resolve(Response.json([]))) as typeof fetch,
+  );
+  await assertRejects(
+    () => sonarr.radarrRootFolders(),
+    ArrApiError,
+    'Root-folder reads require Radarr',
+  );
+});
 
 Deno.test('normalizeArrUrl preserves a base path and removes api/v3', () => {
   assertEquals(

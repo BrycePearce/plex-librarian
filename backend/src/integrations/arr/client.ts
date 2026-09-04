@@ -49,6 +49,8 @@ export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export const RADARR_CATALOG_MAX_RECORDS = 50_000;
 export const RADARR_FILESYSTEM_MAX_BYTES = 2 * 1024 * 1024;
 export const RADARR_FILESYSTEM_MAX_ENTRIES = 2_000;
+export const ARR_ROOT_FOLDERS_MAX_BYTES = 2 * 1024 * 1024;
+export const ARR_ROOT_FOLDERS_MAX_RECORDS = 1_000;
 export const SONARR_SEASON_COORDINATION_MIN_VERSION = '4.0.19.2979';
 export const SONARR_SERIES_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 export const SONARR_SERIES_SNAPSHOT_MAX_RECORDS = 50_000;
@@ -65,6 +67,11 @@ export interface RadarrFilesystemEntry {
 }
 
 export interface RadarrRootFolder {
+  id: number;
+  path: string;
+}
+
+export interface ArrRootFolder {
   id: number;
   path: string;
 }
@@ -1621,28 +1628,42 @@ export class ArrClient {
     });
   }
 
-  async radarrRootFolders(): Promise<RadarrRootFolder[]> {
-    if (this.type !== 'radarr') throw new ArrApiError('Root-folder reads require Radarr');
+  async rootFolders(): Promise<ArrRootFolder[]> {
     const records = await this.boundedRequest<unknown>(
       '/rootfolder',
-      RADARR_FILESYSTEM_MAX_BYTES,
+      ARR_ROOT_FOLDERS_MAX_BYTES,
       'root-folder response',
     );
-    if (!Array.isArray(records) || records.length > 1_000) {
-      throw new ArrApiError('Radarr returned an unsupported root-folder response');
+    if (!Array.isArray(records) || records.length > ARR_ROOT_FOLDERS_MAX_RECORDS) {
+      throw new ArrApiError(
+        `${
+          this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+        } returned an unsupported root-folder response`,
+      );
     }
     return records.map((raw) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new ArrApiError('Radarr returned a malformed root-folder record');
+        throw new ArrApiError(
+          `${this.type === 'radarr' ? 'Radarr' : 'Sonarr'} returned a malformed root-folder record`,
+        );
       }
       const record = raw as Record<string, unknown>;
       const id = Number(record.id);
       const path = typeof record.path === 'string' ? record.path.trim() : '';
       if (!Number.isSafeInteger(id) || id <= 0 || !path) {
-        throw new ArrApiError('Radarr returned an incomplete root-folder record');
+        throw new ArrApiError(
+          `${
+            this.type === 'radarr' ? 'Radarr' : 'Sonarr'
+          } returned an incomplete root-folder record`,
+        );
       }
       return { id, path };
     });
+  }
+
+  async radarrRootFolders(): Promise<RadarrRootFolder[]> {
+    if (this.type !== 'radarr') throw new ArrApiError('Root-folder reads require Radarr');
+    return await this.rootFolders();
   }
 
   async radarrMovieCatalogPaths(): Promise<RadarrCatalogMoviePath[]> {

@@ -51,9 +51,9 @@
     Target="/media"
     Default=""
     Mode="ro"
-    Description="Optional. Read-only library mount used to verify Sonarr/Radarr orphan-download hardlinks. After adding it, configure the matching Arr and local roots under Settings > Media connections."
+    Description="Optional. Analytics and ordinary Arr deletion work without this read-only mount. It is required to verify historical hardlinks after a download job is gone. Select the common media parent used by Arr; Plex Librarian cannot create or change Docker mounts."
     Type="Path"
-    Display="advanced"
+    Display="always"
     Required="false"
     Mask="false" />
 
@@ -62,9 +62,9 @@
     Target="/downloads"
     Default=""
     Mode="rw"
-    Description="Optional. Download mount beneath which Plex Librarian may unlink files proven to be hardlinks of current Arr-managed media. Never map a broader root than necessary."
+    Description="Optional. Analytics and ordinary Arr deletion work without this read/write mount. It is required to remove verified historical hardlinks after a download job is gone. Select only the narrow completed-download root; do not grant write access to an entire media share. Plex Librarian cannot create or change Docker mounts."
     Type="Path"
-    Display="advanced"
+    Display="always"
     Required="false"
     Mask="false" />
 

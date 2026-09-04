@@ -15,6 +15,7 @@ import {
   versionSelectionSemantics,
   versionSonarrOwnershipBlocked,
 } from "./versionDeletionState.ts";
+import { sonarrRetainedPathsSummary } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 Deno.test("Sonarr reassignment does not lock independent qBittorrent selection", () => {
   assertEquals(versionCleanupReassignmentLocked("episode", true, false), false);
@@ -340,11 +341,13 @@ Deno.test("Sonarr preview switches historical ownership only with qBittorrent se
   const sonarrOnly = versionDeletionPresentation(value, true, false);
   assertEquals(sonarrOnly.orphanFiles, []);
   assertEquals(sonarrOnly.sonarrHistoricalPaths[0]?.disposition, "retain_live_qbittorrent");
+  assertEquals(sonarrRetainedPathsSummary(sonarrOnly.sonarrHistoricalPaths)?.count, 1);
 
   const coordinated = versionDeletionPresentation(value, true, true);
   assertEquals(coordinated.orphanFiles.length, 0);
   assertEquals(coordinated.sonarrHistoricalPaths[0]?.disposition, "delete");
   assertEquals(coordinated.sonarrHistoricalPaths[0]?.reason, "selected owner");
+  assertEquals(sonarrRetainedPathsSummary(coordinated.sonarrHistoricalPaths), null);
   assertEquals(coordinated.downloadJobs.length, 1);
 });
 

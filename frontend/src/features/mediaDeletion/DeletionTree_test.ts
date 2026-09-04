@@ -5,6 +5,7 @@ import {
   wholeItemRetainedPaths,
   wholeItemSonarrHistoricalPaths,
 } from "./DeletionTree.tsx";
+import { sonarrRetainedPathsSummary } from "./SonarrRetainedPathsWarning.tsx";
 
 Deno.test("whole-show dialog wiring switches only the qBittorrent ownership projection", () => {
   const sonarrOnly = [{
@@ -28,6 +29,14 @@ Deno.test("whole-show dialog wiring switches only the qBittorrent ownership proj
   assertEquals(wholeItemSonarrHistoricalPaths("show", preview, false, false), []);
   assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, false), sonarrOnly);
   assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, true), withQbittorrent);
+  assertEquals(
+    sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, false))?.count,
+    1,
+  );
+  assertEquals(
+    sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, true)),
+    null,
+  );
 });
 
 Deno.test("qBittorrent-only show preview hides Sonarr historical path effects", () => {

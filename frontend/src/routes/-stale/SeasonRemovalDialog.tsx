@@ -23,6 +23,7 @@ import {
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import type { SeasonRemovalPreviewResponse } from "@shared/types";
 import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
+import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 export interface SeasonRemovalChoice {
   previewFingerprint: string;
@@ -367,12 +368,17 @@ export function SeasonRemovalDialog({
                 </p>
               )}
               {!preview.error && (
-                <SeasonRemovalDeletionTree
-                  preview={value}
-                  coordinated={coordinated}
-                  cleanupDownloads={cleanupDownloads}
-                  loading={preview.isFetching}
-                />
+                <>
+                  <SeasonRemovalDeletionTree
+                    preview={value}
+                    coordinated={coordinated}
+                    cleanupDownloads={cleanupDownloads}
+                    loading={preview.isFetching}
+                  />
+                  <SonarrRetainedPathsWarning
+                    paths={seasonRemovalHistoricalPaths(value, coordinated)}
+                  />
+                </>
               )}
             </div>
           )

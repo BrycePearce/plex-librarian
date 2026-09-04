@@ -32,6 +32,7 @@ import type {
   SeasonDeletionPreviewResponse,
   SeasonVersionProfile,
 } from "../../lib/api.ts";
+import { sonarrRetainedPathsSummary } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 function version(mediaId: number): MediaVersion {
   return {
@@ -410,6 +411,10 @@ Deno.test("duplicate-season Sonarr wiring exposes every classified historical pa
   assertEquals(seasonDuplicateHistoricalPaths(preview, "none"), []);
   assertEquals(seasonDuplicateHistoricalPaths(preview, "adopt_retained"), paths);
   assertEquals(seasonDuplicateHistoricalPaths(preview, "remove_and_unmonitor"), paths);
+  assertEquals(
+    sonarrRetainedPathsSummary(seasonDuplicateHistoricalPaths(preview, "adopt_retained"))?.count,
+    1,
+  );
 });
 
 Deno.test("season destinations are independently authorized for only the exact selection", () => {

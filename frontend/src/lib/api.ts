@@ -2,6 +2,8 @@ import type {
   ActivityEventsResponse,
   ArrInstance,
   ArrIntegrationSettings,
+  ArrRootFoldersRequest,
+  ArrRootFoldersResponse,
   AuthStatus,
   CancelPendingInvitationResponse,
   DeletionOperation,
@@ -74,6 +76,8 @@ export type {
   ArrInstance,
   ArrIntegrationSettings,
   ArrLibraryMapping,
+  ArrRootFoldersRequest,
+  ArrRootFoldersResponse,
   ArrType,
   AuthStatus,
   CancelPendingInvitationResponse,
@@ -686,6 +690,11 @@ export const api = {
   },
   arr: {
     get: () => apiFetch<ArrIntegrationSettings>("/integrations/arr"),
+    rootFolders: (request: ArrRootFoldersRequest) =>
+      apiFetch<ArrRootFoldersResponse>("/integrations/arr/root-folders", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
     createInstance: (instance: SaveArrInstanceRequest) =>
       apiFetch<ArrInstance>("/integrations/arr/instances", {
         method: "POST",

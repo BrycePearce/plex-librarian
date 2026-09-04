@@ -45,6 +45,14 @@ export interface UpdateArrInstanceRequest {
   pathMappings: ArrPathMapping[];
 }
 
+export type ArrRootFoldersRequest =
+  | { type: ArrType; url: string; apiKey: string }
+  | { instanceId: number; url: string; apiKey?: string };
+
+export interface ArrRootFoldersResponse {
+  roots: string[];
+}
+
 export interface SaveArrLibraryMappingRequest {
   instanceIds: number[];
   addImportExclusion: boolean;

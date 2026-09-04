@@ -17,6 +17,13 @@ function localPathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
+export function validArrPath(value: string): boolean {
+  const raw = value.trim();
+  const windows = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(raw);
+  if (!windows && (!raw.startsWith('/') || raw === '/')) return false;
+  return !raw.split(windows ? /[\\/]+/ : /\/+/).includes('..');
+}
+
 export function pathMappingRootsAreDisjoint(mappings: readonly ArrPathMapping[]): boolean {
   const normalized = mappings.flatMap((mapping) => {
     const localPath = normalizeLocalPath(mapping.localPath);
@@ -50,8 +57,7 @@ export function validPathMappings(value: unknown): ArrPathMapping[] | null {
     const localPath = normalizeLocalPath(raw.localPath);
     const arrSegments = arrPath.split(windowsArrPath ? /\\+/ : /\/+/);
     if (
-      (!windowsArrPath && !arrPath.startsWith('/')) || localPath === null ||
-      arrPath === '/' || arrSegments.includes('..')
+      !validArrPath(rawArrPath) || localPath === null || arrSegments.includes('..')
     ) return null;
     const key = `${raw.kind}:${windowsArrPath ? arrPath.toLowerCase() : arrPath}`;
     if (seen.has(key)) return null;

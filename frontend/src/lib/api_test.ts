@@ -1,6 +1,31 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { api, ApiError } from "./api.ts";
 
+Deno.test("Arr root-folder discovery posts credentials without putting them in the URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };
+  globalThis.fetch = (input, init) => {
+    captured.input = input;
+    captured.init = init;
+    return Promise.resolve(Response.json({ roots: ["/data/TV"] }));
+  };
+  try {
+    assertEquals(
+      await api.arr.rootFolders({ type: "sonarr", url: "http://sonarr:8989", apiKey: "secret" }),
+      { roots: ["/data/TV"] },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assertEquals(captured.input, "/api/integrations/arr/root-folders");
+  assertEquals(captured.init?.method, "POST");
+  assertEquals(JSON.parse(String(captured.init?.body)), {
+    type: "sonarr",
+    url: "http://sonarr:8989",
+    apiKey: "secret",
+  });
+});
+
 Deno.test("whole-item deletion serializes independent Arr and qBittorrent selections", async () => {
   const originalFetch = globalThis.fetch;
   let body: Record<string, unknown> = {};

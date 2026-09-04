@@ -8,7 +8,12 @@ import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
-import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
+import {
+  AdvancedDeletionTree,
+  DeletionServiceMarks,
+  wholeItemSonarrHistoricalPaths,
+} from "./DeletionTree.tsx";
+import { SonarrRetainedPathsWarning } from "./SonarrRetainedPathsWarning.tsx";
 import {
   arrDestinationState,
   cleanupConsentInvalidated,
@@ -129,6 +134,16 @@ export function DeleteConfirmDialog({
     preview.data,
     effectiveDeleteFromArr && arrService === "sonarr",
   );
+  const retainedSonarrPaths = arrService === "sonarr"
+    ? items.flatMap((item) =>
+      wholeItemSonarrHistoricalPaths(
+        item.type,
+        previewByRatingKey.get(item.ratingKey),
+        effectiveDeleteFromArr,
+        effectiveCleanupDownloads,
+      )
+    )
+    : [];
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     acceptedCleanupKeyRef.current = null;
@@ -333,6 +348,7 @@ export function DeleteConfirmDialog({
                 />
               }
             />
+            <SonarrRetainedPathsWarning paths={retainedSonarrPaths} />
             {hasMultiVersionItems && (
               <p className="mt-1.5 text-xs text-base-content/40">
                 Items marked with multiple versions lose all of them here. To remove just one, use

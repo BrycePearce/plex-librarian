@@ -33,10 +33,12 @@ import {
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
 import { cleanupConsentInvalidated } from "../../features/mediaDeletion/deletionPreviewState.ts";
+import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 import {
   defaultVersionSelection,
   versionArrDestinationCopy,
   versionCleanupReassignmentLocked,
+  versionDeletionPresentation,
   versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
@@ -291,6 +293,13 @@ export function VersionPickerDialog({
   const effectiveDeleteFromArr = item.mediaType === "movie"
     ? deleteFromArr
     : arrReassignAvailable || deleteFromArr;
+  const retainedSonarrPaths = item.mediaType === "episode"
+    ? versionDeletionPresentation(
+      preview.data,
+      effectiveDeleteFromArr,
+      effectiveCleanupDownloads,
+    ).sonarrHistoricalPaths
+    : [];
   const showFallbackWarning = effectiveDeleteFromArr
     ? versionPlexFallbackWarning(preview.data)
     : preview.data?.arrSelectionMatched === true || arrReassignAvailable;
@@ -477,6 +486,7 @@ export function VersionPickerDialog({
             />
           )}
       />
+      <SonarrRetainedPathsWarning paths={retainedSonarrPaths} />
 
       {(selection.deleteWholeItem ? wholeItemPreview.data : preview.data) &&
         destinationOptionsVisible && (

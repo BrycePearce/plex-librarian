@@ -22,6 +22,7 @@ import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
+import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
@@ -991,6 +992,7 @@ export function SeasonDuplicateDialog({
       breakGlassVisible) &&
     (
       <div className="season-profile-note" aria-live="polite">
+        <SonarrRetainedPathsWarning paths={historicalPaths} />
         {sonarrMode !== "none" && deletionPreview.data &&
           deletionPreview.data.automaticAdoptionCount > 0 && (
           <div className="space-y-1">

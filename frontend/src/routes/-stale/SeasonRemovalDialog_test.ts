@@ -7,6 +7,7 @@ import {
   seasonSonarrOptionInfo,
   usableSeasonRemovalPreview,
 } from "./SeasonRemovalDialog.tsx";
+import { sonarrRetainedPathsSummary } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 Deno.test("season cleanup option appears only for a detected qBittorrent job", () => {
   assertEquals(seasonCleanupAvailable(undefined), false);
@@ -44,6 +45,10 @@ Deno.test("stale-season Sonarr wiring exposes every classified historical path",
   const preview = { sonarrHistoricalPaths: paths } as SeasonRemovalPreviewResponse;
   assertEquals(seasonRemovalHistoricalPaths(preview, false), []);
   assertEquals(seasonRemovalHistoricalPaths(preview, true), paths);
+  assertEquals(
+    sonarrRetainedPathsSummary(seasonRemovalHistoricalPaths(preview, true))?.unverifiedCount,
+    1,
+  );
 });
 
 Deno.test("a failed season preview never exposes retained placeholder data", () => {

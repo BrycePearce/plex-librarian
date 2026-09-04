@@ -9,10 +9,12 @@ import {
   replaceArrInstanceMappings,
   replaceArrLibraryMappings,
   replaceArrPathMappings,
+  validArrPath,
   validPathMappings,
 } from './mappings.ts';
 import type {
   ArrIntegrationSettings,
+  ArrRootFoldersResponse,
   ArrType,
   SaveArrInstanceRequest,
   SaveArrLibraryMappingRequest,
@@ -23,6 +25,11 @@ const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 
 const validType = (value: unknown): value is ArrType => value === 'radarr' || value === 'sonarr';
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
+}
 
 async function validLibrariesForInstance(
   serverId: number,
@@ -84,6 +91,78 @@ router.get('/', async (c) => {
       })),
     } satisfies ArrIntegrationSettings,
   );
+});
+
+router.post('/root-folders', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+
+  const raw = await c.req.json().catch(() => null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return c.json({ error: 'invalid root-folder discovery request' }, 400);
+  }
+  const body = raw as Record<string, unknown>;
+  let type: ArrType;
+  let url: string;
+  let apiKey: string;
+
+  if ('type' in body && !('instanceId' in body)) {
+    if (
+      !exactKeys(body, ['type', 'url', 'apiKey']) || !validType(body.type) ||
+      typeof body.url !== 'string' || typeof body.apiKey !== 'string' || !body.apiKey.trim()
+    ) return c.json({ error: 'invalid root-folder discovery request' }, 400);
+    type = body.type;
+    apiKey = body.apiKey.trim();
+    try {
+      url = normalizeArrUrl(body.url);
+    } catch {
+      return c.json({ error: 'invalid root-folder discovery request' }, 400);
+    }
+  } else if ('instanceId' in body && !('type' in body)) {
+    const allowed = body.apiKey === undefined
+      ? ['instanceId', 'url']
+      : ['instanceId', 'url', 'apiKey'];
+    if (
+      !exactKeys(body, allowed) || !Number.isInteger(body.instanceId) ||
+      typeof body.url !== 'string' ||
+      (body.apiKey !== undefined && typeof body.apiKey !== 'string')
+    ) return c.json({ error: 'invalid root-folder discovery request' }, 400);
+    const [instance] = await db.select().from(arrInstances).where(and(
+      eq(arrInstances.serverId, serverId),
+      eq(arrInstances.id, body.instanceId as number),
+    )).limit(1);
+    if (!instance) return c.json({ error: 'instance not found' }, 404);
+    let requestedUrl: string;
+    try {
+      requestedUrl = normalizeArrUrl(body.url);
+    } catch {
+      return c.json({ error: 'invalid root-folder discovery request' }, 400);
+    }
+    const replacementApiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+    if (!replacementApiKey && requestedUrl !== instance.url) {
+      return c.json({ error: 'a replacement API key is required for an edited URL' }, 400);
+    }
+    type = instance.type;
+    url = replacementApiKey ? requestedUrl : instance.url;
+    apiKey = replacementApiKey || instance.apiKey;
+  } else {
+    return c.json({ error: 'invalid root-folder discovery request' }, 400);
+  }
+
+  try {
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const root of await new ArrClient(type, url, apiKey).rootFolders()) {
+      const path = root.path.trim();
+      if (validArrPath(path) && !seen.has(path)) {
+        seen.add(path);
+        roots.push(path);
+      }
+    }
+    return c.json({ roots } satisfies ArrRootFoldersResponse);
+  } catch {
+    return c.json({ error: 'could not load root-folder suggestions' }, 502);
+  }
 });
 
 router.post('/instances', async (c) => {
