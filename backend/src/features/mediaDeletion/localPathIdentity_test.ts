@@ -6,6 +6,41 @@ import {
 } from './mappedDownloadDiscovery.ts';
 import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
 
+Deno.test({
+  name: 'shipped backend commands can read Linux mount identities',
+  ignore: Deno.build.os !== 'linux',
+  async fn() {
+    const dockerfile = await Deno.readTextFile(new URL('../../../../Dockerfile', import.meta.url));
+    const command = JSON.parse(dockerfile.slice(dockerfile.lastIndexOf('CMD [') + 4)) as string[];
+    const config = JSON.parse(
+      await Deno.readTextFile(new URL('../../../deno.json', import.meta.url)),
+    );
+    const script = await Deno.makeTempFile({ suffix: '.ts' });
+    try {
+      await Deno.writeTextFile(
+        script,
+        "const mounts = await Deno.readTextFile('/proc/self/mountinfo'); if (!mounts.includes(' - ')) throw new Error('Missing mount identities');",
+      );
+      for (
+        const invocation of [command, config.tasks.start.split(' '), config.tasks.dev.split(' ')]
+      ) {
+        // Exercise the shipped permissions, without starting the server or watcher.
+        const flags = invocation.slice(2, -1).filter((arg: string) =>
+          arg !== '--watch' && !arg.startsWith('--env-file=')
+        );
+        const result = await new Deno.Command(Deno.execPath(), {
+          args: ['run', ...flags, script],
+          stdout: 'piped',
+          stderr: 'piped',
+        }).output();
+        assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+      }
+    } finally {
+      await Deno.remove(script);
+    }
+  },
+});
+
 const mounts = [
   '1 0 8:1 / / rw - ext4 /dev/sda rw',
   '2 1 8:1 /storage /media rw - ext4 /dev/sda rw',

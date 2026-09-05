@@ -59,7 +59,7 @@ Deno.test("basic preview warning counts retained paths and reports the first unv
   });
   assertEquals(
     sonarrRetainedPathsWarningCopy(summary!).detail,
-    "2 paths could not be verified: the download root is not mapped. Full logical-media-byte reclamation is not expected, so physical disk space may remain occupied.",
+    "2 paths could not be verified: the download root is not mapped.",
   );
 });
 
@@ -68,9 +68,8 @@ Deno.test("basic preview warning distinguishes an unselected live qBittorrent ow
     path("retain_live_qbittorrent", "a live job owns the exact path"),
   ]);
   assertEquals(sonarrRetainedPathsWarningCopy(summary!), {
-    heading: "1 known historical Sonarr path will be retained",
-    detail:
-      "Live qBittorrent owner retained a path: a live job owns the exact path. Full logical-media-byte reclamation is not expected, so physical disk space may remain occupied.",
+    heading: "1 download path is protected",
+    detail: "Live qBittorrent owner retained a path: a live job owns the exact path.",
   });
 });
 
@@ -88,7 +87,7 @@ Deno.test("basic preview warning preserves mixed retention reasons", () => {
   });
   assertEquals(
     sonarrRetainedPathsWarningCopy(summary!).detail,
-    "Path could not be verified: the download root is not mapped. Live qBittorrent owner retained a path: an unselected live job owns the exact path. Full logical-media-byte reclamation is not expected, so physical disk space may remain occupied.",
+    "Path could not be verified: the download root is not mapped. Live qBittorrent owner retained a path: an unselected live job owns the exact path.",
   );
 });
 
@@ -96,10 +95,11 @@ Deno.test("retained-path alert renders concrete reason and Media connections lin
   const html = await renderWarning([
     path("unverified", "download mapping does not cover this path"),
   ]);
-  assertStringIncludes(html, 'role="alert"');
-  assertStringIncludes(html, "1 known historical Sonarr path will be retained");
+  assertStringIncludes(html, 'role="status"');
+  assertStringIncludes(html, "1 historical location could not be checked");
   assertStringIncludes(html, "download mapping does not cover this path");
-  assertStringIncludes(html, "Full logical-media-byte reclamation is not expected");
+  assertStringIncludes(html, "These files may already be gone");
+  assertEquals(html.includes("will be retained"), false);
   assertStringIncludes(html, 'href="/settings/sonarr-radarr"');
 
   const liveOwner = await renderWarning([

@@ -29,12 +29,14 @@ export function sonarrRetainedPathsWarningCopy(summary: SonarrRetainedPathsSumma
       : null,
   ].filter((reason): reason is string => reason !== null);
   return {
-    heading: `${summary.count} known historical Sonarr ${
-      summary.count === 1 ? "path" : "paths"
-    } will be retained`,
-    detail: `${
-      reasons.join(" ")
-    } Full logical-media-byte reclamation is not expected, so physical disk space may remain occupied.`,
+    heading: summary.unverifiedCount > 0
+      ? `${summary.unverifiedCount} historical ${
+        summary.unverifiedCount === 1 ? "location" : "locations"
+      } could not be checked`
+      : `${summary.liveOwnerCount} download ${
+        summary.liveOwnerCount === 1 ? "path is" : "paths are"
+      } protected`,
+    detail: reasons.join(" "),
   };
 }
 
@@ -64,19 +66,36 @@ export function SonarrRetainedPathsWarning({
   const copy = sonarrRetainedPathsWarningCopy(summary);
 
   return (
-    <div role="alert" className="alert alert-warning mt-2 items-start gap-2.5 py-2 text-sm">
-      <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-      <div>
-        <p className="font-semibold">
+    <div
+      role="status"
+      className="mt-3 flex min-w-0 items-start gap-2.5 rounded-lg border border-warning/20 bg-warning/5 p-3 text-xs"
+    >
+      <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-base-content/85">
           {copy.heading}
         </p>
-        <p className="mt-0.5 text-xs leading-relaxed">
-          {copy.detail} You can continue with managed-only deletion or review{" "}
-          <Link to="/settings/sonarr-radarr" className="link font-medium">
-            Historical hardlink cleanup
-          </Link>{" "}
-          in Media connections.
+        <p className="mt-1 leading-relaxed text-base-content/60">
+          {summary.unverifiedCount > 0
+            ? "These files may already be gone or their folders may be unavailable. Current Plex/Sonarr files can still be deleted if their checks pass."
+            : "These paths belong to qBittorrent jobs that are being kept."}
+          {summary.unverifiedCount > 0 && summary.liveOwnerCount > 0 &&
+            ` ${summary.liveOwnerCount} qBittorrent-owned ${
+              summary.liveOwnerCount === 1 ? "path will" : "paths will"
+            } also be kept.`}
         </p>
+        <details className="mt-2">
+          <summary className="cursor-pointer text-base-content/65">
+            Details and path settings
+          </summary>
+          <p className="mt-2 break-words leading-relaxed text-base-content/55">{copy.detail}</p>
+          <Link
+            to="/settings/sonarr-radarr"
+            className="mt-2 inline-block link text-base-content/70"
+          >
+            Review storage paths
+          </Link>
+        </details>
       </div>
     </div>
   );
