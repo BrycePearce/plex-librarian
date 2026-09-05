@@ -94,14 +94,18 @@ export class QbittorrentDownloadClient implements DownloadClient {
     if (candidates.length === 0) {
       throw new Error('qBittorrent direct discovery requires an exact candidate path');
     }
-    const first: DownloadJobSummary[] = [];
-    const before = await this.scanJobSummaries((summary) => {
-      if (couldOwnCandidate(summary, candidates)) {
-        if (first.length >= 500) throw new Error('Too many intersecting qBittorrent jobs');
-        first.push(summary);
-      }
-      return Promise.resolve();
-    });
+    const readCandidates = async (): Promise<DownloadJobSummary[]> => {
+      const matching: DownloadJobSummary[] = [];
+      await this.scanJobSummaries((summary) => {
+        if (couldOwnCandidate(summary, candidates)) {
+          if (matching.length >= 500) throw new Error('Too many intersecting qBittorrent jobs');
+          matching.push(summary);
+        }
+        return Promise.resolve();
+      });
+      return matching;
+    };
+    const first = await readCandidates();
     let manifestRecords = 0;
     let manifestBytes = 0;
     const jobs = await mapWithConcurrency(
@@ -130,8 +134,10 @@ export class QbittorrentDownloadClient implements DownloadClient {
         return { ...torrent, id: torrent.hash };
       },
     );
-    const after = await this.scanJobSummaries(() => Promise.resolve());
-    if (before !== after) {
+    // Direct discovery is scoped to these candidate paths. Unrelated torrent
+    // activity cannot change their ownership; new or changed matching jobs can.
+    const second = await readCandidates();
+    if (summaryIdentity(first) !== summaryIdentity(second)) {
       throw new Error('qBittorrent ownership summaries changed during direct discovery');
     }
     return { jobs, summaryFingerprint: await summaryFingerprint(first) };
