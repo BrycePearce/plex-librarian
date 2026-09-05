@@ -198,6 +198,12 @@ export function QbittorrentConnections({
             enables verified cleanup without Sonarr history; connection credentials remain
             unchanged.
           </p>
+          <p className="mt-2 text-xs text-base-content/55">
+            Sonarr historical hardlink cleanup also uses these mappings to protect live torrents,
+            even when qBittorrent deletion is unchecked. Map the download locations qBittorrent
+            actually uses. Sonarr library paths do not need a qBittorrent equivalent. Unknown
+            ownership retains historical files and can block Sonarr deletion.
+          </p>
           {data.pathMappings.map((item) => (
             <div key={item.id} className="mt-2 flex items-center gap-2 text-xs">
               <code>{item.qbittorrentPath}</code>

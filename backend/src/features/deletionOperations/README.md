@@ -43,6 +43,13 @@ eligibility, remaining-version, season-membership, active-playback, and Arr-moni
   retained/unverified; it may not add a new destructive path.
 - Plex, Sonarr, qBittorrent, and local/container paths are separate namespaces. Cross-namespace
   comparisons require the snapshotted mapping identities.
+- For Sonarr historical proofs, missing qBittorrent mapping coverage is unknown ownership.
+  Retain the historical path when it cannot be inspected; block Sonarr mutation when the managed
+  entry cannot be inspected. Apply this to every connected qBittorrent instance even when unchecked.
+- TV paths also pass `livePathProtection.ts` without historical proofs. Preview checks use only
+  explicitly authorized cleanup job keys; immediately before Sonarr/Plex deletion, any remaining
+  live owner vetoes the mutation. Folder checks include contained torrent entries. No connected
+  download client means no ownership veto. This does not change movie/Radarr deletion policy.
 - A selected qBittorrent payload shared by season targets is coordinated once. Every sibling whose
   retained copy depends on it must be protected before payload deletion.
 - Mutation order and attempt markers are correctness boundaries. Preserve them during refactors.

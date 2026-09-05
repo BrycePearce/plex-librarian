@@ -1,5 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db, withTransaction } from '../../../db/index.ts';
+import { assertArrDeletionPathsUnowned } from '../../mediaDeletion/livePathProtection.ts';
 import {
   arrDeleteAttempts,
   downloadFileDeleteAttempts,
@@ -251,6 +252,11 @@ async function completeBreakGlassRemoval(
     if (evidence.fileRemovalAttemptedAt === undefined) {
       persistBreakGlassProgress(target, snapshot, 'fileRemovalAttemptedAt');
     }
+    await assertArrDeletionPathsUnowned({
+      serverId: target.serverId,
+      paths: [{ path: evidence.episodeFilePath }],
+      mappings: sonarr.pathMappings,
+    });
     try {
       await sonarr.client.deleteManagedFile(evidence.episodeFileId);
     } catch {
@@ -1215,6 +1221,21 @@ async function ensureWholeItemDeleted(
       : attemptedArr.get(snapshot.ratingKey),
     acceptAlreadyAbsent: false,
     onAttemptStarting: async (entry) => {
+      if (entry.instanceType === 'sonarr') {
+        const targets = await getDownloadClientTargets(target.serverId);
+        if (targets.length > 0) {
+          const record = await entry.client.lookup(id);
+          if (!record?.path) {
+            throw new Error('Sonarr did not return the series path before deletion');
+          }
+          await assertArrDeletionPathsUnowned({
+            serverId: target.serverId,
+            paths: [{ path: record.path, directory: true }],
+            mappings: entry.pathMappings,
+            targets,
+          });
+        }
+      }
       if (accepted) {
         if (entry.instanceId !== accepted.instanceId) {
           const error = new ReclamationEvidenceMismatchError(
@@ -1412,6 +1433,11 @@ async function assertWholeSeasonSonarrPostcondition(
           JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
             JSON.stringify([...file.episodeIds].sort((a, b) => a - b))
         ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
+        await assertArrDeletionPathsUnowned({
+          serverId: target.serverId,
+          paths: [{ path: file.path }],
+          mappings: sonarr.pathMappings,
+        });
         try {
           await sonarr.client.deleteManagedFile(file.id);
         } catch (error) {

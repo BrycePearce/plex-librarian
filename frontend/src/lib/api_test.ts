@@ -1,6 +1,30 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { api, ApiError } from "./api.ts";
 
+Deno.test("storage verification posts mappings and credentials without mutating the connection", async () => {
+  const original = globalThis.fetch;
+  const request = {
+    instanceId: 7,
+    url: "http://sonarr",
+    libraryKeys: ["shows"],
+    pathMappings: [{ kind: "library" as const, arrPath: "/tv", localPath: "/media" }],
+  };
+  globalThis.fetch = (url, init) => {
+    assertEquals(url, "/api/integrations/arr/verify-storage");
+    assertEquals(init?.method, "POST");
+    assertEquals(JSON.parse(String(init?.body)), request);
+    return Promise.resolve(Response.json({ status: "unverified", reason: "No sample" }));
+  };
+  try {
+    assertEquals(await api.arr.verifyStorage(request), {
+      status: "unverified",
+      reason: "No sample",
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 Deno.test("Arr root-folder discovery posts credentials without putting them in the URL", async () => {
   const originalFetch = globalThis.fetch;
   const captured: { input: RequestInfo | URL | null; init?: RequestInit } = { input: null };
@@ -24,6 +48,23 @@ Deno.test("Arr root-folder discovery posts credentials without putting them in t
     url: "http://sonarr:8989",
     apiKey: "secret",
   });
+});
+
+Deno.test("qBittorrent storage discovery uses the connected server endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested: RequestInfo | URL | null = null;
+  globalThis.fetch = (input) => {
+    requested = input;
+    return Promise.resolve(Response.json({ paths: ["/data/.torrents/complete"] }));
+  };
+  try {
+    assertEquals(await api.qbittorrent.storagePaths(), {
+      paths: ["/data/.torrents/complete"],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assertEquals(requested, "/api/integrations/qbittorrent/storage-paths");
 });
 
 Deno.test("whole-item deletion serializes independent Arr and qBittorrent selections", async () => {

@@ -53,6 +53,18 @@ export interface ArrRootFoldersResponse {
   roots: string[];
 }
 
+export type ArrStorageVerificationRequest = ArrRootFoldersRequest & {
+  pathMappings: ArrPathMapping[];
+  libraryKeys: string[];
+};
+
+export interface ArrStorageVerificationResponse {
+  status: 'verified' | 'unverified';
+  reason: string;
+  libraryPath?: string;
+  downloadPath?: string;
+}
+
 export interface SaveArrLibraryMappingRequest {
   instanceIds: number[];
   addImportExclusion: boolean;

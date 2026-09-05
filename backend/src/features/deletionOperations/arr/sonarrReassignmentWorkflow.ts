@@ -1,5 +1,6 @@
 // Runs the existing per-target Sonarr removal, adoption, and monitoring workflow.
 import { ArrApiError } from '../../../integrations/arr/client.ts';
+import { assertArrDeletionPathsUnowned } from '../../mediaDeletion/livePathProtection.ts';
 import type { PersistedArrReassignment } from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
 import type { VersionDeletionPlan } from '../../mediaDeletion/versionPlanning.ts';
 import { DeletionConvergenceError, type DeletionWorkTarget } from '../core/types.ts';
@@ -46,6 +47,11 @@ async function reconcileOrRemoveOldManagedFile(
   if (managedFileId === null) {
     throw new Error(`${entry.target.instanceName} managed file disappeared before deletion`);
   }
+  await assertArrDeletionPathsUnowned({
+    serverId: target.serverId,
+    paths: [{ path: persisted.managedPath }],
+    mappings: entry.target.pathMappings,
+  });
   try {
     await entry.target.client.deleteManagedFile(managedFileId);
   } catch (error) {

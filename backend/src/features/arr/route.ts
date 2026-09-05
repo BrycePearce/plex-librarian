@@ -5,6 +5,8 @@ import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '..
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { ArrClient, normalizeArrUrl } from '../../integrations/arr/client.ts';
 import { assessArr } from '../integrationCompatibility/assessment.ts';
+import { items } from '../../db/schema.ts';
+import { verifyArrStorage } from './storageVerification.ts';
 import {
   replaceArrInstanceMappings,
   replaceArrLibraryMappings,
@@ -93,7 +95,7 @@ router.get('/', async (c) => {
   );
 });
 
-router.post('/root-folders', async (c) => {
+router.on('POST', ['/root-folders', '/verify-storage'], async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
 
@@ -101,7 +103,12 @@ router.post('/root-folders', async (c) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return c.json({ error: 'invalid root-folder discovery request' }, 400);
   }
-  const body = raw as Record<string, unknown>;
+  const verifying = c.req.path.endsWith('/verify-storage');
+  const { pathMappings: rawMappings, libraryKeys: rawLibraries, ...credentials } = raw as Record<
+    string,
+    unknown
+  >;
+  const body = verifying ? credentials : raw as Record<string, unknown>;
   let type: ArrType;
   let url: string;
   let apiKey: string;
@@ -150,6 +157,23 @@ router.post('/root-folders', async (c) => {
   }
 
   try {
+    if (verifying) {
+      const mappings = validPathMappings(rawMappings);
+      const keys = await validLibrariesForInstance(serverId, type, rawLibraries);
+      if (!mappings?.length || keys === null) {
+        return c.json({ error: 'valid paths and libraries are required' }, 400);
+      }
+      const samples = keys.length > 0
+        ? await db.select({ tvdbId: items.tvdbId, tmdbId: items.tmdbId })
+          .from(items).where(and(eq(items.serverId, serverId), inArray(items.libraryKey, keys)))
+          .limit(3)
+        : [];
+      const ids = samples.flatMap((sample) => {
+        const id = type === 'sonarr' ? sample.tvdbId : sample.tmdbId;
+        return id !== null ? [id] : [];
+      });
+      return c.json(await verifyArrStorage(new ArrClient(type, url, apiKey), ids, mappings));
+    }
     const roots: string[] = [];
     const seen = new Set<string>();
     for (const root of await new ArrClient(type, url, apiKey).rootFolders()) {
@@ -161,7 +185,11 @@ router.post('/root-folders', async (c) => {
     }
     return c.json({ roots } satisfies ArrRootFoldersResponse);
   } catch {
-    return c.json({ error: 'could not load root-folder suggestions' }, 502);
+    return c.json({
+      error: verifying
+        ? 'Could not verify storage paths. Check the connection and mounted paths.'
+        : 'could not load root-folder suggestions',
+    }, 502);
   }
 });
 

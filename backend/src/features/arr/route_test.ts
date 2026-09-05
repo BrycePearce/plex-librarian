@@ -23,12 +23,45 @@ withTransaction((client) => {
       VALUES (7, 1, 'sonarr', 'Sonarr', 'http://sonarr:8989', 'stored-sonarr-key', 1, 1),
              (8, 1, 'radarr', 'Radarr', 'http://radarr:7878', 'stored-radarr-key', 1, 1),
              (9, 2, 'sonarr', 'Foreign', 'http://foreign:8989', 'foreign-key', 1, 1);
+    INSERT INTO qbittorrent_instances
+      (id, server_id, name, url, username, password, created_at, updated_at)
+      VALUES (11, 1, 'qBittorrent', 'http://qbit:8080', '', '', 1, 1);
   `);
 });
 
 const { createApp } = await import('../../app.ts');
 const app = createApp();
 const originalFetch = globalThis.fetch;
+
+Deno.test('storage verification validates instance ownership and allows an unavailable sample', async () => {
+  const request = (body: unknown) =>
+    app.request('/api/integrations/arr/verify-storage', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const paths = [
+    { kind: 'library', arrPath: '/tv', localPath: '/media' },
+    { kind: 'download', arrPath: '/downloads', localPath: '/downloads' },
+  ];
+  const body = { instanceId: 7, url: 'http://sonarr:8989', pathMappings: paths, libraryKeys: [] };
+  assertEquals((await request({ ...body, instanceId: 9, url: 'http://foreign:8989' })).status, 404);
+  assertEquals((await request({ ...body, libraryKeys: ['foreign-library'] })).status, 400);
+  assertEquals(
+    (await request({
+      ...body,
+      pathMappings: [{ kind: 'library', arrPath: '/tv', localPath: '../unsafe' }],
+    })).status,
+    400,
+  );
+  assertEquals((await request({ ...body, url: 'http://different' })).status, 400);
+  const response = await request(body);
+  assertEquals(response.status, 200);
+  const result = await response.json();
+  assertEquals(result.status, 'unverified');
+  assertStringIncludes(result.reason, 'sync the library');
+  assertEquals(JSON.stringify(result).includes('stored-sonarr-key'), false);
+});
 
 async function discover(body: unknown): Promise<Response> {
   return await app.request('/api/integrations/arr/root-folders', {
@@ -146,6 +179,58 @@ Deno.test('Arr root-folder discovery validates credentials, ownership, and sanit
       assertEquals(text.includes('sonarr:8989'), false);
       assertStringIncludes(text, 'could not load root-folder suggestions');
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test('connected qBittorrent storage paths are bounded and sanitized', async () => {
+  try {
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+      if (url.endsWith('/app/preferences')) {
+        return Promise.resolve(Response.json({ save_path: '/data/.torrents/complete' }));
+      }
+      if (url.endsWith('/torrents/categories')) {
+        return Promise.resolve(Response.json({
+          tv: { savePath: '/data/.torrents/complete' },
+        }));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+    const response = await app.request('/api/integrations/qbittorrent/storage-paths');
+    assertEquals(response.status, 200);
+    assertEquals(await response.json(), { paths: ['/data/.torrents/complete'] });
+
+    withTransaction((client) =>
+      client.exec(`
+        INSERT INTO qbittorrent_instances
+          (id, server_id, name, url, username, password, created_at, updated_at)
+          VALUES (12, 1, 'Unavailable', 'http://qbit-unavailable:8080', '', '', 1, 1)
+      `)
+    );
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('qbit-unavailable')) {
+        return Promise.resolve(new Response('unavailable', { status: 500 }));
+      }
+      if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+      if (url.endsWith('/app/preferences')) {
+        return Promise.resolve(Response.json({ save_path: '/data/.torrents/complete' }));
+      }
+      return Promise.resolve(Response.json({}));
+    }) as typeof fetch;
+    const partial = await app.request('/api/integrations/qbittorrent/storage-paths');
+    assertEquals(partial.status, 502);
+    withTransaction((client) => client.exec('DELETE FROM qbittorrent_instances WHERE id = 12'));
+
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response('secret body', { status: 500 }))) as typeof fetch;
+    const failed = await app.request('/api/integrations/qbittorrent/storage-paths');
+    assertEquals(failed.status, 502);
+    const body = await failed.text();
+    assertEquals(body.includes('secret body'), false);
   } finally {
     globalThis.fetch = originalFetch;
   }

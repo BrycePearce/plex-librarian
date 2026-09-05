@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from '@std/assert';
 import { normalizeQbittorrentUrl, QbittorrentApiError, QbittorrentClient } from './client.ts';
+import { QbittorrentDownloadClient } from './adapter.ts';
 
 Deno.test('normalizeQbittorrentUrl preserves a reverse-proxy base path', () => {
   assertEquals(
@@ -13,6 +14,71 @@ Deno.test('normalizeQbittorrentUrl rejects credentials embedded in the URL', () 
     () => normalizeQbittorrentUrl('http://admin:secret@qbit:8080'),
     Error,
     'must not include a username or password',
+  );
+});
+
+Deno.test('storage paths include the default and absolute category paths in stable order', async () => {
+  const requests: string[] = [];
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.endsWith('/app/preferences')) {
+      return Promise.resolve(Response.json({ save_path: '/data/.torrents/complete' }));
+    }
+    return Promise.resolve(Response.json({
+      tv: { name: 'tv', savePath: '/data/.torrents/complete' },
+      anime: { name: 'anime', savePath: '/data/.torrents/anime' },
+      inherited: { name: 'inherited', savePath: '' },
+    }));
+  });
+
+  assertEquals(await client.storagePaths(), [
+    '/data/.torrents/complete',
+    '/data/.torrents/anime',
+  ]);
+  assertEquals(requests, [
+    'http://qbit:8080/api/v2/app/version',
+    'http://qbit:8080/api/v2/app/preferences',
+    'http://qbit:8080/api/v2/torrents/categories',
+  ]);
+});
+
+Deno.test('storage path discovery rejects malformed and oversized responses', async () => {
+  const malformed = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.endsWith('/app/preferences')) {
+      return Promise.resolve(Response.json({ save_path: 'relative' }));
+    }
+    return Promise.resolve(Response.json({}));
+  });
+  await assertRejects(() => malformed.storagePaths(), QbittorrentApiError, 'default save path');
+
+  const oversized = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.endsWith('/app/preferences')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ save_path: `/${'x'.repeat(600_000)}` })),
+      );
+    }
+    return Promise.resolve(Response.json({}));
+  });
+  await assertRejects(() => oversized.storagePaths(), QbittorrentApiError, 'byte safety limit');
+
+  const oversizedError = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = String(input);
+    if (url.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    if (url.endsWith('/app/preferences')) {
+      return Promise.resolve(new Response('x'.repeat(600_000), { status: 500 }));
+    }
+    return Promise.resolve(Response.json({}));
+  });
+  await assertRejects(
+    () => oversizedError.storagePaths(),
+    QbittorrentApiError,
+    'byte safety limit',
   );
 });
 
@@ -536,5 +602,56 @@ Deno.test('direct discovery rejects a truncated job inventory', async () => {
     () => client.discoverySummaries(),
     QbittorrentApiError,
     'direct discovery is truncated',
+  );
+});
+
+Deno.test('ownership catalog streams more than 500 jobs with bounded hash-ordered pages', async () => {
+  const offsets: number[] = [];
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    assertEquals(url.searchParams.get('sort'), 'hash');
+    assertEquals(url.searchParams.get('limit'), '500');
+    const offset = Number(url.searchParams.get('offset'));
+    offsets.push(offset);
+    return Promise.resolve(
+      Response.json(Array.from({ length: Math.min(500, 1201 - offset) }, (_, i) => ({
+        hash: (offset + i).toString(16).padStart(40, '0'),
+        content_path: `/downloads/${offset + i}`,
+        save_path: '/downloads',
+        size: 10,
+      }))),
+    );
+  });
+  const adapter = new QbittorrentDownloadClient(client);
+  let count = 0;
+  const fingerprint = await adapter.scanJobSummaries(() => {
+    count++;
+    return Promise.resolve();
+  });
+  assertEquals(count, 1201);
+  assertEquals(fingerprint.length, 64);
+  assertEquals(offsets, [0, 500, 1000]);
+  // No matching files: direct discovery also works on the large catalog.
+  assertEquals(
+    (await adapter.discoverJobs([{ path: '/library/unrelated.mkv', caseSensitive: true }])).jobs,
+    [],
+  );
+});
+
+Deno.test('catalog pagination rejects overlapping pages instead of claiming complete coverage', async () => {
+  const client = new QbittorrentClient('http://qbit:8080', '', '', (input) => {
+    if (String(input).endsWith('/app/version')) return Promise.resolve(new Response('v5.1.2'));
+    return Promise.resolve(Response.json(Array.from({ length: 500 }, (_, i) => ({
+      hash: i.toString(16).padStart(40, '0'),
+      content_path: `/downloads/${i}`,
+      save_path: '/downloads',
+      size: 10,
+    }))));
+  });
+  await assertRejects(
+    () => new QbittorrentDownloadClient(client).scanJobSummaries(() => Promise.resolve()),
+    QbittorrentApiError,
+    'pagination',
   );
 });

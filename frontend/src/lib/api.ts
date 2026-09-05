@@ -4,6 +4,8 @@ import type {
   ArrIntegrationSettings,
   ArrRootFoldersRequest,
   ArrRootFoldersResponse,
+  ArrStorageVerificationRequest,
+  ArrStorageVerificationResponse,
   AuthStatus,
   CancelPendingInvitationResponse,
   DeletionOperation,
@@ -31,6 +33,7 @@ import type {
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
   QbittorrentPathMapping,
+  QbittorrentStoragePathsResponse,
   RemoveUserResponse,
   RequestFollowThroughDetailsResponse,
   SaveArrInstanceRequest,
@@ -117,6 +120,7 @@ export type {
   QbittorrentInstance,
   QbittorrentIntegrationSettings,
   QbittorrentPathMapping,
+  QbittorrentStoragePathsResponse,
   RemoveUserResponse,
   RequestFollowThroughDetailItem,
   RequestFollowThroughDetailsResponse,
@@ -690,6 +694,11 @@ export const api = {
   },
   arr: {
     get: () => apiFetch<ArrIntegrationSettings>("/integrations/arr"),
+    verifyStorage: (request: ArrStorageVerificationRequest) =>
+      apiFetch<ArrStorageVerificationResponse>("/integrations/arr/verify-storage", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
     rootFolders: (request: ArrRootFoldersRequest) =>
       apiFetch<ArrRootFoldersResponse>("/integrations/arr/root-folders", {
         method: "POST",
@@ -721,6 +730,8 @@ export const api = {
   },
   qbittorrent: {
     get: () => apiFetch<QbittorrentIntegrationSettings>("/integrations/qbittorrent"),
+    storagePaths: () =>
+      apiFetch<QbittorrentStoragePathsResponse>("/integrations/qbittorrent/storage-paths"),
     createInstance: (instance: SaveQbittorrentInstanceRequest) =>
       apiFetch<QbittorrentInstance>("/integrations/qbittorrent/instances", {
         method: "POST",

@@ -7,10 +7,21 @@ import {
 } from '@std/assert';
 import { resolve } from '@std/path';
 import type { PlexRawMetadata } from '../../integrations/plex/types.ts';
+import type { SqliteClient } from '../../db/index.ts';
 
 const testDirectory = await Deno.makeTempDir();
 const testDbPath = resolve(testDirectory, 'deletion-worker.db');
 Deno.env.set('DB_PATH', testDbPath);
+
+// Remote API fixtures use these accessible virtual mounts. Tests using actual
+// temporary files continue through the real filesystem implementation.
+const realPath = Deno.realPath;
+Deno.realPath = (path) => {
+  const local = String(path).replaceAll('\\', '/');
+  return /^(?:[A-Za-z]:)?\/(tv|downloads)(\/|$)/.test(local)
+    ? Promise.resolve(local)
+    : realPath(path);
+};
 
 const { runMigrations } = await import('../../db/migrate.ts');
 await runMigrations(testDbPath, resolve(import.meta.dirname!, '../../../drizzle'));
@@ -893,6 +904,12 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         return Promise.resolve(
           Response.json(
             qbitJobsOverride.filter((job) => requestedHash === null || job.hash === requestedHash)
+              .sort((a, b) => a.hash.localeCompare(b.hash))
+              .slice(
+                Number(url.searchParams.get('offset') ?? 0),
+                Number(url.searchParams.get('offset') ?? 0) +
+                  Number(url.searchParams.get('limit') ?? qbitJobsOverride.length),
+              )
               .map((job) => ({
                 hash: job.hash,
                 name: job.name,
@@ -1431,7 +1448,7 @@ function configureRadarr(withQbit = false): void {
   });
 }
 
-function configureSonarr(withQbit = false): void {
+function configureSonarr(withQbit = false, verifiedPaths = false): void {
   withTransaction((client) => {
     client.prepare(
       "INSERT INTO arr_instances (id, server_id, type, name, url, api_key, created_at, updated_at) VALUES (2, 1, 'sonarr', 'Sonarr', 'http://sonarr', 'key', 1, 1)",
@@ -1445,6 +1462,40 @@ function configureSonarr(withQbit = false): void {
       ).run();
     }
   });
+  if (verifiedPaths) {
+    withTransaction((client) => {
+      client.exec(`
+      INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path)
+        VALUES (2, 'library', '/tv', '/tv');
+      INSERT INTO plex_path_mappings (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+        validation_plex_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+        VALUES (1, 'shows', '/tv', '/tv', 1, 1, '/tv/sample', '/tv/sample', 10, 1, 1, 1);
+      INSERT INTO qbittorrent_path_mappings (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+        validation_qbittorrent_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+        VALUES (1, 'db:1', '/tv', '/tv', 1, 1, '/tv/sample', '/tv/sample', 10, 1, 1, 1),
+               (1, 'db:1', '/downloads', '/downloads', 1, 1, '/downloads/sample', '/downloads/sample', 10, 1, 1, 1);
+    `);
+    });
+  }
+}
+
+function addTvLibraryProtection(
+  client: SqliteClient,
+  remoteRoot: string,
+  localRoot: string,
+  localFile: string,
+): void {
+  const remoteFile = `${remoteRoot}${localFile.slice(localRoot.length)}`;
+  client.prepare(`INSERT INTO plex_path_mappings
+    (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+     validation_plex_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+    VALUES (1, 'shows', ?, ?, 1, 1, ?, ?, 40000, 1, 1, 1)`)
+    .run(remoteRoot, localRoot, remoteFile, localFile);
+  client.prepare(`INSERT INTO qbittorrent_path_mappings
+    (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+     validation_qbittorrent_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+    VALUES (1, 'db:1', ?, ?, 1, 1, ?, ?, 40000, 1, 1, 1)`)
+    .run(remoteRoot, localRoot, remoteFile, localFile);
 }
 
 function addEpisode(): void {
@@ -3516,7 +3567,7 @@ Deno.test('qBittorrent-only whole-item deletion does not require Arr selection',
 Deno.test('whole-show preview exposes an exact Sonarr-associated job with partial file history', async () => {
   reset();
   addEpisode();
-  configureSonarr(true);
+  configureSonarr(true, true);
   seasonPackQbit = true;
   seasonPackMixed = true;
   qbitPresent = true;
@@ -3635,7 +3686,7 @@ Deno.test('whole-show hash preview rejects ambiguous Plex TVDB identity', async 
 Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', async () => {
   reset();
   addEpisode();
-  configureSonarr(true);
+  configureSonarr(true, true);
   seasonPackQbit = true;
   qbitPresent = true;
   const result = await enqueueDeletionOperation({
@@ -3679,6 +3730,186 @@ Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', asy
   assertEquals(target.verifiedHardlinkDataRemoved, 0);
   assertEquals(qbitDeleteCount, 1);
   assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+});
+
+Deno.test('Sonarr deletion proceeds with no QB or only QB download mappings', async () => {
+  for (const withQbit of [false, true]) {
+    reset();
+    addEpisode();
+    configureSonarr(withQbit, withQbit);
+    if (withQbit) {
+      withTransaction((client) => {
+        client.exec("DELETE FROM qbittorrent_path_mappings WHERE qbittorrent_path = '/tv'");
+      });
+      qbitJobsOverride = [{
+        hash: torrentHash,
+        name: 'Separate download file',
+        size: 40_000,
+        contentPath: '/downloads/Show/old.mkv',
+        savePath: '/downloads',
+        files: [{ name: 'Show/old.mkv', size: 40_000 }],
+      }];
+    }
+    const previewResponse = await app.request(
+      '/api/libraries/shows/items/download-cleanup-preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ratingKeys: ['show-1'] }),
+      },
+    );
+    const preview = await previewResponse.json();
+    assertEquals(preview.items[0].sonarrCleanupStatus, 'resolved', JSON.stringify(preview));
+    const response = await app.request('/api/libraries/shows/items', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: crypto.randomUUID(),
+        ratingKeys: ['show-1'],
+        coordinatedRatingKeys: ['show-1'],
+        cleanupDownloadRatingKeys: [],
+        cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
+      }),
+    });
+    assertEquals(response.status, 202, await response.clone().text());
+    const { operationId } = await response.json();
+    await settle();
+    const operation = getDeletionOperation(operationId, 1)!;
+    assertEquals(operation.status, 'completed', JSON.stringify(operation));
+    assertEquals(arrDeleteCount, 1);
+    assertEquals(qbitDeleteCount, 0);
+    assertEquals(live.has('show-1'), false);
+  }
+});
+
+Deno.test('Sonarr preview protects live QB files without historical hardlink proof', async () => {
+  for (const mapped of [false, true]) {
+    reset();
+    addEpisode();
+    configureSonarr(true, mapped);
+    qbitJobsOverride = [{
+      hash: torrentHash,
+      name: 'Live library file',
+      size: 40_000,
+      contentPath: sonarrManagedPath,
+      savePath: '/tv',
+      files: [{ name: 'Show/Season 01/old.mkv', size: 40_000 }],
+    }];
+    const response = await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ratingKeys: ['show-1'] }),
+    });
+    assertEquals(response.status, 200);
+    const preview = await response.json();
+    assertEquals(preview.items[0].sonarrCleanupStatus, 'error', JSON.stringify(preview));
+    assertEquals(preview.items[0].sonarrHistoricalPaths, []);
+    assertStringIncludes(
+      preview.items[0].sonarrCleanupReason,
+      mapped ? 'Retained because' : 'Could not verify',
+    );
+    assertEquals(arrDeleteCount, 0);
+    assertEquals(qbitDeleteCount, 0);
+  }
+});
+
+Deno.test({
+  name:
+    'Plex reconciliation completes after Sonarr removes the actual mapped file with QB connected',
+  ignore: Deno.build.os === 'windows',
+  fn: async () => {
+    reset();
+    addEpisode();
+    configureSonarr(true);
+    const root = await Deno.makeTempDir();
+    const file = `${root}/Show/Season 01/old.mkv`;
+    try {
+      await Deno.mkdir(`${root}/Show/Season 01`, { recursive: true });
+      await Deno.writeFile(file, new Uint8Array(40_000));
+      live.get('episode-1')!.Media = [{
+        id: 21,
+        Part: [{ file: sonarrManagedPath, size: 40_000 }],
+      }];
+      withTransaction((client) => {
+        addTvLibraryProtection(client, '/tv', root, file);
+        client.prepare(
+          "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?)",
+        ).run(root);
+      });
+      sonarrSeriesDeleteHook = () => Deno.removeSync(file);
+      const previewResponse = await app.request(
+        '/api/libraries/shows/items/download-cleanup-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: ['show-1'] }),
+        },
+      );
+      const preview = await previewResponse.json();
+      assertEquals(preview.items[0].sonarrCleanupStatus, 'resolved', JSON.stringify(preview));
+      const response = await app.request('/api/libraries/shows/items', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          ratingKeys: ['show-1'],
+          coordinatedRatingKeys: ['show-1'],
+          cleanupDownloadRatingKeys: [],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json();
+      await settle();
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(operation.status, 'completed', JSON.stringify(operation));
+      assertEquals(arrDeleteCount, 1);
+      assertEquals(qbitDeleteCount, 0);
+      assertEquals(live.has('show-1'), false);
+      await assertRejects(() => Deno.lstat(file), Deno.errors.NotFound);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  },
+});
+
+Deno.test('worker protects a newly QB-owned Sonarr path after an accepted no-history preview', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true, true);
+  const previewResponse = await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKeys: ['show-1'] }),
+  });
+  const preview = await previewResponse.json();
+  const response = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: ['show-1'],
+      cleanupDownloadRatingKeys: [],
+      cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json();
+  qbitJobsOverride = [{
+    hash: torrentHash,
+    name: 'New live owner',
+    size: 40_000,
+    contentPath: sonarrManagedPath,
+    savePath: '/tv',
+    files: [{ name: 'Show/Season 01/old.mkv', size: 40_000 }],
+  }];
+  await settle();
+  const operation = getDeletionOperation(operationId, 1)!;
+  assert(operation.status !== 'completed', JSON.stringify(operation));
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(qbitDeleteCount, 0);
+  assert(live.has('show-1'));
 });
 
 Deno.test('whole-show Sonarr deletion does not persist an empty hardlink reclamation', async () => {
@@ -3823,6 +4054,8 @@ Deno.test({
     configureSonarr(true);
     seasonPackQbit = true;
     qbitPresent = true;
+    // All Plex paths selected by this whole-show fixture exist in the mapped library.
+    live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
@@ -3835,6 +4068,7 @@ Deno.test({
       await Deno.link(libraryPath, downloadPath);
       sonarrSeriesDeleteHook = () => Deno.removeSync(libraryPath);
       withTransaction((client) => {
+        addTvLibraryProtection(client, '/tv', libraryRoot, libraryPath);
         client.prepare(
           "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
@@ -3936,6 +4170,7 @@ Deno.test({
       }];
       sonarrEpisodeFileDeleteHook = () => Deno.removeSync(libraryPath);
       withTransaction((client) => {
+        addTvLibraryProtection(client, '/tv', libraryRoot, libraryPath);
         client.prepare(
           "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
@@ -4744,6 +4979,7 @@ Deno.test({
         },
       ];
       withTransaction((client) => {
+        addTvLibraryProtection(client, '/tv/Show/Season 01', libraryRoot, firstLibrary);
         client.prepare(
           "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv/Show/Season 01', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
@@ -5832,7 +6068,7 @@ Deno.test('season cleanup requires verified download coverage when cleanup is se
 
 Deno.test('season cleanup deletes an exactly verified qBittorrent job when selected', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   sonarrManagedMediaId = 21;
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -6164,7 +6400,7 @@ Deno.test('Plex-only season cleanup remains available with unsupported Sonarr', 
 
 Deno.test('season adoption selects the best retained candidate that passes exact preflight', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   withTransaction((client) => {
     client.prepare(
@@ -6272,7 +6508,7 @@ Deno.test('season adoption rejects a retained candidate whose Sonarr preflight s
 
 Deno.test('season adoption refuses Sonarr version drift before the first mutation', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   sonarrManagedMediaId = 21;
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -6327,7 +6563,7 @@ Deno.test('season adoption refuses Sonarr version drift before the first mutatio
 
 Deno.test('season cleanup rejects download manifest drift after enqueue', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   sonarrManagedMediaId = 21;
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -6384,7 +6620,7 @@ Deno.test('season cleanup rejects download manifest drift after enqueue', async 
 
 Deno.test('season cleanup rejects Sonarr ownership drift after preview acceptance', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   sonarrManagedMediaId = 21;
   sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
@@ -6628,6 +6864,7 @@ Deno.test({
         Deno.removeSync(fileId === sonarrManagedFileId ? firstLibrary : secondLibrary);
       };
       withTransaction((client) => {
+        addTvLibraryProtection(client, '/tv/Show/Season 01', libraryRoot, firstLibrary);
         client.prepare(
           "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv/Show/Season 01', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
@@ -6893,7 +7130,7 @@ Deno.test('Plex-only season cleanup deletes managed and unmanaged selected sibli
 
 Deno.test('Plex-only season cleanup does not require one Sonarr adoption candidate', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   withTransaction((client) => {
     client.prepare(
@@ -7202,7 +7439,7 @@ Deno.test('season preview rejects break-glass when exact retained adoption is av
 
 Deno.test('season cleanup uses Plex fallback without touching Sonarr-managed retained media', async () => {
   reset();
-  configureSonarr(true);
+  configureSonarr(true, true);
   addEpisode();
   sonarrManagedMediaId = 22;
   sonarrManagedPath = '/tv/Show/Season 01/managed-retained.mkv';

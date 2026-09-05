@@ -13,6 +13,7 @@ import {
   ArrConnectionWizard,
   type ArrDraft,
   automaticRootFolderDiscoveryTypes,
+  commonPosixRoot,
   initialRootFolderDiscoveryState,
   rootFolderDiscoveryPlan,
   rootFolderDiscoveryTransition,
@@ -24,6 +25,7 @@ import {
   storageCleanupProblem,
   storageCleanupState,
   StorageCleanupStep,
+  storageCleanupSuggestion,
 } from "./ArrConnectionWizard.tsx";
 
 type ElementProps = {
@@ -155,6 +157,174 @@ Deno.test("configured state mirrors existing local-root syntax and non-overlap v
     storageCleanupProblem({ ...overlap, downloadLocalPath: "D:\\Downloads" }),
     "Plex Librarian roots must be absolute Linux paths without parent traversal.",
   );
+});
+
+Deno.test("connected services produce one confirmable storage proposal", () => {
+  assertEquals(commonPosixRoot(["/data/Anime", "/data/TV"]), "/data");
+  assertEquals(
+    storageCleanupSuggestion(
+      ["/data/Anime", "/data/TV"],
+      ["/data/.torrents/complete", "/data/.torrents/complete"],
+    ),
+    {
+      libraryArrPath: "/data",
+      libraryLocalPath: "/media",
+      downloadArrPath: "/data/.torrents/complete",
+      downloadLocalPath: "/downloads",
+    },
+  );
+  assertEquals(storageCleanupSuggestion(["/TV"], ["/one", "/two"]), null);
+  assertEquals(
+    storageCleanupSuggestion(
+      ["/data/TV"],
+      ["/data/.torrents/complete", "/data/.torrents/complete/tv"],
+    )?.downloadArrPath,
+    "/data/.torrents/complete",
+  );
+  assertEquals(storageCleanupSuggestion(["/TV"], ["/data/down", "/data/downloads"]), null);
+  assertEquals(storageCleanupSuggestion(["C:\\TV"], ["C:\\Downloads"]), null);
+});
+
+Deno.test("suggested setup waits for confirmation and preserves manual mappings", () => {
+  const updates: Array<Partial<ArrDraft>> = [];
+  const suggestionProps = {
+    type: "sonarr" as const,
+    draft: draft(),
+    discovery: {
+      revision: 0,
+      attemptedRevision: 0,
+      status: "suggested" as const,
+      roots: ["/data/Anime", "/data/TV"],
+    },
+    storagePaths: {
+      status: "suggested" as const,
+      paths: ["/data/.torrents/complete"],
+    },
+    onUpdate: (update: Partial<ArrDraft>) => updates.push(update),
+  };
+  const suggestion = StorageCleanupStep(suggestionProps);
+  const html = renderToStaticMarkup(suggestion);
+  assertStringIncludes(html, "Detected Sonarr and qBittorrent paths");
+  assertStringIncludes(html, "Enable verified historical hardlink cleanup");
+  assertStringIncludes(html, "Local mount paths are suggestions, not verified mappings");
+  assertEquals(html.includes("complete recovery"), false);
+  assertStringIncludes(html, "path Sonarr sees");
+  assertStringIncludes(html, "/data");
+  assertStringIncludes(html, "/data/.torrents/complete");
+  assertEquals(updates, []);
+  const confirm = findElement(
+    suggestion,
+    (element) => element.type === "button" && element.props.children === "Use detected paths",
+  );
+  if (!confirm) throw new Error("Expected confirmation action");
+  (confirm.props.onClick as () => void)();
+  assertEquals(updates, [{
+    libraryArrPath: "/data",
+    libraryLocalPath: "/media",
+    downloadArrPath: "/data/.torrents/complete",
+    downloadLocalPath: "/downloads",
+  }]);
+
+  const manual = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...suggestionProps}
+      draft={draft({
+        libraryArrPath: "/custom/library",
+        downloadArrPath: "/custom/downloads",
+      })}
+    />,
+  );
+  assertEquals(manual.includes("Use detected paths"), false);
+  assertStringIncludes(manual, 'value="/custom/library"');
+  assertStringIncludes(manual, 'value="/custom/downloads"');
+
+  const editedLocal = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...suggestionProps}
+      draft={draft({ libraryLocalPath: "/custom-media" })}
+    />,
+  );
+  assertEquals(editedLocal.includes("Use detected paths"), false);
+  assertStringIncludes(editedLocal, 'value="/custom-media"');
+});
+
+Deno.test("qBittorrent discovery stays simple while loading and explains manual fallbacks", () => {
+  const base = {
+    type: "sonarr" as const,
+    draft: draft(),
+    onUpdate: () => {},
+  };
+  const loading = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...base}
+      storagePaths={{ status: "loading", paths: [] }}
+    />,
+  );
+  assertStringIncludes(loading, "Checking connected services");
+  assertStringIncludes(loading, "Detecting");
+  assertStringIncludes(loading, "Review or enter paths manually");
+  assertEquals(loading.includes('<details open=""'), false);
+
+  const arrLoading = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...base}
+      discovery={{
+        revision: 0,
+        attemptedRevision: 0,
+        status: "loading",
+        roots: [],
+      }}
+      storagePaths={{ status: "suggested", paths: ["/downloads"] }}
+    />,
+  );
+  assertStringIncludes(arrLoading, "Checking connected services");
+  assertStringIncludes(arrLoading, "Detecting");
+  assertEquals(arrLoading.includes('<details open=""'), false);
+
+  const empty = renderToStaticMarkup(
+    <StorageCleanupStep {...base} storagePaths={{ status: "empty", paths: [] }} />,
+  );
+  assertStringIncludes(empty, "Connect qBittorrent");
+  assertStringIncludes(empty, "Review or enter paths manually");
+
+  const ambiguous = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...base}
+      storagePaths={{ status: "suggested", paths: ["/one", "/two"] }}
+    />,
+  );
+  assertStringIncludes(ambiguous, "Detected: /one, /two");
+  assertStringIncludes(ambiguous, '<option value="/one"></option>');
+  assertStringIncludes(ambiguous, '<option value="/two"></option>');
+
+  const radarr = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...base}
+      type="radarr"
+      discovery={{
+        revision: 0,
+        attemptedRevision: 0,
+        status: "suggested",
+        roots: ["/data/Movies"],
+      }}
+      storagePaths={{ status: "suggested", paths: ["/data/.torrents/complete"] }}
+    />,
+  );
+  assertStringIncludes(radarr, "Detected Radarr and qBittorrent paths");
+
+  let retries = 0;
+  const failed = StorageCleanupStep({
+    ...base,
+    storagePaths: { status: "error", paths: [] },
+    onStorageRetry: () => retries++,
+  });
+  const retry = findElement(
+    failed,
+    (element) => element.type === "button" && element.props.children === "Retry",
+  );
+  if (!retry) throw new Error("Expected storage discovery retry action");
+  (retry.props.onClick as () => void)();
+  assertEquals(retries, 1);
 });
 
 Deno.test("single-root discovery renders an explicit action without changing the draft", () => {
@@ -429,6 +599,85 @@ Deno.test("one advance launches both discoveries without waiting for either resp
   assertEquals(states.radarr.status, "empty");
 });
 
+Deno.test("storage verification runs automatically and ignores results after paths change", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const oldEnvironment = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const originalVerify = api.arr.verifyStorage;
+  const originalRoots = api.arr.rootFolders;
+  const originalStorage = api.qbittorrent.storagePaths;
+  const first = deferred<Awaited<ReturnType<typeof api.arr.verifyStorage>>>();
+  const second = deferred<Awaited<ReturnType<typeof api.arr.verifyStorage>>>();
+  let calls = 0;
+  api.arr.verifyStorage = () => ++calls === 1 ? first.promise : second.promise;
+  api.arr.rootFolders = () => Promise.resolve({ roots: ["/tv"] });
+  api.qbittorrent.storagePaths = () => Promise.resolve({ paths: [] });
+  const queryClient = new QueryClient();
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await act(() => {
+      renderer = TestRenderer.create(
+        <QueryClientProvider client={queryClient}>
+          <ArrConnectionWizard
+            data={{
+              instances: [{
+                id: 7,
+                type: "sonarr",
+                name: "Sonarr",
+                url: "http://sonarr",
+                apiKeyConfigured: true,
+                pathMappings: [
+                  { kind: "library", arrPath: "/tv", localPath: "/media" },
+                  { kind: "download", arrPath: "/data/downloads", localPath: "/downloads" },
+                ],
+              }],
+              mappings: [],
+            }}
+            libraryData={undefined}
+            librariesLoading={false}
+            librariesError={null}
+            initialType="sonarr"
+            editingInstanceId={7}
+            onCancel={() => {}}
+            onSaved={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    const submit = () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
+    await act(submit);
+    await act(submit);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    assertEquals(calls, 1);
+    await act(() =>
+      renderer!.root.findByType(StorageCleanupStep).props.onUpdate({
+        downloadArrPath: "/other/downloads",
+      })
+    );
+    await act(() => first.resolve({ status: "verified", reason: "Stale verification" }));
+    assertEquals(JSON.stringify(renderer!.toJSON()).includes("Stale verification"), false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    assertEquals(calls, 2);
+    await act(() => second.resolve({ status: "unverified", reason: "No current sample" }));
+    assertEquals(JSON.stringify(renderer!.toJSON()).includes("No current sample"), true);
+    const save = renderer!.root.findAllByType("button").find((button) =>
+      button.children.join("").includes("Test and save")
+    );
+    assertEquals(save?.props.disabled, false);
+  } finally {
+    if (renderer) await act(() => renderer!.unmount());
+    queryClient.clear();
+    api.arr.verifyStorage = originalVerify;
+    api.arr.rootFolders = originalRoots;
+    api.qbittorrent.storagePaths = originalStorage;
+    globals.IS_REACT_ACT_ENVIRONMENT = oldEnvironment;
+  }
+});
+
 Deno.test("the real Connection submit starts both discoveries and navigates without waiting", async () => {
   const actEnvironment = globalThis as typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -436,8 +685,11 @@ Deno.test("the real Connection submit starts both discoveries and navigates with
   const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
   actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
   const originalRootFolders = api.arr.rootFolders;
+  const originalStoragePaths = api.qbittorrent.storagePaths;
   const requests: Parameters<typeof api.arr.rootFolders>[0][] = [];
   const pending = deferred<{ roots: string[] }>();
+  const storagePending = deferred<{ paths: string[] }>();
+  let storageRequests = 0;
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -446,6 +698,10 @@ Deno.test("the real Connection submit starts both discoveries and navigates with
   api.arr.rootFolders = (request) => {
     requests.push(request);
     return pending.promise;
+  };
+  api.qbittorrent.storagePaths = () => {
+    storageRequests++;
+    return storagePending.promise;
   };
 
   try {
@@ -523,6 +779,7 @@ Deno.test("the real Connection submit starts both discoveries and navigates with
       { instanceId: 8, url: "http://radarr:7878" },
       { instanceId: 7, url: "http://sonarr:8989" },
     ]);
+    assertEquals(storageRequests, 1);
     assertEquals(renderer!.root.findByType("h4").children.join(""), "Select Plex libraries");
     const librariesNext = renderer!.root.findAllByType("button").find((button) =>
       button.children.join("") === "Next"
@@ -535,8 +792,15 @@ Deno.test("the real Connection submit starts both discoveries and navigates with
     );
     assertEquals(save?.props.disabled, false);
     assertEquals(requests.length, 2);
+    assertEquals(storageRequests, 1);
+    await act(async () => {
+      storagePending.resolve({ paths: ["/data/.torrents/complete"] });
+      pending.resolve({ roots: ["/data/TV"] });
+      await flushPromises();
+    });
   } finally {
     api.arr.rootFolders = originalRootFolders;
+    api.qbittorrent.storagePaths = originalStoragePaths;
     await act(() => renderer?.unmount());
     queryClient.clear();
     actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;

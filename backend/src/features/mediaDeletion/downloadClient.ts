@@ -34,9 +34,19 @@ export interface DiscoveredDownloadJobs {
 export interface DownloadDiscoveryCandidate {
   path: string;
   caseSensitive: boolean;
+  /** Read-only ownership veto for a directory deletion, never payload authority. */
+  directory?: boolean;
 }
 
+export type DownloadJobSummary = Pick<DownloadJob, 'id' | 'contentPath' | 'savePath' | 'size'>;
+
 export interface DownloadClient {
+  /** Stream the complete catalog with bounded memory, returning its stable fingerprint. */
+  scanJobSummaries?(visit: (summary: DownloadJobSummary) => Promise<void>): Promise<string>;
+  /** Complete bounded live catalog, used to map the paths the client actually owns. */
+  listJobSummaries?(): Promise<
+    Array<Pick<DownloadJob, 'id' | 'contentPath' | 'savePath' | 'size'>>
+  >;
   findJob(downloadId: string): Promise<DownloadJob | null>;
   discoverJobs?(
     candidates: readonly DownloadDiscoveryCandidate[],

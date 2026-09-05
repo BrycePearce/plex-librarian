@@ -2,6 +2,7 @@ import type { Context, Next } from 'hono';
 import { withTransaction } from '../../db/index.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
+import { protectWholeSonarrCleanup } from '../mediaDeletion/livePathProtection.ts';
 import {
   DeletionConflictError,
   enqueueDeletionOperation,
@@ -369,11 +370,18 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             [
               cleanup.ratingKey,
               rows.find((row) => row!.ratingKey === cleanup.ratingKey)!.item[1] === 'show'
-                ? await bindSonarrPathOwnership(
-                  cleanup,
+                ? await protectWholeSonarrCleanup({
+                  serverId,
+                  libraryKey,
+                  arrTargets,
                   downloadTargets,
-                  cleanupDownloadRatingKeys.has(cleanup.ratingKey),
-                )
+                  client: activeServer!.client,
+                  cleanup: await bindSonarrPathOwnership(
+                    cleanup,
+                    downloadTargets,
+                    cleanupDownloadRatingKeys.has(cleanup.ratingKey),
+                  ),
+                })
                 : cleanup,
             ] as const
           )),

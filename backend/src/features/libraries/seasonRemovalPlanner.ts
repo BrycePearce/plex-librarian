@@ -10,6 +10,10 @@ import type { PlexSeasonDeletionEpisode } from '../../integrations/plex/types.ts
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { resolveArrPath } from '../mediaDeletion/arrPaths.ts';
 import {
+  assertArrDeletionPathsUnowned,
+  assertPlexDeletionPathsUnowned,
+} from '../mediaDeletion/livePathProtection.ts';
+import {
   bindSonarrPathOwnership,
   type PersistedResolvedCleanupItem,
   persistResolvedCleanupIdentity,
@@ -431,6 +435,32 @@ export async function buildWholeSeasonRemovalPlan(input: {
   }
   if (input.coordinated && cleanup?.status === 'error') {
     blockers.push(cleanup.reason ?? 'Sonarr path ownership is unsafe.');
+  }
+  try {
+    const selectedJobKeys = new Set(
+      (cleanup?.downloadJobs ?? []).map((job) => `${job.instanceKey}:${job.jobId}`),
+    );
+    await assertPlexDeletionPathsUnowned({
+      serverId: input.serverId,
+      libraryKey: input.libraryKey,
+      paths: [...plexPaths.values()].map((file) => file.path),
+      targets: downloadTargets,
+      selectedJobKeys,
+    });
+    if (input.coordinated) {
+      for (const expected of sonarrTargets) {
+        const target = arrTargets.find((entry) => entry.instanceId === expected.instanceId)!;
+        await assertArrDeletionPathsUnowned({
+          serverId: input.serverId,
+          paths: expected.files.map((file) => ({ path: file.path })),
+          mappings: target.pathMappings,
+          targets: downloadTargets,
+          selectedJobKeys,
+        });
+      }
+    }
+  } catch (error) {
+    blockers.push(error instanceof Error ? error.message : 'Could not verify live path ownership');
   }
   const persistedCleanup: PersistedResolvedCleanupItem | undefined =
     cleanup?.status === 'resolved' &&

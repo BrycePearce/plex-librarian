@@ -3,9 +3,11 @@ import type {
   DownloadClient,
   DownloadDiscoveryCandidate,
   DownloadJob,
+  DownloadJobSummary,
 } from '../../features/mediaDeletion/downloadClient.ts';
 import { normalizeRemoteAbsolute } from '../../features/mediaDeletion/hardlinks.ts';
 import type { QbittorrentClient } from './client.ts';
+import { createHash } from 'node:crypto';
 
 const DISCOVERY_MANIFEST_MAX_RECORDS = 25_000;
 const DISCOVERY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
@@ -60,13 +62,26 @@ function couldOwnCandidate(
   return candidates.some((candidate) => {
     const path = normalizeRemoteAbsolute(candidate.path);
     if (!path || path.separator !== content.separator) return false;
-    return within(path.path, content.path, candidate.caseSensitive);
+    return within(path.path, content.path, candidate.caseSensitive) ||
+      (candidate.directory === true && within(content.path, path.path, candidate.caseSensitive));
   });
 }
 
 /** Keeps qBittorrent hashes and API method names out of the deletion domain. */
 export class QbittorrentDownloadClient implements DownloadClient {
   constructor(readonly client: QbittorrentClient) {}
+
+  async scanJobSummaries(visit: (summary: DownloadJobSummary) => Promise<void>): Promise<string> {
+    const fingerprint = createHash('sha256');
+    for await (const page of this.client.discoverySummaryPages()) {
+      for (const { hash, contentPath, savePath, size } of page) {
+        const summary = { id: hash, contentPath, savePath, size };
+        fingerprint.update(JSON.stringify(summary) + '\n');
+        await visit(summary);
+      }
+    }
+    return fingerprint.digest('hex');
+  }
 
   async findJob(downloadId: string): Promise<DownloadJob | null> {
     const torrent = await this.client.torrent(downloadId);
@@ -79,19 +94,24 @@ export class QbittorrentDownloadClient implements DownloadClient {
     if (candidates.length === 0) {
       throw new Error('qBittorrent direct discovery requires an exact candidate path');
     }
-    const first = (await this.client.discoverySummaries()).filter((summary) =>
-      couldOwnCandidate(summary, candidates)
-    );
+    const first: DownloadJobSummary[] = [];
+    const before = await this.scanJobSummaries((summary) => {
+      if (couldOwnCandidate(summary, candidates)) {
+        if (first.length >= 500) throw new Error('Too many intersecting qBittorrent jobs');
+        first.push(summary);
+      }
+      return Promise.resolve();
+    });
     let manifestRecords = 0;
     let manifestBytes = 0;
     const jobs = await mapWithConcurrency(
       first,
       DISCOVERY_MANIFEST_CONCURRENCY,
       async (summary): Promise<DownloadJob> => {
-        const torrent = await this.client.torrent(summary.hash);
+        const torrent = await this.client.torrent(summary.id);
         if (!torrent) throw new Error('qBittorrent jobs changed during direct discovery');
         const liveSummary = {
-          hash: torrent.hash,
+          id: torrent.hash,
           contentPath: torrent.contentPath,
           savePath: torrent.savePath,
           size: torrent.size,
@@ -110,10 +130,8 @@ export class QbittorrentDownloadClient implements DownloadClient {
         return { ...torrent, id: torrent.hash };
       },
     );
-    const second = (await this.client.discoverySummaries()).filter((summary) =>
-      couldOwnCandidate(summary, candidates)
-    );
-    if (summaryIdentity(first) !== summaryIdentity(second)) {
+    const after = await this.scanJobSummaries(() => Promise.resolve());
+    if (before !== after) {
       throw new Error('qBittorrent ownership summaries changed during direct discovery');
     }
     return { jobs, summaryFingerprint: await summaryFingerprint(first) };

@@ -13,6 +13,10 @@ export interface QbittorrentIntegrationSettings {
   pathMappings: QbittorrentPathMapping[];
 }
 
+export interface QbittorrentStoragePathsResponse {
+  paths: string[];
+}
+
 export interface QbittorrentPathMapping {
   id: number;
   instanceKey: string;

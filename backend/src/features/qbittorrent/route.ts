@@ -7,9 +7,11 @@ import {
   normalizeQbittorrentUrl,
   QbittorrentClient,
 } from '../../integrations/qbittorrent/client.ts';
+import { QbittorrentDownloadClient } from '../../integrations/qbittorrent/adapter.ts';
 import { envQbittorrentConfigured, getQbittorrentTargets } from './connections.ts';
 import type {
   QbittorrentIntegrationSettings,
+  QbittorrentStoragePathsResponse,
   SaveQbittorrentInstanceRequest,
   SaveQbittorrentPathMappingRequest,
   UpdateQbittorrentInstanceRequest,
@@ -62,6 +64,27 @@ router.get('/', async (c) => {
       })),
     } satisfies QbittorrentIntegrationSettings,
   );
+});
+
+router.get('/storage-paths', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+  const targets = await getQbittorrentTargets(serverId);
+  if (targets.length === 0) {
+    return c.json({ paths: [] } satisfies QbittorrentStoragePathsResponse);
+  }
+  const results = await Promise.allSettled(
+    targets.map((target) =>
+      target.client instanceof QbittorrentDownloadClient
+        ? target.client.client.storagePaths()
+        : Promise.reject(new Error('unsupported download client'))
+    ),
+  );
+  const successful = results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+  if (results.some((result) => result.status === 'rejected')) {
+    return c.json({ error: 'Could not load qBittorrent storage paths' }, 502);
+  }
+  return c.json({ paths: [...new Set(successful)] } satisfies QbittorrentStoragePathsResponse);
 });
 
 router.post('/path-mappings', async (c) => {

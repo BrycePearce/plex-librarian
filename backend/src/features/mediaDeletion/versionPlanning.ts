@@ -7,6 +7,11 @@ import type {
 import type { PlexMediaVersionPathPreview } from '../../integrations/plex/types.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import {
+  assertArrDeletionPathsUnowned,
+  assertPlexDeletionPathsUnowned,
+} from './livePathProtection.ts';
+import { getDownloadClientTargets } from './targets.ts';
+import {
   bestMediaVersionCandidate,
   type MediaVersionQualityCandidate,
 } from '@plex-librarian/shared/mediaVersionRanking.ts';
@@ -630,14 +635,54 @@ export async function buildVersionDeletionPlan({
     };
   });
   const offeredRadarrPathOverride = radarrRemovalFallback ? radarrPathOverride : undefined;
+  let livePathReason: string | undefined;
+  if (mediaType === 'episode' && serverId !== undefined && libraryKey !== undefined) {
+    try {
+      const targets = await getDownloadClientTargets(serverId);
+      const selectedJobKeys = new Set(
+        (cleanup?.downloadJobs ?? []).map((job) => `${job.instanceKey}:${job.jobId}`),
+      );
+      const remainingSelected = liveVersions.filter((version) =>
+        selectedMediaIds.has(version.mediaId)
+      );
+      if (remainingSelected.length > 0) {
+        await assertPlexDeletionPathsUnowned({
+          serverId,
+          libraryKey,
+          paths: remainingSelected.flatMap((version) => version.paths),
+          truncated: remainingSelected.some((version) => version.truncated),
+          targets,
+          selectedJobKeys,
+        });
+      }
+      for (const entry of eligibleArrReassignments) {
+        if (
+          entry.target.instanceType !== 'sonarr' || !entry.managedPath || entry.alreadyReassigned
+        ) continue;
+        await assertArrDeletionPathsUnowned({
+          serverId,
+          paths: [{ path: entry.managedPath }],
+          mappings: entry.target.pathMappings,
+          targets,
+          selectedJobKeys,
+        });
+      }
+    } catch (error) {
+      livePathReason = error instanceof Error
+        ? error.message
+        : 'Could not verify live path ownership';
+    }
+  }
 
   return {
     eligibleArrTargets,
     eligibleArrReassignments,
     arrMappingIdentities,
     arrOwnerships: arrOwnerships.sort((left, right) => left.instanceId - right.instanceId),
-    arrOwnershipValid,
-    ...(arrOwnershipReason ? { arrOwnershipReason } : {}),
+    arrOwnershipValid: arrOwnershipValid && !livePathReason,
+    ...((livePathReason ?? arrOwnershipReason)
+      ? { arrOwnershipReason: livePathReason ?? arrOwnershipReason }
+      : {}),
     arrManagedMediaIds,
     arrReassignCandidateMediaIds,
     cleanup,
@@ -656,8 +701,8 @@ export async function buildVersionDeletionPlan({
       arrReason,
       arrTargets: eligibleArrTargets.map((entry) => entry.preview),
       arrSelectionMatched,
-      arrReassignStatus,
-      arrReassignReason,
+      arrReassignStatus: livePathReason ? 'error' : arrReassignStatus,
+      arrReassignReason: livePathReason ?? arrReassignReason,
       radarrPathAdoption: effectiveRadarrDecision,
       ...(offeredRadarrPathOverride ? { radarrPathOverride: offeredRadarrPathOverride } : {}),
       cleanupConfigured,

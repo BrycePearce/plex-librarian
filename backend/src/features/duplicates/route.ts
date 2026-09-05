@@ -295,6 +295,8 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
       ? await bindSonarrPathOwnership(qbitOwnershipScope, downloadTargets, true)
       : null;
     const sonarrPlan = await buildVersionDeletionPlan({
+      serverId,
+      libraryKey: target.libraryKey,
       mediaType: 'episode',
       item: show,
       selectedMediaIds: new Set(mediaIds),
@@ -311,6 +313,8 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
     });
     const qbitPlan = inspectDownloadCleanup
       ? await buildVersionDeletionPlan({
+        serverId,
+        libraryKey: target.libraryKey,
         mediaType: 'episode',
         item: show,
         selectedMediaIds: new Set(mediaIds),

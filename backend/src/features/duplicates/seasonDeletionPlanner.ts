@@ -12,6 +12,10 @@ import type { ArrDeleteTarget } from '../arr/delete.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { arrPathIsWithin, resolveArrPath } from '../mediaDeletion/arrPaths.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
+import {
+  assertArrDeletionPathsUnowned,
+  assertPlexDeletionPathsUnowned,
+} from '../mediaDeletion/livePathProtection.ts';
 import { activeWholeItemRatingKeys } from '../mediaDeletion/activePlayback.ts';
 import { episodeRootIsWorkflowOwned } from '../deletionOperations/core/ownership.ts';
 import type {
@@ -986,6 +990,39 @@ export async function buildAuthoritativeSeasonPlan(input: {
         cleanup: persistResolvedCleanupIdentity(scopedCleanup),
       });
     }
+  }
+  try {
+    const selectedJobKeys = new Set(
+      cleanupPlans.flatMap((plan) =>
+        plan.cleanup.downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`)
+      ),
+    );
+    await assertPlexDeletionPathsUnowned({
+      serverId: input.serverId,
+      libraryKey: first.libraryKey,
+      paths: selectedEntries.map((entry) => entry.media.path),
+      targets: downloadTargets,
+      selectedJobKeys,
+    });
+    for (const group of managedGroups.values()) {
+      const target = targets.find((entry) => entry.instanceId === group.arrInstanceId)!;
+      await assertArrDeletionPathsUnowned({
+        serverId: input.serverId,
+        paths: group.children.filter((child) => child.outcome !== 'plex_only').map((child) => {
+          if (!child.episodeFilePath) {
+            throw new Error('Could not verify the selected Sonarr file path');
+          }
+          return { path: child.episodeFilePath };
+        }),
+        mappings: target.pathMappings,
+        targets: downloadTargets,
+        selectedJobKeys,
+      });
+    }
+  } catch (error) {
+    ownershipBlockers.push(
+      error instanceof Error ? error.message : 'Could not verify live path ownership',
+    );
   }
   const targetEvidence: AuthoritativeSeasonPlan['targetEvidence'] = preparedSelections.flatMap(
     (prepared) => {

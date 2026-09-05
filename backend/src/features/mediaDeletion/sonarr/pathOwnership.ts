@@ -3,9 +3,11 @@ import {
   downloadJobManifestFingerprint,
   downloadJobSummaryFingerprint,
 } from '../downloadClient.ts';
-import { directDiscoveryCandidates } from '../../qbittorrent/directDiscovery.ts';
+import {
+  discoverMappedDownloadJobs,
+  localDownloadJobOwnedPaths,
+} from '../mappedDownloadDiscovery.ts';
 import type { VerifiedOrphanFile } from '../hardlinks.ts';
-import { downloadJobOwnsPath } from '../ownership.ts';
 
 export type SonarrPathOwnershipDisposition =
   | 'delete'
@@ -62,8 +64,8 @@ function completeManifest(job: DownloadJob): boolean {
 
 /**
  * Classify only paths which already passed Sonarr's exact two-link proof. Download
- * discovery can remove authority, never create it. Clients without a mapping for
- * the local historical path are deliberately irrelevant.
+ * discovery can remove authority, never create it. Unmapped live QB storage is
+ * unknown ownership, not evidence that a connected client does not own a path.
  */
 export async function classifySonarrOwnedPaths<T extends VerifiedOrphanFile>(input: {
   files: readonly T[];
@@ -78,61 +80,53 @@ export async function classifySonarrOwnedPaths<T extends VerifiedOrphanFile>(inp
     const failures: string[] = [];
     const mutationFailures: string[] = [];
     for (const target of input.downloadTargets) {
-      if (target.provider !== 'qbittorrent' || !target.pathMappings?.length) continue;
-      let sourceCandidates;
-      let managedCandidates;
+      if (target.provider !== 'qbittorrent') continue;
       try {
-        sourceCandidates = directDiscoveryCandidates([file.path], target.pathMappings);
-        managedCandidates = directDiscoveryCandidates([file.importedPath], target.pathMappings);
-      } catch (error) {
-        failures.push(
-          `${target.instanceName}: ${
-            error instanceof Error ? error.message : 'mapping inspection failed'
-          }`,
-        );
-        continue;
-      }
-      const candidates = [
-        ...new Map(
-          [...sourceCandidates, ...managedCandidates].map((
-            candidate,
-          ) => [`${candidate.caseSensitive}:${candidate.path}`, candidate]),
-        ).values(),
-      ];
-      if (candidates.length === 0) continue;
-      if (!target.client.discoverJobs) {
-        const reason = `${target.instanceName}: complete qBittorrent discovery is unavailable`;
-        failures.push(reason);
-        if (managedCandidates.length > 0) mutationFailures.push(reason);
-        continue;
-      }
-      try {
-        const discovery = await target.client.discoverJobs(candidates);
+        const discovery = await discoverMappedDownloadJobs(target, [{ path: file.path }, {
+          path: file.importedPath,
+        }]);
         inspections.push({
           instanceKey: target.instanceKey,
           instanceName: target.instanceName,
           configurationIdentity: target.configurationIdentity,
           discoverySummaryFingerprint: discovery.summaryFingerprint,
-          sourcePathCovered: sourceCandidates.length > 0,
-          managedPathCovered: managedCandidates.length > 0,
+          sourcePathCovered: true,
+          managedPathCovered: true,
         });
         for (const job of discovery.jobs) {
           if (!completeManifest(job)) {
             const reason = `${target.instanceName}: qBittorrent returned an incomplete manifest`;
             failures.push(reason);
-            if (managedCandidates.length > 0) mutationFailures.push(reason);
+            mutationFailures.push(reason);
             continue;
           }
-          if (managedCandidates.some((candidate) => downloadJobOwnsPath(job, candidate.path))) {
+          if (
+            (await localDownloadJobOwnedPaths(job, { path: file.importedPath }, target)).length > 0
+          ) {
             const reason =
               `${target.instanceName}: a live qBittorrent job owns the exact Sonarr-managed directory entry`;
             failures.push(reason);
             mutationFailures.push(reason);
           }
-          const owns = sourceCandidates.some((candidate) =>
-            downloadJobOwnsPath(job, candidate.path)
+          const sourceCandidates = await localDownloadJobOwnedPaths(
+            job,
+            { path: file.path },
+            target,
           );
-          if (!owns) continue;
+          if (sourceCandidates.length === 0) continue;
+          const exactCandidates = await localDownloadJobOwnedPaths(
+            job,
+            { path: file.path },
+            target,
+            undefined,
+            true,
+          );
+          if (sourceCandidates.some((path) => !exactCandidates.includes(path))) {
+            failures.push(
+              `${target.instanceName}: case-ambiguous qBittorrent ownership cannot authorize payload deletion`,
+            );
+            continue;
+          }
           const key = `${target.instanceKey}:${job.id}`;
           owners.push({
             instanceKey: target.instanceKey,
@@ -143,10 +137,7 @@ export async function classifySonarrOwnedPaths<T extends VerifiedOrphanFile>(inp
             summaryFingerprint: await downloadJobSummaryFingerprint(job),
             manifestFingerprint: await downloadJobManifestFingerprint(job),
             job,
-            authorizedSourcePaths: sourceCandidates
-              .filter((candidate) => downloadJobOwnsPath(job, candidate.path))
-              .map((candidate) => candidate.path)
-              .sort(),
+            authorizedSourcePaths: sourceCandidates.sort(),
           });
         }
       } catch (error) {
@@ -154,7 +145,7 @@ export async function classifySonarrOwnedPaths<T extends VerifiedOrphanFile>(inp
           error instanceof Error ? error.message : 'ownership inspection failed'
         }`;
         failures.push(reason);
-        if (managedCandidates.length > 0) mutationFailures.push(reason);
+        mutationFailures.push(reason);
       }
     }
     const unselected = owners.filter((owner) => !owner.selected);

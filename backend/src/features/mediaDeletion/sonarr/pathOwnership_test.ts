@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertRejects } from '@std/assert';
 import type { DownloadClientTarget, DownloadJob } from '../downloadClient.ts';
 import type { VerifiedOrphanFile } from '../hardlinks.ts';
 import {
@@ -12,6 +12,75 @@ import { classifySonarrOwnedPaths } from './pathOwnership.ts';
 const hashA = 'a'.repeat(40);
 const hashB = 'b'.repeat(40);
 const hashC = 'c'.repeat(40);
+
+// Historical proof fixtures represent existing, previously verified media files.
+const realPath = Deno.realPath;
+Deno.realPath = (path) => {
+  const local = String(path).replaceAll('\\', '/');
+  return /^(?:[A-Za-z]:)?\/(downloads|library)(\/|$)/.test(local)
+    ? Promise.resolve(local)
+    : realPath(path);
+};
+
+Deno.test('missing QB coverage retains historical files and blocks unknown managed ownership', async () => {
+  for (
+    const coverage of ['absent', 'empty', 'unrelated', 'library-only', 'ambiguous']
+  ) {
+    const client = target({ jobs: [job()] });
+    if (coverage === 'absent') delete client.pathMappings;
+    if (coverage === 'empty') client.pathMappings = [];
+    if (coverage === 'unrelated') client.pathMappings = target({ mapped: false }).pathMappings;
+    if (coverage === 'library-only') client.pathMappings = client.pathMappings!.slice(1);
+    if (coverage === 'ambiguous') client.pathMappings!.push({ ...client.pathMappings![0]!, id: 3 });
+    for (const selected of [false, true]) {
+      const cleanup = {
+        ratingKey: 'show',
+        status: 'resolved',
+        downloadJobs: [],
+        arrStatus: 'resolved',
+        arrTargets: [],
+        sources: [],
+        orphanFiles: [proof()],
+        retainedPaths: [],
+        sonarrReclamation: { inventoryIdentity: 'accepted', proofs: [proof()] },
+      } as unknown as ResolvedCleanupItem;
+      const result = await bindSonarrPathOwnership(cleanup, [client], selected);
+      assertEquals(result.orphanFiles, [], coverage);
+      assertEquals(
+        result.sonarrReclamation?.proofs[0]?.ownershipDisposition,
+        'unverified',
+        coverage,
+      );
+      assertEquals(result.status, 'error', coverage);
+      assertEquals(result.retainedPaths.length, 1, coverage);
+    }
+  }
+});
+
+Deno.test('execution rejects newly missing mapping coverage before mutation', async () => {
+  const accepted = await bindSonarrPathOwnership(
+    {
+      ratingKey: 'show',
+      status: 'resolved',
+      downloadJobs: [],
+      arrStatus: 'resolved',
+      arrTargets: [],
+      sources: [],
+      orphanFiles: [proof()],
+      retainedPaths: [],
+      sonarrReclamation: { inventoryIdentity: 'accepted', proofs: [proof()] },
+    } as unknown as ResolvedCleanupItem,
+    [target()],
+    false,
+  );
+  const changed = target({ jobs: [job()] });
+  changed.pathMappings = [];
+  await assertRejects(
+    () => revalidateAcceptedSonarrPathOwnership(accepted, [changed]),
+    Error,
+    'accepted qBittorrent ownership inspection is no longer valid',
+  );
+});
 
 function proof(nlink = 2): VerifiedOrphanFile {
   return {
@@ -73,8 +142,16 @@ function target(
       localPath: options.mapped === false ? '/elsewhere' : '/downloads',
       caseSensitive: true,
       revision: 1,
+    }, {
+      id: 2,
+      qbittorrentPath: '/q-library',
+      localPath: options.mapped === false ? '/elsewhere-library' : '/library',
+      caseSensitive: true,
+      revision: 1,
     }],
     client: {
+      listJobSummaries: () =>
+        options.fail ? Promise.reject(new Error('offline')) : Promise.resolve(options.jobs ?? []),
       findJob: () => Promise.resolve(null),
       deleteJob: () => Promise.resolve(),
       discoverJobs: () =>
@@ -106,6 +183,8 @@ Deno.test('Sonarr path ownership deletes with no configured client or reachable 
 
 Deno.test('Sonarr path ownership distinguishes selected and unselected different-hash owners', async () => {
   const client = target({ jobs: [job()] });
+  // QB only sees downloads; the separate Sonarr library has no QB equivalent.
+  client.pathMappings = client.pathMappings!.slice(0, 1);
   assertEquals(
     (await classifySonarrOwnedPaths({
       files: [proof()],
@@ -135,6 +214,7 @@ Deno.test('Sonarr path ownership distinguishes selected and unselected different
     sonarrReclamation: { inventoryIdentity: 'accepted', proofs: [proof()] },
   } as unknown as ResolvedCleanupItem;
   const retained = await bindSonarrPathOwnership(cleanup, [client], false);
+  assertEquals(retained.status, 'resolved');
   assertEquals(retained.orphanFiles, []);
   assertEquals(
     selectVersionDownloadCleanup(
@@ -143,6 +223,17 @@ Deno.test('Sonarr path ownership distinguishes selected and unselected different
     )?.sonarrReclamation?.proofs[0]?.ownershipDisposition,
     'retain_live_qbittorrent',
   );
+});
+
+Deno.test('case-only possible ownership cannot authorize an unrelated QB payload', async () => {
+  const file = { ...proof(), path: '/downloads/release/Episode.mkv' };
+  const result = await classifySonarrOwnedPaths({
+    files: [file],
+    downloadTargets: [target({ jobs: [job()] })],
+    selectedJobKeys: new Set([`qb:1:${hashB}`]),
+  });
+  assertEquals(result[0]?.ownershipDisposition, 'unverified');
+  assertEquals(result[0]?.ownershipJobs, []);
 });
 
 Deno.test('a different-hash exact owner uses the existing selectable payload authorization', async () => {
@@ -303,7 +394,7 @@ Deno.test('a different-hash multi-file owner is authorized across the complete S
   );
 });
 
-Deno.test('only an unreachable applicable client makes Sonarr ownership unverified', async () => {
+Deno.test('unmapped and unreachable clients both leave Sonarr ownership unverified', async () => {
   const result = await classifySonarrOwnedPaths({
     files: [proof()],
     downloadTargets: [target({ mapped: false, fail: true }), target({ fail: true })],
@@ -377,7 +468,7 @@ Deno.test('execution revalidation only downgrades paths accepted for deletion', 
   );
 });
 
-Deno.test('execution revalidation downgrades when an accepted client inspection disappears', async () => {
+Deno.test('execution blocks when an accepted managed-path inspection disappears', async () => {
   const accepted = await bindSonarrPathOwnership(
     {
       ratingKey: 'show',
@@ -396,14 +487,10 @@ Deno.test('execution revalidation downgrades when an accepted client inspection 
   assertEquals(accepted.orphanFiles.length, 1);
   assertEquals(accepted.sonarrReclamation?.proofs[0]?.ownershipInspections?.length, 1);
 
-  const revalidated = await revalidateAcceptedSonarrPathOwnership(accepted, []);
-  assertEquals(revalidated.orphanFiles, []);
-  assertEquals(revalidated.sonarrReclamation?.proofs[0]?.ownershipDisposition, 'unverified');
-  assertEquals(
-    revalidated.sonarrReclamation?.proofs[0]?.ownershipReason?.includes(
-      'accepted qBittorrent ownership inspection is no longer valid',
-    ),
-    true,
+  await assertRejects(
+    () => revalidateAcceptedSonarrPathOwnership(accepted, []),
+    Error,
+    'accepted qBittorrent ownership inspection is no longer valid',
   );
 });
 
@@ -427,7 +514,7 @@ Deno.test('execution revalidation preserves a durably attempted unlink for absen
 
   const revalidated = await revalidateAcceptedSonarrPathOwnership(
     accepted,
-    [],
+    [target()],
     new Set([proof().path]),
   );
   assertEquals(revalidated.orphanFiles.map((entry) => entry.path), [proof().path]);

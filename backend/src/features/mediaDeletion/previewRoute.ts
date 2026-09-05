@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { protectWholeSonarrCleanup } from './livePathProtection.ts';
 import { and, inArray } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { items } from '../../db/schema.ts';
@@ -125,12 +126,23 @@ export function createDownloadCleanupPreviewRouter(
           ...pathPreview,
         };
       }
-      const sonarrBound = item.type === 'show' && resolved.arrStatus === 'resolved'
+      let sonarrBound = item.type === 'show' && resolved.arrStatus === 'resolved'
         ? await bindSonarrPathOwnership(resolved, downloadTargets, false)
         : null;
-      const qbitBound = item.type === 'show' && resolved.arrStatus === 'resolved'
+      let qbitBound = item.type === 'show' && resolved.arrStatus === 'resolved'
         ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
         : resolved;
+      if (sonarrBound) {
+        const protection = {
+          serverId,
+          libraryKey: key,
+          arrTargets,
+          downloadTargets,
+          client: activeServer.client,
+        };
+        sonarrBound = await protectWholeSonarrCleanup({ ...protection, cleanup: sonarrBound });
+        qbitBound = await protectWholeSonarrCleanup({ ...protection, cleanup: qbitBound });
+      }
       const publicQbit = publicCleanupItem(qbitBound);
       const publicSonarr = sonarrBound ? publicCleanupItem(sonarrBound) : null;
       return {

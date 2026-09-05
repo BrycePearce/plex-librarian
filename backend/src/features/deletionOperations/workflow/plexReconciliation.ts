@@ -1,5 +1,6 @@
 import { type SqliteClient, withTransaction } from '../../../db/index.ts';
 import { PlexDeleteError } from '../../../integrations/plex/client.ts';
+import { assertPlexTargetUnowned } from '../../mediaDeletion/livePathProtection.ts';
 import { resolveActiveServer } from '../../../integrations/plex/index.ts';
 import { getArrDeleteTargets } from '../../arr/delete.ts';
 import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
@@ -321,6 +322,16 @@ export async function deleteExactPlexTarget(
     throw new PlexReconciliationError('cannot delete media with active playback', true);
   }
   const attemptStartedAt = Math.floor(Date.now() / 1000);
+  await assertPlexTargetUnowned({
+    serverId: target.serverId,
+    libraryKey: snapshot.libraryKey,
+    ratingKey: snapshot.ratingKey,
+    type: snapshot.type,
+    client,
+    allowMissingPaths: target.phase === 'plex_reconciliation' &&
+      (snapshot.mode === 'coordinated' || snapshot.cleanupDownloads || target.plexAttemptCount > 0),
+    ...(target.targetKind !== 'whole_item' ? { mediaId: snapshot.mediaId! } : {}),
+  });
   const attemptChanged = withTransaction((sqlite) =>
     sqlite
       .prepare(
