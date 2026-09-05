@@ -95,12 +95,12 @@ Deno.test("the shared storage step renders Sonarr and Radarr labels with local-r
   );
   for (
     const text of [
-      "Historical hardlink cleanup",
+      "Clean up leftover files",
       "Sonarr library root",
       "Sonarr download root",
       "Plex Librarian library root",
       "Plex Librarian download root",
-      "Incomplete",
+      "Optional",
       'value="/media"',
       'value="/downloads"',
       "cannot create or change these mounts",
@@ -118,7 +118,7 @@ Deno.test("the shared storage step renders Sonarr and Radarr labels with local-r
     />,
   );
   assertStringIncludes(radarr, "Radarr library root");
-  assertStringIncludes(radarr, "Configured");
+  assertStringIncludes(radarr, "Suggested");
 });
 
 Deno.test("Sonarr and Radarr storage cleanup is configured only with both complete pairs", () => {
@@ -204,8 +204,8 @@ Deno.test("suggested setup waits for confirmation and preserves manual mappings"
   };
   const suggestion = StorageCleanupStep(suggestionProps);
   const html = renderToStaticMarkup(suggestion);
-  assertStringIncludes(html, "Detected Sonarr and qBittorrent paths");
-  assertStringIncludes(html, "Enable verified historical hardlink cleanup");
+  assertStringIncludes(html, "Paths found in Sonarr and qBittorrent");
+  assertStringIncludes(html, "enables verified historical hardlink");
   assertStringIncludes(html, "Local mount paths are suggestions, not verified mappings");
   assertEquals(html.includes("complete recovery"), false);
   assertStringIncludes(html, "path Sonarr sees");
@@ -248,6 +248,49 @@ Deno.test("suggested setup waits for confirmation and preserves manual mappings"
   assertStringIncludes(editedLocal, 'value="/custom-media"');
 });
 
+Deno.test("detected paths distinguish suggestions from verification and can be skipped", () => {
+  const updates: Array<Partial<ArrDraft>> = [];
+  const props = {
+    type: "sonarr" as const,
+    draft: draft({ libraryArrPath: "/data", downloadArrPath: "/data/downloads" }),
+    discovery: {
+      revision: 0,
+      attemptedRevision: 0,
+      status: "suggested" as const,
+      roots: ["/data/TV", "/data/Anime"],
+    },
+    storagePaths: { status: "suggested" as const, paths: ["/data/downloads"] },
+    onUpdate: (update: Partial<ArrDraft>) => updates.push(update),
+  };
+  const step = StorageCleanupStep(props);
+  const html = renderToStaticMarkup(step);
+  assertStringIncludes(html, "Auto-detected");
+  assertStringIncludes(html, "From QB");
+  assertStringIncludes(html, "Suggested");
+  assertEquals(html.includes(">Verified<"), false);
+  const verified = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...props}
+      verification={{ result: { status: "verified", reason: "Sample matched" } }}
+    />,
+  );
+  assertStringIncludes(verified, ">Verified<");
+  assertEquals(verified.includes(">Suggested<"), false);
+  const edited = renderToStaticMarkup(
+    <StorageCleanupStep {...props} draft={draft({ libraryArrPath: "/custom" })} />,
+  );
+  assertEquals(edited.includes("Auto-detected"), false);
+  assertEquals(edited.includes("From QB"), false);
+  const skip = findElement(
+    step,
+    (element) => element.type === "button" && element.props.children === "Skip storage cleanup",
+  );
+  if (!skip) throw new Error("Expected skip action");
+  (skip.props.onClick as () => void)();
+  assertEquals(updates, [skipped]);
+  assertEquals(storageCleanupCanSave({ ...props.draft, ...updates[0] }), true);
+});
+
 Deno.test("qBittorrent discovery stays simple while loading and explains manual fallbacks", () => {
   const base = {
     type: "sonarr" as const,
@@ -261,8 +304,8 @@ Deno.test("qBittorrent discovery stays simple while loading and explains manual 
     />,
   );
   assertStringIncludes(loading, "Checking connected services");
-  assertStringIncludes(loading, "Detecting");
-  assertStringIncludes(loading, "Review or enter paths manually");
+  assertStringIncludes(loading, "Sonarr download root");
+  assertStringIncludes(loading, "How to match your folders");
   assertEquals(loading.includes('<details open=""'), false);
 
   const arrLoading = renderToStaticMarkup(
@@ -278,14 +321,14 @@ Deno.test("qBittorrent discovery stays simple while loading and explains manual 
     />,
   );
   assertStringIncludes(arrLoading, "Checking connected services");
-  assertStringIncludes(arrLoading, "Detecting");
+  assertStringIncludes(arrLoading, "Sonarr download root");
   assertEquals(arrLoading.includes('<details open=""'), false);
 
   const empty = renderToStaticMarkup(
     <StorageCleanupStep {...base} storagePaths={{ status: "empty", paths: [] }} />,
   );
-  assertStringIncludes(empty, "Connect qBittorrent");
-  assertStringIncludes(empty, "Review or enter paths manually");
+  assertStringIncludes(empty, "qBittorrent is optional");
+  assertStringIncludes(empty, "How to match your folders");
 
   const ambiguous = renderToStaticMarkup(
     <StorageCleanupStep
@@ -310,7 +353,7 @@ Deno.test("qBittorrent discovery stays simple while loading and explains manual 
       storagePaths={{ status: "suggested", paths: ["/data/.torrents/complete"] }}
     />,
   );
-  assertStringIncludes(radarr, "Detected Radarr and qBittorrent paths");
+  assertStringIncludes(radarr, "Paths found in Radarr and qBittorrent");
 
   let retries = 0;
   const failed = StorageCleanupStep({

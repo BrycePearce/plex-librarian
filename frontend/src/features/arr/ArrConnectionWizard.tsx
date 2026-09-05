@@ -602,7 +602,7 @@ export function ArrConnectionWizard({
                 <button
                   key={application}
                   type="button"
-                  className={`rounded-xl border p-3 text-left transition ${
+                  className={`min-w-0 rounded-xl border p-3 text-left transition ${
                     type === application
                       ? "border-primary bg-primary/10 text-base-content"
                       : "border-base-300 bg-base-200/35 text-base-content/65 hover:border-base-content/25"
@@ -610,12 +610,12 @@ export function ArrConnectionWizard({
                   onClick={() => setType(application)}
                   aria-pressed={type === application}
                 >
-                  <span className="flex items-center justify-between gap-2">
+                  <span className="flex flex-wrap items-center justify-between gap-2">
                     <strong className="block text-sm capitalize">
                       {application}
                     </strong>
                     {complete && (
-                      <span className="badge badge-success badge-xs">
+                      <span className="badge badge-success badge-xs shrink-0 whitespace-nowrap">
                         Connection ready
                       </span>
                     )}
@@ -779,166 +779,231 @@ export function StorageCleanupStep({
   const suggestion = storageCleanupSuggestion(discovery.roots, storagePaths.paths);
   const discoveryLoading = discovery.status === "loading" || storagePaths.status === "loading";
   const mappingEntered = Boolean(
-    draft.libraryArrPath.trim() ||
-      draft.downloadArrPath.trim() ||
-      draft.libraryLocalPath.trim() !== "/media" ||
-      draft.downloadLocalPath.trim() !== "/downloads",
+    draft.libraryArrPath.trim() || draft.downloadArrPath.trim() ||
+      draft.libraryLocalPath.trim() !== "/media" || draft.downloadLocalPath.trim() !== "/downloads",
   );
   const canConfirmSuggestion = suggestion !== null && !mappingEntered;
+  const libraryDetected = discovery.status === "suggested" &&
+    draft.libraryArrPath === commonPosixRoot(discovery.roots);
+  const downloadDetected = storagePaths.status === "suggested" &&
+    Boolean(draft.downloadArrPath) &&
+    draft.downloadArrPath ===
+      storageCleanupSuggestion(["/library"], storagePaths.paths)?.downloadArrPath;
+  const sampleVerified = verification?.result?.status === "verified";
   return (
-    <section className="space-y-4">
-      {verification && (
-        <div role="status" className="rounded-lg border border-base-300 p-3 text-xs">
-          <p className="font-semibold">
-            {verification.loading
-              ? "Checking storage…"
-              : verification.result?.status === "verified"
-              ? "Storage sample verified"
-              : "Could not fully verify storage"}
+    <section className="min-w-0 space-y-4" aria-label="Storage cleanup">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold">Clean up leftover files</h4>
+          <p className="mt-1 text-xs leading-relaxed text-base-content/60">
+            Match the folders {appName}{" "}
+            sees to their locations in Plex Librarian. This enables verified historical hardlink
+            cleanup.
           </p>
-          {verification.result && (
-            <p className="mt-1 text-base-content/65">{verification.result.reason}</p>
-          )}
+        </div>
+        <span className="shrink-0 whitespace-nowrap rounded-md bg-base-200 px-2 py-1 text-[10px] font-medium text-base-content/55">
+          Optional
+        </span>
+      </div>
+
+      {canConfirmSuggestion && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5">
+          <div className="min-w-0 text-xs">
+            <p className="font-medium">Paths found in {appName} and qBittorrent</p>
+            <p className="mt-0.5 text-base-content/55">
+              Check the local mounts and confirm QB uses the path {appName} sees.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm shrink-0"
+            onClick={() => onUpdate(suggestion)}
+          >
+            Use detected paths
+          </button>
         </div>
       )}
-      <div className="rounded-xl border border-base-300 bg-base-200/30 p-4">
-        <div className="flex items-start justify-between gap-3">
+
+      <div className="overflow-hidden rounded-xl border border-base-300">
+        <div className="space-y-3 bg-base-200/25 p-4">
           <div>
-            <h4 className="text-sm font-semibold">Historical hardlink cleanup</h4>
-            <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-              Enable verified historical hardlink cleanup. These translations let Plex Librarian
-              verify and remove historical import hardlinks after their download job is gone.
+            <h5 className="text-xs font-semibold">Library files</h5>
+            <p className="mt-0.5 text-xs text-base-content/45">
+              Your organized movies or TV shows.
             </p>
           </div>
-          <span
-            className={`badge badge-sm ${
-              storageCleanupState(draft) === "configured" ? "badge-success" : "badge-warning"
-            }`}
-          >
-            {storageCleanupState(draft) === "configured"
-              ? "Configured"
-              : discoveryLoading
-              ? "Detecting"
-              : canConfirmSuggestion
-              ? "Paths detected"
-              : "Incomplete"}
-          </span>
-        </div>
-        {canConfirmSuggestion && (
-          <div className="mt-3 rounded-lg border border-success/30 bg-success/10 p-3 text-xs">
-            <p className="font-semibold text-success">Detected {appName} and qBittorrent paths.</p>
-            <div className="mt-2 grid gap-1 font-mono text-base-content/75">
-              <span>{suggestion.libraryArrPath} → {suggestion.libraryLocalPath}</span>
-              <span>{suggestion.downloadArrPath} → {suggestion.downloadLocalPath}</span>
-            </div>
-            <p className="mt-2 text-base-content/60">
-              Local mount paths are suggestions, not verified mappings. Saving these Arr paths does
-              not verify qBittorrent ownership; configure its path mappings in Media connections.
-              {" "}
-              Use these only if qBittorrent's path is also the path {appName} sees, and if{" "}
-              <code>/media</code> and <code>/downloads</code>{" "}
-              are mounted from the matching host folders.
-            </p>
-            <button
-              type="button"
-              className="btn btn-success btn-sm mt-3"
-              onClick={() => onUpdate(suggestion)}
-            >
-              Use detected paths
-            </button>
-          </div>
-        )}
-        {!suggestion && discoveryLoading && (
-          <p className="mt-3 text-xs text-base-content/50">
-            Checking connected services for storage paths…
-          </p>
-        )}
-        {storagePaths.status === "empty" && (
-          <p className="mt-3 text-xs text-base-content/55">
-            Connect qBittorrent to detect the completed-download path automatically.
-          </p>
-        )}
-        {!suggestion && storagePaths.status === "suggested" && storagePaths.paths.length > 1 && (
-          <div className="mt-3 text-xs text-base-content/55">
-            <p>Multiple qBittorrent download locations need manual review.</p>
-            <p className="mt-1 font-mono">Detected: {storagePaths.paths.join(", ")}</p>
-          </div>
-        )}
-        {storagePaths.status === "error" && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-base-content/55">
-            <span>Could not detect qBittorrent paths.</span>
-            {onStorageRetry && (
-              <button type="button" className="btn btn-ghost btn-xs" onClick={onStorageRetry}>
-                Retry
-              </button>
-            )}
-          </div>
-        )}
-        <details
-          className="mt-3 rounded-lg border border-base-300 p-3"
-          open={!discoveryLoading &&
-            (!suggestion || (mappingEntered && storageCleanupState(draft) !== "configured"))}
-        >
-          <summary className="cursor-pointer text-xs font-medium">
-            Review or enter paths manually
-          </summary>
-          <p className="mt-3 text-xs leading-relaxed text-base-content/55">
-            The {appName}{" "}
-            library prefix must cover every configured root. It still needs the matching path
-            mounted inside Plex Librarian—for example, <code>/data/TV</code> may correspond to{" "}
-            <code>/media/TV</code>, depending on your bind mount. These are not
-            {` ${appName} `}
-            Remote Path Mappings, which neither mount files nor grant Plex Librarian filesystem
-            access.
-          </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
             <PathInput
               label={`${appName} library root`}
               value={draft.libraryArrPath}
-              placeholder="/data/media or D:\\Media"
+              placeholder={suggestion?.libraryArrPath ?? "/data/media"}
               suggestions={discovery.roots}
               suggestionListId={rootFolderSuggestionListId(type)}
+              tag={libraryDetected ? "Auto-detected" : undefined}
+              tagHelp={`Found in ${appName}'s configured library folders.`}
               onChange={(libraryArrPath) => onUpdate({ libraryArrPath })}
             />
             <PathInput
               label="Plex Librarian library root"
               value={draft.libraryLocalPath}
               placeholder="/media"
+              tag={sampleVerified
+                ? "Verified"
+                : draft.libraryLocalPath === "/media"
+                ? "Suggested"
+                : undefined}
               onChange={(libraryLocalPath) => onUpdate({ libraryLocalPath })}
             />
+          </div>
+          {(!suggestion || (draft.libraryArrPath && !libraryDetected)) && (
+            <RootFolderSuggestionStatus
+              appName={appName}
+              discovery={discovery}
+              onUse={(libraryArrPath) => onUpdate(selectSuggestedRoot(libraryArrPath))}
+              onRetry={onRetry}
+            />
+          )}
+        </div>
+        <div className="space-y-3 border-t border-base-300 bg-base-200/25 p-4">
+          <div>
+            <h5 className="text-xs font-semibold">Completed downloads</h5>
+            <p className="mt-0.5 text-xs text-base-content/45">
+              The original files imported into your library.
+            </p>
+          </div>
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
             <PathInput
               label={`${appName} download root`}
               value={draft.downloadArrPath}
-              placeholder="/data/torrents or D:\\Downloads"
+              placeholder={suggestion?.downloadArrPath ?? "/data/torrents"}
               suggestions={storagePaths.paths}
               suggestionListId={`${type}-download-path-suggestions`}
+              tag={downloadDetected ? "From QB" : undefined}
+              tagHelp={`Reported by qBittorrent. Confirm this is also the path ${appName} sees.`}
               onChange={(downloadArrPath) => onUpdate({ downloadArrPath })}
             />
             <PathInput
               label="Plex Librarian download root"
               value={draft.downloadLocalPath}
               placeholder="/downloads"
+              tag={sampleVerified
+                ? "Verified"
+                : draft.downloadLocalPath === "/downloads"
+                ? "Suggested"
+                : undefined}
               onChange={(downloadLocalPath) => onUpdate({ downloadLocalPath })}
             />
           </div>
-          <RootFolderSuggestionStatus
-            appName={appName}
-            discovery={discovery}
-            onUse={(libraryArrPath) => onUpdate(selectSuggestedRoot(libraryArrPath))}
-            onRetry={onRetry}
-          />
-          <p className="mt-3 text-xs leading-relaxed text-warning/85">
-            Docker or Unraid must expose the library root read-only and the narrow
-            completed-download root read/write when the container is created. Plex Librarian cannot
-            create or change these mounts. Both mapping pairs must be complete, and the local roots
-            must not overlap.
+          {downloadDetected && (
+            <p className="text-xs text-base-content/55">
+              Confirm the QB path is also the path {appName} sees.
+            </p>
+          )}
+          {storagePaths.status === "empty" && (
+            <p className="text-xs text-base-content/55">
+              Enter the completed-download folder manually. qBittorrent is optional.
+            </p>
+          )}
+          {!suggestion && storagePaths.status === "suggested" && storagePaths.paths.length > 1 && (
+            <p className="break-all text-xs text-base-content/55">
+              Choose a download folder from the input suggestions. Detected:{" "}
+              {storagePaths.paths.join(", ")}
+            </p>
+          )}
+          {storagePaths.status === "error" && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-base-content/55">
+              <span>Could not detect qBittorrent paths. You can enter them manually.</span>
+              {onStorageRetry && (
+                <button type="button" className="btn btn-ghost btn-xs" onClick={onStorageRetry}>
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {discoveryLoading && (
+        <p role="status" className="flex items-center gap-2 text-xs text-base-content/55">
+          <span className="loading loading-spinner loading-xs" />{" "}
+          Checking connected services for storage paths…
+        </p>
+      )}
+
+      {verification && (
+        <div
+          role="status"
+          className={`rounded-lg border px-3 py-2.5 text-xs ${
+            sampleVerified ? "border-success/20 bg-success/5" : "border-base-300 bg-base-200/25"
+          }`}
+        >
+          <p
+            className={`flex items-center gap-2 font-medium ${
+              sampleVerified ? "text-success" : ""
+            }`}
+          >
+            {verification.loading && <span className="loading loading-spinner loading-xs" />}
+            {verification.loading
+              ? "Checking a sample file…"
+              : sampleVerified
+              ? "Storage sample verified"
+              : "Storage needs a check"}
           </p>
-        </details>
-        {!storageCleanupCanSave(draft) && (
-          <p role="alert" className="mt-2 text-xs font-medium text-error">
-            {problem} Enter both {appName} roots and both Plex Librarian roots, or clear the
-            {` ${appName} `}roots to save without historical hardlink cleanup.
+          {verification.result && (
+            <p className="mt-1 break-words leading-relaxed text-base-content/60">
+              {verification.result.reason}
+            </p>
+          )}
+        </div>
+      )}
+
+      {!storageCleanupCanSave(draft) && (
+        <p role="alert" className="text-xs leading-relaxed text-error">
+          {problem} Complete the paths or skip this step below.
+        </p>
+      )}
+
+      <details className="group text-xs">
+        <summary className="cursor-pointer font-medium text-base-content/65 hover:text-base-content">
+          How to match your folders
+        </summary>
+        <div className="mt-3 space-y-2 border-l-2 border-base-300 pl-3 leading-relaxed text-base-content/55">
+          <p>
+            Each row must point to the same host folder. For example, <code>/data/TV</code>{" "}
+            may correspond to <code>/media/TV</code> in Plex Librarian.
           </p>
+          <p>
+            Local mount paths are suggestions, not verified mappings. Docker or Unraid must mount
+            your library read-only and completed downloads read/write. Plex Librarian cannot create
+            or change these mounts. Keep the two local roots separate.
+          </p>
+          <p>
+            The {appName}{" "}
+            library root must cover all its configured folders. These settings do not change{" "}
+            {appName} Remote Path Mappings.
+          </p>
+          <p>
+            If you use qBittorrent, verify its own path mappings in Media connections. Saving these
+            Arr paths does not verify qBittorrent ownership.
+          </p>
+        </div>
+      </details>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-base-300 pt-3 text-xs text-base-content/45">
+        <span>You can set this up later in Media connections.</span>
+        {mappingEntered && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs shrink-0"
+            onClick={() =>
+              onUpdate({
+                libraryArrPath: "",
+                downloadArrPath: "",
+                libraryLocalPath: "/media",
+                downloadLocalPath: "/downloads",
+              })}
+          >
+            Skip storage cleanup
+          </button>
         )}
       </div>
     </section>
@@ -951,6 +1016,8 @@ function PathInput({
   placeholder,
   suggestions = [],
   suggestionListId,
+  tag,
+  tagHelp,
   onChange,
 }: {
   label: string;
@@ -958,18 +1025,39 @@ function PathInput({
   placeholder: string;
   suggestions?: readonly string[];
   suggestionListId?: string;
+  tag?: "Auto-detected" | "From QB" | "Suggested" | "Verified";
+  tagHelp?: string;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="form-control flex flex-col">
-      <span className="label-text mb-1 text-xs font-medium">{label}</span>
-      <input
-        className="input input-bordered input-sm w-full font-mono text-xs"
-        value={value}
-        placeholder={placeholder}
-        list={suggestions.length > 1 ? suggestionListId : undefined}
-        onChange={(event) => onChange(event.target.value)}
-      />
+    <label className="flex min-w-0 flex-col gap-1.5">
+      <span className="text-[11px] font-medium text-base-content/65">{label}</span>
+      <span className="flex min-w-0 items-center gap-1.5 rounded-lg border border-base-content/20 bg-base-100 px-2.5 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+        <input
+          className="h-10 w-0 min-w-0 flex-1 bg-transparent font-mono text-xs text-base-content outline-none placeholder:text-base-content/30"
+          aria-label={label}
+          value={value}
+          placeholder={placeholder}
+          list={suggestions.length > 1 ? suggestionListId : undefined}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {tag && (
+          <span
+            title={tagHelp ?? (tag === "Verified"
+              ? "A sample file was verified through this mapping. Each deletion is checked again."
+              : "Default container path. Check that the matching host folder is mounted here.")}
+            className={`shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              tag === "Verified"
+                ? "bg-success/10 text-success"
+                : tag === "Suggested"
+                ? "bg-base-200 text-base-content/45"
+                : "bg-primary/10 text-primary"
+            }`}
+          >
+            {tag}
+          </span>
+        )}
+      </span>
       {suggestions.length > 1 && suggestionListId && (
         <datalist id={suggestionListId}>
           {suggestions.map((suggestion) => <option key={suggestion} value={suggestion} />)}
@@ -978,7 +1066,6 @@ function PathInput({
     </label>
   );
 }
-
 export function RootFolderSuggestionStatus({
   appName,
   discovery,
