@@ -24,12 +24,12 @@ postcondition must make that absence attributable.
 
 The Sonarr-owned historical-path behavior is deliberately limited to these four flows:
 
-| Flow | Durable target | Planner / preview |
-| --- | --- | --- |
-| Whole show | whole item | `../mediaDeletion/previewRoute.ts`, `middleware.ts` |
-| Stale season | whole season | `../libraries/seasonRemovalPlanner.ts` |
-| Duplicate episode | media version | `../mediaDeletion/versionPlanning.ts` |
-| Duplicate season | ordered media-version targets | `../duplicates/seasonDeletionPlanner.ts` |
+| Flow              | Durable target                | Planner / preview                                   |
+| ----------------- | ----------------------------- | --------------------------------------------------- |
+| Whole show        | whole item                    | `../mediaDeletion/previewRoute.ts`, `middleware.ts` |
+| Stale season      | whole season                  | `../libraries/seasonRemovalPlanner.ts`              |
+| Duplicate episode | media version                 | `../mediaDeletion/versionPlanning.ts`               |
+| Duplicate season  | ordered media-version targets | `../duplicates/seasonDeletionPlanner.ts`            |
 
 Do not generalize the proof or silently enable it for movie/Radarr flows. Each flow retains its own
 eligibility, remaining-version, season-membership, active-playback, and Arr-monitoring safeguards.
@@ -37,15 +37,21 @@ eligibility, remaining-version, season-membership, active-playback, and Arr-moni
 ## Safety invariants
 
 - A Sonarr historical path is unlinkable only with the exact two-link proof: the source path and
-  Sonarr-managed path are distinct directory entries for the same inode, and the inode link count
-  is exactly two at preview and execution.
+  Sonarr-managed path are distinct directory entries for the same inode, and the inode link count is
+  exactly two at preview and execution.
 - Accepted ownership is immutable evidence. Live revalidation may downgrade an accepted path to
   retained/unverified; it may not add a new destructive path.
 - Plex, Sonarr, qBittorrent, and local/container paths are separate namespaces. Cross-namespace
   comparisons require the snapshotted mapping identities.
-- For Sonarr historical proofs, missing qBittorrent mapping coverage is unknown ownership.
-  Retain the historical path when it cannot be inspected; block Sonarr mutation when the managed
-  entry cannot be inspected. Apply this to every connected qBittorrent instance even when unchecked.
+- Map every connected qBittorrent instance's bounded live content catalog into the local namespace,
+  using hash-ordered pages and streaming fingerprints, then inspect manifests for intersecting jobs.
+  Library paths need no hypothetical QB mapping. Linux mount roots/device identities recognize bind
+  aliases, including nested mounts; conflicting stacked mounts fail closed. Case-folded identity is
+  a conservative veto only, never payload authority. Selected local deletion paths must exist before
+  mutation. Final Plex reconciliation may resolve an already-removed suffix beneath its
+  still-accessible mapped root after accepted Arr/download cleanup or an earlier Plex attempt.
+  Unmapped live download locations or failed catalog inspection mean unknown ownership: retain
+  historical paths and block the affected mutation. Apply this even when QB is unchecked.
 - TV paths also pass `livePathProtection.ts` without historical proofs. Preview checks use only
   explicitly authorized cleanup job keys; immediately before Sonarr/Plex deletion, any remaining
   live owner vetoes the mutation. Folder checks include contained torrent entries. No connected
