@@ -330,21 +330,35 @@ export function storageCleanupProblem(
     "libraryArrPath" | "libraryLocalPath" | "downloadArrPath" | "downloadLocalPath"
   >,
 ): string | null {
-  if (
-    !draft.libraryArrPath.trim() || !draft.libraryLocalPath.trim() ||
-    !draft.downloadArrPath.trim() || !draft.downloadLocalPath.trim()
-  ) return "Both path-mapping pairs must be complete.";
-  if (!validArrRoot(draft.libraryArrPath) || !validArrRoot(draft.downloadArrPath)) {
+  // Prefilled local defaults do not opt users into a mapping.
+  const pairs = [
+    {
+      remote: draft.libraryArrPath.trim(),
+      local: draft.libraryLocalPath.trim(),
+      defaultLocal: "/media",
+    },
+    {
+      remote: draft.downloadArrPath.trim(),
+      local: draft.downloadLocalPath.trim(),
+      defaultLocal: "/downloads",
+    },
+  ].filter((pair) => pair.remote || (pair.local && pair.local !== pair.defaultLocal));
+  if (pairs.some((pair) => !pair.remote || !pair.local)) {
+    return "Each configured mapping needs both an Arr root and a Plex Librarian root.";
+  }
+  if (pairs.some((pair) => !validArrRoot(pair.remote))) {
     return "Arr roots must be absolute POSIX, Windows drive, or UNC paths without parent traversal.";
   }
-  const libraryLocal = normalizedLocalRoot(draft.libraryLocalPath);
-  const downloadLocal = normalizedLocalRoot(draft.downloadLocalPath);
-  if (!libraryLocal || !downloadLocal) {
+  const localRoots = pairs.map((pair) => normalizedLocalRoot(pair.local));
+  if (localRoots.some((root) => !root)) {
     return "Plex Librarian roots must be absolute Linux paths without parent traversal.";
   }
+  const [libraryLocal, downloadLocal] = localRoots;
   if (
-    libraryLocal === downloadLocal || libraryLocal.startsWith(`${downloadLocal}/`) ||
-    downloadLocal.startsWith(`${libraryLocal}/`)
+    libraryLocal && downloadLocal && (
+      libraryLocal === downloadLocal || libraryLocal.startsWith(`${downloadLocal}/`) ||
+      downloadLocal.startsWith(`${libraryLocal}/`)
+    )
   ) return "The Plex Librarian library and download roots must not overlap.";
   return null;
 }
@@ -355,7 +369,10 @@ export function storageCleanupState(
     "libraryArrPath" | "libraryLocalPath" | "downloadArrPath" | "downloadLocalPath"
   >,
 ): StorageCleanupState {
-  return storageCleanupProblem(draft) === null ? "configured" : "incomplete";
+  return (draft.libraryArrPath.trim() || draft.downloadArrPath.trim()) &&
+      storageCleanupProblem(draft) === null
+    ? "configured"
+    : "incomplete";
 }
 
 export function storageCleanupCanSave(
@@ -364,8 +381,7 @@ export function storageCleanupCanSave(
     "libraryArrPath" | "libraryLocalPath" | "downloadArrPath" | "downloadLocalPath"
   >,
 ): boolean {
-  const arrRootEntered = Boolean(draft.libraryArrPath.trim() || draft.downloadArrPath.trim());
-  return !arrRootEntered || storageCleanupProblem(draft) === null;
+  return storageCleanupProblem(draft) === null;
 }
 
 export function ArrConnectionWizard({
@@ -411,7 +427,8 @@ export function ArrConnectionWizard({
     const value = drafts[candidate];
     const plan = rootFolderDiscoveryPlan(candidate, value, data.instances);
     return step === "storage" && arrConnectionComplete(value) &&
-        storageCleanupProblem(value) === null && plan.kind === "request"
+        storageCleanupProblem(value) === null && pathMappings(candidate, value).length > 0 &&
+        plan.kind === "request"
       ? JSON.stringify({
         ...plan.request,
         pathMappings: pathMappings(candidate, value),
@@ -827,6 +844,8 @@ export function StorageCleanupStep({
       storageCleanupSuggestion(["/library"], storagePaths.paths)?.downloadArrPath;
   const sampleVerified = verification?.result?.status === "verified";
   const libraryVerified = verification?.result?.library?.status === "verified" || sampleVerified;
+  const unavailableRoots =
+    verification?.result?.roots?.filter((root) => root.status !== "accessible") ?? [];
   return (
     <section className="min-w-0 space-y-4" aria-label="Storage cleanup">
       <div className="flex items-start justify-between gap-3">
@@ -905,7 +924,7 @@ export function StorageCleanupStep({
           <div>
             <h5 className="text-xs font-semibold">Completed downloads</h5>
             <p className="mt-0.5 text-xs text-base-content/45">
-              The original files imported into your library.
+              Optional. Map the original downloads to enable historical hardlink cleanup.
             </p>
           </div>
           <div className="grid min-w-0 gap-3 sm:grid-cols-2">
@@ -960,6 +979,64 @@ export function StorageCleanupStep({
         </div>
       </div>
 
+      {unavailableRoots.length > 0 && (
+        <div
+          className="space-y-3 rounded-lg border border-warning/20 bg-warning/5 p-3 text-xs"
+          role="status"
+        >
+          <div>
+            <p className="font-semibold">Storage access needs setup</p>
+            <p className="mt-1 leading-relaxed text-base-content/65">
+              {unavailableRoots.some((root) => root.status === "missing")
+                ? "A configured folder is missing inside Plex Librarian. Add its Docker mount or correct the local path below."
+                : "A configured folder is not accessible. Check its Docker mount, folder permissions, and local path."}
+              {" "}
+              Connecting to {appName} does not give this container access to its files.
+            </p>
+          </div>
+          {unavailableRoots.map((root) => (
+            <div
+              key={`${root.kind}:${root.localPath}`}
+              className="rounded border border-base-300 p-2.5 leading-relaxed"
+            >
+              <p className="font-medium">
+                {root.kind === "library"
+                  ? "Library files · read-only"
+                  : "Completed downloads · read/write"}
+              </p>
+              <p className="mt-1 break-all text-base-content/65">
+                Container path: <code>{root.localPath}</code>
+              </p>
+              <p className="break-words text-base-content/65">
+                Host path: the actual host folder that {appName} sees as{" "}
+                <code className="break-all">{root.arrPath}</code>.
+              </p>
+            </div>
+          ))}
+          <details open>
+            <summary className="cursor-pointer font-medium">Set up in Unraid or Docker</summary>
+            <ol className="mt-2 list-decimal space-y-1 pl-4 leading-relaxed text-base-content/65">
+              <li>
+                Edit the Plex Librarian container in Unraid. Set the optional Library Inspection
+                Path and Download Cleanup Path, or add a Path entry for the container paths above.
+              </li>
+              <li>
+                Choose the matching host folders. With Docker Compose, add these as volume mappings
+                with the access modes shown. Keep the existing app-data mount unchanged.
+              </li>
+              <li>
+                Apply the changes and reopen this connection. The wizard checks automatically; use
+                Check again if this page is still open.
+              </li>
+            </ol>
+            <p className="mt-2 leading-relaxed text-base-content/65">
+              Host paths cannot be determined from inside this container. Use your host's actual
+              paths, not a Windows mapped drive letter. Plex Librarian cannot create mounts itself.
+            </p>
+          </details>
+        </div>
+      )}
+
       {discoveryLoading && (
         <p role="status" className="flex items-center gap-2 text-xs text-base-content/55">
           <span className="loading loading-spinner loading-xs" />{" "}
@@ -1002,6 +1079,8 @@ export function StorageCleanupStep({
                   <summary className="cursor-pointer">
                     Historical cleanup: {verification.result.historical?.status === "verified"
                       ? "verified"
+                      : verification.result.historical?.status === "not_checked"
+                      ? "not checked"
                       : "not verified (optional)"}
                   </summary>
                   <p className="mt-1 leading-relaxed">{verification.result.historical?.reason}</p>
@@ -1037,6 +1116,11 @@ export function StorageCleanupStep({
           How to match your folders
         </summary>
         <div className="mt-3 space-y-2 border-l-2 border-base-300 pl-3 leading-relaxed text-base-content/55">
+          <p>
+            The local paths must already exist inside the Plex Librarian container. Entering a path
+            here does not create a Docker mount. If your files are mounted elsewhere, use that
+            existing container path; the wizard checks a current file before marking it verified.
+          </p>
           <p>
             Each row must point to the same host folder. For example, <code>/data/TV</code>{" "}
             may correspond to <code>/media/TV</code> in Plex Librarian.

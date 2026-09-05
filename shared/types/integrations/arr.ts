@@ -59,6 +59,12 @@ export type ArrStorageVerificationRequest = ArrRootFoldersRequest & {
 };
 
 export interface ArrStorageVerificationResponse {
+  roots?: Array<{
+    kind: 'library' | 'download';
+    arrPath: string;
+    localPath: string;
+    status: 'accessible' | 'missing' | 'inaccessible';
+  }>;
   status: 'verified' | 'unverified';
   reason: string;
   libraryPath?: string;
@@ -69,7 +75,7 @@ export interface ArrStorageVerificationResponse {
     arrPath?: string;
     localPath?: string;
   };
-  historical?: { status: 'verified' | 'unverified'; reason: string };
+  historical?: { status: 'verified' | 'unverified' | 'not_checked'; reason: string };
 }
 
 export interface SaveArrLibraryMappingRequest {

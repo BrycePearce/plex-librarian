@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
-import { verifyArrStorage } from './storageVerification.ts';
+import { inspectStorageRoots, verifyArrStorage } from './storageVerification.ts';
 
 const mappings = [
   { kind: 'library' as const, arrPath: '/tv', localPath: '/media' },
@@ -97,6 +97,21 @@ Deno.test('no synced sample is distinct from an inaccessible mount', async () =>
   const result = await verifyArrStorage(client(), [], mappings);
   assertEquals(result.library?.status, 'no_sample');
   assertEquals(result.library?.localPath, undefined);
+  assertEquals(result.historical?.status, 'not_checked');
+});
+
+Deno.test('storage root checks distinguish missing folders from inaccessible and existing mounts', async () => {
+  const roots = await inspectStorageRoots([
+    ...mappings,
+    { kind: 'library', arrPath: '/custom', localPath: '/existing-media' },
+  ], (path) => {
+    if (path === '/media') return Promise.reject(new Deno.errors.NotFound());
+    if (path === '/downloads') return Promise.reject(new Deno.errors.PermissionDenied());
+    return Promise.resolve({ isDirectory: true } as Deno.FileInfo);
+  });
+  assertEquals(roots.map((root) => root.status), ['missing', 'inaccessible', 'accessible']);
+  assertEquals(roots[0].arrPath, '/tv');
+  assertEquals(roots[0].localPath, '/media');
 });
 
 Deno.test('history service failure does not discard successful library verification', async () => {

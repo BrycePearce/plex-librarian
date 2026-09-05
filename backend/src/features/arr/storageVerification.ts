@@ -6,6 +6,33 @@ import type { ArrClient } from '../../integrations/arr/client.ts';
 import { mapArrPath, verifyOrphanHardlink } from '../mediaDeletion/hardlinks.ts';
 import { lstatChain } from '../mediaDeletion/pathNamespace.ts';
 
+/** Folder presence is not proof that the correct host folder is mounted. */
+export async function inspectStorageRoots(
+  mappings: readonly ArrPathMapping[],
+  inspect = lstatChain,
+): Promise<NonNullable<ArrStorageVerificationResponse['roots']>> {
+  return await Promise.all(mappings.map(async ({ kind, arrPath, localPath }) => {
+    try {
+      const info = await inspect(localPath);
+      return {
+        kind,
+        arrPath,
+        localPath,
+        status: info.isDirectory ? 'accessible' as const : 'inaccessible' as const,
+      };
+    } catch (error) {
+      return {
+        kind,
+        arrPath,
+        localPath,
+        status: error instanceof Deno.errors.NotFound
+          ? 'missing' as const
+          : 'inaccessible' as const,
+      };
+    }
+  }));
+}
+
 /** Read-only sample verification; never a durable deletion authorization. */
 export async function verifyArrStorage(
   client: Pick<ArrClient, 'lookup' | 'mediaFiles' | 'torrentAssociations' | 'type'>,
@@ -13,6 +40,7 @@ export async function verifyArrStorage(
   mappings: readonly ArrPathMapping[],
   filesystem = { inspect: lstatChain, verify: verifyOrphanHardlink },
 ): Promise<ArrStorageVerificationResponse> {
+  const roots = await inspectStorageRoots(mappings);
   let libraryPath: string | undefined;
   let library: NonNullable<ArrStorageVerificationResponse['library']> = {
     status: 'no_sample',
@@ -77,6 +105,7 @@ export async function verifyArrStorage(
         });
         if (verified?.file) {
           return {
+            roots,
             status: 'verified',
             library,
             historical: {
@@ -100,9 +129,13 @@ export async function verifyArrStorage(
     break;
   }
   return {
+    roots,
     status: 'unverified',
     library,
-    historical: { status: 'unverified', reason: historicalReason },
+    historical: libraryPath ? { status: 'unverified', reason: historicalReason } : {
+      status: 'not_checked',
+      reason: 'Verify library access first. Historical cleanup has not been checked.',
+    },
     ...(libraryPath ? { libraryPath } : {}),
     reason: libraryPath
       ? 'Library file access checked. No verifiable historical download hardlink was found in the sample. You can save these paths; deletion previews will explain what can be removed.'

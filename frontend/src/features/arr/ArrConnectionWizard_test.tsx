@@ -121,9 +121,15 @@ Deno.test("the shared storage step renders Sonarr and Radarr labels with local-r
   assertStringIncludes(radarr, "Suggested");
 });
 
-Deno.test("Sonarr and Radarr storage cleanup is configured only with both complete pairs", () => {
+Deno.test("storage setup permits skipping or independently configured mapping pairs", () => {
   assertEquals(storageCleanupState(skipped), "incomplete");
   assertEquals(storageCleanupCanSave(skipped), true);
+  const libraryOnly = { ...skipped, libraryArrPath: "/data/media" };
+  assertEquals(storageCleanupCanSave(libraryOnly), true);
+  assertEquals(storageCleanupState(libraryOnly), "configured");
+  assertEquals(storageCleanupProblem(libraryOnly), null);
+  assertEquals(storageCleanupCanSave({ ...skipped, downloadArrPath: "/data/downloads" }), true);
+  assertEquals(storageCleanupCanSave({ ...skipped, libraryLocalPath: "/custom-media" }), false);
   assertEquals(
     storageCleanupState({
       ...skipped,
@@ -135,7 +141,7 @@ Deno.test("Sonarr and Radarr storage cleanup is configured only with both comple
 });
 
 Deno.test("a partial Arr mapping remains incomplete and cannot be submitted", () => {
-  const partial = { ...skipped, libraryArrPath: "/data/media" };
+  const partial = { ...skipped, libraryArrPath: "/data/media", libraryLocalPath: "" };
   assertEquals(storageCleanupState(partial), "incomplete");
   assertEquals(storageCleanupCanSave(partial), false);
 });
@@ -246,6 +252,36 @@ Deno.test("suggested setup waits for confirmation and preserves manual mappings"
   );
   assertEquals(editedLocal.includes("Use detected paths"), false);
   assertStringIncludes(editedLocal, 'value="/custom-media"');
+});
+
+Deno.test("missing storage roots show mount instructions for the user's actual paths", () => {
+  const html = renderToStaticMarkup(
+    <StorageCleanupStep
+      type="sonarr"
+      draft={draft()}
+      onUpdate={() => {}}
+      verification={{
+        result: {
+          status: "unverified",
+          reason: "No sample",
+          library: { status: "no_sample", reason: "Sync a library" },
+          historical: { status: "not_checked", reason: "Verify library access first" },
+          roots: [{
+            kind: "library",
+            arrPath: "/custom/tv",
+            localPath: "/mounted-tv",
+            status: "missing",
+          }],
+        },
+      }}
+    />,
+  );
+  assertStringIncludes(html, "Storage access needs setup");
+  assertStringIncludes(html, "/mounted-tv");
+  assertStringIncludes(html, "/custom/tv");
+  assertStringIncludes(html, "read-only");
+  assertStringIncludes(html, "Keep the existing app-data mount unchanged");
+  assertStringIncludes(html, "not checked");
 });
 
 Deno.test("detected paths distinguish suggestions from verification and can be skipped", () => {
@@ -681,7 +717,7 @@ Deno.test("one advance launches both discoveries without waiting for either resp
   assertEquals(states.radarr.status, "empty");
 });
 
-Deno.test("storage verification runs automatically and ignores results after paths change", async () => {
+Deno.test("library-only verification runs automatically and ignores results after paths change", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const oldEnvironment = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -691,7 +727,11 @@ Deno.test("storage verification runs automatically and ignores results after pat
   const first = deferred<Awaited<ReturnType<typeof api.arr.verifyStorage>>>();
   const second = deferred<Awaited<ReturnType<typeof api.arr.verifyStorage>>>();
   let calls = 0;
-  api.arr.verifyStorage = () => ++calls === 1 ? first.promise : second.promise;
+  api.arr.verifyStorage = (request) => {
+    assertEquals(request.pathMappings.length, 1);
+    assertEquals(request.pathMappings[0].kind, "library");
+    return ++calls === 1 ? first.promise : second.promise;
+  };
   api.arr.rootFolders = () => Promise.resolve({ roots: ["/tv"] });
   api.qbittorrent.storagePaths = () => Promise.resolve({ paths: [] });
   const queryClient = new QueryClient();
@@ -710,7 +750,6 @@ Deno.test("storage verification runs automatically and ignores results after pat
                 apiKeyConfigured: true,
                 pathMappings: [
                   { kind: "library", arrPath: "/tv", localPath: "/media" },
-                  { kind: "download", arrPath: "/data/downloads", localPath: "/downloads" },
                 ],
               }],
               mappings: [],
@@ -739,7 +778,7 @@ Deno.test("storage verification runs automatically and ignores results after pat
     assertEquals(saveButton()?.props.disabled, true, "save waits for the response");
     await act(() =>
       renderer!.root.findByType(StorageCleanupStep).props.onUpdate({
-        downloadArrPath: "/other/downloads",
+        libraryArrPath: "/other/library",
       })
     );
     await act(() => first.resolve({ status: "verified", reason: "Stale verification" }));
