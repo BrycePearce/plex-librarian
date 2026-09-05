@@ -386,7 +386,7 @@ export function SeasonRemovalDialog({
         destinations={item && !preview.error
           ? (
             <DestinationOptions
-              keepDownloads={value?.cleanupConfigured === true && !cleanupDownloads}
+              keepDownloads={(value?.downloadJobs.length ?? 0) > 0 && !cleanupDownloads}
               options={[
                 ...(sonarrActionAvailable
                   ? [{

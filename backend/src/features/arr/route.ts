@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -165,7 +165,13 @@ router.on('POST', ['/root-folders', '/verify-storage'], async (c) => {
       }
       const samples = keys.length > 0
         ? await db.select({ tvdbId: items.tvdbId, tmdbId: items.tmdbId })
-          .from(items).where(and(eq(items.serverId, serverId), inArray(items.libraryKey, keys)))
+          .from(items).where(
+            and(
+              eq(items.serverId, serverId),
+              inArray(items.libraryKey, keys),
+              isNotNull(type === 'sonarr' ? items.tvdbId : items.tmdbId),
+            ),
+          )
           .limit(3)
         : [];
       const ids = samples.flatMap((sample) => {

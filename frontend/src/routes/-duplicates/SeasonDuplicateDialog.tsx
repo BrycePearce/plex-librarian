@@ -1059,7 +1059,8 @@ export function SeasonDuplicateDialog({
   });
   const destinationOptions = (
     <DestinationOptions
-      keepDownloads={deletionPreview.data?.cleanupConfigured === true && !cleanupDownloads}
+      keepDownloads={(deletionPreview.data?.downloadDestinations?.length ?? 0) > 0 &&
+        !cleanupDownloads}
       options={[
         ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
             deletionPreview.data?.breakGlassAvailable !== true

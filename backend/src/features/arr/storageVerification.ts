@@ -14,6 +14,13 @@ export async function verifyArrStorage(
   filesystem = { inspect: lstatChain, verify: verifyOrphanHardlink },
 ): Promise<ArrStorageVerificationResponse> {
   let libraryPath: string | undefined;
+  let library: NonNullable<ArrStorageVerificationResponse['library']> = {
+    status: 'no_sample',
+    reason:
+      'No suitable current file was found in the sample. Select and sync a library, then check again. You can still save this connection.',
+  };
+  let historicalReason =
+    'No verifiable historical download hardlink was found in the sample. This optional check does not prevent saving or deleting current library files.';
   for (const id of externalIds.slice(0, 3)) {
     const record = await client.lookup(id);
     if (!record) continue;
@@ -21,37 +28,81 @@ export async function verifyArrStorage(
     for (const file of (files ?? []).slice(0, 20)) {
       if (!file.path || !Number.isSafeInteger(file.size) || file.size! <= 0) continue;
       const mapped = mapArrPath(file.path, 'library', mappings);
-      if (!mapped) continue;
+      if (!mapped) {
+        if (!libraryPath) {
+          library = {
+            status: 'unavailable',
+            arrPath: file.path,
+            reason: 'No library mapping covers this current file. Check the library root.',
+          };
+        }
+        continue;
+      }
+      let failure = 'The local file does not match the current library file size or type.';
       try {
         const info = await filesystem.inspect(mapped.path);
         if (info.isFile && info.size === file.size) {
           libraryPath = mapped.path;
+          library = {
+            status: 'verified',
+            arrPath: file.path,
+            localPath: mapped.path,
+            reason:
+              'A current library file is accessible and its size matches. Each deletion checks its own files again.',
+          };
           break;
         }
-      } catch { /* Another bounded sample may be accessible. */ }
+      } catch {
+        failure =
+          'Plex Librarian cannot access this current file. Check that the local mount exposes the same folder as the mapped Sonarr/Radarr root.';
+      }
+      if (!libraryPath) {
+        library = {
+          status: 'unavailable',
+          arrPath: file.path,
+          localPath: mapped.path,
+          reason: failure,
+        };
+      }
     }
     if (!libraryPath) continue;
     const managed = (files ?? []).flatMap((file) =>
       file.path ? [{ path: file.path, id: file.id, size: file.size }] : []
     );
-    for (const association of (await client.torrentAssociations(record.id)).slice(0, 20)) {
-      if (!association.sourcePath) continue;
-      const verified = await filesystem.verify(client.type, association, mappings, managed, {
-        exactTwoLinks: client.type === 'sonarr',
-      });
-      if (verified?.file) {
-        return {
-          status: 'verified',
-          libraryPath: verified.file.importedPath,
-          downloadPath: verified.file.path,
-          reason:
-            'Verified a current library file and its historical download hardlink. Each deletion will check its own files again.',
-        };
+    try {
+      for (const association of (await client.torrentAssociations(record.id)).slice(0, 20)) {
+        if (!association.sourcePath) continue;
+        const verified = await filesystem.verify(client.type, association, mappings, managed, {
+          exactTwoLinks: client.type === 'sonarr',
+        });
+        if (verified?.file) {
+          return {
+            status: 'verified',
+            library,
+            historical: {
+              status: 'verified',
+              reason:
+                'A historical download hardlink was verified. Each deletion checks its own files again.',
+            },
+            libraryPath: verified.file.importedPath,
+            downloadPath: verified.file.path,
+            reason:
+              'Verified a current library file and its historical download hardlink. Each deletion will check its own files again.',
+          };
+        }
       }
+    } catch {
+      historicalReason =
+        'Historical cleanup could not be checked. Current library access is verified; you can still save these paths.';
     }
+    // This record supplied a current sample; history is optional. Do not let
+    // unrelated records invalidate its successful filesystem check.
+    break;
   }
   return {
     status: 'unverified',
+    library,
+    historical: { status: 'unverified', reason: historicalReason },
     ...(libraryPath ? { libraryPath } : {}),
     reason: libraryPath
       ? 'Library file access checked. No verifiable historical download hardlink was found in the sample. You can save these paths; deletion previews will explain what can be removed.'

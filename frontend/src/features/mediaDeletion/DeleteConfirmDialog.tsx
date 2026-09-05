@@ -366,7 +366,8 @@ export function DeleteConfirmDialog({
         }
         destinations={
           <DestinationOptions
-            keepDownloads={preview.data?.downloadClientsConfigured === true &&
+            keepDownloads={preview.data?.items.some((item) => item.downloadJobs.length > 0) ===
+                true &&
               !effectiveCleanupDownloads}
             options={[
               ...(coordinatedRatingKeys.length > 0

@@ -75,5 +75,46 @@ Deno.test('a missing historical sample preserves the successful library access c
   });
   assertEquals(result.status, 'unverified');
   assertEquals(result.libraryPath, '/media/Show/episode.mkv');
+  assertEquals(result.library?.status, 'verified');
+  assertEquals(result.historical?.status, 'unverified');
   assertStringIncludes(result.reason, 'You can save');
+});
+
+Deno.test('missing local mount reports the exact current file translation', async () => {
+  const result = await verifyArrStorage(client(), [20], mappings, {
+    inspect: () => Promise.reject(new Deno.errors.NotFound('missing mount')),
+    verify: () => {
+      throw new Error('No history check without a library sample');
+    },
+  });
+  assertEquals(result.library?.status, 'unavailable');
+  assertEquals(result.library?.arrPath, '/tv/Show/episode.mkv');
+  assertEquals(result.library?.localPath, '/media/Show/episode.mkv');
+  assertEquals(result.libraryPath, undefined);
+});
+
+Deno.test('no synced sample is distinct from an inaccessible mount', async () => {
+  const result = await verifyArrStorage(client(), [], mappings);
+  assertEquals(result.library?.status, 'no_sample');
+  assertEquals(result.library?.localPath, undefined);
+});
+
+Deno.test('history service failure does not discard successful library verification', async () => {
+  const result = await verifyArrStorage(
+    {
+      ...client(),
+      torrentAssociations: () => Promise.reject(new Error('offline')),
+    },
+    [20],
+    mappings,
+    {
+      inspect: () => Promise.resolve({ isFile: true, size: 10 } as Deno.FileInfo),
+      verify: () => {
+        throw new Error('No history available');
+      },
+    },
+  );
+  assertEquals(result.library?.status, 'verified');
+  assertEquals(result.historical?.status, 'unverified');
+  assertStringIncludes(result.historical!.reason, 'could not be checked');
 });

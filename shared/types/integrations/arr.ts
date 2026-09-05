@@ -63,6 +63,13 @@ export interface ArrStorageVerificationResponse {
   reason: string;
   libraryPath?: string;
   downloadPath?: string;
+  library?: {
+    status: 'verified' | 'unavailable' | 'no_sample';
+    reason: string;
+    arrPath?: string;
+    localPath?: string;
+  };
+  historical?: { status: 'verified' | 'unverified'; reason: string };
 }
 
 export interface SaveArrLibraryMappingRequest {

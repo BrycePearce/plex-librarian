@@ -370,6 +370,45 @@ Deno.test("qBittorrent discovery stays simple while loading and explains manual 
   assertEquals(retries, 1);
 });
 
+Deno.test("library access is verified independently of optional historical cleanup", () => {
+  const props = {
+    type: "sonarr" as const,
+    draft: draft({ libraryArrPath: "/tv", downloadArrPath: "/downloads" }),
+    onUpdate: () => {},
+  };
+  const result = {
+    status: "unverified" as const,
+    reason: "Historical sample missing",
+    library: { status: "verified" as const, reason: "Current file matches" },
+    historical: { status: "unverified" as const, reason: "No historical sample" },
+  };
+  const html = renderToStaticMarkup(<StorageCleanupStep {...props} verification={{ result }} />);
+  assertStringIncludes(html, "Library path verified");
+  assertStringIncludes(html, "not verified (optional)");
+  assertEquals((html.match(/>Verified</g) ?? []).length, 1);
+  assertStringIncludes(html, ">Suggested<");
+  const unavailable = renderToStaticMarkup(
+    <StorageCleanupStep
+      {...props}
+      verification={{
+        result: {
+          ...result,
+          library: {
+            status: "unavailable",
+            reason: "Check the mount",
+            arrPath: "/tv/Show/episode.mkv",
+            localPath: "/media/Show/episode.mkv",
+          },
+        },
+      }}
+    />,
+  );
+  assertStringIncludes(unavailable, "/tv/Show/episode.mkv");
+  assertStringIncludes(unavailable, "/media/Show/episode.mkv");
+  assertStringIncludes(unavailable, "Library path needs a check");
+  assertEquals(unavailable.includes(">Verified<"), false);
+});
+
 Deno.test("single-root discovery renders an explicit action without changing the draft", () => {
   const original = draft({ libraryArrPath: "/saved/library" });
   const discovery = rootFolderDiscoveryTransition(initialRootFolderDiscoveryState(), {
@@ -690,10 +729,14 @@ Deno.test("storage verification runs automatically and ignores results after pat
     const submit = () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
     await act(submit);
     await act(submit);
+    const saveButton = () =>
+      renderer!.root.findAllByType("button").find((button) => button.props.type === "submit");
+    assertEquals(saveButton()?.props.disabled, true, "save waits during debounce");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 650));
     });
     assertEquals(calls, 1);
+    assertEquals(saveButton()?.props.disabled, true, "save waits for the response");
     await act(() =>
       renderer!.root.findByType(StorageCleanupStep).props.onUpdate({
         downloadArrPath: "/other/downloads",
@@ -701,6 +744,7 @@ Deno.test("storage verification runs automatically and ignores results after pat
     );
     await act(() => first.resolve({ status: "verified", reason: "Stale verification" }));
     assertEquals(JSON.stringify(renderer!.toJSON()).includes("Stale verification"), false);
+    assertEquals(saveButton()?.props.disabled, true, "stale response cannot unlock save");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 650));
     });
@@ -711,6 +755,12 @@ Deno.test("storage verification runs automatically and ignores results after pat
       button.children.join("").includes("Test and save")
     );
     assertEquals(save?.props.disabled, false);
+    await act(() => renderer!.root.findByType(StorageCleanupStep).props.onVerificationRetry());
+    assertEquals(
+      saveButton()?.props.disabled,
+      true,
+      "recheck invalidates the cached result immediately",
+    );
   } finally {
     if (renderer) await act(() => renderer!.unmount());
     queryClient.clear();

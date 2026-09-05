@@ -56,8 +56,11 @@ Deno.test('no QB connection imposes no path mapping or ownership veto', async ()
 });
 
 Deno.test('missing local deletion paths cannot establish nonownership', async () => {
-  await assertRejects(() =>
-    assertLocalDeletionPathsUnowned([{ path: '/absent-ownership-test/file.mkv' }], [target()])
+  await assertRejects(
+    () =>
+      assertLocalDeletionPathsUnowned([{ path: '/absent-ownership-test/file.mkv' }], [target()]),
+    Error,
+    'Plex Librarian cannot access the mapped local path "/absent-ownership-test/file.mkv" to check qBittorrent ownership',
   );
 });
 

@@ -404,46 +404,69 @@ export function ArrConnectionWizard({
   });
   const storagePathsAttempted = useRef(false);
   const draft = drafts[type];
-  const [verification, setVerification] = useState<
-    { key: string; result?: ArrStorageVerificationResponse; loading?: boolean } | null
-  >(null);
-  const verificationPlan = rootFolderDiscoveryPlan(type, draft, data.instances);
-  const verificationKey = step === "storage" && storageCleanupProblem(draft) === null &&
-      verificationPlan.kind === "request"
-    ? JSON.stringify({
-      ...verificationPlan.request,
-      pathMappings: pathMappings(type, draft),
-      libraryKeys: [...draft.libraryKeys],
-    })
-    : "";
+  const [verifications, setVerifications] = useState<
+    Record<string, ArrStorageVerificationResponse>
+  >({});
+  const verificationKeys = (["radarr", "sonarr"] as const).map((candidate) => {
+    const value = drafts[candidate];
+    const plan = rootFolderDiscoveryPlan(candidate, value, data.instances);
+    return step === "storage" && arrConnectionComplete(value) &&
+        storageCleanupProblem(value) === null && plan.kind === "request"
+      ? JSON.stringify({
+        ...plan.request,
+        pathMappings: pathMappings(candidate, value),
+        libraryKeys: [...value.libraryKeys],
+      })
+      : "";
+  });
+  const verificationKey = verificationKeys[type === "radarr" ? 0 : 1];
+  const verificationBatch = JSON.stringify(verificationKeys.filter(Boolean));
+  const verificationPending = verificationKeys.some((key) => key && !verifications[key]);
+  const [verificationAttempt, setVerificationAttempt] = useState(0);
+  function retryVerification() {
+    setVerifications((values) => {
+      const next = { ...values };
+      delete next[verificationKey];
+      return next;
+    });
+    setVerificationAttempt((attempt) => attempt + 1);
+  }
   useEffect(() => {
-    if (!verificationKey) return;
     let current = true;
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
     const timer = setTimeout(() => {
-      setVerification({ key: verificationKey, loading: true });
-      void api.arr.verifyStorage(JSON.parse(verificationKey)).then(
-        (result) => {
-          if (current) setVerification({ key: verificationKey, result });
-        },
-        () => {
-          if (current) {
-            setVerification({
-              key: verificationKey,
-              result: {
-                status: "unverified",
-                reason:
-                  "Could not verify storage. Check the connection and mounted paths. You can still save these settings.",
-              },
-            });
-          }
-        },
-      );
+      for (const key of JSON.parse(verificationBatch) as string[]) {
+        if (verifications[key]) continue;
+        let timeout: ReturnType<typeof setTimeout>;
+        const deadline = new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("Storage check timed out")), 30000);
+          timeouts.push(timeout);
+        });
+        void Promise.race([api.arr.verifyStorage(JSON.parse(key)), deadline]).then(
+          (result) => {
+            if (current) setVerifications((values) => ({ ...values, [key]: result }));
+          },
+          () => {
+            if (current) {
+              setVerifications((values) => ({
+                ...values,
+                [key]: {
+                  status: "unverified",
+                  reason:
+                    "Could not verify storage. Check the connection and mounted paths. You can still save these settings.",
+                },
+              }));
+            }
+          },
+        ).finally(() => clearTimeout(timeout));
+      }
     }, 600);
     return () => {
       current = false;
       clearTimeout(timer);
+      timeouts.forEach(clearTimeout);
     };
-  }, [verificationKey]);
+  }, [verificationBatch, verificationAttempt]);
   const completeTypes = useMemo(
     () =>
       (["radarr", "sonarr"] as const).filter((candidate) =>
@@ -549,6 +572,7 @@ export function ArrConnectionWizard({
       setStep("storage");
       return;
     }
+    if (verificationPending) return;
     save.mutate();
   }
 
@@ -616,7 +640,7 @@ export function ArrConnectionWizard({
                     </strong>
                     {complete && (
                       <span className="badge badge-success badge-xs shrink-0 whitespace-nowrap">
-                        Connection ready
+                        Configured
                       </span>
                     )}
                   </span>
@@ -709,7 +733,13 @@ export function ArrConnectionWizard({
               draft={draft}
               discovery={discoveries[type]}
               storagePaths={storagePaths}
-              verification={verification?.key === verificationKey ? verification : undefined}
+              verification={verificationKey
+                ? {
+                  loading: !verifications[verificationKey],
+                  result: verifications[verificationKey],
+                }
+                : undefined}
+              onVerificationRetry={retryVerification}
               onRetry={() => discoverRootFolders(type, true)}
               onStorageRetry={() => discoverStoragePaths(true)}
               onUpdate={updateDraft}
@@ -740,12 +770,16 @@ export function ArrConnectionWizard({
             className="btn btn-primary btn-sm"
             disabled={save.isPending || librariesLoading ||
               (step === "connection" && !arrConnectionComplete(draft)) ||
-              (step === "storage" && !storageCleanupCanSave(draft))}
+              (step === "storage" && (!storageCleanupCanSave(draft) || verificationPending))}
           >
             {step !== "storage" ? "Next" : (
               <>
-                {save.isPending && <span className="loading loading-spinner loading-xs" />}
-                Test and save {completeTypes.length === 2 ? "both" : appName}
+                {(save.isPending || verificationPending) && (
+                  <span className="loading loading-spinner loading-xs" />
+                )}
+                {verificationPending
+                  ? "Checking storage…"
+                  : `Test and save ${completeTypes.length === 2 ? "both" : appName}`}
               </>
             )}
           </button>
@@ -763,6 +797,7 @@ export function StorageCleanupStep({
   onRetry,
   onStorageRetry,
   verification,
+  onVerificationRetry,
   onUpdate,
 }: {
   type: ArrType;
@@ -772,6 +807,7 @@ export function StorageCleanupStep({
   onRetry?: () => void;
   onStorageRetry?: () => void;
   verification?: { loading?: boolean; result?: ArrStorageVerificationResponse };
+  onVerificationRetry?: () => void;
   onUpdate: (update: Partial<ArrDraft>) => void;
 }) {
   const appName = type === "radarr" ? "Radarr" : "Sonarr";
@@ -790,6 +826,7 @@ export function StorageCleanupStep({
     draft.downloadArrPath ===
       storageCleanupSuggestion(["/library"], storagePaths.paths)?.downloadArrPath;
   const sampleVerified = verification?.result?.status === "verified";
+  const libraryVerified = verification?.result?.library?.status === "verified" || sampleVerified;
   return (
     <section className="min-w-0 space-y-4" aria-label="Storage cleanup">
       <div className="flex items-start justify-between gap-3">
@@ -847,7 +884,7 @@ export function StorageCleanupStep({
               label="Plex Librarian library root"
               value={draft.libraryLocalPath}
               placeholder="/media"
-              tag={sampleVerified
+              tag={libraryVerified
                 ? "Verified"
                 : draft.libraryLocalPath === "/media"
                 ? "Suggested"
@@ -933,26 +970,58 @@ export function StorageCleanupStep({
       {verification && (
         <div
           role="status"
-          className={`rounded-lg border px-3 py-2.5 text-xs ${
-            sampleVerified ? "border-success/20 bg-success/5" : "border-base-300 bg-base-200/25"
-          }`}
+          className="space-y-2 rounded-lg border border-base-300 bg-base-200/25 px-3 py-2.5 text-xs"
         >
-          <p
-            className={`flex items-center gap-2 font-medium ${
-              sampleVerified ? "text-success" : ""
-            }`}
-          >
-            {verification.loading && <span className="loading loading-spinner loading-xs" />}
-            {verification.loading
-              ? "Checking a sample file…"
-              : sampleVerified
-              ? "Storage sample verified"
-              : "Storage needs a check"}
-          </p>
-          {verification.result && (
-            <p className="mt-1 break-words leading-relaxed text-base-content/60">
-              {verification.result.reason}
-            </p>
+          {verification.loading
+            ? (
+              <p className="flex items-center gap-2">
+                <span className="loading loading-spinner loading-xs" />Checking library access and
+                optional historical cleanup...
+              </p>
+            )
+            : verification.result?.library
+            ? (
+              <>
+                <p className={libraryVerified ? "font-medium text-success" : "font-medium"}>
+                  {libraryVerified
+                    ? "Library path verified"
+                    : verification.result.library.status === "no_sample"
+                    ? "Library access: no sample available"
+                    : "Library path needs a check"}
+                </p>
+                <p className="break-words text-base-content/60">
+                  {verification.result.library.reason}
+                </p>
+                {!libraryVerified && verification.result.library.arrPath && (
+                  <p className="break-all font-mono text-base-content/70">
+                    {verification.result.library.arrPath} &rarr;{" "}
+                    {verification.result.library.localPath ?? "No matching local root"}
+                  </p>
+                )}
+                <details className="text-base-content/60">
+                  <summary className="cursor-pointer">
+                    Historical cleanup: {verification.result.historical?.status === "verified"
+                      ? "verified"
+                      : "not verified (optional)"}
+                  </summary>
+                  <p className="mt-1 leading-relaxed">{verification.result.historical?.reason}</p>
+                </details>
+                {!libraryVerified && (
+                  <p className="text-base-content/60">
+                    You can save this connection and correct its storage settings later.
+                  </p>
+                )}
+              </>
+            )
+            : (
+              <p className="break-words leading-relaxed text-base-content/60">
+                {verification.result?.reason}
+              </p>
+            )}
+          {!verification.loading && onVerificationRetry && (
+            <button type="button" className="btn btn-ghost btn-xs" onClick={onVerificationRetry}>
+              Check again
+            </button>
           )}
         </div>
       )}

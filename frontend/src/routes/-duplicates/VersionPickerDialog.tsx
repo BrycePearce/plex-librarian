@@ -492,8 +492,8 @@ export function VersionPickerDialog({
         destinationOptionsVisible && (
         <DestinationOptions
           keepDownloads={!effectiveCleanupDownloads && (selection.deleteWholeItem
-            ? wholeItemPreview.data?.downloadClientsConfigured === true
-            : preview.data?.cleanupConfigured === true)}
+            ? (wholeItemPreviewEntry?.downloadJobs.length ?? 0) > 0
+            : (preview.data?.downloadJobs.length ?? 0) > 0)}
           options={[
             ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
               ? [

@@ -103,11 +103,23 @@ export async function discoverMappedDownloadJobs(
     paths.map(async (entry) => {
       // Only reconciliation of already-authorized removals supplies a root.
       // Historical proofs have their own durable existence/survivor checks.
-      if (requireExisting && entry.verifiedRoot) await resolver(entry.verifiedRoot, true);
-      return {
-        ...entry,
-        identity: await resolver(entry.path, requireExisting && !entry.verifiedRoot),
-      };
+      try {
+        if (requireExisting && entry.verifiedRoot) await resolver(entry.verifiedRoot, true);
+        return {
+          ...entry,
+          identity: await resolver(entry.path, requireExisting && !entry.verifiedRoot),
+        };
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        throw new Error(
+          `Plex Librarian cannot access the mapped local path "${
+            entry.verifiedRoot ?? entry.path
+          }" ` +
+            `to check qBittorrent ownership. Check the library path mapping in Media connections ` +
+            `and the matching Docker mount. This is the path inside Plex Librarian, which may differ from the path shown by Sonarr or Plex.`,
+          { cause: error },
+        );
+      }
     }),
   );
   const relevant: DownloadJobSummary[] = [];
