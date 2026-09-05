@@ -1059,13 +1059,14 @@ export function SeasonDuplicateDialog({
   });
   const destinationOptions = (
     <DestinationOptions
+      keepDownloads={deletionPreview.data?.cleanupConfigured === true && !cleanupDownloads}
       options={[
         ...(seasonSonarrVisible(authorizationKey, destinationAvailability) &&
             deletionPreview.data?.breakGlassAvailable !== true
           ? [{
             id: "arr" as const,
             service: "sonarr" as const,
-            label: "Sonarr",
+            label: "Delete from Sonarr",
             info:
               `${SONARR_OWNED_PATH_COPY} Sonarr protects monitoring and adopts the authorized retained version before removing the old EpisodeFile.`,
             checked: sonarrMode === "adopt_retained",

@@ -491,13 +491,18 @@ export function VersionPickerDialog({
       {(selection.deleteWholeItem ? wholeItemPreview.data : preview.data) &&
         destinationOptionsVisible && (
         <DestinationOptions
+          keepDownloads={!effectiveCleanupDownloads && (selection.deleteWholeItem
+            ? wholeItemPreview.data?.downloadClientsConfigured === true
+            : preview.data?.cleanupConfigured === true)}
           options={[
             ...((selection.deleteWholeItem || destinationOptionVisibility.arr)
               ? [
                 {
                   id: "arr" as const,
                   service: arrService,
-                  label: arrDestinationCopy.label,
+                  label: selection.deleteWholeItem
+                    ? `Delete from ${arrLabel}`
+                    : arrDestinationCopy.label,
                   info: selection.deleteWholeItem
                     ? (wholeItemPreviewEntry?.arrReason ??
                       (wholeItemArrAvailable
@@ -548,16 +553,15 @@ export function VersionPickerDialog({
                 {
                   id: "cleanup" as const,
                   service: "qbittorrent" as const,
-                  label: "qBittorrent",
+                  label: "Delete from qBittorrent",
                   info: selection.deleteWholeItem
                     ? (wholeItemPreviewEntry?.reason ??
                       (wholeItemCleanupAvailable
-                        ? "Deletes the independently verified qBittorrent job and its downloaded payload."
+                        ? "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected."
                         : "No verified qBittorrent job is available"))
                     : pathReassignmentActive
                     ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
-                    : "Deletes the verified qBittorrent job and its downloaded files along with " +
-                      "the selected Plex version.",
+                    : "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
                   checked: effectiveCleanupDownloads,
                   disabled: pending ||
                     (selection.deleteWholeItem

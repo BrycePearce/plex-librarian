@@ -22,7 +22,6 @@ import {
   eligibleDownloadCleanupItems,
   selectedSonarrOwnershipProblems,
   shouldUseArrByDefault,
-  SONARR_OWNED_PATH_COPY,
 } from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
 import { deletionImpact } from "./deletionImpact.ts";
@@ -367,15 +366,17 @@ export function DeleteConfirmDialog({
         }
         destinations={
           <DestinationOptions
+            keepDownloads={preview.data?.downloadClientsConfigured === true &&
+              !effectiveCleanupDownloads}
             options={[
               ...(coordinatedRatingKeys.length > 0
                 ? [{
                   id: "arr" as const,
                   service: arrService,
-                  label: arrLabel,
+                  label: `Delete from ${arrLabel}`,
                   info: arrService === "sonarr"
-                    ? SONARR_OWNED_PATH_COPY
-                    : `Deletes the managed title and its files through ${arrLabel}.`,
+                    ? "Delete the selected media from Sonarr and clean up verified related files. qBittorrent files are kept unless qBittorrent is also selected."
+                    : `Delete the selected media and its files from ${arrLabel}.`,
                   checked: effectiveDeleteFromArr,
                   disabled: pending || preview.isLoading,
                   warning: arrProblems.length > 0,
@@ -388,10 +389,12 @@ export function DeleteConfirmDialog({
                 ? [{
                   id: "cleanup" as const,
                   service: orphanOnlyDestination ? "sonarr" as const : "qbittorrent" as const,
-                  label: orphanOnlyDestination ? "Verified hardlink cleanup" : "Download cleanup",
+                  label: orphanOnlyDestination
+                    ? "Verified hardlink cleanup"
+                    : "Delete from qBittorrent",
                   info: orphanOnlyDestination
                     ? "Removes verified historical Sonarr import hardlinks. This remains available after the download job is gone and is included by default with whole-show Sonarr deletion."
-                    : "Removes verified qBittorrent jobs and verified orphan hardlinks. Orphan-only cleanup remains available after the download job is gone.",
+                    : "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
                   checked: effectiveCleanupDownloads,
                   disabled: pending || preview.isLoading,
                   warning: effectiveCleanupDownloads && cleanupProblems.length > 0,

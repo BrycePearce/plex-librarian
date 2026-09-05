@@ -386,12 +386,13 @@ export function SeasonRemovalDialog({
         destinations={item && !preview.error
           ? (
             <DestinationOptions
+              keepDownloads={value?.cleanupConfigured === true && !cleanupDownloads}
               options={[
                 ...(sonarrActionAvailable
                   ? [{
                     id: "arr" as const,
                     service: "sonarr" as const,
-                    label: "Update Sonarr",
+                    label: "Delete from Sonarr",
                     info: seasonSonarrOptionInfo(value?.sonarrReason),
                     checked: coordinated,
                     disabled: pending || preview.isFetching,
@@ -403,9 +404,9 @@ export function SeasonRemovalDialog({
                   ? [{
                     id: "cleanup" as const,
                     service: "qbittorrent" as const,
-                    label: "Clean downloads",
+                    label: "Delete from qBittorrent",
                     info:
-                      "Remove only qBittorrent jobs whose complete payload is proven to belong to this season.",
+                      "Delete matching torrents and their files. Only torrents whose entire contents belong to this season are deleted.",
                     checked: cleanupDownloads,
                     disabled: pending || preview.isFetching,
                     warning: cleanupDownloads && value?.cleanupStatus !== "resolved",
