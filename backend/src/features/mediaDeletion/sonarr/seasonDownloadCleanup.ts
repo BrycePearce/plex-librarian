@@ -24,36 +24,6 @@ export interface SeasonDownloadAssignmentSource {
   importedPath: string;
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return '{' + Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`)
-      .join(',') +
-      '}';
-  }
-  return JSON.stringify(value);
-}
-
-function cleanupJobAuthorization(cleanup: ResolvedCleanupItem): string[] {
-  return cleanup.downloadJobs.map((job) =>
-    canonical({
-      instanceKey: job.instanceKey,
-      jobId: job.jobId,
-      authorizedSourcePaths: [...job.authorizedSourcePaths].sort(),
-    })
-  ).sort();
-}
-
-export function downloadCleanupEvidenceAgrees(
-  arrHistory: ResolvedCleanupItem,
-  direct: ResolvedCleanupItem,
-): boolean {
-  return canonical(cleanupJobAuthorization(arrHistory)) ===
-    canonical(cleanupJobAuthorization(direct));
-}
-
 /** Resolve season-scoped download ownership without assuming what remains afterward. */
 export async function resolveSeasonDownloadCleanup(input: {
   serverId: number;
@@ -63,6 +33,7 @@ export async function resolveSeasonDownloadCleanup(input: {
   arrTargets: readonly ArrDeleteTarget[];
   downloadTargets: readonly DownloadClientTarget[];
   selected: readonly SeasonDownloadSelection[];
+  selectedArrPaths?: readonly string[];
   retained: readonly SeasonDownloadSelection[];
   inspect: boolean;
 }): Promise<ResolvedCleanupItem | null> {
@@ -74,7 +45,26 @@ export async function resolveSeasonDownloadCleanup(input: {
     [...input.downloadTargets],
   );
   if (input.downloadTargets.length === 0) return seriesCleanup;
-
+  const selectedPaths = new Set([
+    ...input.selected.map((selection) => selection.plexPath),
+    ...(input.selectedArrPaths ?? []),
+  ].flatMap((selectedPath) => {
+    const path = normalizeRemoteAbsolute(selectedPath)?.comparison;
+    return path ? [path] : [];
+  }));
+  const associatedJobIds = new Set(seriesCleanup.sources.flatMap((source) => {
+    const path = source.importedPath
+      ? normalizeRemoteAbsolute(source.importedPath)?.comparison
+      : undefined;
+    return path && selectedPaths.has(path) ? [source.downloadId] : [];
+  }));
+  // A series can have jobs for other seasons. Only expose a current job associated
+  // with this exact selection as its read-only access sample.
+  const accessJob = seriesCleanup.qbittorrentPathAccessJob;
+  const qbittorrentPathAccessJob = accessJob && associatedJobIds.has(accessJob.jobId)
+    ? accessJob
+    : undefined;
+  seriesCleanup = { ...seriesCleanup, qbittorrentPathAccessJob };
   try {
     const direct = await resolveDirectQbittorrentCleanup(
       input.serverId,
@@ -83,17 +73,15 @@ export async function resolveSeasonDownloadCleanup(input: {
       input.selected,
       input.retained,
       input.downloadTargets,
+      associatedJobIds,
     );
-    if (direct.status !== 'resolved') return seriesCleanup;
+    if (direct.status !== 'resolved') {
+      return { ...direct, qbittorrentPathAccessJob };
+    }
     if (seriesCleanup?.status === 'resolved') {
-      if (!downloadCleanupEvidenceAgrees(seriesCleanup, direct)) {
-        return {
-          ...seriesCleanup,
-          status: 'error',
-          downloadJobs: [],
-          reason: 'Arr history and direct qBittorrent ownership evidence disagree',
-        };
-      }
+      // Whole-series history is a discovery hint, not the selected job set or
+      // current manifest authority. Direct discovery has already required full
+      // current proof for every live associated job in this selection.
       return {
         ...direct,
         arrStatus: seriesCleanup.arrStatus,
@@ -103,8 +91,10 @@ export async function resolveSeasonDownloadCleanup(input: {
     }
     return direct;
   } catch (error) {
-    if (seriesCleanup?.status === 'resolved') return seriesCleanup;
+    // A resolved historical association must never override a failed current
+    // file check, especially an alias of a retained Plex version.
     seriesCleanup = {
+      qbittorrentPathAccessJob,
       ratingKey: input.showRatingKey,
       status: 'unavailable',
       downloadJobs: [],

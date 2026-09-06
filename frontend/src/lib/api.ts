@@ -668,6 +668,11 @@ export const api = {
         body: JSON.stringify(partial),
       }),
     plexPathMappings: () => apiFetch<PlexPathMapping[]>("/settings/plex-path-mappings"),
+    updatePlexPathMapping: (id: number, mapping: SavePlexPathMappingRequest) =>
+      apiFetch<PlexPathMapping>(`/settings/plex-path-mappings/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(mapping),
+      }),
     createPlexPathMapping: (mapping: SavePlexPathMappingRequest) =>
       apiFetch<{ id: number; revision: number }>("/settings/plex-path-mappings", {
         method: "POST",
@@ -694,6 +699,11 @@ export const api = {
   },
   arr: {
     get: () => apiFetch<ArrIntegrationSettings>("/integrations/arr"),
+    savePathMappings: (id: number, pathMappings: ArrInstance["pathMappings"]) =>
+      apiFetch<ArrInstance>(`/integrations/arr/instances/${id}/path-mappings`, {
+        method: "PUT",
+        body: JSON.stringify({ pathMappings }),
+      }),
     verifyStorage: (request: ArrStorageVerificationRequest) =>
       apiFetch<ArrStorageVerificationResponse>("/integrations/arr/verify-storage", {
         method: "POST",
@@ -749,6 +759,11 @@ export const api = {
     deleteInstance: (id: number) =>
       apiFetch<{ ok: true }>(`/integrations/qbittorrent/instances/${id}`, {
         method: "DELETE",
+      }),
+    updatePathMapping: (id: number, mapping: SaveQbittorrentPathMappingRequest) =>
+      apiFetch<QbittorrentPathMapping>(`/integrations/qbittorrent/path-mappings/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(mapping),
       }),
     createPathMapping: (mapping: SaveQbittorrentPathMappingRequest) =>
       apiFetch<QbittorrentPathMapping>("/integrations/qbittorrent/path-mappings", {

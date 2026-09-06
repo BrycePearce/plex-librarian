@@ -262,11 +262,11 @@ Deno.test("advanced keeps Plex paths alongside selected deletion services", () =
   );
   assertEquals(selected.services, ["plex", "radarr"]);
   assertEquals(selected.arrTargets.length, 1);
-  assertEquals(selected.orphanFiles.length, 1);
+  assertEquals(selected.orphanFiles.length, 0);
   assertEquals(selected.showPlexPaths, true);
 });
 
-Deno.test("Sonarr implies its automatic historical unlink without selecting qBittorrent", () => {
+Deno.test("Sonarr preview never implies historical unlink", () => {
   const selected = versionDeletionPresentation(
     preview({
       arrService: "sonarr",
@@ -287,11 +287,11 @@ Deno.test("Sonarr implies its automatic historical unlink without selecting qBit
     true,
     false,
   );
-  assertEquals(selected.orphanFiles.length, 1);
+  assertEquals(selected.orphanFiles.length, 0);
   assertEquals(selected.downloadJobs.length, 0);
 });
 
-Deno.test("Sonarr preview switches historical ownership only with qBittorrent selection", () => {
+Deno.test("Sonarr preview ignores stale historical projections for both selections", () => {
   const value = preview({
     arrService: "sonarr",
     arrConfigured: true,
@@ -340,13 +340,13 @@ Deno.test("Sonarr preview switches historical ownership only with qBittorrent se
   });
   const sonarrOnly = versionDeletionPresentation(value, true, false);
   assertEquals(sonarrOnly.orphanFiles, []);
-  assertEquals(sonarrOnly.sonarrHistoricalPaths[0]?.disposition, "retain_live_qbittorrent");
-  assertEquals(sonarrRetainedPathsSummary(sonarrOnly.sonarrHistoricalPaths)?.count, 1);
+  assertEquals(sonarrOnly.sonarrHistoricalPaths, []);
+  assertEquals(sonarrRetainedPathsSummary(sonarrOnly.sonarrHistoricalPaths), null);
 
   const coordinated = versionDeletionPresentation(value, true, true);
   assertEquals(coordinated.orphanFiles.length, 0);
-  assertEquals(coordinated.sonarrHistoricalPaths[0]?.disposition, "delete");
-  assertEquals(coordinated.sonarrHistoricalPaths[0]?.reason, "selected owner");
+  assertEquals(coordinated.sonarrHistoricalPaths, []);
+  assertEquals(coordinated.sonarrHistoricalPaths[0]?.reason, undefined);
   assertEquals(sonarrRetainedPathsSummary(coordinated.sonarrHistoricalPaths), null);
   assertEquals(coordinated.downloadJobs.length, 1);
 });
@@ -446,7 +446,7 @@ Deno.test("Arr destination labels and explanations match their strategy", () => 
   assertEquals(versionArrDestinationCopy(preview({}), "Sonarr", true, false), {
     label: "Switch Sonarr to remaining version",
     info:
-      "Required to keep the record: Sonarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Sonarr adopt the remaining version and preserve the existing monitoring state. Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.",
+      "Required to keep the record: Sonarr currently manages the selected file. Before Plex deletes it, Plex Librarian will make Sonarr adopt the remaining version and preserve the existing monitoring state. Applies the shown Sonarr change to current managed files. Identified qBittorrent files are retained unless qBittorrent is also selected.",
   });
   assertEquals(versionArrDestinationCopy(preview({}), "Radarr", true, true, false), {
     label: "Switch Radarr to remaining version",

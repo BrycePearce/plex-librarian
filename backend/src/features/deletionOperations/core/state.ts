@@ -47,7 +47,7 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
   ).value<[string, number, number, number]>(operationId) ?? ['0', 0, 0, 0];
   const active = running + queued + retrying;
   const sequentialSeasonCleanup = client.prepare(
-    "SELECT 1 FROM deletion_targets WHERE operation_id = ? AND json_extract(snapshot, '$.seasonCleanup') = 1 LIMIT 1",
+    "SELECT 1 FROM deletion_targets WHERE operation_id = ? AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.seasonCleanup') = 1 LIMIT 1",
   ).value<[number]>(operationId) !== undefined;
   const unresolvedWarnings = client.prepare(
     "SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND status = 'completed_with_warning' AND phase <> 'finalizing'",

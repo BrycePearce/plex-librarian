@@ -229,6 +229,9 @@ export interface PlexMediaVersion {
 // filesystem authority because they may name a remote host path, a container path, or
 // a path that changed after this lookup.
 export interface PlexMediaPathPreview {
+  /** Optional current Part byte sizes for bounded current-payload verification. */
+  fileSizes?: Record<string, number | null>;
+  pathAccessSample?: { ratingKey: string; mediaId: number; path: string; size: number };
   paths: string[];
   truncated: boolean;
 }

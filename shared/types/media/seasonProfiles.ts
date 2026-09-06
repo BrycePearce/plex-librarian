@@ -1,6 +1,6 @@
 import type { DuplicateEpisodeGroup } from './duplicates.ts';
 import type { DeletionOperationStatus } from '../deletion/operations.ts';
-import type { SonarrHistoricalPathPreview } from '../deletion/cleanup.ts';
+import type { DownloadCleanupJob, SonarrHistoricalPathPreview } from '../deletion/cleanup.ts';
 
 export interface SeasonVersionProfileMember {
   episodeRatingKey: string;
@@ -115,6 +115,8 @@ export interface SeasonDownloadDestinationPreview {
 }
 
 export interface SeasonDeletionPreviewResponse {
+  plexPathAccessSample?: { ratingKey: string; mediaId: number; path: string };
+  qbittorrentPathAccessJob?: DownloadCleanupJob;
   seasonRatingKey: string;
   completeEpisodeCount: number;
   selectedEpisodeCount: number;

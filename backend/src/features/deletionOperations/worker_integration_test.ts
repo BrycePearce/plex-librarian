@@ -1,3 +1,4 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
 import {
   assert,
   assertEquals,
@@ -1202,6 +1203,35 @@ function addMovie(ratingKey: string, mediaIds = [11, 12], tmdbId: number | null 
   });
 }
 
+async function addMovieCurrentPathProtection(ratingKeys: string[]): Promise<void> {
+  const root = await Deno.makeTempDir({ dir: testDirectory });
+  const libraryRoot = `${root}/library`;
+  const downloadRoot = `${root}/downloads`;
+  await Deno.mkdir(libraryRoot);
+  await Deno.mkdir(`${downloadRoot}/release`, { recursive: true });
+  const paths = ratingKeys.flatMap((key) => live.get(key)!.Media!.flatMap((media) => media.Part!));
+  for (const part of paths) {
+    await Deno.writeFile(
+      `${libraryRoot}/${part.file!.split('/').at(-1)}`,
+      new Uint8Array(part.size!),
+    );
+  }
+  const sample = paths[0]!.file!;
+  await Deno.writeFile(`${downloadRoot}/release/movie.mkv`, new Uint8Array(100_000));
+  withTransaction((client) => {
+    client.prepare(`INSERT INTO plex_path_mappings
+      (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+       validation_plex_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+      VALUES (1, 'movies', '/movies', ?, 1, 1, ?, ?, 50000, 1, 1, 1)`)
+      .run(libraryRoot, sample, `${libraryRoot}/${sample.split('/').at(-1)}`);
+    client.prepare(`INSERT INTO qbittorrent_path_mappings
+      (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+       validation_qbittorrent_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+      VALUES (1, 'db:1', '/downloads', ?, 1, 1, '/downloads/release/movie.mkv', ?, 100000, 1, 1, 1)`)
+      .run(downloadRoot, `${downloadRoot}/release/movie.mkv`);
+  });
+}
+
 function addQuickCleanupShow(ratingKey: string): void {
   withTransaction((client) => {
     client.prepare(
@@ -1600,6 +1630,7 @@ async function enqueueMovieReassignment(
       title: `Movie ${ratingKey}`,
       logicalSize: 50,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -1651,6 +1682,7 @@ async function enqueueRadarrRemovalFallback(ratingKey: string): Promise<string> 
       title: `Movie ${ratingKey}`,
       logicalSize: 50,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -1834,6 +1866,7 @@ async function enqueueEpisodeReassignment(
       title: 'Example Show — Pilot',
       logicalSize: 40,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -1886,6 +1919,7 @@ async function enqueueVersion(
       title: `Movie ${ratingKey}`,
       logicalSize: 50,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -1922,6 +1956,7 @@ async function enqueueWhole(ratingKey: string): Promise<string> {
       title: `Movie ${ratingKey}`,
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -1969,6 +2004,7 @@ async function enqueueWholeDestinations(
       title: `Movie ${ratingKey}`,
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -2000,6 +2036,7 @@ async function enqueueEpisode(): Promise<string> {
       title: 'Example Show — Pilot',
       logicalSize: 40,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -2575,6 +2612,7 @@ Deno.test('Plex-only whole-season deletion preserves the show and finalizes seas
       title: 'Season Show — Season 1',
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -2657,6 +2695,7 @@ Deno.test('whole-season replay finalizes when Plex already confirms season absen
       title: 'Example Show — Season 1',
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -2763,6 +2802,7 @@ Deno.test('whole-season deletion rejects Plex membership and media drift', async
         title: 'Drift Show — Season 1',
         logicalSize: 100,
         snapshot: {
+          currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier: 'machine-1',
           serverUrl: 'http://plex',
           libraryKey: 'shows',
@@ -2914,6 +2954,7 @@ async function enqueueCoordinatedWholeSeason(): Promise<string> {
       title: 'Example Show — Season 1',
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -3550,6 +3591,7 @@ Deno.test('qBittorrent-only whole-item deletion does not require Arr selection',
   coordinatedRatingKey = 'qbit-only';
   arrPresent = true;
   qbitPresent = true;
+  await addMovieCurrentPathProtection(['qbit-only']);
   const operationId = await enqueueWholeDestinations(
     ['qbit-only'],
     new Set(),
@@ -3705,6 +3747,7 @@ Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', asy
       title: 'Example Show',
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -3956,7 +3999,8 @@ Deno.test('whole-show Sonarr deletion does not persist an empty hardlink reclama
 });
 
 Deno.test({
-  name: 'whole-show Sonarr deletion automatically verifies the complete two-link removal',
+  name:
+    'whole-show Sonarr deletion preserves historical hardlinks and reports unknown space recovery',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -3992,25 +4036,7 @@ Deno.test({
       const preview = await previewResponse.json();
       assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
       assertEquals(preview.items[0].downloadJobs.length, 0);
-      assertEquals(preview.items[0].orphanFiles.length, 1);
-
-      const plexOnlyResponse = await app.request('/api/libraries/shows/items', {
-        method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          clientRequestId: crypto.randomUUID(),
-          ratingKeys: ['show-1'],
-          coordinatedRatingKeys: [],
-          cleanupDownloadRatingKeys: ['show-1'],
-          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
-        }),
-      });
-      assertEquals(plexOnlyResponse.status, 409, await plexOnlyResponse.clone().text());
-      assertStringIncludes(
-        (await plexOnlyResponse.json()).error,
-        'requires coordinated Sonarr deletion',
-      );
-      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
+      assertEquals(preview.items[0].orphanFiles.length, 0);
 
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
@@ -4029,15 +4055,15 @@ Deno.test({
       await settle();
       const operation = getDeletionOperation(operationId, 1)!;
       assertEquals(operation.status, 'completed', JSON.stringify(operation));
-      assertEquals(operation.verifiedHardlinkDataRemoved, 40);
-      assertEquals(operation.verifiedTargetCount, 1);
-      assertEquals(operation.unknownTargetCount, 0);
+      assertEquals(operation.verifiedHardlinkDataRemoved, 0);
+      assertEquals(operation.verifiedTargetCount, 0);
+      assertEquals(operation.unknownTargetCount, 1);
       const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
-      assertEquals(target.storageOutcome, 'verified');
-      assertEquals(target.verifiedHardlinkDataRemoved, 40);
+      assertEquals(target.storageOutcome, 'unknown');
+      assertEquals(target.verifiedHardlinkDataRemoved, 0);
       assertEquals(arrDeleteCount, 1);
       assertEquals(destinationOrder, ['arr', 'plex']);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
     } finally {
       await Deno.remove(storageRoot, { recursive: true });
@@ -4092,11 +4118,8 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(
-        preview.items[0].sonarrHistoricalPaths[0].disposition,
-        'retain_live_qbittorrent',
-      );
-      assertEquals(preview.items[0].qbittorrentSonarrHistoricalPaths[0].disposition, 'delete');
+      assertEquals(preview.items[0].sonarrHistoricalPaths, []);
+      assertEquals(preview.items[0].qbittorrentSonarrHistoricalPaths, []);
 
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
@@ -4129,7 +4152,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'stale-season Sonarr deletion unlinks only its authorized two-link history',
+  name: 'stale-season Sonarr deletion preserves separately owned unselected QB entries',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4189,15 +4212,12 @@ Deno.test({
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ coordinated: true, cleanupDownloads: true }),
+          body: JSON.stringify({ coordinated: true, cleanupDownloads: false }),
         },
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.sonarrHistoricalPaths?.[0]?.disposition, 'delete');
-      assertEquals(preview.downloadJobs.map((job: { jobId: string }) => job.jobId), [
-        differentHash,
-      ]);
+      assertEquals(preview.sonarrHistoricalPaths, []);
       const response = await app.request('/api/libraries/shows/seasons/season-1/deletion', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -4205,7 +4225,7 @@ Deno.test({
           clientRequestId: crypto.randomUUID(),
           previewFingerprint: preview.fingerprint,
           coordinated: true,
-          cleanupDownloads: true,
+          cleanupDownloads: false,
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -4213,9 +4233,9 @@ Deno.test({
 
       await settle();
       assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
-      assertEquals(qbitDeleteCount, 1);
-      assertEquals(versionDeleteOrder, ['qbit', 'sonarr']);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals(qbitDeleteCount, 0);
+      assertEquals(versionDeleteOrder, ['sonarr']);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
       assertEquals(live.has('show-1'), true);
     } finally {
@@ -4225,7 +4245,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'stale-season fingerprint and outcome retain an unverified historical reason',
+  name: 'stale-season fingerprint and outcome exclude historical filesystem changes',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4269,21 +4289,10 @@ Deno.test({
       const previewResponse = await previewRequest();
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.sonarrHistoricalPaths?.[0]?.disposition, 'unverified');
-      const reason = String(preview.sonarrHistoricalPaths[0].reason);
-
+      assertEquals(preview.sonarrHistoricalPaths, []);
       await Deno.remove(extraPath);
-      const changed = await app.request('/api/libraries/shows/seasons/season-1/deletion', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          clientRequestId: crypto.randomUUID(),
-          previewFingerprint: preview.fingerprint,
-          coordinated: true,
-          cleanupDownloads: false,
-        }),
-      });
-      assertEquals(changed.status, 409, await changed.clone().text());
+      const changedPreview = await (await previewRequest()).json();
+      assertEquals(changedPreview.fingerprint, preview.fingerprint);
 
       await Deno.link(libraryPath, extraPath);
       const restoredPreviewResponse = await previewRequest();
@@ -4305,7 +4314,7 @@ Deno.test({
       const operation = getDeletionOperation(operationId, 1)!;
       assertEquals(operation.status, 'completed', JSON.stringify(operation));
       const target = (operation.targets as Array<{ storageOutcomeReasons?: string[] }>)[0]!;
-      assertEquals(target.storageOutcomeReasons, [reason]);
+      assertEquals(target.storageOutcomeReasons, []);
       assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       assertEquals((await Deno.lstat(extraPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
@@ -4316,7 +4325,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'coordinated Sonarr orphan cleanup reconciles a lost series-delete response',
+  name: 'current Sonarr deletion reconciles a lost response without historical unlink',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4356,8 +4365,8 @@ Deno.test({
           clientRequestId: crypto.randomUUID(),
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
-          cleanupDownloadRatingKeys: ['show-1'],
-          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+          cleanupDownloadRatingKeys: [],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -4367,16 +4376,16 @@ Deno.test({
       const interrupted = getDeletionOperation(operationId, 1)!;
       assertEquals(interrupted.status, 'waiting_retry', JSON.stringify(interrupted));
       assertEquals(arrDeleteCount, 1);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
 
       makeRetryReady(operationId);
       await settle();
       const completed = getDeletionOperation(operationId, 1)!;
       assertEquals(completed.status, 'completed', JSON.stringify(completed));
-      assertEquals(completed.verifiedHardlinkDataRemoved, 40);
-      assertEquals(completed.verifiedTargetCount, 1);
-      assertEquals(completed.unknownTargetCount, 0);
+      assertEquals(completed.verifiedHardlinkDataRemoved, 0);
+      assertEquals(completed.verifiedTargetCount, 0);
+      assertEquals(completed.unknownTargetCount, 1);
       assertEquals(arrDeleteCount, 1);
       assertEquals(destinationOrder, ['arr', 'plex']);
     } finally {
@@ -4386,7 +4395,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'pre-unlink playback gate preserves both accepted hardlinks',
+  name: 'pre-service playback gate preserves current files and historical hardlinks',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4425,8 +4434,8 @@ Deno.test({
           clientRequestId: crypto.randomUUID(),
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
-          cleanupDownloadRatingKeys: ['show-1'],
-          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+          cleanupDownloadRatingKeys: [],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -4435,7 +4444,7 @@ Deno.test({
       let workerSessionReads = 0;
       activeSessionsHook = () => {
         workerSessionReads++;
-        if (workerSessionReads === 2) activePlaybackRatingKey = 'show-1';
+        if (workerSessionReads === 1) activePlaybackRatingKey = 'show-1';
       };
       await settle();
 
@@ -4454,7 +4463,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'final playback gate preserves accepted proof for an explicit retry',
+  name: 'playback retry deletes current service entries while preserving historical links',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4493,8 +4502,8 @@ Deno.test({
           clientRequestId: crypto.randomUUID(),
           ratingKeys: ['show-1'],
           coordinatedRatingKeys: ['show-1'],
-          cleanupDownloadRatingKeys: ['show-1'],
-          cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+          cleanupDownloadRatingKeys: [],
+          cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
         }),
       });
       assertEquals(response.status, 202, await response.clone().text());
@@ -4503,16 +4512,16 @@ Deno.test({
       let workerSessionReads = 0;
       activeSessionsHook = () => {
         workerSessionReads++;
-        if (workerSessionReads === 3) activePlaybackRatingKey = 'show-1';
+        if (workerSessionReads === 1) activePlaybackRatingKey = 'show-1';
       };
       await settle();
 
       const blocked = getDeletionOperation(operationId, 1)!;
       assertEquals(blocked.status, 'needs_attention', JSON.stringify(blocked));
-      assertEquals(blocked.unknownTargetCount, 1);
+      assertEquals(blocked.unknownTargetCount, 0);
       assertEquals(blocked.verifiedHardlinkDataRemoved, 0);
       assertEquals(arrDeleteCount, 0);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       assertEquals((await Deno.lstat(libraryPath)).isFile, true);
 
       activeSessionsHook = null;
@@ -4522,9 +4531,9 @@ Deno.test({
 
       const completed = getDeletionOperation(operationId, 1)!;
       assertEquals(completed.status, 'completed', JSON.stringify(completed));
-      assertEquals(completed.verifiedTargetCount, 1);
-      assertEquals(completed.unknownTargetCount, 0);
-      assertEquals(completed.verifiedHardlinkDataRemoved, 40);
+      assertEquals(completed.verifiedTargetCount, 0);
+      assertEquals(completed.unknownTargetCount, 1);
+      assertEquals(completed.verifiedHardlinkDataRemoved, 0);
       assertEquals(arrDeleteCount, 1);
       const completionPayloads = withTransaction((client) =>
         client.prepare(
@@ -4532,14 +4541,84 @@ Deno.test({
         ).values<[string]>(operationId).map(([payload]) => JSON.parse(payload))
       );
       assertEquals(completionPayloads.length, 2);
-      assertEquals(completionPayloads[0].unknownTargetCount, 1);
+      assertEquals(completionPayloads[0].unknownTargetCount, 0);
       assertEquals(completionPayloads[0].verifiedHardlinkDataRemoved, 0);
-      assertEquals(completionPayloads[1].verifiedTargetCount, 1);
-      assertEquals(completionPayloads[1].verifiedHardlinkDataRemoved, 40);
+      assertEquals(completionPayloads[1].verifiedTargetCount, 0);
+      assertEquals(completionPayloads[1].verifiedHardlinkDataRemoved, 0);
     } finally {
       await Deno.remove(storageRoot, { recursive: true });
     }
   },
+});
+
+Deno.test('Plex-only movie worker rechecks a QB owner appearing after preview', async () => {
+  reset();
+  addMovie('plex-only-new-qb-owner', [11]);
+  const localRoot = resolve(testDirectory, 'plex-only-new-qb-owner').replaceAll('\\', '/');
+  const localRelease = `${localRoot}/release`;
+  const localMovie = `${localRelease}/old.mkv`;
+  await Deno.mkdir(localRelease, { recursive: true });
+  await Deno.writeFile(localMovie, new Uint8Array(40_000));
+  live.get('plex-only-new-qb-owner')!.Media = [{
+    id: 11,
+    Part: [{ file: '/movies/old.mkv', size: 40_000 }],
+  }];
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO qbittorrent_instances (id, server_id, name, url, username, password, created_at, updated_at) VALUES (1, 1, 'qBittorrent', 'http://qbit', '', '', 1, 1)",
+    ).run();
+    client.prepare(
+      `INSERT INTO plex_path_mappings
+       (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+        validation_plex_path, validation_local_path, validation_size,
+        validated_at, created_at, updated_at)
+       VALUES (1, 'movies', '/movies', ?, 1, 1,
+               '/movies/old.mkv', ?, 40000, 1, 1, 1)`,
+    ).run(localRelease, localMovie);
+    client.prepare(
+      `INSERT INTO qbittorrent_path_mappings
+       (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+        validation_qbittorrent_path, validation_local_path, validation_size,
+        validated_at, created_at, updated_at)
+       VALUES (1, 'db:1', '/downloads', ?, 1, 1,
+               '/downloads/release/old.mkv', ?, 40000, 1, 1, 1)`,
+    ).run(localRoot, localMovie);
+  });
+  seasonPackQbit = true;
+  qbitPresent = false;
+
+  const previewResponse = await app.request(
+    '/api/libraries/movies/items/download-cleanup-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ratingKeys: ['plex-only-new-qb-owner'] }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  const preview = await previewResponse.json();
+  assertEquals(preview.items[0].plexOnlyStatus, 'resolved');
+  const response = await app.request('/api/libraries/movies/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['plex-only-new-qb-owner'],
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: [],
+      cleanupPreviewFingerprints: {},
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json() as { operationId: string };
+  qbitPresent = true;
+  await settle();
+  const operation = getDeletionOperation(operationId, 1)!;
+  assertEquals(operation.status, 'waiting_retry', JSON.stringify(operation));
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(destinationOrder, []);
+  assertEquals(live.has('plex-only-new-qb-owner'), true);
+  assertEquals((await Deno.lstat(localMovie)).isFile, true);
 });
 
 Deno.test('whole-item direct-manifest cleanup converges after a lost delete response', async () => {
@@ -4678,6 +4757,7 @@ Deno.test('whole-item retry rejects changed evidence that splits a shared job', 
   addMovie('retry-shared-unselected', [12], 10);
   arrPresent = true;
   qbitPresent = true;
+  await addMovieCurrentPathProtection(['retry-shared-selected', 'retry-shared-unselected']);
   const operationId = await enqueueWholeDestinations(
     ['retry-shared-selected', 'retry-shared-unselected'],
     new Set(),
@@ -4745,7 +4825,7 @@ Deno.test('coordinated Radarr work never queries qBittorrent unless cleanup is s
 });
 
 Deno.test({
-  name: 'coordinated replay recognizes a durably attempted orphan file already absent',
+  name: 'new current-only deletion does not adopt unrelated historical unlink attempts',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4765,7 +4845,7 @@ Deno.test({
           'INSERT INTO download_file_delete_attempts (server_id, rating_key, local_path, root_path, root_device, root_inode, started_at) VALUES (1, ?, ?, ?, ?, ?, 1)',
         ).run('orphan-movie', localPath, downloadRoot, root.rootDevice, root.rootInode);
       });
-      const operationId = await enqueueCoordinated(['orphan-movie'], true);
+      const operationId = await enqueueCoordinated(['orphan-movie'], false);
       await settle();
       const operation = getDeletionOperation(operationId, 1);
       assertEquals(operation?.status, 'completed', JSON.stringify(operation));
@@ -4852,7 +4932,8 @@ Deno.test('duplicate episode submission rejects a changed Sonarr retained-versio
 });
 
 Deno.test({
-  name: 'duplicate episode Sonarr reassignment removes only the selected two-link history',
+  name:
+    'duplicate episode Sonarr reassignment preserves historical links and adopts the remaining version',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -4893,7 +4974,7 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.sonarrHistoricalPaths?.[0]?.disposition, 'delete');
+      assertEquals(preview.sonarrHistoricalPaths ?? [], []);
       const response = await app.request('/api/duplicates/episodes/episode-1/media', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
@@ -4914,7 +4995,7 @@ Deno.test({
         JSON.stringify(getDeletionOperation(operationId, 1)),
       );
       assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
     } finally {
       await Deno.remove(storageRoot, { recursive: true });
@@ -4939,7 +5020,7 @@ Deno.test({
     ];
     const sibling = addAdditionalSonarrEpisode(2, 31, 32);
     const otherHash = 'b'.repeat(40);
-    const selectedOwnerHash = 'c'.repeat(40);
+    const selectedOwnerHash = torrentHash;
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
@@ -4953,6 +5034,8 @@ Deno.test({
       await Deno.mkdir(`${downloadRoot}/other`, { recursive: true });
       await Deno.writeFile(firstLibrary, new Uint8Array(40_000));
       await Deno.writeFile(secondLibrary, new Uint8Array(40_000));
+      await Deno.writeFile(`${libraryRoot}/episode-1-retained.mkv`, new Uint8Array(40_000));
+      await Deno.writeFile(`${libraryRoot}/episode-2-retained.mkv`, new Uint8Array(40_000));
       await Deno.link(firstLibrary, firstDownload);
       await Deno.link(secondLibrary, secondDownload);
       additionalSonarrHistory = [{
@@ -5014,6 +5097,341 @@ Deno.test({
   },
 });
 
+async function movedDuplicateMovieFixture(adoption = false) {
+  reset();
+  configureRadarr(true);
+  addMovie('moved-movie', [11, 12], 10);
+  coordinatedRatingKey = 'moved-movie';
+  arrPresent = true;
+  arrManagedMediaId = 11;
+  arrManagedPath = '/library/Coordinated/movie.mkv';
+  arrManagedFileSize = 50_000;
+  const retainedRemote = adoption
+    ? '/library/Coordinated/retained.mkv'
+    : '/downloads/retained/movie.mkv';
+  live.get('moved-movie')!.Media = [
+    { id: 11, Part: [{ file: arrManagedPath, size: 50_000 }] },
+    { id: 12, Part: [{ file: retainedRemote, size: 50_000 }] },
+  ];
+  const root = (await Deno.makeTempDir({ dir: testDirectory })).replaceAll('\\', '/')
+    .replace(/^[A-Za-z]:/, '');
+  const libraryRoot = `${root}/library`;
+  const downloadRoot = `${root}/downloads`;
+  await Deno.mkdir(libraryRoot);
+  await Deno.mkdir(`${downloadRoot}/moved`, { recursive: true });
+  const selected = `${libraryRoot}/movie.mkv`;
+  const retained = `${libraryRoot}/retained.mkv`;
+  const payload = `${downloadRoot}/moved/payload.mkv`;
+  await Deno.writeFile(selected, new Uint8Array(50_000));
+  await Deno.writeFile(retained, new Uint8Array(50_000));
+  await Deno.link(selected, payload);
+  qbitJobsOverride = [{
+    hash: torrentHash,
+    name: 'moved movie payload',
+    size: 50_000,
+    contentPath: '/downloads/moved/payload.mkv',
+    savePath: '/downloads',
+    files: [{ name: 'moved/payload.mkv', size: 50_000 }],
+  }];
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (1, 'library', '/library/Coordinated', ?)",
+    ).run(libraryRoot);
+    for (const [remote, local] of [[arrManagedPath, selected], [retainedRemote, retained]]) {
+      client.prepare(`INSERT INTO plex_path_mappings
+        (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+         validation_plex_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+        VALUES (1, 'movies', ?, ?, 1, 1, ?, ?, 50000, 1, 1, 1)`)
+        .run(remote, local, remote, local);
+    }
+    client.prepare(`INSERT INTO qbittorrent_path_mappings
+      (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+       validation_qbittorrent_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+      VALUES (1, 'db:1', '/downloads', ?, 1, 1, '/downloads/moved/payload.mkv', ?, 50000, 1, 1, 1)`)
+      .run(downloadRoot, payload);
+  });
+  return { selected, retained, payload };
+}
+
+Deno.test('individual duplicate movie moved-current payload preserves Radarr removal contract', async (t) => {
+  const fixtureFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === 'radarr' && url.pathname === '/api/v3/history/movie') {
+      return Promise.resolve(
+        Response.json([{
+          id: 1,
+          eventType: 'downloadFolderImported',
+          downloadId: torrentHash,
+          data: { droppedPath: '/downloads/old/movie.mkv', importedPath: arrManagedPath },
+        }]),
+      );
+    }
+    return fixtureFetch(input, init);
+  };
+  const preview = async () => {
+    const response = await app.request(
+      '/api/duplicates/movies/moved-movie/media/deletion-preview',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mediaIds: [11], inspectDownloadCleanup: true }),
+      },
+    );
+    assertEquals(response.status, 200, await response.clone().text());
+    return await response.json();
+  };
+  try {
+    await t.step(
+      'supported removal persists direct proof and preserves retained media',
+      async () => {
+        const { retained } = await movedDuplicateMovieFixture();
+        const planned = await preview();
+        assertEquals(
+          planned.radarrPathAdoption.mode,
+          'remove_from_radarr',
+          JSON.stringify(planned),
+        );
+        assertEquals(planned.cleanupStatus, 'resolved', JSON.stringify(planned));
+        assertEquals(planned.downloadJobs.map((job: { contentPath: string }) => job.contentPath), [
+          '/downloads/moved/payload.mkv',
+        ]);
+        assertEquals(planned.orphanFiles, []);
+        const response = await app.request('/api/duplicates/movies/moved-movie/media', {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            mediaIds: [11],
+            cleanupMediaIds: [11],
+            planFingerprint: planned.radarrPathAdoption.planFingerprint,
+            allowRadarrMovieRemoval: true,
+          }),
+        });
+        assertEquals(response.status, 202, await response.clone().text());
+        const { operationId } = await response.json();
+        const snapshot = withTransaction((client) =>
+          JSON.parse(
+            client.prepare(
+              'SELECT snapshot FROM deletion_targets WHERE operation_id = ?',
+            ).value<[string]>(operationId)![0],
+          )
+        );
+        assertEquals(
+          snapshot.radarrRemovalDownloadCleanup.downloadJobs[0].provenance,
+          'direct_manifest',
+        );
+        assertEquals(snapshot.radarrRemovalDownloadCleanup.orphanFiles, []);
+        await settle();
+        assertEquals(
+          getDeletionOperation(operationId, 1)?.status,
+          'completed',
+          JSON.stringify(getDeletionOperation(operationId, 1)),
+        );
+        assertEquals(qbitDeleteCount, 1);
+        assertEquals(arrDeleteCount, 1);
+        assertEquals(live.get('moved-movie')?.Media?.map((media) => media.id), [12]);
+        assertEquals((await Deno.lstat(retained)).size, 50_000);
+      },
+    );
+    for (const mode of ['adoption', 'plex_only'] as const) {
+      await t.step(`does not enable unsupported ${mode} QB deletion`, async () => {
+        await movedDuplicateMovieFixture(mode === 'adoption');
+        const planned = await preview();
+        assertEquals(planned.cleanupStatus, 'resolved', JSON.stringify(planned));
+        const response = await app.request('/api/duplicates/movies/moved-movie/media', {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            mediaIds: [11],
+            cleanupMediaIds: [11],
+            ...(mode === 'plex_only' ? { radarrMode: 'none' } : {}),
+          }),
+        });
+        assertEquals(
+          response.status,
+          mode === 'adoption' ? 409 : 400,
+          await response.clone().text(),
+        );
+        assertStringIncludes(
+          (await response.json()).error,
+          mode === 'adoption'
+            ? 'qBittorrent cleanup is unavailable for this Radarr decision'
+            : 'Plex-only deletion cannot include Radarr coordination',
+        );
+        assertEquals(qbitDeleteCount, 0);
+        assertEquals(arrDeleteCount, 0);
+        assertEquals(live.get('moved-movie')?.Media?.map((media) => media.id), [11, 12]);
+      });
+    }
+  } finally {
+    globalThis.fetch = fixtureFetch;
+  }
+});
+
+async function movedDuplicateEpisodeFixture(
+  mode: 'verified' | 'different' | 'retained' | 'shared',
+) {
+  reset();
+  addEpisode();
+  configureSonarr(true);
+  seasonPackQbit = true;
+  sonarrManagedMediaId = 21;
+  sonarrManagedPath = '/tv/Show/Season 01/old.mkv';
+  sonarrRescanTargetPath = '/tv/Show/Season 01/retained.mkv';
+  live.get('episode-1')!.Media = [
+    { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+    { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
+  ];
+  // Arr local mappings describe the Linux container namespace; a drive-rooted
+  // Windows test path is also accessible without its drive prefix on this host.
+  const root = (await Deno.makeTempDir({ dir: testDirectory })).replaceAll('\\', '/')
+    .replace(/^[A-Za-z]:/, '');
+  const libraryRoot = `${root}/library`;
+  const downloadRoot = `${root}/downloads`;
+  await Deno.mkdir(libraryRoot);
+  await Deno.mkdir(`${downloadRoot}/moved`, { recursive: true });
+  const selected = `${libraryRoot}/old.mkv`;
+  const retained = `${libraryRoot}/retained.mkv`;
+  const payload = `${downloadRoot}/moved/payload.mkv`;
+  await Deno.writeFile(selected, new Uint8Array(40_000));
+  await Deno.writeFile(retained, new Uint8Array(40_000));
+  if (mode === 'different') await Deno.writeFile(payload, new Uint8Array(40_000));
+  else await Deno.link(mode === 'retained' ? retained : selected, payload);
+  if (mode === 'shared') {
+    await Deno.writeFile(`${downloadRoot}/moved/unselected.mkv`, new Uint8Array(40_000));
+  }
+  qbitJobsOverride = [{
+    hash: torrentHash,
+    name: 'moved payload',
+    size: mode === 'shared' ? 80_000 : 40_000,
+    contentPath: mode === 'shared' ? '/downloads/moved' : '/downloads/moved/payload.mkv',
+    savePath: '/downloads',
+    files: [
+      { name: 'moved/payload.mkv', size: 40_000 },
+      ...(mode === 'shared' ? [{ name: 'moved/unselected.mkv', size: 40_000 }] : []),
+    ],
+  }];
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv/Show/Season 01', ?)",
+    ).run(libraryRoot);
+    client.prepare(`INSERT INTO plex_path_mappings
+      (server_id, library_key, plex_path, local_path, case_sensitive, revision,
+       validation_plex_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+      VALUES (1, 'shows', '/tv/Show/Season 01', ?, 1, 1, '/tv/Show/Season 01/old.mkv', ?, 40000, 1, 1, 1)`)
+      .run(libraryRoot, selected);
+    client.prepare(`INSERT INTO qbittorrent_path_mappings
+      (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+       validation_qbittorrent_path, validation_local_path, validation_size, validated_at, created_at, updated_at)
+      VALUES (1, 'db:1', '/downloads', ?, 1, 1, '/downloads/moved/payload.mkv', ?, 40000, 1, 1, 1)`)
+      .run(downloadRoot, payload);
+  });
+  const previewResponse = await app.request(
+    '/api/duplicates/episodes/episode-1/media/deletion-preview',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mediaIds: [21], inspectDownloadCleanup: true }),
+    },
+  );
+  assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+  return { preview: await previewResponse.json(), retained };
+}
+
+Deno.test('individual duplicate episode current-payload discovery preserves scope through enqueue and retry', async (t) => {
+  for (const mode of ['different', 'retained', 'shared'] as const) {
+    await t.step(`blocks ${mode} moved payload`, async () => {
+      const { preview } = await movedDuplicateEpisodeFixture(mode);
+      assertEquals(preview.cleanupStatus, 'unavailable', JSON.stringify(preview));
+      assertEquals(preview.downloadJobs, []);
+      const response = await app.request('/api/duplicates/episodes/episode-1/media', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          mediaIds: [21],
+          cleanupMediaIds: [21],
+          planFingerprint: preview.qbittorrentPlanFingerprint,
+        }),
+      });
+      assertEquals(response.status, 409, await response.clone().text());
+      assertEquals(qbitDeleteCount, 0);
+    });
+  }
+  await t.step(
+    'verified moved payload is persisted; mapping drift holds execution and retry',
+    async () => {
+      const { preview } = await movedDuplicateEpisodeFixture('verified');
+      assertEquals(preview.cleanupStatus, 'resolved', JSON.stringify(preview));
+      assertEquals(preview.downloadJobs.map((job: { contentPath: string }) => job.contentPath), [
+        '/downloads/moved/payload.mkv',
+      ]);
+      const response = await app.request('/api/duplicates/episodes/episode-1/media', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          mediaIds: [21],
+          cleanupMediaIds: [21],
+          planFingerprint: preview.qbittorrentPlanFingerprint,
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json();
+      const snapshot = withTransaction((client) =>
+        JSON.parse(
+          client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<
+            [string]
+          >(operationId)![0],
+        )
+      );
+      assertEquals(snapshot.seasonDownloadCleanup.downloadJobs[0].provenance, 'direct_manifest');
+      assertEquals(snapshot.seasonDownloadCleanup.orphanFiles, []);
+      withTransaction((client) =>
+        client.prepare('UPDATE qbittorrent_path_mappings SET revision = revision + 1').run()
+      );
+      await settle();
+      assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+      assertEquals(qbitDeleteCount, 0);
+      assertEquals(retryDeletionOperation(operationId, 1), true);
+      await settle();
+      assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+      assertEquals(qbitDeleteCount, 0);
+    },
+  );
+  await t.step(
+    'verified moved payload completes while Sonarr adopts the retained version',
+    async () => {
+      const { preview, retained } = await movedDuplicateEpisodeFixture('verified');
+      assertEquals(preview.cleanupStatus, 'resolved', JSON.stringify(preview));
+      const response = await app.request('/api/duplicates/episodes/episode-1/media', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          mediaIds: [21],
+          cleanupMediaIds: [21],
+          planFingerprint: preview.qbittorrentPlanFingerprint,
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json();
+      await settle();
+      assertEquals(
+        getDeletionOperation(operationId, 1)?.status,
+        'completed',
+        JSON.stringify(getDeletionOperation(operationId, 1)),
+      );
+      assertEquals(qbitDeleteCount, 1);
+      assertEquals(sonarrManagedPath, sonarrRescanTargetPath);
+      assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
+      assertEquals((await Deno.lstat(retained)).isFile, true);
+    },
+  );
+});
+
 Deno.test('multi-target operation processes every target in ordinal order', async () => {
   reset();
   addMovie('batch-a');
@@ -5030,6 +5448,7 @@ Deno.test('multi-target operation processes every target in ordinal order', asyn
       title: `Movie ${ratingKey}`,
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -5061,6 +5480,7 @@ Deno.test('multi-operation enqueue rolls back every library when one library con
       title: 'Existing show',
       logicalSize: null,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'shows',
@@ -5087,6 +5507,7 @@ Deno.test('multi-operation enqueue rolls back every library when one library con
       title: ratingKey,
       logicalSize: null,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey,
@@ -5143,6 +5564,7 @@ Deno.test('season enqueue rejects mapping drift and rolls back all durable rows'
           title: 'Example Show — Pilot',
           logicalSize: 40,
           snapshot: {
+            currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
             libraryKey: 'shows',
             ratingKey: 'episode-1',
             showRatingKey: 'show-1',
@@ -5193,6 +5615,7 @@ Deno.test('season enqueue rolls back operation, targets, and reservations after 
       title: 'Existing reservation',
       logicalSize: 40,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         libraryKey: 'shows',
         ratingKey: 'atomic-episode-2',
         showRatingKey: 'atomic-show',
@@ -5218,6 +5641,7 @@ Deno.test('season enqueue rolls back operation, targets, and reservations after 
     title: episodeRatingKey,
     logicalSize: 40,
     snapshot: {
+      currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
       libraryKey: 'shows',
       ratingKey: episodeRatingKey,
       showRatingKey: 'atomic-show',
@@ -5292,6 +5716,7 @@ Deno.test('Plex-only season enqueue requires reviewed Sonarr inspection evidence
           title: 'Example Show — Pilot',
           logicalSize: 40,
           snapshot: {
+            currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
             libraryKey: 'shows',
             ratingKey: 'episode-1',
             showRatingKey: 'show-1',
@@ -5332,6 +5757,7 @@ Deno.test('Plex-only season enqueue rejects inspected Sonarr mapping drift', asy
           title: 'Example Show — Pilot',
           logicalSize: 40,
           snapshot: {
+            currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
             libraryKey: 'shows',
             ratingKey: 'episode-1',
             showRatingKey: 'show-1',
@@ -5381,6 +5807,7 @@ Deno.test('enqueue race replay returns the existing operation status', async () 
       title: 'Race status',
       logicalSize: 100,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -6066,6 +6493,41 @@ Deno.test('season cleanup requires verified download coverage when cleanup is se
   );
 });
 
+/** Expose the current library and payload as separate hardlink directory entries. */
+async function exposeSeasonCurrentFiles(): Promise<void> {
+  // Arr's local path vocabulary is Unix-shaped; Windows accepts a drive-rooted
+  // slash path on the current drive for these isolated filesystem fixtures.
+  const root = (await Deno.makeTempDir({ dir: testDirectory })).replaceAll('\\', '/')
+    .replace(/^[A-Za-z]:/, '');
+  const library = `${root}/tv`;
+  const downloads = `${root}/downloads`;
+  await Deno.mkdir(`${library}/Show/Season 01`, { recursive: true });
+  await Deno.mkdir(`${downloads}/release`, { recursive: true });
+  for (const media of live.get('episode-1')!.Media!) {
+    for (const part of media.Part ?? []) {
+      if (!part.file?.startsWith('/tv/')) throw new Error('Unexpected fixture Plex path');
+      await Deno.writeFile(`${root}${part.file}`, new Uint8Array(part.size!));
+    }
+  }
+  await Deno.link(`${root}${sonarrManagedPath}`, `${downloads}/release/old.mkv`);
+  withTransaction((client) => {
+    client.prepare("UPDATE arr_path_mappings SET local_path = ? WHERE arr_path = '/tv'")
+      .run(library);
+    client.prepare(
+      "UPDATE plex_path_mappings SET local_path = ?, validation_local_path = ? WHERE plex_path = '/tv'",
+    )
+      .run(library, `${root}${sonarrManagedPath}`);
+    client.prepare(
+      "UPDATE qbittorrent_path_mappings SET local_path = ?, validation_local_path = ? WHERE qbittorrent_path = '/tv'",
+    )
+      .run(library, `${root}${sonarrManagedPath}`);
+    client.prepare(
+      "UPDATE qbittorrent_path_mappings SET local_path = ?, validation_local_path = ? WHERE qbittorrent_path = '/downloads'",
+    )
+      .run(downloads, `${downloads}/release/old.mkv`);
+  });
+}
+
 Deno.test('season cleanup deletes an exactly verified qBittorrent job when selected', async () => {
   reset();
   configureSonarr(true, true);
@@ -6079,6 +6541,7 @@ Deno.test('season cleanup deletes an exactly verified qBittorrent job when selec
     { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
     { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
   ];
+  await exposeSeasonCurrentFiles();
   const availabilityPreview = await seasonPreviewEvidence('season-1', ['episode-1'], {
     coordinateSonarr: true,
     cleanupDownloads: false,
@@ -6574,6 +7037,7 @@ Deno.test('season cleanup rejects download manifest drift after enqueue', async 
     { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
     { id: 22, Part: [{ file: sonarrRescanTargetPath, size: 40_000 }] },
   ];
+  await exposeSeasonCurrentFiles();
   const previewResponse = await app.request(
     '/api/duplicates/seasons/season-1/deletion-preview',
     {
@@ -6739,7 +7203,7 @@ Deno.test('season cleanup coordinates the managed version after Plex-only siblin
 });
 
 Deno.test({
-  name: 'duplicate-season Sonarr policy removes only an authorized version two-link history',
+  name: 'duplicate-season Sonarr policy preserves historical links and remaining versions',
   ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
@@ -6784,7 +7248,7 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.sonarrHistoricalPaths?.[0]?.disposition, 'delete');
+      assertEquals(preview.sonarrHistoricalPaths ?? [], []);
       const response = await seasonCleanupRequest('season-1', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -6802,7 +7266,7 @@ Deno.test({
       await settle();
       assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
       assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [22]);
-      await assertRejects(() => Deno.lstat(downloadPath), Deno.errors.NotFound);
+      assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
     } finally {
       await Deno.remove(storageRoot, { recursive: true });
@@ -6838,6 +7302,8 @@ Deno.test({
       await Deno.mkdir(`${downloadRoot}/release`, { recursive: true });
       await Deno.writeFile(firstLibrary, new Uint8Array(40_000));
       await Deno.writeFile(secondLibrary, new Uint8Array(40_000));
+      await Deno.writeFile(`${libraryRoot}/episode-1-retained.mkv`, new Uint8Array(40_000));
+      await Deno.writeFile(`${libraryRoot}/episode-2-retained.mkv`, new Uint8Array(40_000));
       await Deno.link(firstLibrary, firstDownload);
       await Deno.link(secondLibrary, secondDownload);
       additionalSonarrHistory = [{
@@ -6895,7 +7361,7 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.sonarrHistoricalPaths?.length, 2);
+      assertEquals(preview.sonarrHistoricalPaths, []);
       const response = await seasonCleanupRequest('season-1', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -7146,6 +7612,7 @@ Deno.test('Plex-only season cleanup does not require one Sonarr adoption candida
     { id: 22, Part: [{ file: '/tv/Show/Season 01/retained-a.mkv', size: 40_000 }] },
     { id: 23, Part: [{ file: '/tv/Show/Season 01/retained-b.mkv', size: 40_000 }] },
   ];
+  await exposeSeasonCurrentFiles();
 
   const alignmentResponse = await app.request(
     '/api/duplicates/seasons/season-1/analysis',
@@ -8181,6 +8648,7 @@ Deno.test('multi-version batch replays sequentially while earlier selected versi
       title: 'Movie version-batch',
       logicalSize: 50,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',
@@ -8397,6 +8865,7 @@ Deno.test('legacy Arr intent cannot bypass media-version capacity validation', a
           title: 'Movie mixed-version-batch',
           logicalSize: 50,
           snapshot: {
+            currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
             machineIdentifier: 'machine-1',
             serverUrl: 'http://plex',
             libraryKey: 'movies',
@@ -8459,6 +8928,7 @@ Deno.test('Radarr reassignment keeps the movie and adopts the chosen retained ve
       title: 'Movie reassign-version',
       logicalSize: 50,
       snapshot: {
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
         machineIdentifier: 'machine-1',
         serverUrl: 'http://plex',
         libraryKey: 'movies',

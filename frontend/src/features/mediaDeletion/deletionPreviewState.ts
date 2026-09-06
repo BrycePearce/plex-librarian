@@ -1,7 +1,8 @@
+import type { DownloadCleanupPreviewItem } from "../../../../shared/types.ts";
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
 
 export const SONARR_OWNED_PATH_COPY =
-  "Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.";
+  "Applies the shown Sonarr change to current managed files. Identified qBittorrent files are retained unless qBittorrent is also selected.";
 
 export function arrDestinationState(
   preview: DownloadCleanupPreviewResponse | undefined,
@@ -37,40 +38,31 @@ export function selectedSonarrOwnershipProblems(
 
 export function downloadCleanupDestinationVisible(
   preview: DownloadCleanupPreviewResponse | undefined,
-  allowOrphanOnly = false,
+  _allowOrphanOnly = false,
 ): boolean {
   return preview?.items.some((item) =>
-    item.status === "resolved" &&
-    ((allowOrphanOnly && (item.orphanFiles?.length ?? 0) > 0) ||
-      (preview.downloadClientsConfigured === true && item.downloadJobs.length > 0))
+    preview.downloadClientsConfigured === true &&
+    ((item.status === "resolved" && item.downloadJobs.length > 0) ||
+      item.qbittorrentPathAccessJob !== undefined)
   ) ?? false;
 }
 
 export function eligibleDownloadCleanupItems(
   preview: DownloadCleanupPreviewResponse | undefined,
-  allowOrphanOnly: boolean,
-  coordinateArr: boolean,
+  _allowOrphanOnly: boolean,
+  _coordinateArr: boolean,
 ) {
   return preview?.items.filter((item) =>
     item.status === "resolved" &&
-    (item.downloadJobs.length > 0 ||
-      (allowOrphanOnly && coordinateArr && item.orphanFiles.length > 0))
+    item.downloadJobs.length > 0
   ) ?? [];
 }
 
-/**
- * Whole-show Sonarr deletion can reclaim an orphaned import hardlink even after
- * its download job has disappeared. Default only that narrow cleanup case on;
- * a live download job must continue to require an explicit user choice.
- */
+/** Historical cleanup never defaults into a current-location request. */
 export function shouldDefaultOrphanOnlyCleanup(
-  preview: DownloadCleanupPreviewResponse | undefined,
+  _preview: DownloadCleanupPreviewResponse | undefined,
 ): boolean {
-  if (!preview) return false;
-  const resolved = preview.items.filter((item) => item.status === "resolved");
-  return resolved.some((item) =>
-    item.downloadJobs.length === 0 && (item.orphanFiles?.length ?? 0) > 0
-  ) && resolved.every((item) => item.downloadJobs.length === 0);
+  return false;
 }
 
 export function cleanupConsentInvalidated(
@@ -79,4 +71,26 @@ export function cleanupConsentInvalidated(
   acceptedAuthorizationKey: string | null,
 ): boolean {
   return selected && currentAuthorizationKey !== acceptedAuthorizationKey;
+}
+
+export function currentLocationOwnershipProblem(
+  item: DownloadCleanupPreviewItem,
+  sonarrSelected: boolean,
+  qbittorrentSelected: boolean,
+): { blocked: boolean; reason?: string } {
+  const status = sonarrSelected && qbittorrentSelected
+    ? item.status
+    : sonarrSelected
+    ? item.sonarrCleanupStatus
+    : qbittorrentSelected
+    ? item.qbittorrentOnlyStatus
+    : item.plexOnlyStatus;
+  const reason = sonarrSelected && qbittorrentSelected
+    ? item.reason
+    : sonarrSelected
+    ? item.sonarrCleanupReason
+    : qbittorrentSelected
+    ? item.qbittorrentOnlyReason
+    : item.plexOnlyReason;
+  return { blocked: status !== undefined && status !== "resolved", reason };
 }

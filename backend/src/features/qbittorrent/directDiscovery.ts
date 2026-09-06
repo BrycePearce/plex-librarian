@@ -16,6 +16,7 @@ import {
 import { appendRemotePath } from '../mediaDeletion/ownership.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 import { lstatChain, resolvePlexToLocal } from '../mediaDeletion/pathNamespace.ts';
+import { createLocalPathIdentityResolver } from '../mediaDeletion/localPathIdentity.ts';
 
 export interface DirectDiscoverySelection {
   plexPath: string;
@@ -28,6 +29,8 @@ export interface DirectLocalIdentity {
   canonical: string;
   device: string;
   inode: string;
+  /** Mount-aware directory entry; distinct hardlinks can share an inode. */
+  entry?: string;
 }
 
 function within(path: string, root: string, caseSensitive: boolean): boolean {
@@ -97,7 +100,11 @@ export function directDiscoveryCandidates(
   ])).values()];
 }
 
-async function exactLocalIdentity(path: string, size: number): Promise<DirectLocalIdentity> {
+async function exactLocalIdentity(
+  path: string,
+  size: number,
+  resolveEntry: Awaited<ReturnType<typeof createLocalPathIdentityResolver>>,
+): Promise<DirectLocalIdentity> {
   const [info, canonical] = await Promise.all([lstatChain(path), Deno.realPath(path)]);
   if (
     !info.isFile || info.isSymlink || info.size !== size || info.dev === null || info.ino === null
@@ -106,7 +113,15 @@ async function exactLocalIdentity(path: string, size: number): Promise<DirectLoc
       'Direct qBittorrent path is missing, linked, or has no exact filesystem identity',
     );
   }
-  return { path, size, canonical, device: String(info.dev), inode: String(info.ino) };
+  const identity = await resolveEntry(path, true);
+  return {
+    path,
+    size,
+    canonical,
+    device: String(info.dev),
+    inode: String(info.ino),
+    entry: identity.possibleEntry,
+  };
 }
 
 export function directManifestSelection(
@@ -115,8 +130,7 @@ export function directManifestSelection(
   retained: readonly { plexPath: string; local: DirectLocalIdentity }[],
 ): { plexPath: string; local: DirectLocalIdentity } | null {
   const retainedConflict = retained.some((candidate) =>
-    candidate.local.canonical === local.canonical ||
-    candidate.local.device === local.device && candidate.local.inode === local.inode
+    (candidate.local.entry ?? candidate.local.canonical) === (local.entry ?? local.canonical)
   );
   if (retainedConflict) {
     throw new Error(
@@ -136,11 +150,19 @@ export function completeDirectManifestSelection(
   localFiles: readonly (DirectLocalIdentity | null)[],
   selected: readonly DirectManifestMatch[],
   retained: readonly DirectManifestMatch[],
+  associated = false,
 ): DirectManifestMatch[] | null {
   const matched = localFiles.map((local) =>
     local === null ? null : directManifestSelection(local, selected, retained)
   );
-  if (matched.every((candidate) => candidate === null)) return null;
+  if (matched.every((candidate) => candidate === null)) {
+    if (associated) {
+      throw new Error(
+        'An associated current qBittorrent payload could not be verified against the selected media',
+      );
+    }
+    return null;
+  }
   if (matched.some((candidate) => candidate === null)) {
     throw new Error(
       'A matching qBittorrent payload contains an unselected or unverifiable file',
@@ -153,7 +175,7 @@ export function directManifestRemotePaths(job: DownloadJob): string[] {
   const content = normalizeRemoteAbsolute(job.contentPath);
   const save = normalizeRemoteAbsolute(job.savePath);
   if (
-    !content || !save || job.manifestFiles.length === 0 ||
+    !content || !save || job.filesTruncated || job.manifestFiles.length === 0 ||
     job.fileCount !== job.manifestFiles.length ||
     job.manifestFiles.reduce((total, file) => total + (file.size ?? 0), 0) !== job.size
   ) {
@@ -176,6 +198,25 @@ export function directManifestRemotePaths(job: DownloadJob): string[] {
   });
 }
 
+/** History supplies identifiers only; candidate locations always come from live QB. */
+export async function associatedCurrentJobCandidates(
+  target: DownloadClientTarget,
+  associatedJobIds: ReadonlySet<string>,
+  liveAssociatedJobIds?: Set<string>,
+): Promise<DownloadDiscoveryCandidate[]> {
+  const candidates: DownloadDiscoveryCandidate[] = [];
+  for (const jobId of associatedJobIds) {
+    const current = await target.client.findJob(jobId);
+    if (!current) continue;
+    if (current.id !== jobId || !normalizeRemoteAbsolute(current.contentPath)) {
+      throw new Error('The associated current qBittorrent job has no valid payload identity');
+    }
+    liveAssociatedJobIds?.add(jobId);
+    candidates.push({ path: current.contentPath, caseSensitive: true });
+  }
+  return candidates;
+}
+
 export async function resolveDirectQbittorrentCleanup(
   serverId: number,
   libraryKey: string,
@@ -183,17 +224,23 @@ export async function resolveDirectQbittorrentCleanup(
   selections: readonly DirectDiscoverySelection[],
   retainedSelections: readonly DirectDiscoverySelection[],
   targets: readonly DownloadClientTarget[],
+  associatedJobIds: ReadonlySet<string> = new Set(),
 ): Promise<ResolvedCleanupItem> {
+  const resolveEntry = await createLocalPathIdentityResolver();
   const rows = await db.select().from(plexPathMappings).where(and(
     eq(plexPathMappings.serverId, serverId),
     eq(plexPathMappings.libraryKey, libraryKey),
   ));
   const selected = await Promise.all(selections.map(async (selection) => {
     const mapped = resolvePlexToLocal(selection.plexPath, rows);
-    if (!mapped) throw new Error('The selected Plex path has no single validated local mapping');
+    if (!mapped) {
+      throw new Error(
+        `The selected Plex path has no single validated local mapping: ${selection.plexPath}`,
+      );
+    }
     return {
       ...selection,
-      local: await exactLocalIdentity(mapped.path, selection.size),
+      local: await exactLocalIdentity(mapped.path, selection.size, resolveEntry),
       mapping: mapped.mapping,
     };
   }));
@@ -210,10 +257,14 @@ export async function resolveDirectQbittorrentCleanup(
   }));
   const retained = await Promise.all(retainedSelections.map(async (selection) => {
     const mapped = resolvePlexToLocal(selection.plexPath, rows);
-    if (!mapped) throw new Error('A retained Plex path has no single validated local mapping');
+    if (!mapped) {
+      throw new Error(
+        `A retained Plex path has no single validated local mapping: ${selection.plexPath}`,
+      );
+    }
     return {
       ...selection,
-      local: await exactLocalIdentity(mapped.path, selection.size),
+      local: await exactLocalIdentity(mapped.path, selection.size, resolveEntry),
       mapping: mapped.mapping,
     };
   }));
@@ -241,16 +292,40 @@ export async function resolveDirectQbittorrentCleanup(
       selected.map((selection) => selection.local.path),
       target.pathMappings,
     );
+    // Association is a discovery hint only. Use the live job's current location,
+    // then prove every manifest file against selected and retained current media.
+    const liveAssociatedJobIds = new Set<string>();
+    for (
+      const candidate of await associatedCurrentJobCandidates(
+        target,
+        associatedJobIds,
+        liveAssociatedJobIds,
+      )
+    ) {
+      if (!discoveryCandidates.some((entry) => entry.path === candidate.path)) {
+        discoveryCandidates.push(candidate);
+      }
+    }
     if (discoveryCandidates.length === 0) continue;
     const discovered = await target.client.discoverJobs(discoveryCandidates);
+    if ([...liveAssociatedJobIds].some((id) => !discovered.jobs.some((job) => job.id === id))) {
+      throw new Error('An associated current qBittorrent job could not be inspected completely');
+    }
     for (const job of discovered.jobs) {
       const remotePaths = directManifestRemotePaths(job);
       const localFiles = await Promise.all(remotePaths.map((remotePath, index) => {
         const localPath = resolveDownloadPath(remotePath, target.pathMappings!);
         if (!localPath) return null;
-        return exactLocalIdentity(localPath, job.manifestFiles[index]!.size!).catch(() => null);
+        return exactLocalIdentity(localPath, job.manifestFiles[index]!.size!, resolveEntry).catch(
+          () => null,
+        );
       }));
-      const matched = completeDirectManifestSelection(localFiles, selected, retained);
+      const matched = completeDirectManifestSelection(
+        localFiles,
+        selected,
+        retained,
+        liveAssociatedJobIds.has(job.id),
+      );
       if (matched === null) continue;
       const verifiedLocalFiles = localFiles.filter((local): local is DirectLocalIdentity =>
         local !== null

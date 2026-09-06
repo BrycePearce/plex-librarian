@@ -29,7 +29,7 @@ Deno.test('Plex path preview aborts active lookups and falls back when its batch
 
   assertEquals(calls, 3);
   assertEquals(aborted, 3);
-  assertEquals(
+  assertEquals<unknown>(
     [...previews.values()],
     items.map(() => ({
       plexPaths: [],

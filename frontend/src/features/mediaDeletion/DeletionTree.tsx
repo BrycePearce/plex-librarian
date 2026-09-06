@@ -367,39 +367,30 @@ export function DeletionServiceMarks({
 }
 
 export function wholeItemSonarrHistoricalPaths(
-  itemType: WholeItemDeletionCandidate["type"],
-  preview: DownloadCleanupPreviewItem | undefined,
-  arrSelected: boolean,
-  cleanupDownloads: boolean,
-) {
-  if (itemType !== "show" || !arrSelected) return [];
-  return cleanupDownloads
-    ? preview?.qbittorrentSonarrHistoricalPaths ?? preview?.sonarrHistoricalPaths ?? []
-    : preview?.sonarrHistoricalPaths ?? [];
+  _itemType: WholeItemDeletionCandidate["type"],
+  _preview: DownloadCleanupPreviewItem | undefined,
+  _arrSelected: boolean,
+  _cleanupDownloads: boolean,
+): NonNullable<DownloadCleanupPreviewItem["sonarrHistoricalPaths"]> {
+  return [];
 }
 
 export function wholeItemOrphanFiles(
-  itemType: WholeItemDeletionCandidate["type"],
-  preview: DownloadCleanupPreviewItem | undefined,
-  arrSelected: boolean,
-  cleanupDownloads: boolean,
-) {
-  if (!cleanupDownloads || preview?.status !== "resolved") return [];
-  if (itemType !== "show") return preview.orphanFiles;
-  if (!arrSelected) return [];
-  return preview.qbittorrentOrphanFiles ?? preview.orphanFiles;
+  _itemType: WholeItemDeletionCandidate["type"],
+  _preview: DownloadCleanupPreviewItem | undefined,
+  _arrSelected: boolean,
+  _cleanupDownloads: boolean,
+): NonNullable<DownloadCleanupPreviewItem["orphanFiles"]> {
+  return [];
 }
 
 export function wholeItemRetainedPaths(
-  itemType: WholeItemDeletionCandidate["type"],
-  preview: DownloadCleanupPreviewItem | undefined,
-  arrSelected: boolean,
-  cleanupDownloads: boolean,
-) {
-  if (itemType === "show" && !arrSelected) return [];
-  return itemType === "show" && cleanupDownloads
-    ? preview?.qbittorrentRetainedPaths ?? preview?.retainedPaths ?? []
-    : preview?.retainedPaths ?? [];
+  _itemType: WholeItemDeletionCandidate["type"],
+  _preview: DownloadCleanupPreviewItem | undefined,
+  _arrSelected: boolean,
+  _cleanupDownloads: boolean,
+): NonNullable<DownloadCleanupPreviewItem["retainedPaths"]> {
+  return [];
 }
 
 export function AdvancedDeletionTree({

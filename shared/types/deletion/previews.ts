@@ -22,6 +22,7 @@ export interface MediaVersionPathPreview {
 }
 
 export interface VersionDeletionPreviewResponse {
+  qbittorrentPathAccessJob?: DownloadCleanupJob;
   mediaType: 'movie' | 'episode';
   arrService: ArrType;
   // Every live Plex version is included for advanced comparison context.

@@ -54,6 +54,8 @@ export interface ArrRootFoldersResponse {
 }
 
 export type ArrStorageVerificationRequest = ArrRootFoldersRequest & {
+  ratingKey?: string;
+  selectedPath?: string;
   pathMappings: ArrPathMapping[];
   libraryKeys: string[];
 };

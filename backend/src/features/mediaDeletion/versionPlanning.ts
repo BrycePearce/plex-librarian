@@ -1,3 +1,4 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
 import type {
   ArrCleanupTarget,
   MediaVersionPathPreview,
@@ -89,6 +90,7 @@ export async function episodeVersionSonarrPlanFingerprint(
     (left.episodeId ?? -1) - (right.episodeId ?? -1)
   );
   return await stableFingerprint({
+    currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     preview: plan.preview,
     arrMappingIdentities: plan.arrMappingIdentities,
     arrOwnerships: plan.arrOwnerships,
@@ -674,6 +676,19 @@ export async function buildVersionDeletionPlan({
     }
   }
 
+  const accessJob = resolvedCleanup?.qbittorrentPathAccessJob;
+  const currentAccessPaths = new Set([
+    ...selectedPaths,
+    ...versionsWithApplicability.flatMap((version) => version.arrPaths)
+      .flatMap((path) => normalizedComparison(path) ?? []),
+  ]);
+  const qbittorrentPathAccessJob = accessJob &&
+      resolvedCleanup?.sources.some((source) =>
+        source.downloadId === accessJob.jobId && source.importedPath &&
+        currentAccessPaths.has(normalizedComparison(source.importedPath) ?? '')
+      )
+    ? accessJob
+    : undefined;
   return {
     eligibleArrTargets,
     eligibleArrReassignments,
@@ -708,6 +723,7 @@ export async function buildVersionDeletionPlan({
       cleanupConfigured,
       cleanupStatus,
       cleanupReason,
+      qbittorrentPathAccessJob,
       downloadJobs: publicCleanup?.downloadJobs ?? [],
       orphanFiles: publicCleanup?.orphanFiles ?? [],
       retainedPaths: publicCleanup?.retainedPaths ?? [],

@@ -1,3 +1,5 @@
+import { ServicePathAccess } from "./ServicePathAccess.tsx";
+import { DeletionPathAccess } from "./DeletionPathAccess.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -8,19 +10,14 @@ import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
-import {
-  AdvancedDeletionTree,
-  DeletionServiceMarks,
-  wholeItemSonarrHistoricalPaths,
-} from "./DeletionTree.tsx";
-import { SonarrRetainedPathsWarning } from "./SonarrRetainedPathsWarning.tsx";
+import { AdvancedDeletionTree, DeletionServiceMarks } from "./DeletionTree.tsx";
 import {
   arrDestinationState,
   cleanupConsentInvalidated,
+  currentLocationOwnershipProblem,
   downloadCleanupDestinationVisible,
   effectiveArrSelection,
   eligibleDownloadCleanupItems,
-  selectedSonarrOwnershipProblems,
   shouldUseArrByDefault,
 } from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
@@ -105,18 +102,29 @@ export function DeleteConfirmDialog({
   // selection immediately when no coordinated destination exists so the displayed
   // deletion plan stays accurate before the state-syncing effect catches up.
   const effectiveDeleteFromArr = effectiveArrSelection(deleteFromArr, preview.data);
+  const cleanupDestinationPreview = preview.data
+    ? {
+      ...preview.data,
+      items: preview.data.items.map((item) =>
+        effectiveDeleteFromArr ? item : {
+          ...item,
+          status: item.qbittorrentOnlyStatus ?? item.status,
+          cleanupFingerprint: item.qbittorrentOnlyFingerprint,
+        }
+      ),
+    }
+    : undefined;
   const cleanupEligibleItems = eligibleDownloadCleanupItems(
-    preview.data,
+    cleanupDestinationPreview,
     false,
     false,
   );
   const cleanupEligibleCount = cleanupEligibleItems.length;
   const cleanupDestinationVisible = downloadCleanupDestinationVisible(
-    preview.data,
+    cleanupDestinationPreview,
     false,
   );
   const defaultOrphanOnlyCleanup = false;
-  const orphanOnlyDestination = false;
   const cleanupAuthorizationKey = cleanupEligibleCount > 0 &&
       cleanupEligibleItems.every((item) => item.cleanupFingerprint)
     ? JSON.stringify(
@@ -129,20 +137,14 @@ export function DeleteConfirmDialog({
     preview.data?.items.filter((item) =>
       item.status !== "resolved" || item.downloadJobs.length === 0
     ) ?? [];
-  const sonarrOwnershipProblems = selectedSonarrOwnershipProblems(
-    preview.data,
-    effectiveDeleteFromArr && arrService === "sonarr",
-  );
-  const retainedSonarrPaths = arrService === "sonarr"
-    ? items.flatMap((item) =>
-      wholeItemSonarrHistoricalPaths(
-        item.type,
-        previewByRatingKey.get(item.ratingKey),
-        effectiveDeleteFromArr,
-        effectiveCleanupDownloads,
-      )
-    )
-    : [];
+  const ownershipProblems = preview.data?.items.flatMap((item) => {
+    const problem = currentLocationOwnershipProblem(
+      item,
+      effectiveDeleteFromArr && arrService === "sonarr",
+      cleanupDownloads,
+    );
+    return problem.blocked ? [{ ...item, ownershipReason: problem.reason }] : [];
+  }) ?? [];
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     acceptedCleanupKeyRef.current = null;
@@ -212,7 +214,8 @@ export function DeleteConfirmDialog({
     pending,
     hasSelection: items.length > 0,
     preview: preview.isLoading ? "loading" : preview.isError ? "error" : "ready",
-    semanticBlock: sonarrOwnershipProblems.length > 0,
+    semanticBlock: ownershipProblems.length > 0 ||
+      (cleanupDownloads && cleanupAuthorizationKey === null),
   });
 
   return (
@@ -246,10 +249,34 @@ export function DeleteConfirmDialog({
                 {error instanceof Error ? error.message : "Delete failed"}
               </p>
             )}
+            {ownershipProblems.slice(0, 1).map((entry) => {
+              return effectiveDeleteFromArr && entry.arrTargets[0] &&
+                  /Sonarr library|Arr.*mapping/i.test(entry.ownershipReason ?? "")
+                ? (
+                  <DeletionPathAccess
+                    key={entry.ratingKey}
+                    libraryKey={libraryKey}
+                    ratingKey={entry.ratingKey}
+                    target={entry.arrTargets[0]}
+                    reason={entry.ownershipReason}
+                    onResolved={() => void preview.refetch()}
+                  />
+                )
+                : (
+                  <ServicePathAccess
+                    key={entry.ratingKey}
+                    libraryKey={libraryKey}
+                    reason={entry.ownershipReason}
+                    plexSample={entry.plexPathAccessSample}
+                    job={entry.qbittorrentPathAccessJob ?? entry.downloadJobs[0]}
+                    onResolved={() => void preview.refetch()}
+                  />
+                );
+            })}
             <DeletionPreviewStatus
               error={preview.isError
                 ? preview.error.message
-                : sonarrOwnershipProblems[0]?.sonarrCleanupReason ?? null}
+                : ownershipProblems[0]?.ownershipReason ?? null}
               onRetry={() => void preview.refetch()}
               retrying={preview.isFetching}
               warnings={[
@@ -266,15 +293,11 @@ export function DeleteConfirmDialog({
                   : []),
                 ...(effectiveCleanupDownloads && cleanupProblems.length > 0
                   ? [
-                    `${
-                      orphanOnlyDestination ? "Verified hardlink cleanup" : "Download cleanup"
-                    } could not be verified for ${cleanupProblems.length} ${
+                    `qBittorrent deletion could not be verified for ${cleanupProblems.length} ${
                       cleanupProblems.length === 1 ? "item" : "items"
                     }: ${
                       cleanupProblems[0]?.reason ??
-                        (orphanOnlyDestination
-                          ? "No verified historical Sonarr hardlink is available"
-                          : "No verified qBittorrent job is available")
+                        "No verified qBittorrent job is available"
                     }`,
                   ]
                   : []),
@@ -347,7 +370,6 @@ export function DeleteConfirmDialog({
                 />
               }
             />
-            <SonarrRetainedPathsWarning paths={retainedSonarrPaths} />
             {hasMultiVersionItems && (
               <p className="mt-1.5 text-xs text-base-content/40">
                 Items marked with multiple versions lose all of them here. To remove just one, use
@@ -376,7 +398,7 @@ export function DeleteConfirmDialog({
                   service: arrService,
                   label: `Delete from ${arrLabel}`,
                   info: arrService === "sonarr"
-                    ? "Delete the selected media from Sonarr and clean up verified related files. qBittorrent files are kept unless qBittorrent is also selected."
+                    ? "Delete current matched Sonarr media. Verified qBittorrent files are kept unless qBittorrent is also selected."
                     : `Delete the selected media and its files from ${arrLabel}.`,
                   checked: effectiveDeleteFromArr,
                   disabled: pending || preview.isLoading,
@@ -389,14 +411,11 @@ export function DeleteConfirmDialog({
               ...(cleanupDestinationVisible
                 ? [{
                   id: "cleanup" as const,
-                  service: orphanOnlyDestination ? "sonarr" as const : "qbittorrent" as const,
-                  label: orphanOnlyDestination
-                    ? "Verified hardlink cleanup"
-                    : "Delete from qBittorrent",
-                  info: orphanOnlyDestination
-                    ? "Removes verified historical Sonarr import hardlinks. This remains available after the download job is gone and is included by default with whole-show Sonarr deletion."
-                    : "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
-                  checked: effectiveCleanupDownloads,
+                  service: "qbittorrent" as const,
+                  label: "Delete from qBittorrent",
+                  info:
+                    "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
+                  checked: cleanupDownloads,
                   disabled: pending || preview.isLoading,
                   warning: effectiveCleanupDownloads && cleanupProblems.length > 0,
                   onChange: (checked: boolean) => {
@@ -426,8 +445,11 @@ export function DeleteConfirmDialog({
                 cleanupPreviewFingerprints: Object.fromEntries(
                   items.flatMap((item) => {
                     const itemPreview = previewByRatingKey.get(item.ratingKey);
-                    if (effectiveCleanupDownloads && itemPreview?.cleanupFingerprint) {
-                      return [[item.ratingKey, itemPreview.cleanupFingerprint]];
+                    const fingerprint = effectiveDeleteFromArr
+                      ? itemPreview?.cleanupFingerprint
+                      : itemPreview?.qbittorrentOnlyFingerprint;
+                    if (effectiveCleanupDownloads && fingerprint) {
+                      return [[item.ratingKey, fingerprint]];
                     }
                     if (
                       effectiveDeleteFromArr && item.type === "show" &&

@@ -2,6 +2,8 @@ import type { DownloadCleanupJob, SonarrHistoricalPathPreview } from './cleanup.
 import type { DeletionOperationCreated } from './operations.ts';
 
 export interface SeasonRemovalPreviewResponse {
+  plexPathAccessSample?: { ratingKey: string; mediaId: number; path: string };
+  qbittorrentPathAccessJob?: DownloadCleanupJob;
   fingerprint: string;
   expiresAt: number;
   libraryKey: string;

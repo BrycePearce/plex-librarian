@@ -1,11 +1,64 @@
-import { assertEquals, assertThrows } from '@std/assert';
+import { assertEquals, assertRejects, assertThrows } from '@std/assert';
+import type { DownloadClientTarget } from '../mediaDeletion/downloadClient.ts';
+import { createLocalPathIdentityResolver } from '../mediaDeletion/localPathIdentity.ts';
 import {
+  associatedCurrentJobCandidates,
   completeDirectManifestSelection,
   directDiscoveryCandidates,
   type DirectLocalIdentity,
   directManifestRemotePaths,
   directManifestSelection,
 } from './directDiscovery.ts';
+
+Deno.test('Arr association finds a separate moved current payload without authorizing old paths', async () => {
+  const target = {
+    client: {
+      findJob: (id: string) =>
+        Promise.resolve({ id, contentPath: '/current/downloads/moved-pack' }),
+    },
+  } as unknown as DownloadClientTarget;
+  assertEquals(await associatedCurrentJobCandidates(target, new Set(['associated-hash'])), [
+    { path: '/current/downloads/moved-pack', caseSensitive: true },
+  ]);
+  const selected = { plexPath: '/plex/episode.mkv', local: identity('/library/episode.mkv', '7') };
+  const moved = identity('/current/downloads/moved-pack/episode.mkv', '7');
+  assertEquals(completeDirectManifestSelection([moved], [selected], []), [selected]);
+  assertEquals(completeDirectManifestSelection([identity(moved.path, '9')], [selected], []), null);
+  assertThrows(
+    () =>
+      completeDirectManifestSelection([moved, identity('/current/other.mkv', '9')], [selected], []),
+    Error,
+    'unselected or unverifiable',
+  );
+});
+
+Deno.test('associated current job lookup preserves no-match and offline distinction', async () => {
+  const absent = {
+    client: { findJob: () => Promise.resolve(null) },
+  } as unknown as DownloadClientTarget;
+  assertEquals(await associatedCurrentJobCandidates(absent, new Set(['hash'])), []);
+  const offline = {
+    client: { findJob: () => Promise.reject(new Error('QB offline')) },
+  } as unknown as DownloadClientTarget;
+  await assertRejects(
+    () => associatedCurrentJobCandidates(offline, new Set(['hash'])),
+    Error,
+    'QB offline',
+  );
+});
+
+Deno.test('one verified associated job cannot hide another unresolved live payload', () => {
+  const selected = { plexPath: '/plex/episode.mkv', local: identity('/library/episode.mkv', '7') };
+  const manifests = [
+    [identity('/current/verified/episode.mkv', '7')],
+    [identity('/current/moved/episode.mkv', '9')],
+  ];
+  assertThrows(
+    () => manifests.map((files) => completeDirectManifestSelection(files, [selected], [], true)),
+    Error,
+    'associated current qBittorrent payload could not be verified',
+  );
+});
 
 Deno.test('direct discovery maps selected local paths into the qBittorrent namespace', () => {
   assertEquals(
@@ -84,6 +137,27 @@ Deno.test('direct discovery still accepts an exact selected path with no retaine
   const selected = { plexPath: '/plex/selected.mkv', local: identity('/local/selected.mkv', '7') };
   const retained = { plexPath: '/plex/retained.mkv', local: identity('/local/retained.mkv', '8') };
   assertEquals(directManifestSelection(selected.local, [selected], [retained]), selected);
+});
+
+Deno.test('direct retained protection resolves bind aliases while permitting distinct hardlink entries', async () => {
+  const identify = await createLocalPathIdentityResolver({
+    mountInfo: [
+      '1 0 8:1 / / rw - ext4 /dev/sda rw',
+      '2 1 8:1 /storage /downloads rw - ext4 /dev/sda rw',
+      '3 1 8:1 /storage /retained rw - ext4 /dev/sda rw',
+    ].join('\n'),
+    realPath: (path) => Promise.resolve(path.replaceAll('\\', '/').replace(/^[A-Za-z]:/, '')),
+  });
+  const file = async (path: string) => ({
+    ...identity(path, '7'),
+    entry: (await identify(path)).possibleEntry,
+  });
+  const selected = { plexPath: '/plex/a.mkv', local: await file('/library/a.mkv') };
+  const payload = await file('/downloads/a.mkv');
+  const alias = { plexPath: '/other/a.mkv', local: await file('/retained/a.mkv') };
+  assertThrows(() => directManifestSelection(payload, [selected], [alias]), Error, 'aliases');
+  const hardlink = { plexPath: '/other/kept.mkv', local: await file('/library/kept.mkv') };
+  assertEquals(directManifestSelection(payload, [selected], [hardlink]), selected);
 });
 
 Deno.test('direct discovery skips a completely unrelated manifest', () => {

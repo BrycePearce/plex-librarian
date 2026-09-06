@@ -132,6 +132,25 @@ export function createDownloadCleanupPreviewRouter(
       let qbitBound = item.type === 'show' && resolved.arrStatus === 'resolved'
         ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
         : resolved;
+      const plexProtection = {
+        serverId,
+        libraryKey: key,
+        arrTargets,
+        downloadTargets,
+        client: activeServer.client,
+        sonarrSelected: false,
+        itemType: item.type,
+      };
+      const plexOnly = await protectWholeSonarrCleanup({
+        ...plexProtection,
+        cleanup: { ...resolved, status: 'resolved', reason: undefined, downloadJobs: [] },
+      });
+      const qbittorrentOnly = await protectWholeSonarrCleanup({
+        ...plexProtection,
+        cleanup: item.type === 'show'
+          ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
+          : resolved,
+      });
       if (sonarrBound) {
         const protection = {
           serverId,
@@ -147,6 +166,13 @@ export function createDownloadCleanupPreviewRouter(
       const publicSonarr = sonarrBound ? publicCleanupItem(sonarrBound) : null;
       return {
         ...publicQbit,
+        plexOnlyStatus: plexOnly.status,
+        plexOnlyReason: plexOnly.reason,
+        qbittorrentOnlyStatus: qbittorrentOnly.status,
+        qbittorrentOnlyReason: qbittorrentOnly.reason,
+        ...(cleanupIsEligible(qbittorrentOnly)
+          ? { qbittorrentOnlyFingerprint: await cleanupAuthorizationFingerprint(qbittorrentOnly) }
+          : {}),
         ...(publicSonarr
           ? {
             sonarrCleanupStatus: publicSonarr.status,

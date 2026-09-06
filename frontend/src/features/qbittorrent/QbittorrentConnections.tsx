@@ -191,18 +191,18 @@ export function QbittorrentConnections({
         </div>
       ))}
       {data && data.targets.length > 0 && (
-        <div className="mt-4 rounded-xl border border-base-300 bg-base-200/25 p-4">
-          <h4 className="text-sm font-semibold">Direct-discovery path mappings</h4>
+        <details className="mt-4 rounded-xl border border-base-300 bg-base-200/25 p-4">
+          <summary className="cursor-pointer text-sm font-semibold">
+            Advanced: optional path mappings
+          </summary>
           <p className="mt-1 text-xs text-base-content/55">
             Map qBittorrent container paths to this container using one exact existing file. This
             enables verified cleanup without Sonarr history; connection credentials remain
             unchanged.
           </p>
           <p className="mt-2 text-xs text-base-content/55">
-            Sonarr historical hardlink cleanup also uses these mappings to protect live torrents,
-            even when qBittorrent deletion is unchecked. Map the download locations qBittorrent
-            actually uses. Sonarr library paths do not need a qBittorrent equivalent. Unknown
-            ownership retains historical files and can block Sonarr deletion.
+            Current deletion uses these mappings only when needed to protect live torrents. Missing
+            access or unresolved ownership blocks affected media deletion.
           </p>
           {data.pathMappings.map((item) => (
             <div key={item.id} className="mt-2 flex items-center gap-2 text-xs">
@@ -277,7 +277,7 @@ export function QbittorrentConnections({
             {saveMapping.isPending && <span className="loading loading-spinner loading-xs" />}
             Add validated mapping
           </button>
-        </div>
+        </details>
       )}
       <div className="min-h-5">
         {test.isError && <p className="mt-1 text-xs text-error">{test.error.message}</p>}

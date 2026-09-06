@@ -104,7 +104,15 @@ export interface DownloadCleanupPreviewItem {
   orphanFiles: ArrCleanupFile[];
   retainedPaths: ArrCleanupRetainedPath[];
   cleanupFingerprint?: string;
-  /** Fingerprint for Sonarr-owned historical paths with qBittorrent unselected. */
+  plexOnlyStatus?: 'resolved' | 'unavailable' | 'error';
+  plexPathAccessSample?: { ratingKey: string; mediaId: number; path: string; size: number };
+  plexOnlyReason?: string;
+  qbittorrentOnlyStatus?: 'resolved' | 'unavailable' | 'error';
+  qbittorrentOnlyReason?: string;
+  qbittorrentOnlyFingerprint?: string;
+  /** Current live job for access verification only; never deletion authority. */
+  qbittorrentPathAccessJob?: DownloadCleanupJob;
+  /** Current Plex/Sonarr scope with qBittorrent unselected. */
   sonarrCleanupFingerprint?: string;
   sonarrCleanupStatus?: 'resolved' | 'unavailable' | 'error';
   sonarrCleanupReason?: string;

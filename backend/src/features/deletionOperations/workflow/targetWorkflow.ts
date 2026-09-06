@@ -1,4 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm';
+import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgradePolicy.ts';
 import { db, withTransaction } from '../../../db/index.ts';
 import { assertArrDeletionPathsUnowned } from '../../mediaDeletion/livePathProtection.ts';
 import {
@@ -654,6 +655,13 @@ async function executeCleanup(
   } = {},
 ): Promise<void> {
   const attemptRatingKey = attemptParentRatingKey ?? cleanup.ratingKey;
+  // Legacy work is held before entering this workflow. Even a newly resolved plan
+  // must never expand current-location authorization into a historical unlink.
+  if (cleanup.orphanFiles.length > 0 || cleanup.sonarrReclamation !== undefined) {
+    throw new DeletionConvergenceError(
+      'Historical filesystem cleanup is outside current-location deletion; preview again',
+    );
+  }
   const confirmedJobAbsences = new Set(callbacks.confirmedDownloadJobKeys ?? []);
   const confirmedOrphanAbsences = new Set<string>();
   if (reconcileAttemptedAbsence) {
@@ -2059,6 +2067,14 @@ async function ensureVersionDeleted(
           );
           persistRevalidatedSonarrOwnership(target, snapshot, resolvedCleanup);
         }
+      } else if (target.targetKind === 'movie_version' && snapshot.radarrRemovalDownloadCleanup) {
+        if (snapshot.radarrRemovalDownloadCleanup.ratingKey !== snapshot.ratingKey) {
+          throw new Error('The accepted version download cleanup belongs to another Plex movie');
+        }
+        resolvedCleanup = rehydrateResolvedCleanup(
+          snapshot.radarrRemovalDownloadCleanup,
+          downloadTargets,
+        );
       } else {
         resolvedCleanup = await resolveDownloadCleanup(
           attemptRatingKey,
@@ -2137,7 +2153,8 @@ async function ensureVersionDeleted(
           new Map([[snapshot.ratingKey, plan.cleanup]]),
           plan.cleanup,
           attemptRatingKey,
-          snapshot.seasonDownloadCleanup !== undefined,
+          snapshot.seasonDownloadCleanup !== undefined ||
+            snapshot.radarrRemovalDownloadCleanup !== undefined,
           plan.cleanup.sonarrReclamation
             ? {
               confirmedDownloadJobKeys: confirmedAcceptedJobAbsences,
@@ -2351,6 +2368,7 @@ async function ensureVersionDeleted(
 }
 
 export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<void> {
+  if (!currentLocationSnapshot(target.snapshot)) throw new Error(UPGRADE_RECOVERY_MESSAGE);
   const release = tryAcquireLibraryOperation(
     target.serverId,
     JSON.parse(target.snapshot).libraryKey,
@@ -2359,6 +2377,20 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   if (!release) throw new DeletionConvergenceError('the library is currently being modified');
   try {
     const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
+    if (target.targetKind !== 'whole_item' && snapshot.cleanupDownloads) {
+      const cleanup = snapshot.seasonDownloadCleanup ?? snapshot.radarrRemovalDownloadCleanup;
+      if (
+        !cleanup || cleanup.downloadJobs.length === 0 ||
+        cleanup.downloadJobs.some((job) =>
+          job.provenance !== 'direct_manifest' || !job.directPathEvidence?.length ||
+          !job.directPlexPathEvidence?.length || !job.directRetainedPathEvidence?.length
+        )
+      ) {
+        throw new DeletionConvergenceError(
+          'Current selected and retained file evidence is missing for version download cleanup; preview again',
+        );
+      }
+    }
     if (target.phase === 'plex_reconciliation') {
       if (snapshot.type === 'season') {
         await assertWholeSeasonSonarrPostcondition(target, snapshot, 'confirm');

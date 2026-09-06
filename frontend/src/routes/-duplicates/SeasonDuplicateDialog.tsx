@@ -1,3 +1,4 @@
+import { DeletionAccessResolver } from "../../features/mediaDeletion/DeletionAccessResolver.tsx";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { ChevronDown, ExternalLink, Layers3, LoaderCircle, Trash2 } from "lucide-react";
@@ -22,16 +23,15 @@ import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import { CandidateFileDetails } from "../../features/quickCleanup/CandidateFileDetails.tsx";
 import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
 import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
-import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
 
 export function seasonDuplicateHistoricalPaths(
-  preview: SeasonDeletionPreviewResponse | undefined,
-  sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor",
-) {
-  return sonarrMode === "none" ? [] : preview?.sonarrHistoricalPaths ?? [];
+  _preview: SeasonDeletionPreviewResponse | undefined,
+  _selection: "none" | "adopt_retained" | "remove_and_unmonitor",
+): NonNullable<SeasonDeletionPreviewResponse["sonarrHistoricalPaths"]> {
+  return [];
 }
 
 export function initialSeasonReviewMode(
@@ -888,9 +888,9 @@ export function SeasonDuplicateDialog({
     setDestinationAvailability((current) => ({
       key: authorizationKey,
       sonarr: deletionPreview.data.sonarrAvailable,
-      cleanup: cleanupDownloads
-        ? deletionPreview.data.cleanupEligibleVersionCount > 0
-        : current.key === authorizationKey && current.cleanup,
+      cleanup: deletionPreview.data.cleanupEligibleVersionCount > 0 ||
+        deletionPreview.data.qbittorrentPathAccessJob !== undefined ||
+        (current.key === authorizationKey && current.cleanup),
       cleanupEligibleVersionCount: cleanupDownloads
         ? deletionPreview.data.cleanupEligibleVersionCount
         : current.key === authorizationKey
@@ -912,7 +912,7 @@ export function SeasonDuplicateDialog({
     setDestinationAvailability((current) => ({
       key: authorizationKey,
       sonarr: false,
-      cleanup: cleanupDownloads ? false : current.key === authorizationKey && current.cleanup,
+      cleanup: current.key === authorizationKey && current.cleanup,
       cleanupEligibleVersionCount: cleanupDownloads
         ? 0
         : current.key === authorizationKey
@@ -929,15 +929,6 @@ export function SeasonDuplicateDialog({
   const cleanupDestinationAvailable = destinationAvailability.key === authorizationKey &&
     destinationAvailability.cleanup;
   const breakGlassVisible = seasonBreakGlassVisible(deletionPreview.data, sonarrMode);
-  useEffect(() => {
-    if (deletionPreview.data && cleanupEligibleVersionCount === 0) {
-      setDestinationChoice((current) => ({
-        key: authorizationKey,
-        sonarrMode: current.key === authorizationKey ? current.sonarrMode : "none",
-        cleanupDownloads: false,
-      }));
-    }
-  }, [authorizationKey, cleanupEligibleVersionCount, deletionPreview.data]);
   if (!season) return <dialog ref={dialogRef} className="modal" onClose={onClose} />;
   const conflictOperationId = seasonDeletionConflictOperationId(error);
 
@@ -985,24 +976,21 @@ export function SeasonDuplicateDialog({
   }
 
   const deletionPlanVerifying = selections.length > 0 && deletionPreview.isFetching;
-  const historicalPaths = seasonDuplicateHistoricalPaths(deletionPreview.data, sonarrMode);
   const destinationPreview = selections.length > 0 &&
     ((deletionPreview.data?.automaticAdoptionCount ?? 0) > 0 ||
-      historicalPaths.length > 0 ||
       breakGlassVisible) &&
     (
       <div className="season-profile-note" aria-live="polite">
-        <SonarrRetainedPathsWarning paths={historicalPaths} />
         {sonarrMode !== "none" && deletionPreview.data &&
           deletionPreview.data.automaticAdoptionCount > 0 && (
           <div className="space-y-1">
             <span className="badge badge-info">
-              Sonarr adopts {deletionPreview.data.automaticAdoptionCount}
+              Switch Sonarr to remaining version ({deletionPreview.data.automaticAdoptionCount})
             </span>
             {(deletionPreview.data.sonarrAdoptionTargets?.length ?? 0) > 0 && (
-              <details open={deletionPreview.data.sonarrAdoptionTargets?.length === 1}>
+              <details>
                 <summary className="cursor-pointer text-xs text-base-content/70">
-                  Review exact import{" "}
+                  Advanced: exact import{" "}
                   {deletionPreview.data.sonarrAdoptionTargets?.length === 1 ? "target" : "targets"}
                 </summary>
                 <ul className="mt-1 space-y-1 text-xs text-base-content/65">
@@ -1027,18 +1015,6 @@ export function SeasonDuplicateDialog({
             Sonarr removes and unmonitors {deletionPreview.data.removedAndUnmonitoredCount}
           </span>
         )}
-        {historicalPaths.map((entry) => (
-          <div key={entry.path} className="break-all text-xs text-base-content/65">
-            <span className="font-medium">
-              {entry.disposition === "delete"
-                ? "Automatic unlink"
-                : entry.disposition === "retain_live_qbittorrent"
-                ? "Retained — live qBittorrent owner"
-                : "Unverified"}:
-            </span>{" "}
-            {entry.path} · {entry.reason}
-          </div>
-        ))}
         {sonarrMode === "none" && deletionPreview.data?.breakGlassAvailable &&
           deletionPreview.data.adoptionUnavailableReason && (
           <span className="text-warning">
@@ -1048,10 +1024,11 @@ export function SeasonDuplicateDialog({
       </div>
     );
 
-  const downloadCleanupVisible = seasonDownloadCleanupVisible({
-    cleanupConfigured: cleanupDestinationAvailable,
-    cleanupEligibleVersionCount,
-  });
+  const downloadCleanupVisible = cleanupDownloads || cleanupDestinationAvailable ||
+    seasonDownloadCleanupVisible({
+      cleanupConfigured: cleanupDestinationAvailable,
+      cleanupEligibleVersionCount,
+    });
   const selectedDestinationServices = seasonSelectedDestinationServices({
     sonarrMode,
     cleanupDownloads,
@@ -1160,6 +1137,27 @@ export function SeasonDuplicateDialog({
                   ? deletionPreview.error.message
                   : "Authoritative preview failed"}
                 onRetry={() => deletionPreview.refetch()}
+              />
+            )}
+            {season && deletionPreview.data && (
+              <DeletionAccessResolver
+                libraryKey={season.episodes[0]?.libraryKey ?? ""}
+                ratingKey={season.showRatingKey}
+                plexSample={deletionPreview.data.plexPathAccessSample}
+                job={deletionPreview.data.qbittorrentPathAccessJob}
+                target={deletionPreview.data.sonarrDestinations?.[0]
+                  ? {
+                    instanceName: deletionPreview.data.sonarrDestinations[0].instanceName,
+                    type: "sonarr",
+                    title: season.showTitle,
+                    path: deletionPreview.data.sonarrDestinations[0].seriesPath,
+                    seasons: null,
+                    mediaFiles: null,
+                    extraFiles: null,
+                  }
+                  : undefined}
+                reason={deletionPreview.data.blockers.join(" ")}
+                onResolved={() => void deletionPreview.refetch()}
               />
             )}
             {deletionPreview.data?.blockers.map((blocker, index) => (

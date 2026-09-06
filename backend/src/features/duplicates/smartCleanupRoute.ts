@@ -333,6 +333,7 @@ router.post('/smart-cleanup', async (c) => {
         title: candidate.context ? `${candidate.title} — ${candidate.context}` : candidate.title,
         logicalSize: row.fileSize,
         snapshot: {
+          currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier,
           serverUrl,
           libraryKey: candidate.libraryKey,
@@ -428,3 +429,4 @@ router.post('/smart-cleanup', async (c) => {
 });
 
 export default router;
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';

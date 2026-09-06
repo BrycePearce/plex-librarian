@@ -1092,6 +1092,35 @@ Deno.test('show media path preview pages through live allLeaves metadata', async
   assertEquals(starts, ['0', '1']);
 });
 
+Deno.test('selected show access evidence uses current episode media and stays within the path cap', async () => {
+  const mockFetch = (() =>
+    Promise.resolve(Response.json({
+      MediaContainer: {
+        totalSize: 1,
+        Metadata: [{
+          ratingKey: 'episode-current',
+          type: 'episode',
+          Media: [
+            { id: 71, Part: [{ file: '/tv/current.mkv', size: 123456 }] },
+            { id: 72, Part: [{ file: '/tv/other.mkv', size: 654321 }] },
+          ],
+        }],
+      },
+    }))) as typeof fetch;
+  const client = new PlexClient('http://plex:32400', 'token', undefined, mockFetch);
+  assertEquals(await client.mediaPathPreview('show-current', 'show', 1, undefined, true), {
+    paths: ['/tv/current.mkv'],
+    truncated: true,
+    fileSizes: { '/tv/current.mkv': 123456 },
+    pathAccessSample: {
+      ratingKey: 'episode-current',
+      mediaId: 71,
+      path: '/tv/current.mkv',
+      size: 123456,
+    },
+  });
+});
+
 Deno.test(
   'show duplicate check pages live leaves and stops at the first duplicate episode',
   async () => {

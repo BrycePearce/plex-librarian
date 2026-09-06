@@ -51,18 +51,18 @@
     Target="/media"
     Default=""
     Mode="ro"
-    Description="Optional for analytics. Mount the actual media folder here read-only for filesystem verification, including qBittorrent ownership protection during Sonarr deletion and historical hardlink cleanup. Select the host folder corresponding to the Arr library root configured in the app. Connecting Sonarr does not create this mount."
+    Description="Optional for analytics. Mount the actual media folder here read-only for filesystem verification, including qBittorrent ownership protection during current media deletion. Select the host folder corresponding to the Arr library root configured in the app. Connecting Sonarr does not create this mount."
     Type="Path"
     Display="always"
     Required="false"
     Mask="false" />
 
   <Config
-    Name="Download Cleanup Path"
+    Name="Download Inspection Path"
     Target="/downloads"
     Default=""
-    Mode="rw"
-    Description="Optional for analytics. Mount only the completed-download folder here read/write to remove verified historical hardlinks. Select the host folder corresponding to the Arr download root configured in the app. Do not grant write access to an entire media share. Connecting Sonarr or qBittorrent does not create this mount."
+    Mode="ro"
+    Description="Optional for analytics. Mount only the current completed-download folder here read-only when a deletion requests file identity verification. Select the host folder corresponding to the Arr download root configured in the app. Service APIs delete their own files; writable media access is not required. Connecting Sonarr or qBittorrent does not create this mount."
     Type="Path"
     Display="always"
     Required="false"

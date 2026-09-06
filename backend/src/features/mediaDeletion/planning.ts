@@ -121,15 +121,17 @@ export async function resolveWholeShowDownloadCleanupBatch(
   });
 }
 
-/** Resolve whole-item cleanup from Arr history, then use the existing strict direct
- * manifest proof only for complete movie Media evidence. */
+/** Resolve current jobs using Arr associations, then verify complete current Plex
+ * file evidence when a separate or moved payload needs direct manifest proof. */
 export async function resolveWholeItemDownloadCleanupBatch(
   serverId: number,
   libraryKey: string,
   selectedItems: DownloadResolvableItem[],
   arrTargets: ArrDeleteTarget[],
   downloadTargets: DownloadClientTarget[],
-  plexClient: Pick<PlexClient, 'mediaVersionPathPreviews'>,
+  plexClient:
+    & Pick<PlexClient, 'mediaVersionPathPreviews'>
+    & Partial<Pick<PlexClient, 'mediaPathPreview'>>,
   attemptedJobKeysByItem: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
   attemptedOrphanFilesByItem: ReadonlyMap<string, readonly AttemptedOrphanFile[]> = new Map(),
   attemptedArrInstancesByItem: ReadonlyMap<string, ReadonlySet<number>> = new Map(),
@@ -146,28 +148,62 @@ export async function resolveWholeItemDownloadCleanupBatch(
   if (downloadTargets.length === 0) return resolved;
   return await mapWithConcurrency(resolved, 3, async (arrCleanup, index) => {
     const item = selectedItems[index]!;
-    if (item.type !== 'movie' || arrCleanup.downloadJobs.length > 0) return arrCleanup;
+    if (!['movie', 'show'].includes(item.type) || arrCleanup.downloadJobs.length > 0) {
+      return arrCleanup;
+    }
+    if (arrCleanup.status === 'error' || arrCleanup.retainedPaths.length > 0) return arrCleanup;
     try {
-      const versions = await plexClient.mediaVersionPathPreviews(item.ratingKey);
-      if (
-        versions.length === 0 ||
-        !versions.every((version) =>
-          version.allMediaEntriesRepresented === true && !version.truncated &&
-          version.paths.length === 1 && Number.isSafeInteger(version.fileSize) &&
-          version.fileSize! > 0
-        )
-      ) {
-        throw new Error(
-          'Every Plex Media entry must have an ID, one exact path, and a positive byte size',
+      let selections: Array<{ plexPath: string; size: number }>;
+      if (item.type === 'show') {
+        if (!plexClient.mediaPathPreview) return arrCleanup;
+        const preview = await plexClient.mediaPathPreview(
+          item.ratingKey,
+          'show',
+          undefined,
+          undefined,
+          true,
         );
+        if (
+          preview.truncated || preview.paths.length === 0 ||
+          !preview.paths.every((path) =>
+            Number.isSafeInteger(preview.fileSizes?.[path]) && preview.fileSizes![path]! > 0
+          )
+        ) {
+          throw new Error(
+            'Complete current Plex file sizes are required to verify this show’s qBittorrent payload',
+          );
+        }
+        selections = preview.paths.map((plexPath) => ({
+          plexPath,
+          size: preview.fileSizes![plexPath]!,
+        }));
+      } else {
+        const versions = await plexClient.mediaVersionPathPreviews(item.ratingKey);
+        if (
+          versions.length === 0 ||
+          !versions.every((version) =>
+            version.allMediaEntriesRepresented === true && !version.truncated &&
+            version.paths.length === 1 && Number.isSafeInteger(version.fileSize) &&
+            version.fileSize! > 0
+          )
+        ) {
+          throw new Error(
+            'Every Plex Media entry must have an ID, one exact path, and a positive byte size',
+          );
+        }
+        selections = versions.map((version) => ({
+          plexPath: version.paths[0]!,
+          size: version.fileSize!,
+        }));
       }
       const direct = await resolveDirectQbittorrentCleanup(
         serverId,
         libraryKey,
         item.ratingKey,
-        versions.map((version) => ({ plexPath: version.paths[0]!, size: version.fileSize! })),
+        selections,
         [],
         downloadTargets,
+        new Set(arrCleanup.sources.map((source) => source.downloadId)),
       );
       return {
         ...direct,

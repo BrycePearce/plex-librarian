@@ -235,3 +235,130 @@ Deno.test('connected qBittorrent storage paths are bounded and sanitized', async
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test('deletion-time path saving preserves credentials and per-library preferences', async () => {
+  withTransaction((client) => {
+    client.exec(`
+      INSERT INTO libraries (server_id, key, title, type, synced_at)
+        VALUES (1, 'access-tv-a', 'TV A', 'show', 1), (1, 'access-tv-b', 'TV B', 'show', 1);
+      INSERT INTO arr_library_mappings (server_id, library_key, arr_instance_id, add_import_exclusion)
+        VALUES (1, 'access-tv-a', 7, 0), (1, 'access-tv-b', 7, 1);
+    `);
+  });
+  const request = (id: number, body: unknown) =>
+    app.request(`/api/integrations/arr/instances/${id}/path-mappings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const body = { pathMappings: [{ kind: 'library', arrPath: '/tv', localPath: '/media' }] };
+  assertEquals((await request(9, body)).status, 404);
+  assertEquals((await request(7, { ...body, url: 'http://other' })).status, 400);
+  assertEquals((await request(7, body)).status, 200);
+  withTransaction((client) => {
+    assertEquals(client.prepare('SELECT url, api_key FROM arr_instances WHERE id = 7').value(), [
+      'http://sonarr:8989',
+      'stored-sonarr-key',
+    ]);
+    assertEquals(
+      client.prepare(
+        'SELECT add_import_exclusion FROM arr_library_mappings WHERE arr_instance_id = 7 ORDER BY library_key',
+      ).values(),
+      [[0], [1]],
+    );
+    assertEquals(
+      client.prepare(
+        'SELECT kind, arr_path, local_path FROM arr_path_mappings WHERE arr_instance_id = 7',
+      ).values(),
+      [['library', '/tv', '/media']],
+    );
+  });
+});
+
+Deno.test('selected-title storage verification rejects foreign and stale selection instead of sampling another title', async () => {
+  const request = (body: unknown) =>
+    app.request('/api/integrations/arr/verify-storage', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const body = {
+    instanceId: 7,
+    url: 'http://sonarr:8989',
+    pathMappings: [{ kind: 'library', arrPath: '/tv', localPath: '/media' }],
+    libraryKeys: ['access-tv-a'],
+    ratingKey: 'missing-title',
+  };
+  assertEquals((await request(body)).status, 404);
+  assertEquals((await request({ ...body, ratingKey: 123 })).status, 400);
+  assertEquals((await request({ ...body, selectedPath: '/tv/../unsafe' })).status, 400);
+  assertEquals(
+    (await request({ ...body, ratingKey: undefined, selectedPath: '/tv/file.mkv' })).status,
+    400,
+  );
+});
+
+Deno.test('qBittorrent mapping correction validates a current sample and increments revision without deleting the mapping', async () => {
+  const firstRoot = await Deno.makeTempDir();
+  const secondRoot = await Deno.makeTempDir();
+  try {
+    const firstFile = resolve(firstRoot, 'selected.mkv');
+    const secondFile = resolve(secondRoot, 'selected.mkv');
+    await Deno.writeTextFile(firstFile, 'test');
+    await Deno.writeTextFile(secondFile, 'test');
+    const request = (path: string, method: string, body: unknown) =>
+      app.request(path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const body = {
+      instanceKey: 'db:11',
+      qbittorrentPath: '/downloads',
+      localPath: firstRoot,
+      caseSensitive: true,
+      validationQbittorrentPath: '/downloads/selected.mkv',
+      validationLocalPath: firstFile,
+      validationSize: 4,
+    };
+    const created = await request('/api/integrations/qbittorrent/path-mappings', 'POST', body);
+    assertEquals(created.status, 201, await created.clone().text());
+    const mapping = await created.json();
+    const updated = await request(
+      `/api/integrations/qbittorrent/path-mappings/${mapping.id}`,
+      'PUT',
+      {
+        ...body,
+        localPath: secondRoot,
+        validationLocalPath: secondFile,
+      },
+    );
+    assertEquals(updated.status, 200, await updated.clone().text());
+    assertEquals((await updated.json()).revision, 2);
+    assertEquals(
+      (await request(`/api/integrations/qbittorrent/path-mappings/${mapping.id}`, 'PUT', {
+        ...body,
+        validationSize: 99,
+      })).status,
+      409,
+    );
+    assertEquals(
+      (await request(`/api/integrations/qbittorrent/path-mappings/${mapping.id}`, 'PUT', {
+        ...body,
+        instanceKey: 'db:999',
+      })).status,
+      404,
+    );
+    withTransaction((client) => {
+      assertEquals(
+        client.prepare('SELECT revision FROM qbittorrent_path_mappings WHERE id = ?').value(
+          mapping.id,
+        ),
+        [2],
+      );
+    });
+  } finally {
+    await Deno.remove(firstRoot, { recursive: true });
+    await Deno.remove(secondRoot, { recursive: true });
+  }
+});

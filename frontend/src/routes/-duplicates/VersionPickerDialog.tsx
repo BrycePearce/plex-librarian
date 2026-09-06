@@ -1,3 +1,6 @@
+import { DeletionAccessResolver } from "../../features/mediaDeletion/DeletionAccessResolver.tsx";
+import { versionAccessSample } from "../../features/mediaDeletion/ServicePathAccess.tsx";
+import { needsDeletionPathAccess } from "../../features/mediaDeletion/DeletionPathAccess.tsx";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,13 +35,14 @@ import {
   useDeletionDialogCancelFocus,
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "../../features/mediaDeletion/deletionConfirmation.ts";
-import { cleanupConsentInvalidated } from "../../features/mediaDeletion/deletionPreviewState.ts";
-import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
+import {
+  cleanupConsentInvalidated,
+  currentLocationOwnershipProblem,
+} from "../../features/mediaDeletion/deletionPreviewState.ts";
 import {
   defaultVersionSelection,
   versionArrDestinationCopy,
   versionCleanupReassignmentLocked,
-  versionDeletionPresentation,
   versionDestinationOptionVisibility,
   versionDestinationState,
   versionPlexFallbackWarning,
@@ -46,7 +50,6 @@ import {
   versionSelectionSemantics,
   versionSonarrOwnershipBlocked,
 } from "./versionDeletionState.ts";
-import "../../components/dataSurfaces.css";
 
 export function VersionPickerDialog({
   dialogRef,
@@ -176,7 +179,6 @@ export function VersionPickerDialog({
     const destination = versionDestinationState(preview.data);
     if (!deletingWholeMovie) {
       setDeleteFromArr(destination.arrSelectedByDefault);
-      setCleanupDownloads(false);
     }
     setUseRadarrPathOverride(false);
   }, [
@@ -188,6 +190,13 @@ export function VersionPickerDialog({
     preview.data?.radarrPathOverride?.planFingerprint,
     deletingWholeMovie,
   ]);
+
+  // A refreshed ownership result can change Arr availability. Preserve explicit
+  // QB intent so an unresolved selected job blocks confirmation instead of silently
+  // changing the request. A different media selection starts a new decision.
+  useEffect(() => {
+    if (!deletingWholeMovie) setCleanupDownloads(false);
+  }, [itemKey, mediaIds.join("|"), deletingWholeMovie]);
 
   const wholeItemPreview = useQuery({
     queryKey: queryKeys.downloadCleanupPreview.forItems(item?.libraryKey ?? "", [ratingKey]),
@@ -232,7 +241,6 @@ export function VersionPickerDialog({
       )
     ) {
       acceptedWholeItemCleanupFingerprintRef.current = null;
-      setCleanupDownloads(false);
     }
     if (!wholeItemArrAvailable) setDeleteFromArr(false);
   }, [
@@ -276,7 +284,8 @@ export function VersionPickerDialog({
   const pathConsentRequired = pathAdoption?.mode === "remove_from_radarr";
   const destinationOptionVisibility = versionDestinationOptionVisibility(preview.data);
   const destinationOptionsVisible = selection.deleteWholeItem || destinationOptionVisibility.arr ||
-    destinationOptionVisibility.cleanup;
+    destinationOptionVisibility.cleanup || cleanupDownloads ||
+    Boolean(preview.data?.qbittorrentPathAccessJob);
   // Merge in refreshed technical detail by mediaId where available — selection state,
   // fileSize, and everything else stays keyed off item.versions; only the fields the
   // refresh can improve (video/audio/subtitle technical detail) are swapped in.
@@ -293,13 +302,6 @@ export function VersionPickerDialog({
   const effectiveDeleteFromArr = item.mediaType === "movie"
     ? deleteFromArr
     : arrReassignAvailable || deleteFromArr;
-  const retainedSonarrPaths = item.mediaType === "episode"
-    ? versionDeletionPresentation(
-      preview.data,
-      effectiveDeleteFromArr,
-      effectiveCleanupDownloads,
-    ).sonarrHistoricalPaths
-    : [];
   const showFallbackWarning = effectiveDeleteFromArr
     ? versionPlexFallbackWarning(preview.data)
     : preview.data?.arrSelectionMatched === true || arrReassignAvailable;
@@ -348,8 +350,24 @@ export function VersionPickerDialog({
       : "ready",
     semanticBlock: selection.blocked || (!selection.deleteWholeItem && sonarrOwnershipBlocked),
   }) ||
-    (cleanupDownloads && !cleanupAvailable);
+    (cleanupDownloads &&
+      (!cleanupAvailable || (selection.deleteWholeItem && !effectiveCleanupDownloads)));
   const activePreviewError = selection.deleteWholeItem ? wholeItemPreview.error : preview.error;
+  const accessReasons = [
+    preview.data?.sonarrCleanupReason,
+    preview.data?.arrReassignReason,
+    preview.data?.arrReason,
+    preview.data?.cleanupReason,
+  ];
+  const versionAccessReason = accessReasons.filter(needsDeletionPathAccess).join(" ") ||
+    accessReasons.find(Boolean);
+  const wholeAccessProblem = wholeItemPreviewEntry
+    ? currentLocationOwnershipProblem(
+      wholeItemPreviewEntry,
+      effectiveDeleteFromArr && item.mediaType === "episode",
+      cleanupDownloads,
+    )
+    : undefined;
   const blockingOperationId = deletionOperationIdFromError(activePreviewError) ??
     deletionOperationIdFromError(error);
   return (
@@ -486,7 +504,33 @@ export function VersionPickerDialog({
             />
           )}
       />
-      <SonarrRetainedPathsWarning paths={retainedSonarrPaths} />
+      <DeletionAccessResolver
+        libraryKey={item.libraryKey}
+        ratingKey={item.mediaType === "movie" ? item.ratingKey : item.showRatingKey}
+        target={selection.deleteWholeItem
+          ? wholeItemPreviewEntry?.arrTargets[0]
+          : preview.data?.arrTargets[0]}
+        reason={selection.deleteWholeItem
+          ? wholeAccessProblem?.reason ?? wholeItemPreviewEntry?.reason
+          : versionAccessReason}
+        plexSample={selection.deleteWholeItem
+          ? wholeItemPreviewEntry?.plexPathAccessSample
+          : versionAccessSample(
+            ratingKey,
+            preview.data?.versions ?? [],
+            availableVersionPaths,
+            versionAccessReason,
+          )}
+        job={selection.deleteWholeItem
+          ? wholeItemPreviewEntry?.qbittorrentPathAccessJob ??
+            wholeItemPreviewEntry?.downloadJobs[0]
+          : preview.data?.qbittorrentPathAccessJob ?? preview.data?.downloadJobs[0]}
+        selectedPath={selection.deleteWholeItem
+          ? undefined
+          : preview.data?.versions[0]?.arrPaths[0]}
+        onResolved={() =>
+          void (selection.deleteWholeItem ? wholeItemPreview.refetch() : preview.refetch())}
+      />
 
       {(selection.deleteWholeItem ? wholeItemPreview.data : preview.data) &&
         destinationOptionsVisible && (
@@ -548,7 +592,8 @@ export function VersionPickerDialog({
                 },
               ]
               : []),
-            ...((selection.deleteWholeItem || destinationOptionVisibility.cleanup)
+            ...((selection.deleteWholeItem || destinationOptionVisibility.cleanup ||
+                cleanupDownloads || preview.data?.qbittorrentPathAccessJob)
               ? [
                 {
                   id: "cleanup" as const,
@@ -562,11 +607,11 @@ export function VersionPickerDialog({
                     : pathReassignmentActive
                     ? `Unavailable while ${arrLabel} is reassigning its record to the retained version.`
                     : "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
-                  checked: effectiveCleanupDownloads,
+                  checked: cleanupDownloads,
                   disabled: pending ||
                     (selection.deleteWholeItem
-                      ? wholeItemPreview.isLoading || !wholeItemCleanupAvailable
-                      : !effectiveDeleteFromArr || pathReassignmentActive),
+                      ? wholeItemPreview.isLoading
+                      : !cleanupDownloads && (!effectiveDeleteFromArr || pathReassignmentActive)),
                   warning: !cleanupAvailable ||
                     (!selection.deleteWholeItem && pathReassignmentActive),
                   onChange: (checked: boolean) => {
@@ -606,7 +651,7 @@ export function VersionPickerDialog({
         error={activePreviewError && blockingOperationId === null
           ? activePreviewError.message
           : !selection.deleteWholeItem && sonarrOwnershipBlocked
-          ? preview.data?.sonarrCleanupReason ?? "Sonarr historical path ownership is unsafe"
+          ? preview.data?.sonarrCleanupReason ?? "Current file ownership could not be verified"
           : null}
         onRetry={blockingOperationId === null
           ? () => void (selection.deleteWholeItem ? wholeItemPreview.refetch() : preview.refetch())

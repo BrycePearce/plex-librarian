@@ -1,4 +1,5 @@
 import { withTransaction } from '../../../db/index.ts';
+import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from './upgradePolicy.ts';
 import { resolveActiveServer } from '../../../integrations/plex/index.ts';
 import type { PlexClient } from '../../../integrations/plex/client.ts';
 import type {
@@ -44,6 +45,7 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  currentLocationPolicyVersion?: number;
   machineIdentifier: string;
   serverUrl: string;
   libraryKey: string;
@@ -166,6 +168,26 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (currentLocationSnapshot(snapshot)) {
+    if (snapshot.sonarrHistoricalPaths !== undefined) {
+      throw new DeletionValidationError(
+        'current-location deletion cannot contain historical paths',
+      );
+    }
+    for (
+      const cleanup of [
+        snapshot.wholeItemDownloadCleanup,
+        snapshot.seasonDownloadCleanup,
+        snapshot.radarrRemovalDownloadCleanup,
+      ]
+    ) {
+      if (cleanup && (cleanup.sonarrReclamation !== undefined || cleanup.orphanFiles.length > 0)) {
+        throw new DeletionValidationError(
+          'current-location deletion cannot contain historical cleanup',
+        );
+      }
+    }
+  }
   const cleanupSlots: Array<{
     cleanup: PersistedResolvedCleanupItem | undefined;
     wholeShowAllowed: boolean;
@@ -747,6 +769,9 @@ export async function validateDeletionTarget(
   snapshot: DurableTargetSnapshot;
   live: PlexMetadataIdentity | null;
 }> {
+  if (!currentLocationSnapshot(target.snapshot)) {
+    throw new DeletionValidationError(UPGRADE_RECOVERY_MESSAGE);
+  }
   const active = await resolveActiveServer();
   if (active.serverId !== serverId) {
     throw new DeletionValidationError('the active Plex server changed after deletion was accepted');

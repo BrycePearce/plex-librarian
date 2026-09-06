@@ -1,3 +1,4 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
 import type {
   DownloadCleanupJob,
   SeasonRemovalPreviewResponse,
@@ -392,6 +393,7 @@ export async function buildWholeSeasonRemovalPlan(input: {
       plexPath: part.path,
       size: part.byteSize,
     })),
+    selectedArrPaths: sonarrTargets.flatMap((target) => target.files.map((file) => file.path)),
     retained: [],
     // Discovery is read-only and powers the preview. The accepted durable plan below
     // still includes cleanup evidence only when the user explicitly opts in.
@@ -474,6 +476,7 @@ export async function buildWholeSeasonRemovalPlan(input: {
     sonarrTargets: input.coordinated ? sonarrTargets : [],
   };
   const accepted = {
+    currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     libraryKey: row.libraryKey,
     seasonRatingKey: row.seasonRatingKey,
     showRatingKey: row.showRatingKey,
@@ -491,6 +494,17 @@ export async function buildWholeSeasonRemovalPlan(input: {
     ? 'error' as const
     : 'unavailable' as const;
   const preview: SeasonRemovalPreviewResponse = {
+    plexPathAccessSample:
+      episodes.flatMap((episode) =>
+        episode.media.flatMap((media) =>
+          media.paths.slice(0, 1).map((part) => ({
+            ratingKey: episode.ratingKey,
+            mediaId: media.mediaId,
+            path: part.path,
+          }))
+        )
+      )[0],
+    qbittorrentPathAccessJob: rawCleanup?.qbittorrentPathAccessJob,
     fingerprint: planFingerprint,
     expiresAt: Math.floor(Date.now() / 1000) + 300,
     libraryKey: row.libraryKey,
@@ -536,6 +550,7 @@ export async function buildWholeSeasonRemovalPlan(input: {
     preview,
     logicalSize: row.fileSize,
     snapshot: {
+      currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
       machineIdentifier: input.machineIdentifier,
       serverUrl: input.plexClient.serverUrl,
       libraryKey: row.libraryKey,
@@ -548,7 +563,6 @@ export async function buildWholeSeasonRemovalPlan(input: {
       cleanupDownloads: input.cleanupDownloads,
       seasonCleanup: true,
       seasonDownloadCleanup: persistedCleanup,
-      sonarrHistoricalPaths,
       showTitle: row.showTitle,
       showRatingKey: row.showRatingKey,
       seasonRatingKey: row.seasonRatingKey,

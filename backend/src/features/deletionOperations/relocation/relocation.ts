@@ -1,4 +1,5 @@
 import type { SqliteClient } from '../../../db/index.ts';
+import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgradePolicy.ts';
 import { withTransaction } from '../../../db/index.ts';
 import { activeLibraryOperation } from '../../../services/libraryOperations.ts';
 import { refreshDeletionOperation } from '../core/state.ts';
@@ -403,6 +404,9 @@ export function finishRelocation(
   return withTransaction((client) => {
     const loaded = lifecycleRow(client, operationId, targetId, serverId);
     if (!loaded) throw new RelocationConflictError('Relocation target not found', 404);
+    if (!currentLocationSnapshot(loaded.lifecycle.snapshot)) {
+      throw new RelocationConflictError(UPGRADE_RECOVERY_MESSAGE);
+    }
     const current = classifyRelocationLifecycle(
       loaded.lifecycle,
       loadRelocationLifecycleEvidence(client, [loaded.lifecycle]).get(targetId)!,

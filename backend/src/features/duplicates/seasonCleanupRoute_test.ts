@@ -7,41 +7,9 @@ import {
 } from './seasonCleanupRoute.ts';
 import { DeletionConflictError } from '../deletionOperations/service.ts';
 import { managedEpisodesNeedBreakGlass } from './seasonDeletionPlanner.ts';
-import {
-  downloadCleanupEvidenceAgrees,
-  seasonDownloadJobAssignments,
-} from '../mediaDeletion/sonarr/seasonDownloadCleanup.ts';
-import type { ResolvedCleanupItem } from '../mediaDeletion/cleanup.ts';
+import { seasonDownloadJobAssignments } from '../mediaDeletion/sonarr/seasonDownloadCleanup.ts';
 
 const fingerprint = 'a'.repeat(64);
-
-function cleanupEvidence(paths: string[]): ResolvedCleanupItem {
-  return {
-    status: 'resolved',
-    downloadJobs: [{
-      instanceKey: 'db:1',
-      jobId: 'hash',
-      authorizedSourcePaths: paths,
-    }],
-  } as unknown as ResolvedCleanupItem;
-}
-
-Deno.test('Arr and direct cleanup evidence must authorize the same payload', () => {
-  assertEquals(
-    downloadCleanupEvidenceAgrees(
-      cleanupEvidence(['/downloads/a.mkv']),
-      cleanupEvidence(['/downloads/a.mkv']),
-    ),
-    true,
-  );
-  assertEquals(
-    downloadCleanupEvidenceAgrees(
-      cleanupEvidence(['/downloads/a.mkv']),
-      cleanupEvidence(['/downloads/a.mkv', '/downloads/b.mkv']),
-    ),
-    false,
-  );
-});
 
 Deno.test('season download jobs have one deterministic durable owner', () => {
   const entries = [

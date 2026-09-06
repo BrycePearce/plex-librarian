@@ -1,3 +1,4 @@
+import { DeletionAccessResolver } from "../../features/mediaDeletion/DeletionAccessResolver.tsx";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
@@ -23,7 +24,6 @@ import {
 } from "../../features/mediaDeletion/DeletionDialog.tsx";
 import type { SeasonRemovalPreviewResponse } from "@shared/types";
 import { SONARR_OWNED_PATH_COPY } from "../../features/mediaDeletion/deletionPreviewState.ts";
-import { SonarrRetainedPathsWarning } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 export interface SeasonRemovalChoice {
   previewFingerprint: string;
@@ -36,16 +36,22 @@ export function seasonSonarrOptionInfo(reason?: string): string {
 }
 
 export function seasonRemovalHistoricalPaths(
-  preview: SeasonRemovalPreviewResponse | undefined,
-  coordinated: boolean,
-) {
-  return coordinated ? preview?.sonarrHistoricalPaths ?? [] : [];
+  _preview: SeasonRemovalPreviewResponse | undefined,
+  _selection: boolean,
+): NonNullable<SeasonRemovalPreviewResponse["sonarrHistoricalPaths"]> {
+  return [];
 }
 
 export function seasonCleanupAvailable(
-  preview: Pick<SeasonRemovalPreviewResponse, "cleanupConfigured" | "downloadJobs"> | undefined,
+  preview:
+    | Pick<
+      SeasonRemovalPreviewResponse,
+      "cleanupConfigured" | "downloadJobs" | "qbittorrentPathAccessJob"
+    >
+    | undefined,
 ): boolean {
-  return preview?.cleanupConfigured === true && preview.downloadJobs.length > 0;
+  return preview?.cleanupConfigured === true &&
+    (preview.downloadJobs.length > 0 || preview.qbittorrentPathAccessJob !== undefined);
 }
 
 export function seasonSonarrActionAvailable(
@@ -270,9 +276,10 @@ export function SeasonRemovalDialog({
   const cleanupAvailableNow = seasonCleanupAvailable(value);
   useEffect(() => {
     if (!item || !value || !cleanupDownloads) return;
-    setVerifiedCleanupKey(cleanupAvailableNow ? item.ratingKey : null);
+    if (cleanupAvailableNow) setVerifiedCleanupKey(item.ratingKey);
   }, [cleanupAvailableNow, cleanupDownloads, item, value]);
-  const cleanupAvailable = cleanupAvailableNow || verifiedCleanupKey === item?.ratingKey;
+  const cleanupAvailable = value?.cleanupConfigured === true || cleanupAvailableNow ||
+    verifiedCleanupKey === item?.ratingKey;
   useEffect(() => {
     if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
   }, [cleanupAvailable, cleanupDownloads, value]);
@@ -326,6 +333,28 @@ export function SeasonRemovalDialog({
                 </div>
               </div>
             )}
+            {value && (
+              <DeletionAccessResolver
+                libraryKey={value.libraryKey}
+                ratingKey={value.showRatingKey}
+                selectedPath={value.sonarrFiles[0]?.path}
+                reason={value.blockers.join(" ")}
+                plexSample={value.plexPathAccessSample}
+                job={value.qbittorrentPathAccessJob ?? value.downloadJobs[0]}
+                target={value.sonarrFiles[0]
+                  ? {
+                    instanceName: value.sonarrFiles[0].instanceName,
+                    type: "sonarr",
+                    title: value.showTitle,
+                    path: value.sonarrFiles[0].path.replace(/[\\/][^\\/]+$/, ""),
+                    seasons: null,
+                    mediaFiles: null,
+                    extraFiles: null,
+                  }
+                  : undefined}
+                onResolved={() => void preview.refetch()}
+              />
+            )}
             {value?.blockers.map((blocker) => (
               <div key={blocker} className="alert alert-error mt-2 text-sm" role="alert">
                 <AlertTriangle className="size-4" /> {blocker}
@@ -374,9 +403,6 @@ export function SeasonRemovalDialog({
                     coordinated={coordinated}
                     cleanupDownloads={cleanupDownloads}
                     loading={preview.isFetching}
-                  />
-                  <SonarrRetainedPathsWarning
-                    paths={seasonRemovalHistoricalPaths(value, coordinated)}
                   />
                 </>
               )}

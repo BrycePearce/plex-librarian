@@ -399,7 +399,7 @@ Deno.test("season Sonarr destination requires an actionable aligned version", ()
   assertEquals(seasonSonarrVisible("selection-b", { key: "selection-a", sonarr: true }), false);
 });
 
-Deno.test("duplicate-season Sonarr wiring exposes every classified historical path", () => {
+Deno.test("duplicate-season preview ignores historical paths", () => {
   const paths = [{
     path: "/downloads/episode.mkv",
     managedPath: "/library/episode.mkv",
@@ -409,11 +409,11 @@ Deno.test("duplicate-season Sonarr wiring exposes every classified historical pa
   }];
   const preview = { sonarrHistoricalPaths: paths } as SeasonDeletionPreviewResponse;
   assertEquals(seasonDuplicateHistoricalPaths(preview, "none"), []);
-  assertEquals(seasonDuplicateHistoricalPaths(preview, "adopt_retained"), paths);
-  assertEquals(seasonDuplicateHistoricalPaths(preview, "remove_and_unmonitor"), paths);
+  assertEquals(seasonDuplicateHistoricalPaths(preview, "adopt_retained"), []);
+  assertEquals(seasonDuplicateHistoricalPaths(preview, "remove_and_unmonitor"), []);
   assertEquals(
     sonarrRetainedPathsSummary(seasonDuplicateHistoricalPaths(preview, "adopt_retained"))?.count,
-    1,
+    undefined,
   );
 });
 

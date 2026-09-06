@@ -113,8 +113,13 @@ export async function assertPlexTargetUnowned(input: {
   mediaId?: number;
   client: PlexClient;
   allowMissingPaths?: boolean;
+  /** Whole-movie Plex-only intent retains QB ownership without altering Radarr coordination. */
+  protectPlexOnlyMovie?: boolean;
 }): Promise<void> {
-  if (!['show', 'season', 'episode'].includes(input.type)) return;
+  if (
+    !['show', 'season', 'episode'].includes(input.type) &&
+    !(input.type === 'movie' && input.protectPlexOnlyMovie)
+  ) return;
   const targets = await getDownloadClientTargets(input.serverId);
   if (targets.length === 0) return;
   let paths: string[];
@@ -145,13 +150,19 @@ export async function protectWholeSonarrCleanup(input: {
   arrTargets: readonly ArrDeleteTarget[];
   downloadTargets: readonly DownloadClientTarget[];
   client: PlexClient;
+  sonarrSelected?: boolean;
+  itemType?: string;
 }): Promise<ResolvedCleanupItem> {
   if (input.downloadTargets.length === 0 || input.cleanup.status === 'error') return input.cleanup;
   try {
     const selectedJobKeys = new Set(
       input.cleanup.downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`),
     );
-    for (const record of input.cleanup.arrTargets.filter((entry) => entry.type === 'sonarr')) {
+    for (
+      const record of input.cleanup.arrTargets.filter((entry) =>
+        input.sonarrSelected !== false && entry.type === 'sonarr'
+      )
+    ) {
       const matches = input.arrTargets.filter((entry) =>
         entry.instanceName === record.instanceName && entry.instanceType === 'sonarr'
       );
@@ -167,7 +178,10 @@ export async function protectWholeSonarrCleanup(input: {
         selectedJobKeys,
       });
     }
-    const plex = await input.client.mediaPathPreview(input.cleanup.ratingKey, 'show');
+    const plex = await input.client.mediaPathPreview(
+      input.cleanup.ratingKey,
+      input.itemType ?? 'show',
+    );
     await assertPlexDeletionPathsUnowned({
       ...input,
       ...plex,

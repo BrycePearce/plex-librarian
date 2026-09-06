@@ -12,6 +12,7 @@ import { Pagination } from "../components/Pagination.tsx";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow.tsx";
 import { DuplicateSeasonRows } from "./-duplicates/DuplicateSeasonRows.tsx";
 import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog.tsx";
+import "../components/dataSurfaces.css";
 import { SeasonDuplicateDialog } from "./-duplicates/SeasonDuplicateDialog.tsx";
 import { QuickCleanupAction } from "../features/quickCleanup/QuickCleanupAction.tsx";
 import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionState.ts";

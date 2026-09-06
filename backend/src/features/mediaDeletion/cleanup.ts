@@ -1,3 +1,6 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
+import { createLocalPathIdentityResolver } from './localPathIdentity.ts';
+import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget, CoordinatedDeleteItem } from '../arr/delete.ts';
 import type { ArrExtraFile, ArrManagedFile } from '../../integrations/arr/client.ts';
 import { and, eq } from 'drizzle-orm';
@@ -10,32 +13,18 @@ import {
 } from './downloadClient.ts';
 import {
   type AttemptedOrphanFile,
-  completedOrphanFileAttempt,
   deleteVerifiedOrphanFile,
-  findRetainedSiblingPaths,
   normalizeRemoteAbsolute,
   type PayloadScanBudget,
   type VerifiedOrphanFile,
-  verifyOrphanHardlink,
-  verifyTrackedHardlinks,
 } from './hardlinks.ts';
-import {
-  appendRemotePath,
-  downloadJobOwnsPath,
-  downloadPayloadIsExclusivelyOwned,
-} from './ownership.ts';
+import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './ownership.ts';
 import {
   lstatChain,
   type PlexNamespaceMappingRecord,
   resolvePlexToLocal,
 } from './pathNamespace.ts';
-import {
-  assertPersistedSonarrReclamation,
-  buildSonarrReclamation,
-  canonicalSonarrInventory,
-  type PersistedSonarrReclamation,
-  sonarrInventoryIdentity,
-} from './sonarr/reclamation.ts';
+import { assertPersistedSonarrReclamation } from './sonarr/reclamation.ts';
 import { classifySonarrOwnedPaths } from './sonarr/pathOwnership.ts';
 import type {
   CleanupItemWithoutPlexPaths,
@@ -55,37 +44,12 @@ export type {
   ResolvedDownloadJob,
 } from './cleanup/types.ts';
 
-export function publicSonarrHistoricalPaths(cleanup: ResolvedCleanupItem) {
-  const classified = cleanup.sonarrReclamation?.proofs.map((proof) => ({
-    path: proof.path,
-    managedPath: proof.managedPath,
-    size: proof.size,
-    disposition: proof.ownershipDisposition ?? 'unverified',
-    reason: proof.ownershipReason ?? 'Live qBittorrent ownership was not durably classified',
-  })) ?? [];
-  const classifiedPaths = new Set(classified.map((entry) => entry.path));
-  const sonarrInstances = new Set(
-    cleanup.arrTargets.filter((target) => target.type === 'sonarr').map((target) =>
-      target.instanceName
-    ),
-  );
-  const unavailable = cleanup.sources.flatMap((source) => {
-    if (
-      !sonarrInstances.has(source.instanceName) || source.verification !== 'unverified' ||
-      !source.reason
-    ) return [];
-    const path = source.localPath ?? source.path;
-    if (!path || classifiedPaths.has(path)) return [];
-    return [{
-      path,
-      managedPath: source.importedPath,
-      size: null,
-      disposition: 'unverified' as const,
-      reason: `${source.instanceName}: ${source.reason}`,
-    }];
-  });
-  return [...new Map([...classified, ...unavailable].map((entry) => [entry.path, entry])).values()]
-    .sort((left, right) => left.path.localeCompare(right.path));
+export function publicSonarrHistoricalPaths(
+  cleanup: ResolvedCleanupItem,
+): SonarrHistoricalPathPreview[] {
+  // Historical filesystem locations are never part of a current-location preview.
+  void cleanup;
+  return [];
 }
 
 /** Bind Sonarr historical unlink authority independently from qBittorrent intent. */
@@ -421,6 +385,7 @@ export async function cleanupAuthorizationFingerprint(
 ): Promise<string> {
   const accepted = persistResolvedCleanupIdentity(cleanup);
   const authorization = {
+    currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     ratingKey: accepted.ratingKey,
     downloadJobs: accepted.downloadJobs.map((job) => ({
       provider: job.provider,
@@ -775,7 +740,14 @@ async function assertDirectPlexMappingsUnchanged(
 
 async function assertDirectRetainedPathsUnchanged(
   evidence: readonly DirectRetainedPathEvidence[],
+  payloads: readonly { localPath: string }[],
 ): Promise<void> {
+  const resolveEntry = await createLocalPathIdentityResolver();
+  const payloadEntries = new Set(
+    await Promise.all(
+      payloads.map(async (payload) => (await resolveEntry(payload.localPath, true)).possibleEntry),
+    ),
+  );
   for (const item of evidence) {
     const [info, canonical] = await Promise.all([
       lstatChain(item.localPath),
@@ -786,6 +758,9 @@ async function assertDirectRetainedPathsUnchanged(
       String(info.dev) !== item.device || String(info.ino) !== item.inode ||
       canonical !== item.canonicalPath
     ) throw new Error('A retained Plex filesystem identity changed since preview');
+    if (payloadEntries.has((await resolveEntry(item.localPath, true)).possibleEntry)) {
+      throw new Error('A qBittorrent payload aliases an unselected retained Plex version');
+    }
   }
 }
 
@@ -949,7 +924,10 @@ export async function executeDownloadedFileCleanup(
         if ((job.directRetainedPathEvidence?.length ?? 0) > 0) {
           await assertDirectPlexMappingsUnchanged(job.directRetainedPathEvidence!);
         }
-        await assertDirectRetainedPathsUnchanged(job.directRetainedPathEvidence ?? []);
+        await assertDirectRetainedPathsUnchanged(
+          job.directRetainedPathEvidence ?? [],
+          job.directPathEvidence,
+        );
       }
       const wholeShowHash = job.authorizationMode === 'whole_show_hash';
       if (
@@ -1081,34 +1059,15 @@ export async function resolveDownloadCleanup(
   const sharedAssociationHashes = new Set<string>();
   const sources = new Map<string, ResolvedCleanupItem['sources'][number]>();
   const orphanFiles: VerifiedOrphanFile[] = [];
-  const sonarrCandidates: PersistedSonarrReclamation[] = [];
   const inspectionWarnings = new Map<string, ResolvedCleanupItem['retainedPaths'][number]>();
   const resolvedArrTargets: ResolvedCleanupItem['arrTargets'] = [];
   const arrErrors: string[] = [];
   const historyErrors: string[] = [];
   const managedFileErrors: string[] = [];
-  const orphanAttemptErrors: string[] = [];
-  let completedOrphanAttemptCount = 0;
   let completedArrAttemptCount = 0;
-  let reclamationUnavailableReason: string | undefined;
-  const configuredDownloadRoots = new Set(
-    arrTargets.flatMap((target) =>
-      target.pathMappings.filter((mapping) => mapping.kind === 'download').map((mapping) =>
-        mapping.localPath
-      )
-    ),
-  );
-  for (const attempt of attemptedOrphanFiles) {
-    try {
-      if (await completedOrphanFileAttempt(attempt, configuredDownloadRoots)) {
-        completedOrphanAttemptCount++;
-      }
-    } catch (error) {
-      orphanAttemptErrors.push(
-        `Orphan cleanup retry: ${error instanceof Error ? error.message : 'path check failed'}`,
-      );
-    }
-  }
+  // Historical unlink attempts are handled only by the durable legacy gate.
+  void attemptedOrphanFiles;
+  void payloadScanBudget;
   for (const arr of arrTargets) {
     let record;
     try {
@@ -1125,7 +1084,6 @@ export async function resolveDownloadCleanup(
       continue;
     }
     arrMediaIds.set(arr.instanceId, record.id);
-    const verifiedStart = orphanFiles.length;
     let mediaFiles: ArrManagedFile[] | null;
     let extraFiles: ArrExtraFile[] | null;
     try {
@@ -1183,72 +1141,23 @@ export async function resolveDownloadCleanup(
           }
           sonarrAssociations.set(key, evidence);
         }
-        if (association.sourcePath) {
-          const trackedPaths = [
-            ...(mediaFiles ?? []).map((file) => file.relativePath),
-            ...(extraFiles ?? []).map((file) => file.relativePath),
-          ];
-          const currentManagedPaths = arr.client.type === 'sonarr'
-            ? (mediaFiles ?? []).flatMap((file) =>
-              file.path ? [{ path: file.path, id: file.id, size: file.size }] : []
-            )
-            : trackedPaths.flatMap((relativePath) => {
-              const path = record.path ? appendRemotePath(record.path, relativePath) : null;
-              return path ? [path] : [];
-            });
-          const verification = await verifyOrphanHardlink(
-            arr.instanceName,
-            association,
-            arr.pathMappings,
-            currentManagedPaths,
-            { exactTwoLinks: arr.client.type === 'sonarr' },
-          );
-          if (verification) {
-            sources.set(
-              `${arr.instanceId}:${association.hash}:${association.sourcePath}:${association.importedPath}`,
-              verification.source,
-            );
-            if (verification.file) orphanFiles.push(verification.file);
-          }
-          if (arr.client.type === 'radarr') {
-            orphanFiles.push(
-              ...await verifyTrackedHardlinks(
-                record.path,
-                trackedPaths,
-                association,
-                arr.pathMappings,
-              ),
-            );
-          }
-        }
-      }
-      if (arr.client.type === 'sonarr' && item.type === 'show' && mediaFiles !== null) {
-        const snapshot = await arr.client.sonarrSeriesSnapshot(record.id);
-        const inventory = canonicalSonarrInventory(snapshot);
-        sonarrCandidates.push(buildSonarrReclamation(
-          arr,
-          record.id,
-          id,
-          inventory,
-          await sonarrInventoryIdentity(inventory),
-          orphanFiles.slice(verifiedStart),
-        ));
+        // Retain association metadata to scope current jobs, never old-path authority.
+        sources.set(
+          `${arr.instanceId}:${association.hash}:${association.sourcePath}:${association.importedPath}`,
+          {
+            instanceName: arr.instanceName,
+            downloadId: association.hash,
+            path: association.sourcePath ?? '',
+            importedPath: association.importedPath,
+            verification: 'unverified',
+          },
+        );
       }
     } catch (error) {
       historyErrors.push(
         `${arr.instanceName}: ${error instanceof Error ? error.message : 'history lookup failed'}`,
       );
     }
-  }
-
-  let sonarrReclamation = sonarrCandidates.length === 1 ? sonarrCandidates[0] : undefined;
-  if (sonarrCandidates.length > 1) {
-    for (let index = orphanFiles.length - 1; index >= 0; index--) {
-      if (orphanFiles[index]!.strictTwoLinkProof) orphanFiles.splice(index, 1);
-    }
-    sonarrReclamation = undefined;
-    reclamationUnavailableReason =
-      'More than one mapped Sonarr instance contains this series; hardlink data removal cannot be verified';
   }
 
   if (downloadTargets.length > 0 && arrErrors.length === 0 && associationHashes.size > 0) {
@@ -1285,7 +1194,6 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (resolvedArrTargets.length === 0 && completedArrAttemptCount === 0) {
@@ -1300,21 +1208,6 @@ export async function resolveDownloadCleanup(
       sources: [],
       orphanFiles: [],
       retainedPaths: [...inspectionWarnings.values()],
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
-    };
-  }
-  if (orphanAttemptErrors.length > 0) {
-    return {
-      ratingKey,
-      status: 'error',
-      downloadJobs: [],
-      reason: [...new Set(orphanAttemptErrors)].join('; '),
-      arrStatus: 'resolved',
-      arrTargets: resolvedArrTargets,
-      sources: publicSources,
-      orphanFiles: [],
-      retainedPaths: [...inspectionWarnings.values()],
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (managedFileErrors.length > 0) {
@@ -1331,8 +1224,7 @@ export async function resolveDownloadCleanup(
     };
   }
   if (
-    downloadTargets.length === 0 && orphanFiles.length === 0 &&
-    completedOrphanAttemptCount === 0
+    downloadTargets.length === 0
   ) {
     return {
       ratingKey,
@@ -1344,7 +1236,6 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles: [],
       retainedPaths: [...inspectionWarnings.values()],
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
   if (historyErrors.length > 0) {
@@ -1358,7 +1249,6 @@ export async function resolveDownloadCleanup(
       sources: publicSources,
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
 
@@ -1369,6 +1259,7 @@ export async function resolveDownloadCleanup(
   let unownedLiveJobCount = 0;
   let nonExclusiveLiveJobCount = 0;
   const qbitErrors: string[] = [];
+  let qbittorrentPathAccessJob: ResolvedCleanupItem['qbittorrentPathAccessJob'];
   for (const target of downloadTargets) {
     const instancePrefix = `${target.instanceKey}:`;
     const candidateHashes = new Set(associationHashes);
@@ -1388,10 +1279,20 @@ export async function resolveDownloadCleanup(
           }
           continue;
         }
+        const { id: currentId, manifestFiles: _manifestFiles, ...currentJob } = job;
+        const currentPathAccessJob = {
+          ...currentJob,
+          provider: target.provider,
+          instanceKey: target.instanceKey,
+          instanceName: target.instanceName,
+          jobId: currentId,
+          sourcePath: job.contentPath,
+        };
+        qbittorrentPathAccessJob ??= currentPathAccessJob;
         if (![...sourcePaths].some((path) => downloadJobOwnsPath(job, path))) {
-          // A hash can be re-added at a different save path, or appear in another
-          // client instance. It is not the historical payload unless its full
-          // manifest owns at least one exact Arr source path.
+          qbittorrentPathAccessJob = currentPathAccessJob;
+          // A hash can be re-added or moved. Association alone is insufficient;
+          // callers may establish complete current-file proof through direct discovery.
           unownedLiveJobCount++;
           continue;
         }
@@ -1474,6 +1375,7 @@ export async function resolveDownloadCleanup(
 
   if (qbitErrors.length > 0) {
     return {
+      qbittorrentPathAccessJob,
       ratingKey,
       status: 'error',
       downloadJobs,
@@ -1484,67 +1386,65 @@ export async function resolveDownloadCleanup(
       orphanFiles,
       retainedPaths: [...inspectionWarnings.values()],
       observedDownloadJobKeys,
-      ...(sonarrReclamation ? { sonarrReclamation } : {}),
     };
   }
-  // Never unlink a file underneath a live job that was retained because its complete
-  // payload could not be attributed. A download client could otherwise restore the file, and
-  // the user would still have an active job with a partially removed payload.
-  const directOrphanFiles = selectDirectOrphanFiles(orphanFiles, ownedLiveJobs);
-  const executableReclamation = sonarrReclamation;
-  const retainedPaths = [...new Map([
-    ...inspectionWarnings.values(),
-    ...await findRetainedSiblingPaths(
-      directOrphanFiles,
-      undefined,
-      payloadScanBudget,
-    ),
-  ].map((entry) => [entry.path, entry])).values()];
+  const retainedPaths = [...inspectionWarnings.values()];
+  if (unownedLiveJobCount > 0) {
+    // A selected current job with a moved or unresolved payload cannot disappear
+    // from the accepted job set merely because another job was easy to verify.
+    return {
+      qbittorrentPathAccessJob,
+      ratingKey,
+      status: 'unavailable',
+      downloadJobs: [],
+      reason:
+        'A matching current download exists, but its current payload ownership could not be verified',
+      arrStatus: 'resolved',
+      arrTargets: resolvedArrTargets,
+      sources: publicSources,
+      orphanFiles: [],
+      retainedPaths,
+      observedDownloadJobKeys,
+    };
+  }
   if (
-    downloadJobs.length > 0 || completedAttemptCount > 0 || directOrphanFiles.length > 0 ||
-    completedOrphanAttemptCount > 0
+    downloadJobs.length > 0 || completedAttemptCount > 0
   ) {
     return {
       ratingKey,
       status: 'resolved',
       downloadJobs,
-      ...(downloadJobs.length === 0 && directOrphanFiles.length === 0
+      ...(downloadJobs.length === 0
         ? {
-          reason: completedOrphanAttemptCount > 0
-            ? 'Downloaded-file cleanup was previously started and the verified path is now absent'
-            : 'Download cleanup was previously started and the job is now absent',
+          reason: 'Download cleanup was previously started and the job is now absent',
         }
         : {}),
       arrStatus: 'resolved',
       arrTargets: resolvedArrTargets,
       sources: publicSources,
-      orphanFiles: directOrphanFiles,
+      orphanFiles: [],
       retainedPaths,
       observedDownloadJobKeys,
-      ...(executableReclamation && executableReclamation.proofs.length > 0
-        ? { sonarrReclamation: executableReclamation }
-        : {}),
     };
   }
   return {
     ratingKey,
     status: 'unavailable',
     downloadJobs: [],
-    reason: reclamationUnavailableReason ??
-      (associationHashes.size === 0
-        ? 'Arr has no retained download import history for this item'
-        : nonExclusiveLiveJobCount > 0
-        ? 'A matching live download contains files that are not all attributable to this Arr title'
-        : unownedLiveJobCount > 0
-        ? 'A matching download ID exists, but its manifest does not own the historical source path'
-        : 'The imported download is no longer present in configured download clients'),
+    qbittorrentPathAccessJob,
+    reason: associationHashes.size === 0
+      ? 'Arr has no retained download import history for this item'
+      : nonExclusiveLiveJobCount > 0
+      ? 'A matching live download contains files that are not all attributable to this Arr title'
+      : unownedLiveJobCount > 0
+      ? 'A matching current download exists, but its current payload ownership could not be verified'
+      : 'The imported download is no longer present in configured download clients',
     arrStatus: 'resolved',
     arrTargets: resolvedArrTargets,
     sources: publicSources,
     orphanFiles: [],
     retainedPaths,
     observedDownloadJobKeys,
-    ...(sonarrReclamation ? { sonarrReclamation } : {}),
   };
 }
 
@@ -1563,6 +1463,9 @@ export function selectDirectOrphanFiles(
 
 export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithoutPlexPaths {
   return {
+    ...(item.qbittorrentPathAccessJob
+      ? { qbittorrentPathAccessJob: item.qbittorrentPathAccessJob }
+      : {}),
     ratingKey: item.ratingKey,
     status: item.status,
     reason: item.reason,
@@ -1590,7 +1493,7 @@ export function publicCleanupItem(item: ResolvedCleanupItem): CleanupItemWithout
       mediaFiles: target.mediaFiles?.map(({ relativePath, size }) => ({ relativePath, size })) ??
         null,
     })),
-    sources: item.sources,
+    sources: [],
     orphanFiles: item.orphanFiles.map(({ path, size, method }) => ({ path, size, method })),
     retainedPaths: item.retainedPaths,
     sonarrHistoricalPaths: publicSonarrHistoricalPaths(item),

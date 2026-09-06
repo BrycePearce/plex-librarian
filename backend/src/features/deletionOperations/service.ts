@@ -1,4 +1,11 @@
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
+import { CURRENT_LOCATION_POLICY_VERSION } from '../../../../shared/deletionPolicy.ts';
+import {
+  currentLocationSnapshot,
+  holdLegacyDeletionTargets,
+  UPGRADE_HOLD,
+  upgradeTargetCanCancel,
+} from './core/upgradePolicy.ts';
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
 import { ArrApiError } from '../../integrations/arr/client.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
@@ -63,6 +70,14 @@ export interface NewDeletionOperation {
   kind: DeletionKind;
   payload: Record<string, unknown>;
   targets: NewDeletionTarget[];
+}
+
+function displaySnapshot(raw: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(raw);
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  } catch { /* Keep corrupt evidence stored and show the manual recovery hold. */ }
+  return { upgradeHold: UPGRADE_HOLD };
 }
 
 export function listDeletionOperations(
@@ -136,9 +151,9 @@ export function listDeletionOperations(
       operations: rows.map((row) => {
         const targets = client.prepare(
           `SELECT title, error, status, phase,
-                  json_type(snapshot, '$.relocationGuidance'),
-                  json_type(snapshot, '$.relocationSyncBarrier'),
-                  json_type(snapshot, '$.resolutionState'), snapshot
+                  json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance'),
+                  json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier'),
+                  json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState'), snapshot
            FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal`,
         ).values<[
           string,
@@ -152,11 +167,16 @@ export function listDeletionOperations(
         ]>(row[0]);
         const acceptedArrInstances = new Map<number, 'sonarr' | 'radarr'>();
         for (const target of targets) {
-          const snapshot = JSON.parse(target[7]) as {
+          const snapshot = displaySnapshot(target[7]) as {
             arrReassignments?: Array<{ instanceId?: unknown; instanceType?: unknown }>;
           };
-          for (const reassignment of snapshot.arrReassignments ?? []) {
+          for (
+            const reassignment of Array.isArray(snapshot.arrReassignments)
+              ? snapshot.arrReassignments
+              : []
+          ) {
             if (
+              reassignment && typeof reassignment === 'object' &&
               Number.isSafeInteger(reassignment.instanceId) &&
               Number(reassignment.instanceId) > 0 &&
               (reassignment.instanceType === 'sonarr' || reassignment.instanceType === 'radarr')
@@ -198,7 +218,8 @@ export function listDeletionOperations(
             (target[2] === 'needs_attention' ||
               (target[2] === 'completed_with_warning' && target[3] !== 'finalizing' &&
                 row[3] === 'completed_with_warning')) &&
-            target[4] === null && target[5] === null && target[6] === null
+            target[4] === null && target[5] === null && target[6] === null &&
+            currentLocationSnapshot(target[7])
           ),
         };
       }),
@@ -229,7 +250,7 @@ export async function deletionOperationArrLinks(
     ).values<[number, string, string]>(operationId).map(([id, title, rawSnapshot]) => ({
       id,
       title,
-      snapshot: JSON.parse(rawSnapshot) as {
+      snapshot: displaySnapshot(rawSnapshot) as {
         tmdbId?: number | null;
         tvdbId?: number | null;
         arrReassignments?: Array<{
@@ -253,7 +274,12 @@ export async function deletionOperationArrLinks(
     href: string;
   }>();
   for (const target of loaded.targets) {
-    for (const evidence of target.snapshot.arrReassignments ?? []) {
+    for (
+      const evidence of Array.isArray(target.snapshot.arrReassignments)
+        ? target.snapshot.arrReassignments
+        : []
+    ) {
+      if (!evidence || typeof evidence !== 'object') continue;
       if (
         !Number.isSafeInteger(evidence.instanceId) || Number(evidence.instanceId) <= 0 ||
         !Number.isSafeInteger(evidence.recordId) || Number(evidence.recordId) <= 0 ||
@@ -694,7 +720,9 @@ export async function enqueueDeletionOperations(
       throw new DeletionConflictError('no deletion targets were found', 404);
     }
     for (const target of input.targets) {
-      if (target.snapshot.skipArrCoordination === true) {
+      if (
+        target.snapshot.skipArrCoordination === true || currentLocationSnapshot(target.snapshot)
+      ) {
         validateArrMonitoringEvidence(target.snapshot as unknown as DurableTargetSnapshot);
       }
     }
@@ -908,6 +936,7 @@ export async function enqueueDeletionOperations(
 function claimTarget(): DeletionWorkTarget | null {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
+    holdLegacyDeletionTargets(client, now);
     const row = client
       .prepare(
         `SELECT t.id, t.operation_id, o.server_id, t.target_kind, t.target_key, t.snapshot, t.logical_size,
@@ -915,7 +944,7 @@ function claimTarget(): DeletionWorkTarget | null {
        FROM deletion_targets t JOIN deletion_operations o ON o.id = t.operation_id
        WHERE (t.status = 'queued' OR (t.status = 'waiting_retry' AND t.next_retry_at <= ?))
          AND (
-           json_extract(t.snapshot, '$.seasonCleanup') IS NULL
+           json_extract(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.seasonCleanup') IS NULL
            OR NOT EXISTS (
              SELECT 1 FROM deletion_targets season_prior
              WHERE season_prior.operation_id = t.operation_id
@@ -930,7 +959,7 @@ function claimTarget(): DeletionWorkTarget | null {
            )
          )
          AND (
-           json_extract(t.snapshot, '$.arrReassignments') IS NULL
+           json_extract(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.arrReassignments') IS NULL
            OR NOT EXISTS (
              SELECT 1 FROM deletion_targets prior
              WHERE prior.operation_id = t.operation_id
@@ -1077,7 +1106,7 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
         .prepare(
           `SELECT 1 FROM deletion_targets
          WHERE id = ?
-           AND COALESCE(json_extract(snapshot, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'`,
+           AND COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'`,
         )
         .value<[number]>(target.id);
       if (hasOutsidePathPlan) {
@@ -1102,7 +1131,7 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
          WHERE operation_id = ?
            AND ordinal > (SELECT ordinal FROM deletion_targets WHERE id = ?)
            AND status IN ('queued', 'waiting_retry')
-           AND json_extract(snapshot, '$.arrReassignments') IS NOT NULL`,
+           AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments') IS NOT NULL`,
         )
         .run(now, target.operationId, target.id);
     }
@@ -1168,9 +1197,10 @@ export async function runDeletionWorkerOnceForTest(): Promise<void> {
 }
 
 export function startDeletionWorker(): void {
-  withTransaction((client) =>
-    recoverInterruptedDeletionWork(client, Math.floor(Date.now() / 1000))
-  );
+  withTransaction((client) => {
+    holdLegacyDeletionTargets(client, Math.floor(Date.now() / 1000));
+    recoverInterruptedDeletionWork(client, Math.floor(Date.now() / 1000));
+  });
   wakeDeletionWorker();
 }
 
@@ -1234,7 +1264,7 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
       )
       .values<unknown[]>(id);
     const projectedTargets = targetRows.map((target) => {
-      const snapshot = JSON.parse(String(target[15])) as Record<string, unknown> & {
+      const snapshot = displaySnapshot(String(target[15])) as Record<string, unknown> & {
         mode?: string;
         cleanupDownloads?: boolean;
         unmonitorFromArr?: boolean;
@@ -1244,19 +1274,20 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         resolutionState?: 'management_hold';
       };
       const legacyUnsupported = String(target[2]) === 'sonarr_series';
-      const lifecycleRow: RelocationLifecycleRow | null = legacyUnsupported ? null : {
-        targetId: Number(target[0]),
-        operationId: id,
-        serverId,
-        targetKind: String(target[2]) as 'whole_item' | 'movie_version' | 'episode_version',
-        targetKey: String(target[3]),
-        status: String(target[5]),
-        phase: String(target[7]),
-        plexAttemptCount: Number(target[10]),
-        removalConfirmedAt: target[8] === null ? null : Number(target[8]),
-        error: target[13] === null ? null : String(target[13]),
-        snapshot,
-      };
+      const lifecycleRow: RelocationLifecycleRow | null =
+        legacyUnsupported || snapshot.upgradeHold === UPGRADE_HOLD ? null : {
+          targetId: Number(target[0]),
+          operationId: id,
+          serverId,
+          targetKind: String(target[2]) as 'whole_item' | 'movie_version' | 'episode_version',
+          targetKey: String(target[3]),
+          status: String(target[5]),
+          phase: String(target[7]),
+          plexAttemptCount: Number(target[10]),
+          removalConfirmedAt: target[8] === null ? null : Number(target[8]),
+          error: target[13] === null ? null : String(target[13]),
+          snapshot,
+        };
       return { target, snapshot, lifecycleRow, legacyUnsupported };
     });
     const lifecycleEvidence = loadRelocationLifecycleEvidence(
@@ -1292,6 +1323,10 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
           ? []
           : JSON.parse(String(target[20]));
         targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
+        targetResult.upgradeHold = snapshot.upgradeHold === UPGRADE_HOLD;
+        targetResult.upgradeHoldCancellable = snapshot.upgradeHold === UPGRADE_HOLD &&
+          targetResult.status === 'needs_attention' &&
+          upgradeTargetCanCancel(client, Number(target[0]));
         if (legacyUnsupported) {
           targetResult.unsupportedLegacyWorkflow = true;
           return targetResult;
@@ -1301,7 +1336,10 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
           (Array.isArray(snapshot.arrOwnerships) && snapshot.arrOwnerships.length > 0) ||
           (Array.isArray(snapshot.arrReassignments) && snapshot.arrReassignments.length > 0) ||
           snapshot.radarrRemovalFallback !== undefined;
-        targetResult.seasonRemovedUnmonitoredAvailable =
+        // Held, malformed transition evidence must remain readable, but it cannot
+        // be interpreted as an actionable recovery/relocation plan.
+        if (snapshot.upgradeHold === UPGRADE_HOLD) return targetResult;
+        targetResult.seasonRemovedUnmonitoredAvailable = currentLocationSnapshot(snapshot) &&
           targetResult.status === 'needs_attention' &&
           targetResult.phase === 'arr_coordination' &&
           snapshot.seasonCleanup === true &&
@@ -1357,6 +1395,7 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
 export function cancelDeletionOperation(id: string, serverId: number): boolean {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
+    holdLegacyDeletionTargets(client, now);
     const queued = client
       .prepare(
         `SELECT id FROM deletion_targets
@@ -1365,21 +1404,28 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
          AND attempt_count = 0
          AND NOT (
            (
-             COALESCE(json_extract(snapshot, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
-             AND json_type(snapshot, '$.arrReassignments[0].radarrPathPlan.transition') IS NOT NULL
+             COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
+             AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].radarrPathPlan.transition') IS NOT NULL
             )
-            OR json_type(snapshot, '$.radarrRemovalFallback.transition') IS NOT NULL
+            OR json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.radarrRemovalFallback.transition') IS NOT NULL
             OR (
-              json_extract(snapshot, '$.arrReassignments[0].instanceType') = 'sonarr'
+              json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].instanceType') = 'sonarr'
               AND json_type(
                 snapshot,
                 '$.arrReassignments[0].sonarrTransition.payloadProtectionAt'
               ) IS NOT NULL
             )
-            OR json_type(snapshot, '$.seasonBreakGlass.monitoringProtectedAt') IS NOT NULL
+            OR json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.seasonBreakGlass.monitoringProtectedAt') IS NOT NULL
           )`,
       )
       .values<[number]>(id);
+    const held = client.prepare(
+      `SELECT id FROM deletion_targets WHERE operation_id = ? AND status = 'needs_attention'
+       AND json_valid(snapshot) AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') = ?`,
+    ).values<[number]>(id, UPGRADE_HOLD).filter(([targetId]) =>
+      upgradeTargetCanCancel(client, targetId)
+    );
+    queued.push(...held);
     if (
       queued.length === 0 ||
       !client
@@ -1391,7 +1437,7 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
     for (const [targetId] of queued) {
       client
         .prepare(
-          "UPDATE deletion_targets SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'queued'",
+          "UPDATE deletion_targets SET status = 'cancelled', next_retry_at = NULL, updated_at = ? WHERE id = ? AND status IN ('queued', 'needs_attention')",
         )
         .run(now, targetId);
       client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(targetId);
@@ -1409,6 +1455,7 @@ export function retryDeletionOperation(
 ): boolean {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
+    holdLegacyDeletionTargets(client, now);
     const operation = client
       .prepare('SELECT library_key FROM deletion_operations WHERE id = ? AND server_id = ?')
       .value<[string]>(id, serverId);
@@ -1438,7 +1485,7 @@ export function retryDeletionOperation(
       ? "status = 'completed_with_warning' AND phase <> 'finalizing'"
       : "status = 'needs_attention'";
     const eligiblePredicate =
-      `operation_id = ? AND ${targetStatusSql} AND json_type(snapshot, '$.relocationGuidance') IS NULL AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL AND json_type(snapshot, '$.resolutionState') IS NULL`;
+      `operation_id = ? AND ${targetStatusSql} AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState') IS NULL`;
     const eligibleParams = [id];
     const matching = client
       .prepare(`SELECT COUNT(*) FROM deletion_targets WHERE ${eligiblePredicate}`)
@@ -1451,7 +1498,7 @@ export function retryDeletionOperation(
            attempt_count = CASE WHEN status = 'needs_attention' THEN 0 ELSE attempt_count END,
            plex_attempt_count = CASE
              WHEN phase = 'plex_reconciliation'
-              AND COALESCE(json_extract(snapshot, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
+              AND COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
              THEN 0
              ELSE plex_attempt_count
            END,
@@ -1475,6 +1522,7 @@ export function recheckPlexReconciliationAfterSync(
   libraryKey: string | null,
 ): number {
   return withTransaction((client) => {
+    holdLegacyDeletionTargets(client, Math.floor(Date.now() / 1000));
     if (!activeServerMatches(client, serverId)) return 0;
     const now = Math.floor(Date.now() / 1000);
     const rows = client.prepare(
@@ -1484,10 +1532,11 @@ export function recheckPlexReconciliationAfterSync(
        WHERE o.server_id = ?
          AND (? IS NULL OR o.library_key = ?)
          AND t.phase = 'plex_reconciliation'
+         AND json_extract(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
          AND t.status IN ('needs_attention','completed_with_warning')
-         AND json_type(t.snapshot, '$.relocationGuidance') IS NULL
-         AND json_type(t.snapshot, '$.relocationSyncBarrier') IS NULL
-         AND json_type(t.snapshot, '$.resolutionState') IS NULL
+         AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL
+         AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL
+         AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.resolutionState') IS NULL
        ORDER BY o.updated_at, o.created_at, o.id`,
     ).values<[string, string]>(serverId, libraryKey, libraryKey);
 
@@ -1512,7 +1561,7 @@ export function recheckPlexReconciliationAfterSync(
         `UPDATE deletion_targets
          SET status = 'queued',
              plex_attempt_count = CASE
-               WHEN COALESCE(json_extract(snapshot, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
+               WHEN COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].instanceType'), '') <> 'radarr'
                THEN 0
                ELSE plex_attempt_count
              END,
@@ -1522,10 +1571,11 @@ export function recheckPlexReconciliationAfterSync(
              updated_at = ?
          WHERE operation_id = ?
            AND phase = 'plex_reconciliation'
+           AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
            AND status IN ('needs_attention','completed_with_warning')
-           AND json_type(snapshot, '$.relocationGuidance') IS NULL
-           AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
-           AND json_type(snapshot, '$.resolutionState') IS NULL`,
+           AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL
+           AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL
+           AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState') IS NULL`,
       ).run(now, operationId);
       if (changed === 0) continue;
       refreshDeletionOperation(client, operationId);
@@ -1538,6 +1588,7 @@ export function recheckPlexReconciliationAfterSync(
 export function dismissDeletionOperation(id: string, serverId: number): boolean {
   return withTransaction((client) => {
     const now = Math.floor(Date.now() / 1000);
+    holdLegacyDeletionTargets(client, now);
     const operation = client
       .prepare('SELECT id FROM deletion_operations WHERE id = ? AND server_id = ?')
       .value<[string]>(id, serverId);
@@ -1552,7 +1603,7 @@ export function dismissDeletionOperation(id: string, serverId: number): boolean 
        JOIN deletion_targets later ON later.operation_id = unresolved.operation_id
          AND later.ordinal > unresolved.ordinal
        WHERE unresolved.operation_id = ?
-         AND json_extract(unresolved.snapshot, '$.seasonCleanup') = 1
+         AND json_extract(CASE WHEN json_valid(unresolved.snapshot) THEN unresolved.snapshot ELSE '{}' END, '$.seasonCleanup') = 1
          AND (
            unresolved.status = 'needs_attention'
            OR (unresolved.status = 'completed_with_warning' AND unresolved.phase <> 'finalizing')
@@ -1565,13 +1616,14 @@ export function dismissDeletionOperation(id: string, serverId: number): boolean 
     const targets = client.prepare(
       `SELECT id, target_kind FROM deletion_targets
        WHERE operation_id = ?
+         AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
          AND (
            status = 'needs_attention'
            OR (status = 'completed_with_warning' AND phase <> 'finalizing')
          )
-          AND json_type(snapshot, '$.relocationGuidance') IS NULL
-          AND json_type(snapshot, '$.relocationSyncBarrier') IS NULL
-          AND json_type(snapshot, '$.resolutionState') IS NULL
+          AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL
+          AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL
+          AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState') IS NULL
           `,
     ).values<[number, DeletionKind]>(id);
     if (targets.length === 0) return false;

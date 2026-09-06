@@ -1,4 +1,8 @@
 interface DeletionOperationTargetBase {
+  /** Paused because the accepted snapshot predates current-location deletion. */
+  upgradeHold?: boolean;
+  /** Durable evidence proves this held target has no external mutation attempt. */
+  upgradeHoldCancellable?: boolean;
   id: number;
   ordinal: number;
   targetKind: 'whole_item' | 'movie_version' | 'episode_version';

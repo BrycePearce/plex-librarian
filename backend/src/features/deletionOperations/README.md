@@ -3,7 +3,7 @@
 Deletion is intentionally a workflow, not a route-side side effect. The HTTP layer proves and
 snapshots an exact request, then the durable worker revalidates that evidence before each external
 mutation. This directory owns the durable operation lifecycle; `../mediaDeletion/` owns preview,
-path, download-client, and reclamation evidence used by that lifecycle.
+current-path and download-client evidence used by that lifecycle.
 
 ## Lifecycle
 
@@ -22,7 +22,7 @@ postcondition must make that absence attributable.
 
 ## TV flows in scope
 
-The Sonarr-owned historical-path behavior is deliberately limited to these four flows:
+The current-location policy covers these four TV flows:
 
 | Flow              | Durable target                | Planner / preview                                   |
 | ----------------- | ----------------------------- | --------------------------------------------------- |
@@ -31,14 +31,19 @@ The Sonarr-owned historical-path behavior is deliberately limited to these four 
 | Duplicate episode | media version                 | `../mediaDeletion/versionPlanning.ts`               |
 | Duplicate season  | ordered media-version targets | `../duplicates/seasonDeletionPlanner.ts`            |
 
-Do not generalize the proof or silently enable it for movie/Radarr flows. Each flow retains its own
+Each flow retains its own
 eligibility, remaining-version, season-membership, active-playback, and Arr-monitoring safeguards.
 
 ## Safety invariants
 
-- A Sonarr historical path is unlinkable only with the exact two-link proof: the source path and
-  Sonarr-managed path are distinct directory entries for the same inode, and the inode link count is
-  exactly two at preview and execution.
+- New fingerprints and snapshots carry `currentLocationPolicyVersion`. Historical import paths
+  never authorize a new filesystem target. Arr history remains association evidence for current
+  download jobs; their live locations and full manifests must still pass ownership checks.
+- Legacy unfinished targets are upgrade-held before recovery, claiming, retry, and reconciliation.
+  Only explicitly upgrade-held targets without external or uncertain attempt evidence may be
+  cancelled; their reservations are released in the same transaction. Attempted work retains its
+  snapshots, attempt records and reservations for manual service outcome and monitoring recovery.
+  Completed legacy audit records are preserved. No legacy deletion or historical unlink is replayed.
 - Accepted ownership is immutable evidence. Live revalidation may downgrade an accepted path to
   retained/unverified; it may not add a new destructive path.
 - Plex, Sonarr, qBittorrent, and local/container paths are separate namespaces. Cross-namespace
@@ -50,9 +55,9 @@ eligibility, remaining-version, season-membership, active-playback, and Arr-moni
   a conservative veto only, never payload authority. Selected local deletion paths must exist before
   mutation. Final Plex reconciliation may resolve an already-removed suffix beneath its
   still-accessible mapped root after accepted Arr/download cleanup or an earlier Plex attempt.
-  Unmapped live download locations or failed catalog inspection mean unknown ownership: retain
-  historical paths and block the affected mutation. Apply this even when QB is unchecked.
-- TV paths also pass `livePathProtection.ts` without historical proofs. Preview checks use only
+  Unmapped live download locations or failed catalog inspection mean unknown ownership and block
+  the affected mutation. Apply this even when QB is unchecked.
+- TV paths pass `livePathProtection.ts`. Preview checks use only
   explicitly authorized cleanup job keys; immediately before Sonarr/Plex deletion, any remaining
   live owner vetoes the mutation. Folder checks include contained torrent entries. No connected
   download client means no ownership veto. This does not change movie/Radarr deletion policy.

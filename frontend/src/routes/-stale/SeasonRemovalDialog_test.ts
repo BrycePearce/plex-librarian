@@ -24,7 +24,7 @@ Deno.test("season cleanup option appears only for a detected qBittorrent job", (
 
 Deno.test("stale-season Sonarr warnings preserve the ownership contract", () => {
   const info = seasonSonarrOptionInfo("qBittorrent inspection failed");
-  assertEquals(info.includes("removes its verified historical import links"), true);
+  assertEquals(info.includes("current managed files"), true);
   assertEquals(info.includes("qBittorrent inspection failed"), true);
 });
 
@@ -34,7 +34,7 @@ Deno.test("season Sonarr option appears only for a detected action", () => {
   assertEquals(seasonSonarrActionAvailable({ sonarrActionAvailable: true }), true);
 });
 
-Deno.test("stale-season Sonarr wiring exposes every classified historical path", () => {
+Deno.test("stale-season preview ignores historical paths", () => {
   const paths = [{
     path: "/downloads/episode.mkv",
     managedPath: "/library/episode.mkv",
@@ -44,10 +44,10 @@ Deno.test("stale-season Sonarr wiring exposes every classified historical path",
   }];
   const preview = { sonarrHistoricalPaths: paths } as SeasonRemovalPreviewResponse;
   assertEquals(seasonRemovalHistoricalPaths(preview, false), []);
-  assertEquals(seasonRemovalHistoricalPaths(preview, true), paths);
+  assertEquals(seasonRemovalHistoricalPaths(preview, true), []);
   assertEquals(
     sonarrRetainedPathsSummary(seasonRemovalHistoricalPaths(preview, true))?.unverifiedCount,
-    1,
+    undefined,
   );
 });
 

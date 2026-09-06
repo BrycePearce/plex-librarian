@@ -17,7 +17,7 @@ import { ArrUrlHelp } from "./ArrUrlHelp.tsx";
 import { companionUrl } from "./companionUrl.ts";
 
 export type ArrType = "radarr" | "sonarr";
-export const ARR_SETUP_STEPS = ["Connection", "Libraries", "Storage cleanup"] as const;
+export const ARR_SETUP_STEPS = ["Connection", "Libraries"] as const;
 
 export interface ArrDraft {
   instanceId: number | null;
@@ -404,7 +404,8 @@ export function ArrConnectionWizard({
   onSaved: () => void;
 }) {
   const [type, setType] = useState<ArrType>(initialType);
-  const [step, setStep] = useState<"connection" | "libraries" | "storage">("connection");
+  const [advancedPaths, setAdvancedPaths] = useState(false);
+  const [step, setStep] = useState<"connection" | "libraries">("connection");
   const [drafts, setDrafts] = useState<Record<ArrType, ArrDraft>>(() => ({
     radarr: draftFor("radarr", data, libraryData, editingInstanceId),
     sonarr: draftFor("sonarr", data, libraryData, editingInstanceId),
@@ -426,7 +427,7 @@ export function ArrConnectionWizard({
   const verificationKeys = (["radarr", "sonarr"] as const).map((candidate) => {
     const value = drafts[candidate];
     const plan = rootFolderDiscoveryPlan(candidate, value, data.instances);
-    return step === "storage" && arrConnectionComplete(value) &&
+    return advancedPaths && arrConnectionComplete(value) &&
         storageCleanupProblem(value) === null && pathMappings(candidate, value).length > 0 &&
         plan.kind === "request"
       ? JSON.stringify({
@@ -438,7 +439,6 @@ export function ArrConnectionWizard({
   });
   const verificationKey = verificationKeys[type === "radarr" ? 0 : 1];
   const verificationBatch = JSON.stringify(verificationKeys.filter(Boolean));
-  const verificationPending = verificationKeys.some((key) => key && !verifications[key]);
   const [verificationAttempt, setVerificationAttempt] = useState(0);
   function retryVerification() {
     setVerifications((values) => {
@@ -581,15 +581,10 @@ export function ArrConnectionWizard({
       ) {
         discoverRootFolders(candidate);
       }
-      discoverStoragePaths();
       setStep("libraries");
       return;
     }
-    if (step === "libraries") {
-      setStep("storage");
-      return;
-    }
-    if (verificationPending) return;
+
     save.mutate();
   }
 
@@ -610,7 +605,7 @@ export function ArrConnectionWizard({
         </div>
       </div>
 
-      <ol className="mt-4 grid grid-cols-3 gap-2 text-xs">
+      <ol className="mt-4 grid grid-cols-2 gap-2 text-xs">
         {ARR_SETUP_STEPS.map((label, index) => {
           const key = (["connection", "libraries", "storage"] as const)[index];
           return (
@@ -656,8 +651,8 @@ export function ArrConnectionWizard({
                       {application}
                     </strong>
                     {complete && (
-                      <span className="badge badge-success badge-xs shrink-0 whitespace-nowrap">
-                        Configured
+                      <span className="badge badge-ghost badge-xs shrink-0 whitespace-nowrap">
+                        {connectionTestLabel(discoveries[application])}
                       </span>
                     )}
                   </span>
@@ -731,36 +726,47 @@ export function ArrConnectionWizard({
               </label>
             </>
           )
-          : step === "libraries"
-          ? (
-            <ArrLibrarySelectionStep
-              type={type}
-              libraryData={libraryData}
-              isLoading={librariesLoading}
-              error={librariesError}
-              selectedKeys={draft.libraryKeys}
-              setSelectedKeys={(libraryKeys) => updateDraft({ libraryKeys })}
-              addImportExclusion={draft.addImportExclusion}
-              setAddImportExclusion={(addImportExclusion) => updateDraft({ addImportExclusion })}
-            />
-          )
           : (
-            <StorageCleanupStep
-              type={type}
-              draft={draft}
-              discovery={discoveries[type]}
-              storagePaths={storagePaths}
-              verification={verificationKey
-                ? {
-                  loading: !verifications[verificationKey],
-                  result: verifications[verificationKey],
-                }
-                : undefined}
-              onVerificationRetry={retryVerification}
-              onRetry={() => discoverRootFolders(type, true)}
-              onStorageRetry={() => discoverStoragePaths(true)}
-              onUpdate={updateDraft}
-            />
+            <>
+              <ArrLibrarySelectionStep
+                type={type}
+                libraryData={libraryData}
+                isLoading={librariesLoading}
+                error={librariesError}
+                selectedKeys={draft.libraryKeys}
+                setSelectedKeys={(libraryKeys) => updateDraft({ libraryKeys })}
+                addImportExclusion={draft.addImportExclusion}
+                setAddImportExclusion={(addImportExclusion) => updateDraft({ addImportExclusion })}
+              />
+              <details
+                onToggle={(event) => {
+                  const open = event.currentTarget.open;
+                  setAdvancedPaths(open);
+                  if (open) {
+                    discoverRootFolders(type);
+                    discoverStoragePaths();
+                  }
+                }}
+              >
+                <summary className="cursor-pointer text-sm">Advanced: optional path access</summary>
+                <StorageCleanupStep
+                  type={type}
+                  draft={draft}
+                  discovery={discoveries[type]}
+                  storagePaths={storagePaths}
+                  verification={verificationKey
+                    ? {
+                      loading: !verifications[verificationKey],
+                      result: verifications[verificationKey],
+                    }
+                    : undefined}
+                  onVerificationRetry={retryVerification}
+                  onRetry={() => discoverRootFolders(type, true)}
+                  onStorageRetry={() => discoverStoragePaths(true)}
+                  onUpdate={updateDraft}
+                />
+              </details>
+            </>
           )}
 
         <div className="modal-action">
@@ -768,7 +774,7 @@ export function ArrConnectionWizard({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => setStep(step === "storage" ? "libraries" : "connection")}
+              onClick={() => setStep("connection")}
               disabled={save.isPending}
             >
               Back
@@ -787,16 +793,12 @@ export function ArrConnectionWizard({
             className="btn btn-primary btn-sm"
             disabled={save.isPending || librariesLoading ||
               (step === "connection" && !arrConnectionComplete(draft)) ||
-              (step === "storage" && (!storageCleanupCanSave(draft) || verificationPending))}
+              (step === "libraries" && !storageCleanupCanSave(draft))}
           >
-            {step !== "storage" ? "Next" : (
+            {step === "connection" ? "Test connection and continue" : (
               <>
-                {(save.isPending || verificationPending) && (
-                  <span className="loading loading-spinner loading-xs" />
-                )}
-                {verificationPending
-                  ? "Checking storage…"
-                  : `Test and save ${completeTypes.length === 2 ? "both" : appName}`}
+                {save.isPending && <span className="loading loading-spinner loading-xs" />}
+                {`Test and save ${completeTypes.length === 2 ? "both" : appName}`}
               </>
             )}
           </button>
@@ -847,14 +849,14 @@ export function StorageCleanupStep({
   const unavailableRoots =
     verification?.result?.roots?.filter((root) => root.status !== "accessible") ?? [];
   return (
-    <section className="min-w-0 space-y-4" aria-label="Storage cleanup">
+    <section className="min-w-0 space-y-4" aria-label="Optional path access">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold">Clean up leftover files</h4>
+          <h4 className="text-sm font-semibold">Optional path access</h4>
           <p className="mt-1 text-xs leading-relaxed text-base-content/60">
             Match the folders {appName}{" "}
-            sees to their locations in Plex Librarian. This enables verified historical hardlink
-            cleanup.
+            sees to their locations in Plex Librarian when a deletion needs file identity checks. No
+            mapping is required to connect.
           </p>
         </div>
         <span className="shrink-0 whitespace-nowrap rounded-md bg-base-200 px-2 py-1 text-[10px] font-medium text-base-content/55">
@@ -924,7 +926,8 @@ export function StorageCleanupStep({
           <div>
             <h5 className="text-xs font-semibold">Completed downloads</h5>
             <p className="mt-0.5 text-xs text-base-content/45">
-              Optional. Map the original downloads to enable historical hardlink cleanup.
+              Optional. Map current download folders only when file identity verification needs
+              access.
             </p>
           </div>
           <div className="grid min-w-0 gap-3 sm:grid-cols-2">
@@ -1002,7 +1005,7 @@ export function StorageCleanupStep({
               <p className="font-medium">
                 {root.kind === "library"
                   ? "Library files · read-only"
-                  : "Completed downloads · read/write"}
+                  : "Completed downloads · read-only"}
               </p>
               <p className="mt-1 break-all text-base-content/65">
                 Container path: <code>{root.localPath}</code>
@@ -1018,7 +1021,8 @@ export function StorageCleanupStep({
             <ol className="mt-2 list-decimal space-y-1 pl-4 leading-relaxed text-base-content/65">
               <li>
                 Edit the Plex Librarian container in Unraid. Set the optional Library Inspection
-                Path and Download Cleanup Path, or add a Path entry for the container paths above.
+                Path and Download Inspection Path, or add a Path entry for the container paths
+                above.
               </li>
               <li>
                 Choose the matching host folders. With Docker Compose, add these as volume mappings
@@ -1052,8 +1056,8 @@ export function StorageCleanupStep({
           {verification.loading
             ? (
               <p className="flex items-center gap-2">
-                <span className="loading loading-spinner loading-xs" />Checking library access and
-                optional historical cleanup...
+                <span className="loading loading-spinner loading-xs" />Checking current library
+                access...
               </p>
             )
             : verification.result?.library
@@ -1075,16 +1079,6 @@ export function StorageCleanupStep({
                     {verification.result.library.localPath ?? "No matching local root"}
                   </p>
                 )}
-                <details className="text-base-content/60">
-                  <summary className="cursor-pointer">
-                    Historical cleanup: {verification.result.historical?.status === "verified"
-                      ? "verified"
-                      : verification.result.historical?.status === "not_checked"
-                      ? "not checked"
-                      : "not verified (optional)"}
-                  </summary>
-                  <p className="mt-1 leading-relaxed">{verification.result.historical?.reason}</p>
-                </details>
                 {!libraryVerified && (
                   <p className="text-base-content/60">
                     You can save this connection and correct its storage settings later.
@@ -1107,7 +1101,7 @@ export function StorageCleanupStep({
 
       {!storageCleanupCanSave(draft) && (
         <p role="alert" className="text-xs leading-relaxed text-error">
-          {problem} Complete the paths or skip this step below.
+          {problem} Complete the paths or clear the optional mappings.
         </p>
       )}
 
@@ -1127,7 +1121,7 @@ export function StorageCleanupStep({
           </p>
           <p>
             Local mount paths are suggestions, not verified mappings. Docker or Unraid must mount
-            your library read-only and completed downloads read/write. Plex Librarian cannot create
+            your library read-only and completed downloads read-only. Plex Librarian cannot create
             or change these mounts. Keep the two local roots separate.
           </p>
           <p>
@@ -1155,7 +1149,7 @@ export function StorageCleanupStep({
                 downloadLocalPath: "/downloads",
               })}
           >
-            Skip storage cleanup
+            Clear optional mappings
           </button>
         )}
       </div>
@@ -1267,4 +1261,14 @@ export function RootFolderSuggestionStatus({
       )}
     </div>
   );
+}
+
+export function connectionTestLabel(state: RootFolderDiscoveryState): string {
+  return state.status === "suggested" || state.status === "empty"
+    ? "Connected"
+    : state.status === "loading"
+    ? "Testing…"
+    : state.status === "error"
+    ? "Connection failed"
+    : "Not tested";
 }

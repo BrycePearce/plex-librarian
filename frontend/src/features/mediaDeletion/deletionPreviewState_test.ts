@@ -1,3 +1,5 @@
+import { currentLocationOwnershipProblem } from "./deletionPreviewState.ts";
+import type { DownloadCleanupPreviewItem } from "../../../../shared/types.ts";
 import { assertEquals } from "@std/assert";
 import type { DownloadCleanupPreviewResponse } from "../../../../shared/types.ts";
 import {
@@ -12,10 +14,10 @@ import {
   SONARR_OWNED_PATH_COPY,
 } from "./deletionPreviewState.ts";
 
-Deno.test("Sonarr destinations share the automatic historical-path contract copy", () => {
+Deno.test("Sonarr destinations describe current managed files", () => {
   assertEquals(
     SONARR_OWNED_PATH_COPY,
-    "Applies the shown Sonarr change and removes its verified historical import links. Active qBittorrent payloads are retained unless qBittorrent is also selected.",
+    "Applies the shown Sonarr change to current managed files. Identified qBittorrent files are retained unless qBittorrent is also selected.",
   );
 });
 
@@ -76,7 +78,7 @@ Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview 
   assertEquals(effectiveArrSelection(true, preview), false);
 });
 
-Deno.test("download cleanup is visible for a verified job or an orphan-only proof", () => {
+Deno.test("download cleanup requires a current verified job and never historical proof", () => {
   const item = {
     ratingKey: "1",
     status: "resolved",
@@ -112,7 +114,7 @@ Deno.test("download cleanup is visible for a verified job or an orphan-only proo
       downloadClientsConfigured: false,
       items: [{ ...item, downloadJobs: [], orphanFiles: [{}] }],
     } as unknown as DownloadCleanupPreviewResponse, true),
-    true,
+    false,
   );
   assertEquals(
     downloadCleanupDestinationVisible({
@@ -124,7 +126,7 @@ Deno.test("download cleanup is visible for a verified job or an orphan-only proo
   );
 });
 
-Deno.test("verified orphan-only cleanup defaults on without opting into live job deletion", () => {
+Deno.test("historical cleanup never defaults into a current-location request", () => {
   const orphan = {
     ratingKey: "show-1",
     status: "resolved",
@@ -137,7 +139,7 @@ Deno.test("verified orphan-only cleanup defaults on without opting into live job
       downloadClientsConfigured: false,
       items: [orphan],
     } as unknown as DownloadCleanupPreviewResponse),
-    true,
+    false,
   );
   assertEquals(
     shouldDefaultOrphanOnlyCleanup({
@@ -149,7 +151,22 @@ Deno.test("verified orphan-only cleanup defaults on without opting into live job
   );
 });
 
-Deno.test("bulk cleanup selects exact eligible shows and binds orphans to Sonarr", () => {
+Deno.test("an unresolved current QB job exposes access resolution without authorizing cleanup", () => {
+  const value = {
+    coordinatedConfigured: false,
+    downloadClientsConfigured: true,
+    items: [{
+      ratingKey: "show",
+      status: "unavailable",
+      downloadJobs: [],
+      qbittorrentPathAccessJob: { jobId: "live-job" },
+    }],
+  } as unknown as DownloadCleanupPreviewResponse;
+  assertEquals(downloadCleanupDestinationVisible(value), true);
+  assertEquals(eligibleDownloadCleanupItems(value, false, false), []);
+});
+
+Deno.test("bulk cleanup selects current jobs and excludes historical files", () => {
   const preview = {
     coordinatedConfigured: true,
     downloadClientsConfigured: true,
@@ -162,7 +179,7 @@ Deno.test("bulk cleanup selects exact eligible shows and binds orphans to Sonarr
 
   assertEquals(
     eligibleDownloadCleanupItems(preview, true, true).map((item) => item.ratingKey),
-    ["orphan", "live"],
+    ["live"],
   );
   assertEquals(
     eligibleDownloadCleanupItems(preview, true, false).map((item) => item.ratingKey),
@@ -175,4 +192,36 @@ Deno.test("cleanup consent is invalidated only when selected evidence changes", 
   assertEquals(cleanupConsentInvalidated(true, "changed", "accepted"), true);
   assertEquals(cleanupConsentInvalidated(true, null, "accepted"), true);
   assertEquals(cleanupConsentInvalidated(false, "changed", "accepted"), false);
+});
+
+Deno.test("current destination ownership ignores unchecked Sonarr but preserves Plex and QB blockers", () => {
+  const item = {
+    status: "resolved",
+    sonarrCleanupStatus: "error",
+    sonarrCleanupReason: "Sonarr mapping needed",
+    plexOnlyStatus: "resolved",
+    qbittorrentOnlyStatus: "resolved",
+  } as DownloadCleanupPreviewItem;
+  assertEquals(currentLocationOwnershipProblem(item, true, false).blocked, true);
+  assertEquals(currentLocationOwnershipProblem(item, true, true).blocked, false);
+  item.status = "error";
+  item.reason = "Shared pack contains unselected files";
+  assertEquals(currentLocationOwnershipProblem(item, true, true), {
+    blocked: true,
+    reason: "Shared pack contains unselected files",
+  });
+  assertEquals(currentLocationOwnershipProblem(item, false, false).blocked, false);
+  assertEquals(currentLocationOwnershipProblem(item, false, true).blocked, false);
+  item.plexOnlyStatus = "error";
+  item.plexOnlyReason = "Plex mapping needed";
+  assertEquals(currentLocationOwnershipProblem(item, false, false), {
+    blocked: true,
+    reason: "Plex mapping needed",
+  });
+  item.qbittorrentOnlyStatus = "error";
+  item.qbittorrentOnlyReason = "Current QB payload unresolved";
+  assertEquals(currentLocationOwnershipProblem(item, false, true), {
+    blocked: true,
+    reason: "Current QB payload unresolved",
+  });
 });

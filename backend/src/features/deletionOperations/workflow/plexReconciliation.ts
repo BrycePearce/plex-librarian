@@ -1,4 +1,5 @@
 import { type SqliteClient, withTransaction } from '../../../db/index.ts';
+import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgradePolicy.ts';
 import { PlexDeleteError } from '../../../integrations/plex/client.ts';
 import { assertPlexTargetUnowned } from '../../mediaDeletion/livePathProtection.ts';
 import { resolveActiveServer } from '../../../integrations/plex/index.ts';
@@ -327,6 +328,8 @@ export async function deleteExactPlexTarget(
     libraryKey: snapshot.libraryKey,
     ratingKey: snapshot.ratingKey,
     type: snapshot.type,
+    protectPlexOnlyMovie: target.targetKind === 'whole_item' && snapshot.type === 'movie' &&
+      snapshot.mode !== 'coordinated',
     client,
     allowMissingPaths: target.phase === 'plex_reconciliation' &&
       (snapshot.mode === 'coordinated' || snapshot.cleanupDownloads || target.plexAttemptCount > 0),
@@ -428,6 +431,7 @@ export async function reconcilePlexTarget(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
 ): Promise<void> {
+  if (!currentLocationSnapshot(snapshot)) throw new Error(UPGRADE_RECOVERY_MESSAGE);
   if (target.targetKind === 'whole_item') {
     await assertWholeItemArrPostcondition(target, snapshot);
   }

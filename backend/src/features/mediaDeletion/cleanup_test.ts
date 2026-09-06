@@ -198,7 +198,7 @@ Deno.test('public cleanup projection strips durable Sonarr proof evidence', () =
   }]);
 });
 
-Deno.test('public Sonarr history exposes an unavailable exact candidate and reason', () => {
+Deno.test('current previews omit historical candidates and diagnostics', () => {
   const projected = publicCleanupItem({
     ratingKey: 'show',
     status: 'resolved',
@@ -226,13 +226,8 @@ Deno.test('public Sonarr history exposes an unavailable exact candidate and reas
     retainedPaths: [],
   });
 
-  assertEquals(projected.sonarrHistoricalPaths, [{
-    path: '/downloads/release/episode.mkv',
-    managedPath: '/tv/Show/episode.mkv',
-    size: null,
-    disposition: 'unverified',
-    reason: 'Sonarr: Source is not the same hardlinked file as the managed file',
-  }]);
+  assertEquals(projected.sonarrHistoricalPaths, []);
+  assertEquals(projected.sources, []);
 });
 
 Deno.test('Sonarr scope retains only unavailable candidates for authorized managed paths', () => {
@@ -280,9 +275,7 @@ Deno.test('Sonarr scope retains only unavailable candidates for authorized manag
     new Set(['/tv/Show/selected.mkv']),
   );
   assertEquals(scoped.sources.map((source) => source.localPath), ['/downloads/selected.mkv']);
-  assertEquals(publicCleanupItem(scoped).sonarrHistoricalPaths?.map((entry) => entry.path), [
-    '/downloads/selected.mkv',
-  ]);
+  assertEquals(publicCleanupItem(scoped).sonarrHistoricalPaths, []);
 });
 
 Deno.test('Radarr verification failures are not projected as Sonarr history', () => {
@@ -307,7 +300,6 @@ Deno.test('Radarr verification failures are not projected as Sonarr history', ()
       importedPath: '/movies/Movie/movie.mkv',
       localPath: '/downloads/release/movie.mkv',
       verification: 'unverified',
-      reason: 'No download path mapping covers this path',
     }],
     orphanFiles: [],
     retainedPaths: [],
@@ -1508,7 +1500,6 @@ Deno.test('torrent cleanup resolves Arr import history to live redacted qBittorr
     path: '/downloads/release/movie.mkv',
     importedPath: null,
     verification: 'unverified',
-    reason: 'No download path mapping covers this path',
   }]);
 });
 
@@ -1520,7 +1511,7 @@ Deno.test('a re-added torrent at a different path is not selected by hash', asyn
     [qbitTarget(undefined, 'different-release')],
   );
   assertEquals(result.downloadJobs, []);
-  assertStringIncludes(result.reason ?? '', 'manifest does not own');
+  assertStringIncludes(result.reason ?? '', 'current payload ownership could not be verified');
 });
 
 Deno.test('a torrent associated with an unselected Arr title is retained', async () => {
@@ -1731,4 +1722,31 @@ Deno.test('bounded Sonarr inventory failures remain item-scoped cleanup errors',
   assertEquals(result.arrStatus, 'resolved');
   assertEquals(result.arrTargets[0]?.mediaFiles, null);
   assertStringIncludes(result.reason ?? '', 'Inventory unavailable');
+});
+
+Deno.test('current Arr deletion without QB never inspects historical filesystem paths', async () => {
+  const target = arrTarget();
+  let inspections = 0;
+  const originalLstat = Deno.lstat;
+  Deno.lstat = () => {
+    inspections++;
+    throw new Error('Historical filesystem access is outside this flow');
+  };
+  try {
+    const result = await resolveDownloadCleanup(
+      'plex-current',
+      { title: 'Movie', type: 'movie', tmdbId: 10, tvdbId: null },
+      [target],
+      [],
+    );
+    assertEquals(result.arrStatus, 'resolved');
+    assertEquals(result.orphanFiles, []);
+    assertEquals(result.sonarrReclamation, undefined);
+    assertEquals(result.retainedPaths, []);
+    assertEquals(inspections, 0);
+    assertEquals(publicCleanupItem(result).sources, []);
+    assertEquals(publicCleanupItem(result).sonarrHistoricalPaths, []);
+  } finally {
+    Deno.lstat = originalLstat;
+  }
 });

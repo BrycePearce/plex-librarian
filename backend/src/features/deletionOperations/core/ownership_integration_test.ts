@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { Hono } from 'hono';
 import { resolve } from '@std/path';
+import { CURRENT_LOCATION_POLICY_VERSION } from '../../../../../shared/deletionPolicy.ts';
 
 const testDirectory = await Deno.makeTempDir();
 const testDbPath = resolve(testDirectory, 'workflow-ownership.db');
@@ -51,7 +52,20 @@ function insertOperation(
         (operation_id, ordinal, target_kind, target_key, title, snapshot, status, phase,
          created_at, updated_at)
        VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, kind, id, title, JSON.stringify(snapshot), status, phase, NOW, NOW);
+    ).run(
+      id,
+      kind,
+      id,
+      title,
+      JSON.stringify({
+        currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
+        ...snapshot,
+      }),
+      status,
+      phase,
+      NOW,
+      NOW,
+    );
   });
 }
 

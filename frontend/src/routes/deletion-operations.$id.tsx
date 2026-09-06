@@ -12,6 +12,7 @@ import { deletionRecoveryGuidance } from "../features/deletionOperations/recover
 import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRecoveryDialog.tsx";
 import {
   activeDeletionStatuses,
+  canCancelDeletionTarget,
   deletionOperationPollInterval,
   deletionOperationTitle,
   hardlinkOutcomeSummary,
@@ -106,7 +107,7 @@ function DeletionOperationPage() {
       (target) => target.status === "waiting_retry" || target.status === "queued",
     );
   const ordinaryTargets = operation.targets.filter(
-    (target) => target.resolutionState !== "management_hold",
+    (target) => target.resolutionState !== "management_hold" && !target.upgradeHold,
   );
   const retryableFailedCount = retryableRelocationSafeTargetCount(
     ordinaryTargets,
@@ -117,7 +118,8 @@ function DeletionOperationPage() {
     "completed_with_warning",
   );
   const retryableCount = retryableFailedCount + retryableWarningCount;
-  const hasQueuedTargets = operation.targets.some((target) => target.status === "queued");
+  const hasQueuedTargets = operation.targets.some(canCancelDeletionTarget);
+  const hasUpgradeHold = operation.targets.some((target) => target.upgradeHold);
   const manuallyDismissed = operation.targets.some((target) =>
     target.warning?.startsWith("Dismissed after manual intervention")
   );
@@ -234,6 +236,14 @@ function DeletionOperationPage() {
               </div>
             </div>
           )}
+          {hasUpgradeHold && (
+            <div className="alert alert-warning text-sm">
+              This work was previewed before the current-location update. Cancel eligible unstarted
+              targets, then obtain a fresh preview. Targets with attempted or uncertain actions
+              remain held with their evidence and reservations; review their recovery guidance
+              before taking any action.
+            </div>
+          )}
           {operation.status === "needs_attention" &&
             operation.targets.some((target) => target.status === "queued") && (
             <div className="alert alert-warning text-sm">
@@ -265,7 +275,8 @@ function DeletionOperationPage() {
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {operation.targets.some((target) => target.resolutionState === "management_hold") && (
+            {!hasUpgradeHold &&
+              operation.targets.some((target) => target.resolutionState === "management_hold") && (
               <button
                 type="button"
                 className="btn btn-warning btn-sm"
@@ -284,10 +295,11 @@ function DeletionOperationPage() {
                 onClick={() => cancel.mutate()}
               >
                 <XCircle className="size-4" />
-                Cancel queued targets
+                Cancel unstarted targets
               </button>
             )}
-            {retryableCount > 0 && !activeDeletionStatuses.has(operation.status) && (
+            {!hasUpgradeHold && retryableCount > 0 &&
+              !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -298,7 +310,8 @@ function DeletionOperationPage() {
                 Recheck
               </button>
             )}
-            {removedUnmonitoredTarget && !activeDeletionStatuses.has(operation.status) && (
+            {!hasUpgradeHold && removedUnmonitoredTarget &&
+              !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-warning btn-sm"
@@ -314,7 +327,8 @@ function DeletionOperationPage() {
                 Accept removed and unmonitored
               </button>
             )}
-            {reassignmentRetryTarget && !activeDeletionStatuses.has(operation.status) && (
+            {!hasUpgradeHold && reassignmentRetryTarget &&
+              !activeDeletionStatuses.has(operation.status) && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"

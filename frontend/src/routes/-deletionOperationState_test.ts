@@ -1,3 +1,4 @@
+import { canCancelDeletionTarget } from "./-deletionOperationState.ts";
 import { assertEquals } from "@std/assert";
 import {
   deletionAttentionSummary,
@@ -158,4 +159,22 @@ Deno.test("storage outcome reasons are readable, unique, and forward compatible"
       "Plex Librarian could not verify storage reclamation for at least one target.",
     ],
   );
+});
+
+Deno.test("upgrade-held cancellation follows durable eligibility rather than UI status", () => {
+  assertEquals(
+    canCancelDeletionTarget({
+      status: "needs_attention",
+      upgradeHold: true,
+      upgradeHoldCancellable: true,
+    }),
+    true,
+  );
+  assertEquals(
+    canCancelDeletionTarget({ status: "queued", upgradeHold: true, upgradeHoldCancellable: false }),
+    false,
+  );
+  assertEquals(canCancelDeletionTarget({ status: "needs_attention", upgradeHold: true }), false);
+  assertEquals(canCancelDeletionTarget({ status: "needs_attention" }), false);
+  assertEquals(canCancelDeletionTarget({ status: "queued" }), true);
 });

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { and, eq, ne } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, withTransaction } from '../../db/index.ts';
 import { qbittorrentInstances, qbittorrentPathMappings } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import {
@@ -118,6 +118,75 @@ router.post('/path-mappings', async (c) => {
       updatedAt: now,
     }).returning();
     return c.json(created, 201);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'mapping validation failed' },
+      409,
+    );
+  }
+});
+
+router.put('/path-mappings/:id', async (c) => {
+  const serverId = c.get('activeServerId');
+  const id = Number(c.req.param('id'));
+  if (serverId === null || !Number.isSafeInteger(id) || id <= 0) {
+    return c.json({ error: 'mapping not found' }, 404);
+  }
+  const body = await c.req.json().catch(() => null) as SaveQbittorrentPathMappingRequest | null;
+  if (!body || typeof body.instanceKey !== 'string' || typeof body.caseSensitive !== 'boolean') {
+    return c.json({ error: 'exact qBittorrent mapping evidence is required' }, 400);
+  }
+  const [existing] = await db.select().from(qbittorrentPathMappings).where(and(
+    eq(qbittorrentPathMappings.serverId, serverId),
+    eq(qbittorrentPathMappings.id, id),
+  ));
+  if (!existing || existing.instanceKey !== body.instanceKey) {
+    return c.json({ error: 'mapping not found' }, 404);
+  }
+  if (
+    !(await getQbittorrentTargets(serverId)).some((target) =>
+      target.instanceKey === body.instanceKey
+    )
+  ) {
+    return c.json({ error: 'qBittorrent target identity is unavailable' }, 409);
+  }
+  try {
+    const validated = await validateQbittorrentPathMapping(body);
+    const now = Math.floor(Date.now() / 1000);
+    const revision = withTransaction((client) => {
+      const others = client.prepare(
+        'SELECT qbittorrent_path, local_path, case_sensitive FROM qbittorrent_path_mappings WHERE server_id = ? AND instance_key = ? AND id <> ?',
+      ).values<[string, string, number]>(serverId, body.instanceKey, id).map((row) => ({
+        qbittorrentPath: row[0],
+        localPath: row[1],
+        caseSensitive: row[2] === 1,
+      }));
+      if (qbitMappingsOverlap([...others, validated])) {
+        throw new Error('qBittorrent path mappings must not overlap');
+      }
+      const row = client.prepare(
+        `UPDATE qbittorrent_path_mappings SET qbittorrent_path = ?, local_path = ?, case_sensitive = ?,
+         validation_qbittorrent_path = ?, validation_local_path = ?, validation_size = ?,
+         validated_at = ?, updated_at = ?, revision = revision + 1
+         WHERE id = ? AND server_id = ? AND instance_key = ? AND revision = ? RETURNING revision`,
+      ).value<[number]>(
+        validated.qbittorrentPath,
+        validated.localPath,
+        validated.caseSensitive ? 1 : 0,
+        validated.validationQbittorrentPath,
+        validated.validationLocalPath,
+        validated.validationSize,
+        now,
+        now,
+        id,
+        serverId,
+        body.instanceKey,
+        existing.revision,
+      );
+      if (!row) throw new Error('The saved mapping changed; refresh before updating it');
+      return row[0];
+    });
+    return c.json({ id, revision });
   } catch (error) {
     return c.json(
       { error: error instanceof Error ? error.message : 'mapping validation failed' },

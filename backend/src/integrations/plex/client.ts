@@ -154,16 +154,34 @@ function appendMediaPaths(
   paths: string[],
   seen: Set<string>,
   limit: number,
+  fileSizes?: Record<string, number | null>,
+  accessSample?: { value?: { ratingKey: string; mediaId: number; path: string; size: number } },
 ): boolean {
   for (const item of metadata) {
     for (const media of item.Media ?? []) {
       for (const part of existingFileParts(media)) {
         // Keep Plex's path byte-for-byte. Normalizing separators or case would corrupt
         // valid Windows/UNC paths and can also merge distinct Linux paths.
-        if (seen.has(part.file)) continue;
+        const size = Number.isSafeInteger(part.size) && part.size! > 0 ? part.size! : null;
+        if (seen.has(part.file)) {
+          if (fileSizes && fileSizes[part.file] !== size) fileSizes[part.file] = null;
+          continue;
+        }
         if (paths.length >= limit) return true;
         seen.add(part.file);
         paths.push(part.file);
+        if (fileSizes) fileSizes[part.file] = size;
+        if (
+          accessSample && !accessSample.value && size !== null &&
+          Number.isSafeInteger(Number(media.id)) && Number(media.id) > 0 && item.ratingKey
+        ) {
+          accessSample.value = {
+            ratingKey: String(item.ratingKey),
+            mediaId: Number(media.id),
+            path: part.file,
+            size,
+          };
+        }
       }
     }
   }
@@ -798,8 +816,17 @@ export class PlexClient {
     itemType: string,
     limit = MAX_PREVIEW_MEDIA_PATHS,
     signal?: AbortSignal,
+    includeFileSizes = false,
   ): Promise<PlexMediaPathPreview> {
     const paths: string[] = [];
+    const fileSizes: Record<string, number | null> | undefined = includeFileSizes ? {} : undefined;
+    const accessSample: {
+      value?: { ratingKey: string; mediaId: number; path: string; size: number };
+    } = {};
+    const extraEvidence = () =>
+      fileSizes
+        ? { fileSizes, ...(accessSample.value ? { pathAccessSample: accessSample.value } : {}) }
+        : {};
     const seen = new Set<string>();
     const encodedKey = encodeURIComponent(ratingKey);
     if (itemType !== 'show' && itemType !== 'artist') {
@@ -813,8 +840,10 @@ export class PlexClient {
         paths,
         seen,
         limit,
+        fileSizes,
+        includeFileSizes ? accessSample : undefined,
       );
-      return { paths, truncated };
+      return { paths, truncated, ...extraEvidence() };
     }
 
     const basePath = `/library/metadata/${encodedKey}/allLeaves`;
@@ -830,8 +859,17 @@ export class PlexClient {
         'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
       }, signal);
       const metadata = data.MediaContainer.Metadata ?? [];
-      if (appendMediaPaths(metadata, paths, seen, limit)) {
-        return { paths, truncated: true };
+      if (
+        appendMediaPaths(
+          metadata,
+          paths,
+          seen,
+          limit,
+          fileSizes,
+          includeFileSizes ? accessSample : undefined,
+        )
+      ) {
+        return { paths, truncated: true, ...extraEvidence() };
       }
       start += metadata.length;
       const total = data.MediaContainer.totalSize;
@@ -839,10 +877,11 @@ export class PlexClient {
         metadata.length === 0 ||
         (total !== undefined ? start >= total : metadata.length < ITEMS_PAGE_SIZE)
       ) {
-        return { paths, truncated: false };
+        return { paths, truncated: false, ...extraEvidence() };
       }
-      if (start >= leafLimit) return { paths, truncated: true };
-      if (paths.length >= limit) return { paths, truncated: true };
+      if (start >= leafLimit || paths.length >= limit) {
+        return { paths, truncated: true, ...extraEvidence() };
+      }
     }
   }
 

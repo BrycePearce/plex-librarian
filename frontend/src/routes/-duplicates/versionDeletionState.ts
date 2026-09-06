@@ -178,19 +178,9 @@ export function versionDeletionPresentation(
   deleteFromArr: boolean,
   cleanupDownloads: boolean,
 ) {
-  const selectedOrphanFiles = cleanupDownloads
-    ? preview?.qbittorrentOrphanFiles ?? preview?.orphanFiles ?? []
-    : preview?.orphanFiles ?? [];
-  const selectedHistoricalPaths = cleanupDownloads
-    ? preview?.qbittorrentSonarrHistoricalPaths ?? preview?.sonarrHistoricalPaths ?? []
-    : preview?.sonarrHistoricalPaths ?? [];
-  const historicalPathSet = new Set(selectedHistoricalPaths.map((entry) => entry.path));
   const arrTargets = deleteFromArr && preview?.arrStatus === "resolved" ? preview.arrTargets : [];
-  const downloadJobs = deleteFromArr && cleanupDownloads && preview?.cleanupStatus === "resolved"
+  const downloadJobs = cleanupDownloads && preview?.cleanupStatus === "resolved"
     ? preview.downloadJobs
-    : [];
-  const orphanFiles = deleteFromArr
-    ? selectedOrphanFiles.filter((entry) => !historicalPathSet.has(entry.path))
     : [];
   return {
     services: [
@@ -200,8 +190,10 @@ export function versionDeletionPresentation(
     ],
     arrTargets,
     downloadJobs,
-    orphanFiles,
-    sonarrHistoricalPaths: deleteFromArr ? selectedHistoricalPaths : [],
+    orphanFiles: [] as VersionDeletionPreviewResponse["orphanFiles"],
+    sonarrHistoricalPaths: [] as NonNullable<
+      VersionDeletionPreviewResponse["sonarrHistoricalPaths"]
+    >,
     // Advanced mode should always retain Plex's view of the selected files. Arr and
     // qBittorrent paths explain additional actions; they do not replace the Plex paths.
     showPlexPaths: true,

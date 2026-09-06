@@ -1,3 +1,11 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '../../../../../shared/deletionPolicy.ts';
+import {
+  holdLegacyDeletionTargets,
+  UPGRADE_HOLD,
+  UPGRADE_RECOVERY_MESSAGE,
+} from './upgradePolicy.ts';
+import type { SqliteClient } from '../../../db/index.ts';
+
 interface RecoveryStatement {
   run(...params: unknown[]): unknown;
 }
@@ -7,6 +15,33 @@ interface RecoveryClient {
 }
 
 export function recoverInterruptedDeletionWork(client: RecoveryClient, now: number): void {
+  try {
+    holdLegacyDeletionTargets(client as SqliteClient, now);
+  } catch (error) {
+    if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;
+  }
+  // Gate before resetting running work. No legacy snapshot may reach a replay,
+  // including callers that invoke restart recovery independently of the worker.
+  try {
+    client.prepare(
+      `UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL,
+       snapshot = CASE WHEN json_valid(snapshot) THEN json_set(snapshot, '$.upgradeHold', ?, '$.upgradePreviousError', error) ELSE snapshot END,
+       error = ?, updated_at = ?
+       WHERE status NOT IN ('completed', 'cancelled')
+         AND NOT (status = 'completed_with_warning' AND phase = 'finalizing')
+         AND CASE WHEN json_valid(snapshot) THEN json_extract(snapshot, '$.upgradeHold') IS NULL ELSE 1 END
+         AND CASE WHEN json_valid(snapshot) THEN COALESCE(json_extract(snapshot, '$.currentLocationPolicyVersion'), -1) <> ? ELSE 1 END`,
+    ).run(UPGRADE_HOLD, UPGRADE_RECOVERY_MESSAGE, now, CURRENT_LOCATION_POLICY_VERSION);
+    client.prepare(
+      `UPDATE deletion_operations SET status = 'needs_attention', next_retry_at = NULL, updated_at = ?
+       WHERE id IN (SELECT operation_id FROM deletion_targets WHERE status = 'needs_attention'
+         AND CASE WHEN json_valid(snapshot) THEN json_extract(snapshot, '$.upgradeHold') = ? ELSE 1 END)`,
+    ).run(now, UPGRADE_HOLD);
+  } catch (error) {
+    // Pre-snapshot schemas cannot execute durable work; current migrated databases
+    // always contain these columns. Keep the small migration recovery fixtures usable.
+    if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;
+  }
   try {
     client.prepare(
       `UPDATE deletion_targets SET status = 'needs_attention', next_retry_at = NULL,

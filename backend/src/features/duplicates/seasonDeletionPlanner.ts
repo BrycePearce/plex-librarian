@@ -1,3 +1,4 @@
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
 import { and, eq, inArray, not, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, items, servers } from '../../db/schema.ts';
@@ -824,6 +825,9 @@ export async function buildAuthoritativeSeasonPlan(input: {
       plexPath: entry.media.path,
       size: entry.media.byteSize,
     })),
+    selectedArrPaths: selectedEntries.flatMap((entry) =>
+      entry.media.arrPath ? [entry.media.arrPath] : []
+    ),
     retained: preparedSelections.flatMap((prepared) =>
       (prepared.kind === 'plex_only' ? prepared.child.retainedMedia : prepared.retainedMedia)
         .map((media) => ({ plexPath: media.path, size: media.byteSize }))
@@ -1060,6 +1064,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
     },
   );
   const evidence = {
+    currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     serverId: input.serverId,
     machineIdentifier: input.machineIdentifier,
     serverUrl: input.plexClient.serverUrl,
@@ -1175,7 +1180,31 @@ export async function buildAuthoritativeSeasonPlan(input: {
   const downloadDestinations = [...downloadDestinationMap.values()].sort((left, right) =>
     left.instanceName.localeCompare(right.instanceName) || left.jobName.localeCompare(right.jobName)
   );
+  if (input.cleanupDownloads && cleanupEligibleMedia.length === 0) {
+    ownershipBlockers.push(
+      seriesCleanup?.reason ??
+        'No selected current qBittorrent payload could be verified. Deselect qBittorrent or resolve its access before deleting.',
+    );
+  }
+  const accessSamples = [
+    ...selectedEntries.map((entry) => ({
+      ratingKey: entry.episodeRatingKey,
+      mediaId: entry.media.mediaId,
+      path: entry.media.path,
+    })),
+    ...preparedSelections.flatMap((prepared) => {
+      const ratingKey = prepared.kind === 'plex_only'
+        ? prepared.child.episodeRatingKey
+        : prepared.selection.episodeRatingKey;
+      return (prepared.kind === 'plex_only' ? prepared.child.retainedMedia : prepared.retainedMedia)
+        .map((media) => ({ ratingKey, mediaId: media.mediaId, path: media.path }));
+    }),
+  ];
   const preview: SeasonDeletionPreviewResponse = {
+    plexPathAccessSample:
+      accessSamples.find((sample) => seriesCleanup?.reason?.endsWith(`: ${sample.path}`)) ??
+        accessSamples[0],
+    qbittorrentPathAccessJob: seriesCleanup?.qbittorrentPathAccessJob,
     seasonRatingKey: input.seasonRatingKey,
     completeEpisodeCount: byEpisode.size,
     selectedEpisodeCount: normalizedSelections.length,
@@ -1290,15 +1319,6 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
       const cleanup = plan.cleanupPlans.find((entry) =>
         entry.episodeRatingKey === child.episodeRatingKey && entry.mediaId === selected.mediaId
       );
-      const selectedPathComparisons = new Set([selected.path, selected.arrPath].flatMap((path) => {
-        const normalized = normalizeRemoteAbsolute(path)?.comparison;
-        return normalized ? [normalized] : [];
-      }));
-      const targetHistoricalPaths = plan.sonarrHistoricalPaths?.filter((entry) => {
-        if (entry.managedPath === null) return true;
-        const normalized = normalizeRemoteAbsolute(entry.managedPath)?.comparison;
-        return normalized !== undefined && selectedPathComparisons.has(normalized);
-      }) ?? [];
       const selectedTechnical = technicalSnapshot(selected.version);
       const expectedRetainedVersions = retained.map((entry) => {
         const retainedTechnical = technicalSnapshot(entry.version);
@@ -1320,6 +1340,7 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
         title: `${plan.showTitle} — ${child.episodeTitle}`,
         logicalSize: selected.logicalSize,
         snapshot: {
+          currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier: plan.machineIdentifier,
           serverUrl: plan.serverUrl,
           libraryKey: plan.libraryKey,
@@ -1383,7 +1404,6 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
             }
             : {}),
           ...(cleanup ? { seasonDownloadCleanup: cleanup.cleanup } : {}),
-          sonarrHistoricalPaths: targetHistoricalPaths,
         },
         reservation: {
           mediaKind: 'episode' as const,

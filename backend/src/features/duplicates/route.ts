@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { resolveSelectedVersionDownloadCleanup } from '../mediaDeletion/selectedVersionDownloadCleanup.ts';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { episodeMediaVersions, itemMediaVersions, items } from '../../db/schema.ts';
@@ -125,7 +126,7 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
         ? loadAttemptedOrphanFilesByItem(serverId, [ratingKey])
         : Promise.resolve(new Map()),
     ]);
-    const cleanup = inspectDownloadCleanup
+    const rawCleanup = inspectDownloadCleanup
       ? await resolveDownloadCleanup(
         ratingKey,
         item,
@@ -134,6 +135,16 @@ router.post('/movies/:ratingKey/media/deletion-preview', async (c) => {
         attemptedKeys.get(ratingKey),
         attemptedOrphans.get(ratingKey),
       )
+      : null;
+    const cleanup = rawCleanup
+      ? await resolveSelectedVersionDownloadCleanup({
+        serverId,
+        libraryKey: item.libraryKey,
+        rawCleanup,
+        liveVersions,
+        selectedMediaIds: new Set(mediaIds),
+        downloadTargets,
+      })
       : null;
     const attemptedArrInstances = await loadAttemptedArrInstancesByItem(
       serverId,
@@ -278,12 +289,23 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
           : []
       ),
     );
-    const qbitScoped = selectVersionDownloadCleanup(rawCleanup, selectedPaths, true);
+    const currentCleanup = inspectDownloadCleanup && managedFileIds.size > 0
+      ? await resolveSelectedVersionDownloadCleanup({
+        serverId,
+        libraryKey: target.libraryKey,
+        rawCleanup,
+        liveVersions,
+        selectedMediaIds: new Set(mediaIds),
+        selectedArrPaths: [...managedPaths],
+        downloadTargets,
+      })
+      : rawCleanup;
+    const qbitScoped = selectVersionDownloadCleanup(currentCleanup, selectedPaths, true);
     const qbitOwnershipScope = scopeSonarrReclamation(
       {
-        ...rawCleanup,
+        ...currentCleanup,
         downloadJobs: qbitScoped?.downloadJobs ?? [],
-        sources: qbitScoped?.sources ?? rawCleanup.sources,
+        sources: qbitScoped?.sources ?? currentCleanup.sources,
       },
       managedFileIds,
       managedPaths,
@@ -338,6 +360,7 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
             versions: qbitPlan.preview.versions,
             cleanupStatus: qbitPlan.preview.cleanupStatus,
             cleanupReason: qbitPlan.preview.cleanupReason,
+            qbittorrentPathAccessJob: qbitPlan.preview.qbittorrentPathAccessJob,
             downloadJobs: qbitPlan.preview.downloadJobs,
             qbittorrentOrphanFiles: qbitPlan.preview.orphanFiles,
             qbittorrentRetainedPaths: qbitPlan.preview.retainedPaths,

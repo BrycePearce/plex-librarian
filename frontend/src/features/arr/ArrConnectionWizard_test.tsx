@@ -1,4 +1,5 @@
 /// <reference lib="dom" />
+import { connectionTestLabel } from "./ArrConnectionWizard.tsx";
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -71,8 +72,8 @@ const skipped = {
   downloadLocalPath: "/downloads",
 };
 
-Deno.test("shared Arr setup ends with the storage cleanup step", () => {
-  assertEquals(ARR_SETUP_STEPS, ["Connection", "Libraries", "Storage cleanup"]);
+Deno.test("shared Arr setup contains only connection and libraries", () => {
+  assertEquals(ARR_SETUP_STEPS, ["Connection", "Libraries"]);
 });
 
 function draft(update: Partial<ArrDraft> = {}): ArrDraft {
@@ -95,7 +96,7 @@ Deno.test("the shared storage step renders Sonarr and Radarr labels with local-r
   );
   for (
     const text of [
-      "Clean up leftover files",
+      "Optional path access",
       "Sonarr library root",
       "Sonarr download root",
       "Plex Librarian library root",
@@ -211,7 +212,7 @@ Deno.test("suggested setup waits for confirmation and preserves manual mappings"
   const suggestion = StorageCleanupStep(suggestionProps);
   const html = renderToStaticMarkup(suggestion);
   assertStringIncludes(html, "Paths found in Sonarr and qBittorrent");
-  assertStringIncludes(html, "enables verified historical hardlink");
+  assertStringIncludes(html, "No mapping is required to connect.");
   assertStringIncludes(html, "Local mount paths are suggestions, not verified mappings");
   assertEquals(html.includes("complete recovery"), false);
   assertStringIncludes(html, "path Sonarr sees");
@@ -281,7 +282,7 @@ Deno.test("missing storage roots show mount instructions for the user's actual p
   assertStringIncludes(html, "/custom/tv");
   assertStringIncludes(html, "read-only");
   assertStringIncludes(html, "Keep the existing app-data mount unchanged");
-  assertStringIncludes(html, "not checked");
+  assertEquals(html.includes("Historical cleanup"), false);
 });
 
 Deno.test("detected paths distinguish suggestions from verification and can be skipped", () => {
@@ -319,7 +320,7 @@ Deno.test("detected paths distinguish suggestions from verification and can be s
   assertEquals(edited.includes("From QB"), false);
   const skip = findElement(
     step,
-    (element) => element.type === "button" && element.props.children === "Skip storage cleanup",
+    (element) => element.type === "button" && element.props.children === "Clear optional mappings",
   );
   if (!skip) throw new Error("Expected skip action");
   (skip.props.onClick as () => void)();
@@ -420,7 +421,7 @@ Deno.test("library access is verified independently of optional historical clean
   };
   const html = renderToStaticMarkup(<StorageCleanupStep {...props} verification={{ result }} />);
   assertStringIncludes(html, "Library path verified");
-  assertStringIncludes(html, "not verified (optional)");
+  assertEquals(html.includes("Historical cleanup"), false);
   assertEquals((html.match(/>Verified</g) ?? []).length, 1);
   assertStringIncludes(html, ">Suggested<");
   const unavailable = renderToStaticMarkup(
@@ -717,7 +718,7 @@ Deno.test("one advance launches both discoveries without waiting for either resp
   assertEquals(states.radarr.status, "empty");
 });
 
-Deno.test("library-only verification runs automatically and ignores results after paths change", async () => {
+Deno.test("optional library verification waits for Advanced and ignores stale results", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const oldEnvironment = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -767,15 +768,23 @@ Deno.test("library-only verification runs automatically and ignores results afte
     });
     const submit = () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
     await act(submit);
-    await act(submit);
+    assertEquals(calls, 0, "normal connection setup does not inspect storage");
+    await act(() =>
+      renderer!.root.findAllByType("details").find((element) => element.props.onToggle)!.props
+        .onToggle({ currentTarget: { open: true } })
+    );
     const saveButton = () =>
       renderer!.root.findAllByType("button").find((button) => button.props.type === "submit");
-    assertEquals(saveButton()?.props.disabled, true, "save waits during debounce");
+    assertEquals(
+      saveButton()?.props.disabled,
+      false,
+      "optional verification does not block saving credentials",
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 650));
     });
     assertEquals(calls, 1);
-    assertEquals(saveButton()?.props.disabled, true, "save waits for the response");
+    assertEquals(saveButton()?.props.disabled, false, "optional verification remains advisory");
     await act(() =>
       renderer!.root.findByType(StorageCleanupStep).props.onUpdate({
         libraryArrPath: "/other/library",
@@ -783,7 +792,11 @@ Deno.test("library-only verification runs automatically and ignores results afte
     );
     await act(() => first.resolve({ status: "verified", reason: "Stale verification" }));
     assertEquals(JSON.stringify(renderer!.toJSON()).includes("Stale verification"), false);
-    assertEquals(saveButton()?.props.disabled, true, "stale response cannot unlock save");
+    assertEquals(
+      saveButton()?.props.disabled,
+      false,
+      "save remains available without verified optional storage",
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 650));
     });
@@ -797,8 +810,8 @@ Deno.test("library-only verification runs automatically and ignores results afte
     await act(() => renderer!.root.findByType(StorageCleanupStep).props.onVerificationRetry());
     assertEquals(
       saveButton()?.props.disabled,
-      true,
-      "recheck invalidates the cached result immediately",
+      false,
+      "rechecking optional storage does not block connection save",
     );
   } finally {
     if (renderer) await act(() => renderer!.unmount());
@@ -911,20 +924,19 @@ Deno.test("the real Connection submit starts both discoveries and navigates with
       { instanceId: 8, url: "http://radarr:7878" },
       { instanceId: 7, url: "http://sonarr:8989" },
     ]);
-    assertEquals(storageRequests, 1);
-    assertEquals(renderer!.root.findByType("h4").children.join(""), "Select Plex libraries");
+    assertEquals(storageRequests, 0);
+    assertEquals(renderer!.root.findAllByType("h4")[0].children.join(""), "Select Plex libraries");
     const librariesNext = renderer!.root.findAllByType("button").find((button) =>
-      button.children.join("") === "Next"
+      button.props.type === "submit"
     );
     assertEquals(librariesNext?.props.disabled, false);
 
-    await act(() => form.props.onSubmit({ preventDefault() {} }));
     const save = renderer!.root.findAllByType("button").find((button) =>
       button.children.join("").includes("Test and save")
     );
     assertEquals(save?.props.disabled, false);
     assertEquals(requests.length, 2);
-    assertEquals(storageRequests, 1);
+    assertEquals(storageRequests, 0);
     await act(async () => {
       storagePending.resolve({ paths: ["/data/.torrents/complete"] });
       pending.resolve({ roots: ["/data/TV"] });
@@ -982,4 +994,18 @@ Deno.test("credential changes ignore an in-flight result and retry the current r
   assertEquals(requests, ["http://arr:8989", "http://new-sonarr:8989"]);
   assertEquals(state.revision, 1);
   assertEquals(state.status, "error");
+});
+
+Deno.test("connection test status follows credential revision and ignores stale responses", () => {
+  let state = initialRootFolderDiscoveryState();
+  assertEquals(connectionTestLabel(state), "Not tested");
+  state = rootFolderDiscoveryTransition(state, { type: "started", revision: 0 });
+  assertEquals(connectionTestLabel(state), "Testing…");
+  state = rootFolderDiscoveryTransition(state, { type: "succeeded", revision: 0, roots: [] });
+  assertEquals(connectionTestLabel(state), "Connected");
+  state = rootFolderDiscoveryTransition(state, { type: "credentials-changed" });
+  state = rootFolderDiscoveryTransition(state, { type: "succeeded", revision: 0, roots: ["/old"] });
+  assertEquals(connectionTestLabel(state), "Not tested");
+  state = rootFolderDiscoveryTransition(state, { type: "failed", revision: 1 });
+  assertEquals(connectionTestLabel(state), "Connection failed");
 });

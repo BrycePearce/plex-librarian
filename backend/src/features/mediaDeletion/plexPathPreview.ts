@@ -7,7 +7,7 @@ import {
 
 type PlexPathPreview = Pick<
   DownloadCleanupPreviewResponse['items'][number],
-  'plexPaths' | 'plexPathStatus' | 'plexPathReason' | 'plexPathsTruncated'
+  'plexPaths' | 'plexPathStatus' | 'plexPathReason' | 'plexPathsTruncated' | 'plexPathAccessSample'
 >;
 
 type PlexPathClient = Pick<PlexClient, 'mediaPathPreview'>;
@@ -85,6 +85,7 @@ export async function loadPlexPathPreviews(
           item.type,
           perItemPathLimit,
           controller.signal,
+          true,
         );
         result.set(item.ratingKey, {
           plexPaths: preview.paths,
@@ -95,6 +96,7 @@ export async function loadPlexPathPreviews(
             ? 'Plex did not return a path within the bounded preview scan; additional media was not inspected'
             : 'Plex did not return an underlying media path',
           plexPathsTruncated: preview.truncated,
+          ...(preview.pathAccessSample ? { plexPathAccessSample: preview.pathAccessSample } : {}),
         });
       } catch {
         if (controller.signal.aborted) break;

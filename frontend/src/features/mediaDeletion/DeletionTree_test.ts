@@ -7,7 +7,7 @@ import {
 } from "./DeletionTree.tsx";
 import { sonarrRetainedPathsSummary } from "./SonarrRetainedPathsWarning.tsx";
 
-Deno.test("whole-show dialog wiring switches only the qBittorrent ownership projection", () => {
+Deno.test("whole-show preview ignores stale historical projections", () => {
   const sonarrOnly = [{
     path: "/downloads/episode.mkv",
     managedPath: "/library/episode.mkv",
@@ -27,11 +27,11 @@ Deno.test("whole-show dialog wiring switches only the qBittorrent ownership proj
 
   assertEquals(wholeItemSonarrHistoricalPaths("movie", preview, true, false), []);
   assertEquals(wholeItemSonarrHistoricalPaths("show", preview, false, false), []);
-  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, false), sonarrOnly);
-  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, true), withQbittorrent);
+  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, false), []);
+  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, true), []);
   assertEquals(
     sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, false))?.count,
-    1,
+    undefined,
   );
   assertEquals(
     sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, true)),
@@ -48,5 +48,5 @@ Deno.test("qBittorrent-only show preview hides Sonarr historical path effects", 
 
   assertEquals(wholeItemOrphanFiles("show", preview, false, true), []);
   assertEquals(wholeItemRetainedPaths("show", preview, false, true), []);
-  assertEquals(wholeItemOrphanFiles("movie", preview, false, true), preview.orphanFiles);
+  assertEquals(wholeItemOrphanFiles("movie", preview, false, true), []);
 });

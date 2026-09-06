@@ -104,7 +104,13 @@ router.on('POST', ['/root-folders', '/verify-storage'], async (c) => {
     return c.json({ error: 'invalid root-folder discovery request' }, 400);
   }
   const verifying = c.req.path.endsWith('/verify-storage');
-  const { pathMappings: rawMappings, libraryKeys: rawLibraries, ...credentials } = raw as Record<
+  const {
+    pathMappings: rawMappings,
+    libraryKeys: rawLibraries,
+    ratingKey,
+    selectedPath,
+    ...credentials
+  } = raw as Record<
     string,
     unknown
   >;
@@ -163,22 +169,41 @@ router.on('POST', ['/root-folders', '/verify-storage'], async (c) => {
       if (!mappings?.length || keys === null) {
         return c.json({ error: 'valid paths and libraries are required' }, 400);
       }
+      if (
+        (ratingKey !== undefined && (typeof ratingKey !== 'string' || !ratingKey)) ||
+        (selectedPath !== undefined &&
+          (ratingKey === undefined || typeof selectedPath !== 'string' ||
+            !validArrPath(selectedPath)))
+      ) return c.json({ error: 'a valid selected title and current path are required' }, 400);
       const samples = keys.length > 0
         ? await db.select({ tvdbId: items.tvdbId, tmdbId: items.tmdbId })
           .from(items).where(
             and(
               eq(items.serverId, serverId),
               inArray(items.libraryKey, keys),
+              ...(ratingKey === undefined ? [] : [eq(items.ratingKey, ratingKey as string)]),
+              eq(items.type, type === 'sonarr' ? 'show' : 'movie'),
               isNotNull(type === 'sonarr' ? items.tvdbId : items.tmdbId),
             ),
           )
           .limit(3)
         : [];
+      if (ratingKey !== undefined && samples.length !== 1) {
+        return c.json({ error: 'the selected title is not available in these libraries' }, 404);
+      }
       const ids = samples.flatMap((sample) => {
         const id = type === 'sonarr' ? sample.tvdbId : sample.tmdbId;
         return id !== null ? [id] : [];
       });
-      return c.json(await verifyArrStorage(new ArrClient(type, url, apiKey), ids, mappings));
+      return c.json(
+        await verifyArrStorage(
+          new ArrClient(type, url, apiKey),
+          ids,
+          mappings,
+          undefined,
+          selectedPath as string | undefined,
+        ),
+      );
     }
     const roots: string[] = [];
     const seen = new Set<string>();
@@ -313,6 +338,32 @@ router.post('/instances/:id/test', async (c) => {
       502,
     );
   }
+});
+
+// Deletion-time access setup changes paths only, preserving credentials and each
+// library's service-specific deletion preferences.
+router.put('/instances/:id/path-mappings', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json().catch(() => null);
+  if (!Number.isSafeInteger(id) || id <= 0) return c.json({ error: 'instance not found' }, 404);
+  const mappings = validPathMappings(body?.pathMappings);
+  if (!body || !exactKeys(body, ['pathMappings']) || mappings === null) {
+    return c.json({ error: 'valid path mappings are required' }, 400);
+  }
+  const saved = withTransaction((client) => {
+    const instance = client.prepare(
+      'SELECT updated_at FROM arr_instances WHERE id = ? AND server_id = ?',
+    )
+      .value<[number]>(id, serverId);
+    if (!instance) return false;
+    replaceArrPathMappings(client, id, mappings);
+    client.prepare('UPDATE arr_instances SET updated_at = ? WHERE id = ? AND server_id = ?')
+      .run(Math.max(Math.floor(Date.now() / 1000), instance[0] + 1), id, serverId);
+    return true;
+  });
+  return saved ? c.json({ ok: true }) : c.json({ error: 'instance not found' }, 404);
 });
 
 router.patch('/instances/:id', async (c) => {

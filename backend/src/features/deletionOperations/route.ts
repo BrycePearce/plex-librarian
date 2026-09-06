@@ -86,7 +86,10 @@ router.get('/:id/arr-links', async (c) => {
 router.post('/:id/cancel', (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null || !cancelDeletionOperation(c.req.param('id'), serverId)) {
-    return c.json({ error: 'only queued targets can be cancelled' }, 409);
+    return c.json({
+      error:
+        'Only untouched queued targets or upgrade-held targets without external attempt evidence can be cancelled',
+    }, 409);
   }
   wakeDeletionWorker();
   return c.json(getDeletionOperation(c.req.param('id'), serverId));

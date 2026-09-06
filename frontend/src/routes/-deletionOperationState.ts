@@ -138,3 +138,9 @@ export function retryableRelocationSafeTargetCount(
     (status !== "completed_with_warning" || target.phase !== "finalizing")
   ).length;
 }
+
+export function canCancelDeletionTarget(
+  target: { status: string; upgradeHold?: boolean; upgradeHoldCancellable?: boolean },
+): boolean {
+  return target.upgradeHold ? target.upgradeHoldCancellable === true : target.status === "queued";
+}

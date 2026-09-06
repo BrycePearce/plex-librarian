@@ -1,4 +1,6 @@
 import type { Context, Next } from 'hono';
+import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
+import { resolveSelectedVersionDownloadCleanup } from '../mediaDeletion/selectedVersionDownloadCleanup.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
@@ -39,7 +41,6 @@ import {
   cleanupHasDurableAcceptedIdentity,
   cleanupIsEligible,
   persistResolvedCleanupIdentity,
-  publicSonarrHistoricalPaths,
   reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
@@ -371,6 +372,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
               cleanup.ratingKey,
               rows.find((row) => row!.ratingKey === cleanup.ratingKey)!.item[1] === 'show'
                 ? await protectWholeSonarrCleanup({
+                  sonarrSelected: coordinated.has(cleanup.ratingKey),
                   serverId,
                   libraryKey,
                   arrTargets,
@@ -438,6 +440,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           title: found.item[0],
           logicalSize: found.item[2],
           snapshot: {
+            currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
             machineIdentifier: found.machine,
             serverUrl,
             libraryKey,
@@ -457,9 +460,6 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
                   acceptedCleanup,
                 ),
               }
-              : {}),
-            ...(sonarrOwnedRatingKeys.has(found.ratingKey) && acceptedCleanup
-              ? { sonarrHistoricalPaths: publicSonarrHistoricalPaths(acceptedCleanup) }
               : {}),
             ...(quickCleanupCandidate
               ? {
@@ -713,10 +713,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
     let acceptedPlan: Awaited<ReturnType<typeof buildVersionDeletionPlan>> | null = null;
     let acceptedReassignments: PersistedArrReassignment[] = [];
     const episodeCleanups = new Map<number, ReturnType<typeof persistResolvedCleanupIdentity>>();
-    const episodeHistoricalPaths = new Map<
-      number,
-      ReturnType<typeof publicSonarrHistoricalPaths>
-    >();
+    const movieCleanups = new Map<number, ReturnType<typeof persistResolvedCleanupIdentity>>();
     if (kind === 'movie_version') {
       const activeMovies = activeWholeItemRatingKeys(
         new Set([ratingKey]),
@@ -887,6 +884,46 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           }
         }
       }
+      if (cleanupMediaIds.size > 0) {
+        if (
+          acceptedReassignments.length > 0 || allowRadarrRetainedPathManagement ||
+          (!acceptedPlan.radarrRemovalFallback && acceptedPlan.eligibleArrTargets.length === 0)
+        ) {
+          return c.json(
+            { error: 'qBittorrent cleanup is unavailable for this Radarr decision' },
+            409,
+          );
+        }
+        const downloadTargets = await getDownloadClientTargets(serverId);
+        const rawCleanup = await resolveDownloadCleanup(
+          ratingKey,
+          item,
+          arrTargets,
+          downloadTargets,
+        );
+        const cleanup = await resolveSelectedVersionDownloadCleanup({
+          serverId,
+          libraryKey,
+          rawCleanup,
+          liveVersions,
+          selectedMediaIds: cleanupMediaIds,
+          downloadTargets,
+        });
+        for (const mediaId of cleanupMediaIds) {
+          const paths = new Set(
+            liveVersions.filter((version) => version.mediaId === mediaId)
+              .flatMap((version) => version.paths)
+              .flatMap((path) => normalizeRemoteAbsolute(path)?.comparison ?? []),
+          );
+          const scoped = selectVersionDownloadCleanup(cleanup, paths);
+          if (!scoped) {
+            return c.json({
+              error: cleanup.reason ?? 'No exclusive current payload is available for this version',
+            }, 409);
+          }
+          movieCleanups.set(mediaId, persistResolvedCleanupIdentity(scoped));
+        }
+      }
     } else {
       if (allowRadarrMovieRemoval || allowRadarrRetainedPathManagement) {
         return c.json({ error: 'Radarr path adoption is unavailable for Sonarr episodes' }, 400);
@@ -955,16 +992,34 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
               : []
           ),
         );
-        const qbitScoped = selectVersionDownloadCleanup(raw, selectedPaths, true);
         const allManagedPaths = new Set(
           [...managedPathsByMedia.values()].flatMap((paths) => [...paths]),
         );
+        const currentCleanup = cleanupMediaIds.size > 0
+          ? await resolveSelectedVersionDownloadCleanup({
+            serverId,
+            libraryKey,
+            rawCleanup: raw,
+            liveVersions,
+            selectedMediaIds: cleanupMediaIds,
+            selectedArrPaths: [...managedPathsByMedia].flatMap(([mediaId, paths]) =>
+              cleanupMediaIds.has(mediaId) ? [...paths] : []
+            ),
+            downloadTargets,
+          })
+          : raw;
+        const qbitScoped = selectVersionDownloadCleanup(currentCleanup, selectedPaths, true);
+        if (cleanupMediaIds.size > 0 && !qbitScoped) {
+          return c.json({
+            error: currentCleanup.reason ?? 'No verified current qBittorrent payload is available',
+          }, 409);
+        }
         acceptedCleanup = await bindSonarrPathOwnership(
           scopeSonarrReclamation(
             {
-              ...raw,
+              ...currentCleanup,
               downloadJobs: qbitScoped?.downloadJobs ?? [],
-              sources: qbitScoped?.sources ?? raw.sources,
+              sources: qbitScoped?.sources ?? currentCleanup.sources,
             },
             allManagedIds,
             allManagedPaths,
@@ -983,13 +1038,28 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             managedIds,
             managedPathsByMedia.get(mediaId),
           );
-          episodeHistoricalPaths.set(mediaId, publicSonarrHistoricalPaths(scoped));
-          if (scoped.downloadJobs.length > 0 || scoped.sonarrReclamation) {
-            episodeCleanups.set(mediaId, persistResolvedCleanupIdentity(scoped));
+          if (cleanupMediaIds.has(mediaId)) {
+            const paths = new Set(
+              liveVersions.filter((version) => version.mediaId === mediaId)
+                .flatMap((version) => version.paths)
+                .flatMap((path) => normalizeRemoteAbsolute(path)?.comparison ?? []),
+            );
+            const perVersion = selectVersionDownloadCleanup(scoped, paths);
+            if (!perVersion) {
+              return c.json({
+                error: 'A qBittorrent payload is shared with another selected or retained version',
+              }, 409);
+            }
+            episodeCleanups.set(mediaId, persistResolvedCleanupIdentity(perVersion));
           }
         }
       } else if (requestedPlanFingerprint !== null) {
         return c.json({ error: 'the accepted Sonarr coordination decision changed' }, 409);
+      }
+      if ([...cleanupMediaIds].some((mediaId) => !episodeCleanups.has(mediaId))) {
+        return c.json({
+          error: 'qBittorrent cleanup requires a verified selected Sonarr-managed version',
+        }, 409);
       }
       acceptedPlan = await buildVersionDeletionPlan({
         ...planInput,
@@ -1029,6 +1099,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         title: target.title,
         logicalSize: target.size,
         snapshot: {
+          currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier: target.machine,
           serverUrl,
           libraryKey,
@@ -1050,6 +1121,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
           seasonIndex: target.seasonIndex,
           episodeIndex: target.episodeIndex,
           cleanupDownloads: cleanupMediaIds.has(target.mediaId),
+          ...(movieCleanups.has(target.mediaId)
+            ? { radarrRemovalDownloadCleanup: movieCleanups.get(target.mediaId) }
+            : {}),
           ...(radarrMode === 'none' ? { skipArrCoordination: true } : {}),
           selectedMediaIds: [target.mediaId],
           operationMediaIds: mediaIds,
@@ -1073,9 +1147,6 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
               arrOwnerships: acceptedPlan.arrOwnerships,
               ...(episodeCleanups.has(target.mediaId)
                 ? { seasonDownloadCleanup: episodeCleanups.get(target.mediaId) }
-                : {}),
-              ...(episodeHistoricalPaths.has(target.mediaId)
-                ? { sonarrHistoricalPaths: episodeHistoricalPaths.get(target.mediaId) }
                 : {}),
             }
             : {}),
