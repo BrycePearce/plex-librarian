@@ -4047,7 +4047,6 @@ Deno.test('whole-show Sonarr deletion does not persist an empty hardlink reclama
 Deno.test({
   name:
     'whole-show Sonarr deletion preserves historical hardlinks and reports unknown space recovery',
-  ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
     addEpisode();
@@ -4080,7 +4079,7 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
+      assertEquals(preview.items[0].sonarrCleanupStatus, 'resolved', JSON.stringify(preview));
       assertEquals(preview.items[0].downloadJobs.length, 0);
       assertEquals(preview.items[0].orphanFiles.length, 0);
 
@@ -4106,7 +4105,7 @@ Deno.test({
       assertEquals(operation.unknownTargetCount, 1);
       const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
       assertEquals(target.storageOutcome, 'unknown');
-      assertEquals(target.verifiedHardlinkDataRemoved, 0);
+      assertEquals(target.verifiedHardlinkDataRemoved, null);
       assertEquals(arrDeleteCount, 1);
       assertEquals(destinationOrder, ['arr', 'plex']);
       assertEquals((await Deno.lstat(downloadPath)).isFile, true);
@@ -4119,7 +4118,6 @@ Deno.test({
 
 Deno.test({
   name: 'whole-show Sonarr deletion retains history owned by unselected live qBittorrent',
-  ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
     addEpisode();
@@ -4199,7 +4197,6 @@ Deno.test({
 
 Deno.test({
   name: 'stale-season Sonarr deletion preserves separately owned unselected QB entries',
-  ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
     addEpisode();
@@ -4207,7 +4204,8 @@ Deno.test({
     seasonPackQbit = true;
     qbitPresent = true;
     sonarrManagedMediaId = 21;
-    sonarrManagedPath = '/tv/show-1-21.mkv';
+    sonarrManagedPath = '/tv/Show/show-1-21.mkv';
+    live.get('episode-1')!.Media![0].Part![0].file = sonarrManagedPath;
     live.set('season-1', {
       ratingKey: 'season-1',
       title: 'Season 1',
@@ -4219,12 +4217,12 @@ Deno.test({
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
-    const libraryPath = `${libraryRoot}/show-1-21.mkv`;
+    const libraryPath = `${libraryRoot}/Show/show-1-21.mkv`;
     const retainedLibraryPath = `${libraryRoot}/show-1-22.mkv`;
     const downloadPath = `${downloadRoot}/release/old.mkv`;
     const differentHash = 'b'.repeat(40);
     try {
-      await Deno.mkdir(libraryRoot, { recursive: true });
+      await Deno.mkdir(`${libraryRoot}/Show`, { recursive: true });
       await Deno.mkdir(downloadPath.slice(0, downloadPath.lastIndexOf('/')), { recursive: true });
       await Deno.writeFile(libraryPath, new Uint8Array(40_000));
       await Deno.writeFile(retainedLibraryPath, new Uint8Array(40_000));
@@ -4253,6 +4251,7 @@ Deno.test({
         ).run(downloadRoot, downloadPath);
       });
 
+      await ordinaryFixtureConfiguration();
       const previewResponse = await app.request(
         '/api/libraries/shows/seasons/season-1/deletion-preview',
         {
@@ -4292,14 +4291,14 @@ Deno.test({
 
 Deno.test({
   name: 'stale-season fingerprint and outcome exclude historical filesystem changes',
-  ignore: Deno.build.os === 'windows',
   fn: async () => {
     reset();
     addEpisode();
     configureSonarr();
     seasonPackQbit = true;
     sonarrManagedMediaId = 21;
-    sonarrManagedPath = '/tv/show-1-21.mkv';
+    sonarrManagedPath = '/tv/Show/show-1-21.mkv';
+    live.get('episode-1')!.Media![0].Part![0].file = sonarrManagedPath;
     live.set('season-1', {
       ratingKey: 'season-1',
       title: 'Season 1',
@@ -4311,11 +4310,11 @@ Deno.test({
     const storageRoot = await Deno.makeTempDir();
     const libraryRoot = `${storageRoot}/library`;
     const downloadRoot = `${storageRoot}/downloads`;
-    const libraryPath = `${libraryRoot}/show-1-21.mkv`;
+    const libraryPath = `${libraryRoot}/Show/show-1-21.mkv`;
     const downloadPath = `${downloadRoot}/release/old.mkv`;
     const extraPath = `${downloadRoot}/release/extra-link.mkv`;
     try {
-      await Deno.mkdir(libraryRoot, { recursive: true });
+      await Deno.mkdir(`${libraryRoot}/Show`, { recursive: true });
       await Deno.mkdir(`${downloadRoot}/release`, { recursive: true });
       await Deno.writeFile(libraryPath, new Uint8Array(40_000));
       await Deno.link(libraryPath, downloadPath);
@@ -4326,6 +4325,7 @@ Deno.test({
           "INSERT INTO arr_path_mappings (arr_instance_id, kind, arr_path, local_path) VALUES (2, 'library', '/tv', ?), (2, 'download', '/downloads', ?)",
         ).run(libraryRoot, downloadRoot);
       });
+      await ordinaryFixtureConfiguration();
       const previewRequest = () =>
         app.request('/api/libraries/shows/seasons/season-1/deletion-preview', {
           method: 'POST',
@@ -4360,7 +4360,9 @@ Deno.test({
       const operation = getDeletionOperation(operationId, 1)!;
       assertEquals(operation.status, 'completed', JSON.stringify(operation));
       const target = (operation.targets as Array<{ storageOutcomeReasons?: string[] }>)[0]!;
-      assertEquals(target.storageOutcomeReasons, []);
+      assertEquals(target.storageOutcomeReasons, [
+        'Service-reported deletion; physical disk reclamation is not measured',
+      ]);
       assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       assertEquals((await Deno.lstat(extraPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
@@ -4371,8 +4373,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: 'current Sonarr deletion reconciles a lost response without historical unlink',
-  ignore: Deno.build.os === 'windows',
+  name: 'current Sonarr deletion holds a lost response without replay or historical unlink',
   fn: async () => {
     reset();
     addEpisode();
@@ -4420,20 +4421,25 @@ Deno.test({
 
       await settle();
       const interrupted = getDeletionOperation(operationId, 1)!;
-      assertEquals(interrupted.status, 'waiting_retry', JSON.stringify(interrupted));
+      assertEquals(interrupted.status, 'needs_attention', JSON.stringify(interrupted));
+      const interruptedTargets = interrupted.targets as Array<{
+        serviceOutcomes: Array<{ status: string }>;
+      }>;
+      assertEquals(interruptedTargets[0].serviceOutcomes[0].status, 'uncertain');
       assertEquals(arrDeleteCount, 1);
       assertEquals((await Deno.lstat(downloadPath)).isFile, true);
       await assertRejects(() => Deno.lstat(libraryPath), Deno.errors.NotFound);
 
-      makeRetryReady(operationId);
+      retryDeletionOperation(operationId, 1);
       await settle();
-      const completed = getDeletionOperation(operationId, 1)!;
-      assertEquals(completed.status, 'completed', JSON.stringify(completed));
-      assertEquals(completed.verifiedHardlinkDataRemoved, 0);
-      assertEquals(completed.verifiedTargetCount, 0);
-      assertEquals(completed.unknownTargetCount, 1);
+      const held = getDeletionOperation(operationId, 1)!;
+      assertEquals(held.status, 'needs_attention', JSON.stringify(held));
+      const heldTargets = held.targets as typeof interruptedTargets;
+      assertEquals(heldTargets[0].serviceOutcomes, interruptedTargets[0].serviceOutcomes);
+      assertEquals(held.removalConfirmedCount, 0);
       assertEquals(arrDeleteCount, 1);
-      assertEquals(destinationOrder, ['arr', 'plex']);
+      assertEquals(destinationOrder, ['arr']);
+      assertEquals(live.has('show-1'), true);
     } finally {
       await Deno.remove(storageRoot, { recursive: true });
     }
