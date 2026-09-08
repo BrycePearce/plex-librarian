@@ -52,16 +52,8 @@ export function recoverInterruptedDeletionWork(client: RecoveryClient, now: numb
   } catch (error) {
     if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;
   }
-  try {
-    client.prepare(
-      `DELETE FROM radarr_movie_reservations
-       WHERE target_id IN (SELECT id FROM deletion_targets WHERE status IN ('completed','cancelled'))`,
-    ).run();
-  } catch (error) {
-    // Compatibility for recovery tests and interrupted upgrades whose pre-0047
-    // schema has not yet acquired feature-specific reservations.
-    if (!(error instanceof Error) || !/no such table/i.test(error.message)) throw error;
-  }
+  // Reservations are released by explicit safe cancellation or successful
+  // finalization, never retrospectively from a legacy status during startup.
   client.prepare(
     `UPDATE deletion_targets
      SET status = 'queued',

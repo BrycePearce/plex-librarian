@@ -1025,6 +1025,17 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
       )
       .value<[DeletionWorkTarget['phase'], number, number | null, string]>(target.id);
     const inPlexReconciliation = phaseRow?.[0] === 'plex_reconciliation';
+    const acceptedSnapshot = phaseRow ? JSON.parse(phaseRow[3]) : null;
+    if (
+      acceptedSnapshot?.ordinaryPlan &&
+      (acceptedSnapshot.ordinaryAttempts || phaseRow![0] !== 'validating' || phaseRow![1] > 0)
+    ) {
+      client.prepare(
+        "UPDATE deletion_targets SET status='needs_attention',next_retry_at=NULL,error=?,updated_at=? WHERE id=? AND status='running'",
+      ).run(message, now, target.id);
+      refreshDeletionOperation(client, target.operationId);
+      return;
+    }
     const permanent = error instanceof DeletionValidationError ||
       (error instanceof PlexReconciliationError && error.permanent);
     if (inPlexReconciliation && phaseRow) {
@@ -1323,10 +1334,50 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
           ? []
           : JSON.parse(String(target[20]));
         targetResult.downloadCleanupSelected = snapshot.cleanupDownloads === true;
+        if (snapshot.ordinaryAttempts && typeof snapshot.ordinaryAttempts === 'object') {
+          targetResult.serviceOutcomes = Object.values(snapshot.ordinaryAttempts).map((value) => {
+            const attempt = value as {
+              service: string;
+              action: string;
+              startedAt: number;
+              response?: { status: string; httpStatus: number };
+              failure?: { httpStatus?: number };
+              error?: string;
+            };
+            return {
+              service: attempt.service,
+              action: attempt.action,
+              startedAt: attempt.startedAt,
+              status: attempt.response?.status ?? (attempt.failure ? 'failed' : 'uncertain'),
+              httpStatus: attempt.response?.httpStatus ?? attempt.failure?.httpStatus,
+              error: attempt.error,
+            };
+          });
+          if (
+            snapshot.ordinaryReconciliations && typeof snapshot.ordinaryReconciliations === 'object'
+          ) {
+            (targetResult.serviceOutcomes as unknown[]).push(
+              ...Object.values(snapshot.ordinaryReconciliations).map((value) => {
+                const entry = value as { service: string; action: string; reconciledAt: number };
+                return {
+                  service: entry.service,
+                  action: entry.action,
+                  startedAt: entry.reconciledAt,
+                  status: 'reconciled',
+                };
+              }),
+            );
+          }
+        }
         targetResult.upgradeHold = snapshot.upgradeHold === UPGRADE_HOLD;
         targetResult.upgradeHoldCancellable = snapshot.upgradeHold === UPGRADE_HOLD &&
           targetResult.status === 'needs_attention' &&
           upgradeTargetCanCancel(client, Number(target[0]));
+        if (snapshot.ordinaryPlan !== undefined) {
+          targetResult.ordinaryCancellable =
+            ['queued', 'waiting_retry', 'needs_attention'].includes(String(targetResult.status)) &&
+            upgradeTargetCanCancel(client, Number(target[0]));
+        }
         if (legacyUnsupported) {
           targetResult.unsupportedLegacyWorkflow = true;
           return targetResult;
@@ -1402,6 +1453,7 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
        WHERE operation_id = ? AND status = 'queued'
          AND phase = 'validating'
          AND attempt_count = 0
+         AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.ordinaryAttempts') IS NULL
          AND NOT (
            (
              COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
@@ -1420,8 +1472,9 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
       )
       .values<[number]>(id);
     const held = client.prepare(
-      `SELECT id FROM deletion_targets WHERE operation_id = ? AND status = 'needs_attention'
-       AND json_valid(snapshot) AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') = ?`,
+      `SELECT id FROM deletion_targets WHERE operation_id = ? AND status IN ('needs_attention','waiting_retry','queued')
+       AND json_valid(snapshot) AND (json_extract(snapshot, '$.upgradeHold') = ?
+         OR json_extract(snapshot, '$.ordinaryPlan.policyVersion') = ${CURRENT_LOCATION_POLICY_VERSION})`,
     ).values<[number]>(id, UPGRADE_HOLD).filter(([targetId]) =>
       upgradeTargetCanCancel(client, targetId)
     );
@@ -1437,7 +1490,7 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
     for (const [targetId] of queued) {
       client
         .prepare(
-          "UPDATE deletion_targets SET status = 'cancelled', next_retry_at = NULL, updated_at = ? WHERE id = ? AND status IN ('queued', 'needs_attention')",
+          "UPDATE deletion_targets SET status = 'cancelled', next_retry_at = NULL, updated_at = ? WHERE id = ? AND status IN ('queued', 'needs_attention', 'waiting_retry')",
         )
         .run(now, targetId);
       client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(targetId);

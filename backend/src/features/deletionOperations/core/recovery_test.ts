@@ -39,7 +39,7 @@ Deno.test('startup requeues running targets for full replay', () => {
   sqlite.close();
 });
 
-Deno.test('startup preserves management holds and reconciles safe reservation terminals', () => {
+Deno.test('startup preserves management holds and never retroactively releases terminal reservations', () => {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
     CREATE TABLE deletion_operations (
@@ -67,7 +67,7 @@ Deno.test('startup preserves management holds and reconciles safe reservation te
     sqlite.prepare(
       'SELECT target_id, state, updated_at FROM radarr_movie_reservations ORDER BY target_id',
     ).values(),
-    [[1, 'reserved', 100], [2, 'management_hold', 1]],
+    [[1, 'reserved', 100], [2, 'management_hold', 1], [3, 'reserved', 1]],
   );
   sqlite.close();
 });

@@ -34,7 +34,7 @@ function externalId(snapshot: DurableTargetSnapshot): number | null {
     : null;
 }
 
-function finalizeTarget(
+export function finalizeTarget(
   client: SqliteClient,
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,

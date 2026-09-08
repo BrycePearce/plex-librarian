@@ -1,10 +1,15 @@
+import {
+  buildOrdinaryDeletionPlan,
+  type OrdinaryDeletionPlan,
+} from '../mediaDeletion/ordinaryPlanning.ts';
+import { loadServiceRoots, serviceEndpoints } from '../mediaDeletion/serviceStorage.ts';
 import type { Context, Next } from 'hono';
 import { CURRENT_LOCATION_POLICY_VERSION } from '@plex-librarian/shared/deletionPolicy.ts';
 import { resolveSelectedVersionDownloadCleanup } from '../mediaDeletion/selectedVersionDownloadCleanup.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
-import { protectWholeSonarrCleanup } from '../mediaDeletion/livePathProtection.ts';
+
 import {
   DeletionConflictError,
   enqueueDeletionOperation,
@@ -26,22 +31,12 @@ import {
   selectVersionDownloadCleanup,
 } from '../mediaDeletion/versionPlanning.ts';
 import type { PersistedArrReassignment } from '../mediaDeletion/arrReassignmentPlanning/types.ts';
-import {
-  assertDownloadJobSelectionConsistent,
-  loadAttemptedArrInstancesByItem,
-  loadAttemptedDownloadJobKeysByItem,
-  loadAttemptedOrphanFilesByItem,
-  resolveWholeItemDownloadCleanupBatch,
-} from '../mediaDeletion/planning.ts';
+
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { normalizeRemoteAbsolute } from '../mediaDeletion/hardlinks.ts';
 import {
   bindSonarrPathOwnership,
-  cleanupAuthorizationFingerprint,
-  cleanupHasDurableAcceptedIdentity,
-  cleanupIsEligible,
   persistResolvedCleanupIdentity,
-  reconcileSharedDownloadCleanups,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
   scopeSonarrReclamation,
@@ -308,132 +303,61 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       if (rows.some((row) => row === null)) {
         return c.json({ error: 'one or more items were not found in this library' }, 404);
       }
-      let acceptedCleanups = new Map<string, ResolvedCleanupItem>();
-      const sonarrOwnedRatingKeys = new Set(
-        rows.flatMap((row) =>
-          row!.item[1] === 'show' && coordinated.has(row!.ratingKey) ? [row!.ratingKey] : []
-        ),
-      );
-      const cleanupInspectionKeys = new Set([
-        ...cleanupDownloadRatingKeys,
-        ...sonarrOwnedRatingKeys,
-      ]);
       const submittedFingerprintKeys = Object.keys(cleanupPreviewFingerprints ?? {});
       if (
-        submittedFingerprintKeys.length !== cleanupInspectionKeys.size ||
-        submittedFingerprintKeys.some((key) => !cleanupInspectionKeys.has(key))
+        submittedFingerprintKeys.length !== ratingKeys.length ||
+        submittedFingerprintKeys.some((key) => !ratingKeys.includes(key))
       ) {
-        return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
+        return c.json(
+          { error: 'The current service preview is required for every selected item' },
+          409,
+        );
       }
-      if (cleanupInspectionKeys.size > 0) {
-        const selectedItems = rows.map((row) => ({
-          ratingKey: row!.ratingKey,
-          title: row!.item[0],
-          type: row!.item[1],
-          tmdbId: row!.item[3],
-          tvdbId: row!.item[4],
-        }));
-        const [arrTargets, downloadTargets] = await Promise.all([
-          getArrDeleteTargets(serverId, libraryKey),
-          getDownloadClientTargets(serverId),
-        ]);
-        const [attemptedJobs, attemptedOrphans, attemptedArr] = await Promise.all([
-          loadAttemptedDownloadJobKeysByItem(serverId, ratingKeys),
-          loadAttemptedOrphanFilesByItem(serverId, ratingKeys),
-          loadAttemptedArrInstancesByItem(
-            serverId,
-            selectedItems,
-            arrTargets.map((target) => target.instanceId),
-          ),
-        ]);
-        const rawCleanups = await resolveWholeItemDownloadCleanupBatch(
+      if (unmonitor.size) {
+        return c.json({ error: 'Choose deletion destinations in the current preview' }, 400);
+      }
+      const [arrTargets, downloadTargets, roots, connections] = await Promise.all([
+        getArrDeleteTargets(serverId, libraryKey),
+        getDownloadClientTargets(serverId),
+        loadServiceRoots(serverId),
+        serviceEndpoints(serverId),
+      ]);
+      const acceptedPlans = new Map<string, OrdinaryDeletionPlan>();
+      for (const row of rows) {
+        const found = row!;
+        const plan = await buildOrdinaryDeletionPlan({
           serverId,
           libraryKey,
-          selectedItems,
+          selection: {
+            ratingKey: found.ratingKey,
+            title: found.item[0],
+            type: found.item[1] as 'movie' | 'show',
+            tmdbId: found.item[3],
+            tvdbId: found.item[4],
+          },
+          arrSelected: coordinated.has(found.ratingKey),
+          qbSelected: cleanupDownloadRatingKeys.has(found.ratingKey),
+          plex: activeServer.client,
           arrTargets,
           downloadTargets,
-          activeServer.client,
-          attemptedJobs,
-          attemptedOrphans,
-          attemptedArr,
-        );
-        try {
-          assertDownloadJobSelectionConsistent(rawCleanups, cleanupDownloadRatingKeys);
-        } catch (error) {
+          roots,
+          connections,
+        }).catch((error) => {
           throw new DeletionConflictError(
-            error instanceof Error ? error.message : 'qBittorrent selection is inconsistent',
+            error instanceof Error ? error.message : 'Current service scope is unavailable',
             409,
           );
+        });
+        if (plan.fingerprint !== cleanupPreviewFingerprints?.[found.ratingKey]) {
+          return c.json({ error: 'Current service scope changed; review deletion again' }, 409);
         }
-        const reconciled = reconcileSharedDownloadCleanups(rawCleanups);
-        acceptedCleanups = new Map(
-          await Promise.all(reconciled.map(async (cleanup) =>
-            [
-              cleanup.ratingKey,
-              rows.find((row) => row!.ratingKey === cleanup.ratingKey)!.item[1] === 'show'
-                ? await protectWholeSonarrCleanup({
-                  sonarrSelected: coordinated.has(cleanup.ratingKey),
-                  serverId,
-                  libraryKey,
-                  arrTargets,
-                  downloadTargets,
-                  client: activeServer!.client,
-                  cleanup: await bindSonarrPathOwnership(
-                    cleanup,
-                    downloadTargets,
-                    cleanupDownloadRatingKeys.has(cleanup.ratingKey),
-                  ),
-                })
-                : cleanup,
-            ] as const
-          )),
-        );
-        for (const ratingKey of cleanupInspectionKeys) {
-          const cleanup = acceptedCleanups.get(ratingKey);
-          if (
-            !cleanup ||
-            (cleanupDownloadRatingKeys.has(ratingKey) &&
-              (!cleanupIsEligible(cleanup) ||
-                (!sonarrOwnedRatingKeys.has(ratingKey) &&
-                  rows.find((row) => row!.ratingKey === ratingKey)!.item[1] === 'show' &&
-                  cleanup.downloadJobs.length === 0)))
-          ) {
-            return c.json({
-              error: cleanup &&
-                  !sonarrOwnedRatingKeys.has(ratingKey) &&
-                  cleanup.sonarrReclamation !== undefined &&
-                  cleanup.orphanFiles.length > 0 &&
-                  cleanup.downloadJobs.length === 0
-                ? 'Verified orphan hardlink cleanup requires coordinated Sonarr deletion'
-                : cleanup?.reason ?? 'No verified download job or orphan hardlink is available',
-            }, 409);
-          }
-          if (sonarrOwnedRatingKeys.has(ratingKey) && cleanup.status === 'error') {
-            return c.json({ error: cleanup.reason ?? 'Sonarr path ownership is unsafe' }, 409);
-          }
-          if (
-            await cleanupAuthorizationFingerprint(cleanup) !==
-              cleanupPreviewFingerprints?.[ratingKey]
-          ) {
-            return c.json({ error: 'cleanup preview changed; review the deletion again' }, 409);
-          }
-        }
-        acceptedCleanups = new Map([...acceptedCleanups].map(([ratingKey, cleanup]) => {
-          const row = rows.find((candidate) => candidate!.ratingKey === ratingKey)!;
-          return row.item[1] === 'show' && !sonarrOwnedRatingKeys.has(ratingKey)
-            ? [ratingKey, { ...cleanup, orphanFiles: [], sonarrReclamation: undefined }]
-            : [ratingKey, cleanup];
-        }));
+        acceptedPlans.set(found.ratingKey, plan);
       }
       const sortedCleanupKeys = [...cleanupDownloadRatingKeys].sort();
       const targets: NewDeletionTarget[] = rows.map((row) => {
         const found = row!;
         const mode = coordinated.has(found.ratingKey) ? 'coordinated' : 'plex-only';
         const quickCleanupCandidate = quickCleanupCandidates?.get(found.ratingKey);
-        const acceptedCleanup = acceptedCleanups.get(found.ratingKey);
-        const persistAcceptedCleanup = (cleanupDownloadRatingKeys.has(found.ratingKey) ||
-          sonarrOwnedRatingKeys.has(found.ratingKey)) &&
-          acceptedCleanup !== undefined && cleanupHasDurableAcceptedIdentity(acceptedCleanup);
         return {
           kind: 'whole_item',
           key: found.ratingKey,
@@ -454,13 +378,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             unmonitorFromArr: mode === 'plex-only' && unmonitor.has(found.ratingKey),
             selectedRatingKeys: [...ratingKeys],
             cleanupDownloadRatingKeys: sortedCleanupKeys,
-            ...(persistAcceptedCleanup
-              ? {
-                wholeItemDownloadCleanup: persistResolvedCleanupIdentity(
-                  acceptedCleanup,
-                ),
-              }
-              : {}),
+            ordinaryPlan: acceptedPlans.get(found.ratingKey),
             ...(quickCleanupCandidate
               ? {
                 quickCleanupEvidence: {

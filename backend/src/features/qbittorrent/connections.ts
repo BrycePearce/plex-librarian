@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
+import { createHash } from 'node:crypto';
 import { qbittorrentInstances, qbittorrentPathMappings } from '../../db/schema.ts';
 import {
   normalizeQbittorrentUrl,
@@ -41,7 +42,14 @@ export async function getQbittorrentTargets(serverId: number): Promise<DownloadC
       provider: 'qbittorrent',
       instanceKey,
       instanceUrl: normalized,
-      configurationIdentity: `env:${normalized}:${JSON.stringify(pathMappings)}`,
+      configurationIdentity: createHash('sha256').update(
+        JSON.stringify([
+          normalized,
+          Deno.env.get('QBITTORRENT_USERNAME'),
+          Deno.env.get('QBITTORRENT_PASSWORD'),
+          pathMappings,
+        ]),
+      ).digest('hex'),
       instanceId: null,
       instanceName: 'qBittorrent (environment)',
       pathMappings,
@@ -65,9 +73,16 @@ export async function getQbittorrentTargets(serverId: number): Promise<DownloadC
       provider: 'qbittorrent',
       instanceKey,
       instanceUrl: normalizeQbittorrentUrl(row.url),
-      configurationIdentity: `db:${row.id}:${row.updatedAt}:${normalizeQbittorrentUrl(row.url)}:${
-        JSON.stringify(pathMappings)
-      }`,
+      configurationIdentity: createHash('sha256').update(
+        JSON.stringify([
+          row.id,
+          row.updatedAt,
+          normalizeQbittorrentUrl(row.url),
+          row.username,
+          row.password,
+          pathMappings,
+        ]),
+      ).digest('hex'),
       instanceId: row.id,
       instanceName: row.name,
       pathMappings,

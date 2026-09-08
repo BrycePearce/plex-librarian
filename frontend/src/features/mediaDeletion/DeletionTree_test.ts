@@ -1,52 +1,45 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
+import { createElement } from "react";
+import TestRenderer, { act } from "react-test-renderer";
 import type { DownloadCleanupPreviewItem } from "@shared/types";
-import {
-  wholeItemOrphanFiles,
-  wholeItemRetainedPaths,
-  wholeItemSonarrHistoricalPaths,
-} from "./DeletionTree.tsx";
-import { sonarrRetainedPathsSummary } from "./SonarrRetainedPathsWarning.tsx";
+import { AdvancedDeletionTree } from "./DeletionTree.tsx";
 
-Deno.test("whole-show preview ignores stale historical projections", () => {
-  const sonarrOnly = [{
-    path: "/downloads/episode.mkv",
-    managedPath: "/library/episode.mkv",
-    size: 100,
-    disposition: "retain_live_qbittorrent" as const,
-    reason: "live owner",
-  }];
-  const withQbittorrent = [{
-    ...sonarrOnly[0],
-    disposition: "delete" as const,
-    reason: "selected owner",
-  }];
-  const preview = {
-    sonarrHistoricalPaths: sonarrOnly,
-    qbittorrentSonarrHistoricalPaths: withQbittorrent,
-  } as DownloadCleanupPreviewItem;
-
-  assertEquals(wholeItemSonarrHistoricalPaths("movie", preview, true, false), []);
-  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, false, false), []);
-  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, false), []);
-  assertEquals(wholeItemSonarrHistoricalPaths("show", preview, true, true), []);
-  assertEquals(
-    sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, false))?.count,
-    undefined,
-  );
-  assertEquals(
-    sonarrRetainedPathsSummary(wholeItemSonarrHistoricalPaths("show", preview, true, true)),
-    null,
-  );
-});
-
-Deno.test("qBittorrent-only show preview hides Sonarr historical path effects", () => {
+Deno.test("ordinary preview renders current paths without legacy historical effects", async () => {
   const preview = {
     status: "resolved",
-    orphanFiles: [{ path: "/downloads/history.mkv", size: 100, method: "hardlink" }],
-    retainedPaths: [{ path: "/downloads/retained.mkv", reason: "live owner" }],
-  } as DownloadCleanupPreviewItem;
-
-  assertEquals(wholeItemOrphanFiles("show", preview, false, true), []);
-  assertEquals(wholeItemRetainedPaths("show", preview, false, true), []);
-  assertEquals(wholeItemOrphanFiles("movie", preview, false, true), []);
+    arrStatus: "unavailable",
+    downloadJobs: [],
+    plexPaths: ["/library/current.mkv"],
+    orphanFiles: [{ path: "/historical/orphan.mkv", size: 100, method: "hardlink" }],
+    retainedPaths: [{ path: "/historical/retained.mkv", reason: "live owner" }],
+    sonarrHistoricalPaths: [{ path: "/historical/import.mkv", disposition: "delete" }],
+  } as unknown as DownloadCleanupPreviewItem;
+  for (const deleteFromArr of [false, true]) {
+    for (const cleanupDownloads of [false, true]) {
+      let renderer!: TestRenderer.ReactTestRenderer;
+      try {
+        await act(() => {
+          renderer = TestRenderer.create(createElement(AdvancedDeletionTree, {
+            items: [{
+              ratingKey: "show",
+              libraryKey: "tv",
+              title: "Fixture",
+              type: "show",
+              fileSize: 100,
+            }],
+            plexPreviews: new Map([["show", preview]]),
+            deleteFromArr,
+            cleanupDownloads,
+            loading: false,
+          }));
+        });
+        const rendered = JSON.stringify(renderer.toJSON());
+        assertStringIncludes(rendered, "/library/current.mkv");
+        assertEquals(rendered.includes("/historical/"), false);
+        assertEquals(rendered.includes("Automatic unlink"), false);
+      } finally {
+        if (renderer) await act(() => renderer.unmount());
+      }
+    }
+  }
 });

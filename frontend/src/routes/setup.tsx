@@ -14,7 +14,7 @@ export const Route = createFileRoute("/setup")({
       queryKey: queryKeys.auth.status,
       queryFn: api.auth.status,
     });
-    if (status.configured) throw redirect({ to: "/dashboard" });
+    if (status.configured) throw redirect({ to: "/settings/sonarr-radarr" });
   },
   component: SetupPage,
 });
@@ -271,7 +271,7 @@ function SetupPage() {
                             <div className="font-semibold">{server.name}</div>
                             <div className="text-xs text-base-content/50 truncate">
                               {isThisServerConnected
-                                ? "Connected — opening your dashboard…"
+                                ? "Connected — opening media connections…"
                                 : isThisServerConnecting
                                 ? "Finding the best connection…"
                                 : "Plex Media Server"}

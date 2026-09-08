@@ -1,4 +1,5 @@
-import { DeletionAccessResolver } from "../../features/mediaDeletion/DeletionAccessResolver.tsx";
+import { OPTIONAL_DELETION_DESTINATIONS } from "../../../../shared/deletionPolicy.ts";
+import { DeletionSetupLink } from "../../features/mediaDeletion/DeletionSetupLink.tsx";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
@@ -33,13 +34,6 @@ export interface SeasonRemovalChoice {
 
 export function seasonSonarrOptionInfo(reason?: string): string {
   return reason ? `${SONARR_OWNED_PATH_COPY} Warning: ${reason}` : SONARR_OWNED_PATH_COPY;
-}
-
-export function seasonRemovalHistoricalPaths(
-  _preview: SeasonRemovalPreviewResponse | undefined,
-  _selection: boolean,
-): NonNullable<SeasonRemovalPreviewResponse["sonarrHistoricalPaths"]> {
-  return [];
 }
 
 export function seasonCleanupAvailable(
@@ -125,10 +119,9 @@ function SeasonRemovalDeletionTree({
       : []),
   ]);
   const downloadJobs = cleanupDownloads ? preview?.downloadJobs ?? [] : [];
-  const historicalPaths = seasonRemovalHistoricalPaths(preview, coordinated);
   const pathCount = (preview?.plexFiles.length ?? 0) +
     (coordinated ? preview?.sonarrFiles.length ?? 0 : 0) +
-    downloadJobs.reduce((total, job) => total + job.fileCount, 0) + historicalPaths.length;
+    downloadJobs.reduce((total, job) => total + job.fileCount, 0);
 
   return (
     <DeletionPreviewDisclosure
@@ -178,29 +171,6 @@ function SeasonRemovalDeletionTree({
             info={downloadJobInfo(job)}
           />
         ))}
-        {historicalPaths.map((entry) => (
-          <PathTreeRoot
-            key={`historical:${entry.path}`}
-            path={entry.path}
-            source="Sonarr import history"
-            marks={
-              <span
-                className={`badge badge-xs ${
-                  entry.disposition === "delete" ? "badge-error" : "badge-warning"
-                }`}
-              >
-                {entry.disposition === "delete"
-                  ? "automatic unlink"
-                  : entry.disposition === "retain_live_qbittorrent"
-                  ? "retained live job"
-                  : "unverified"}
-              </span>
-            }
-            files={[]}
-            totalFiles={1}
-            info={entry.reason}
-          />
-        ))}
         {loading && (
           <p className="flex items-center gap-2 py-2 text-[11px] text-base-content/40">
             <span className="loading loading-spinner loading-xs" /> Loading files…
@@ -231,13 +201,15 @@ export function SeasonRemovalDialog({
   onConfirm: (choice: SeasonRemovalChoice) => void;
   onCancel: () => void;
 }) {
-  const [coordinated, setCoordinated] = useState(true);
-  const [cleanupDownloads, setCleanupDownloads] = useState(true);
+  const [coordinated, setCoordinated] = useState<boolean>(OPTIONAL_DELETION_DESTINATIONS.arr);
+  const [cleanupDownloads, setCleanupDownloads] = useState<boolean>(
+    OPTIONAL_DELETION_DESTINATIONS.qbittorrent,
+  );
   const [verifiedCleanupKey, setVerifiedCleanupKey] = useState<string | null>(null);
   const [verifiedSonarrKey, setVerifiedSonarrKey] = useState<string | null>(null);
   useEffect(() => {
-    setCoordinated(true);
-    setCleanupDownloads(true);
+    setCoordinated(OPTIONAL_DELETION_DESTINATIONS.arr);
+    setCleanupDownloads(OPTIONAL_DELETION_DESTINATIONS.qbittorrent);
     setVerifiedCleanupKey(null);
     setVerifiedSonarrKey(null);
   }, [item?.ratingKey]);
@@ -270,9 +242,6 @@ export function SeasonRemovalDialog({
   }, [coordinated, item, sonarrActionAvailableNow, value]);
   const sonarrActionAvailable = sonarrActionAvailableNow ||
     verifiedSonarrKey === item?.ratingKey;
-  useEffect(() => {
-    if (value && !sonarrActionAvailable && coordinated) setCoordinated(false);
-  }, [coordinated, sonarrActionAvailable, value]);
   const cleanupAvailableNow = seasonCleanupAvailable(value);
   useEffect(() => {
     if (!item || !value || !cleanupDownloads) return;
@@ -280,12 +249,9 @@ export function SeasonRemovalDialog({
   }, [cleanupAvailableNow, cleanupDownloads, item, value]);
   const cleanupAvailable = value?.cleanupConfigured === true || cleanupAvailableNow ||
     verifiedCleanupKey === item?.ratingKey;
-  useEffect(() => {
-    if (value && !cleanupAvailable && cleanupDownloads) setCleanupDownloads(false);
-  }, [cleanupAvailable, cleanupDownloads, value]);
   const showPreviewLoading = useDelayedFlag(preview.isFetching, 350);
   const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
-    (coordinated && !sonarrActionAvailable);
+    (coordinated && !sonarrActionAvailableNow) || (cleanupDownloads && !cleanupAvailable);
 
   return (
     <DeletionModalShell
@@ -333,28 +299,7 @@ export function SeasonRemovalDialog({
                 </div>
               </div>
             )}
-            {value && (
-              <DeletionAccessResolver
-                libraryKey={value.libraryKey}
-                ratingKey={value.showRatingKey}
-                selectedPath={value.sonarrFiles[0]?.path}
-                reason={value.blockers.join(" ")}
-                plexSample={value.plexPathAccessSample}
-                job={value.qbittorrentPathAccessJob ?? value.downloadJobs[0]}
-                target={value.sonarrFiles[0]
-                  ? {
-                    instanceName: value.sonarrFiles[0].instanceName,
-                    type: "sonarr",
-                    title: value.showTitle,
-                    path: value.sonarrFiles[0].path.replace(/[\\/][^\\/]+$/, ""),
-                    seasons: null,
-                    mediaFiles: null,
-                    extraFiles: null,
-                  }
-                  : undefined}
-                onResolved={() => void preview.refetch()}
-              />
-            )}
+            <DeletionSetupLink reason={value?.blockers.join(" ")} />
             {value?.blockers.map((blocker) => (
               <div key={blocker} className="alert alert-error mt-2 text-sm" role="alert">
                 <AlertTriangle className="size-4" /> {blocker}
@@ -396,6 +341,13 @@ export function SeasonRemovalDialog({
                   season episode{value.monitoredEpisodeCount === 1 ? "" : "s"}.
                 </p>
               )}
+              {cleanupDownloads && value?.cleanupStatus === "resolved" &&
+                value.downloadJobs.length === 0 && (
+                <p className="mt-3 text-base-content/70">
+                  {value.cleanupReason ??
+                    "No matching live qBittorrent job is in this season's current scope. No qBittorrent deletion will be requested."}
+                </p>
+              )}
               {!preview.error && (
                 <>
                   <SeasonRemovalDeletionTree
@@ -409,12 +361,12 @@ export function SeasonRemovalDialog({
             </div>
           )
           : null}
-        destinations={item && !preview.error
+        destinations={item
           ? (
             <DestinationOptions
               keepDownloads={(value?.downloadJobs.length ?? 0) > 0 && !cleanupDownloads}
               options={[
-                ...(sonarrActionAvailable
+                ...(value?.coordinatedConfigured || sonarrActionAvailable || coordinated
                   ? [{
                     id: "arr" as const,
                     service: "sonarr" as const,
@@ -426,7 +378,7 @@ export function SeasonRemovalDialog({
                     onChange: setCoordinated,
                   }]
                   : []),
-                ...(cleanupAvailable
+                ...(cleanupAvailable || cleanupDownloads
                   ? [{
                     id: "cleanup" as const,
                     service: "qbittorrent" as const,

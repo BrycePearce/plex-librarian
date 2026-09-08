@@ -178,3 +178,15 @@ Deno.test("upgrade-held cancellation follows durable eligibility rather than UI 
   assertEquals(canCancelDeletionTarget({ status: "needs_attention" }), false);
   assertEquals(canCancelDeletionTarget({ status: "queued" }), true);
 });
+
+Deno.test("ordinary cancellation uses durable no-attempt eligibility, including preflight holds", () => {
+  assertEquals(
+    canCancelDeletionTarget({ status: "needs_attention", ordinaryCancellable: true }),
+    true,
+  );
+  assertEquals(
+    canCancelDeletionTarget({ status: "waiting_retry", ordinaryCancellable: true }),
+    true,
+  );
+  assertEquals(canCancelDeletionTarget({ status: "queued", ordinaryCancellable: false }), false);
+});

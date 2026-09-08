@@ -115,7 +115,7 @@ export function usePlexSetupFlow() {
       ),
     onSuccess: async () => {
       // Hold the success beat at least as long as the ring-collapse finale so
-      // the resolution reads before the dashboard swap; the cache work below
+      // the resolution reads before opening Media connections; the cache work below
       // runs concurrently, so this rarely adds real wait.
       const finaleBeat = new Promise((resolve) => setTimeout(resolve, 900));
       await queryClient.refetchQueries({ queryKey: queryKeys.auth.status });
@@ -133,7 +133,7 @@ export function usePlexSetupFlow() {
         }),
       ]);
       await finaleBeat;
-      void navigate({ to: "/dashboard" });
+      void navigate({ to: "/settings/sonarr-radarr" });
     },
   });
 
@@ -179,10 +179,10 @@ export function usePlexSetupFlow() {
 
   // The route guard handles normal visits, but a query-driven remount can occur during
   // the successful setup handoff. Never let that remount paint the initial Welcome state
-  // after auth has already become configured; send it straight to the dashboard instead.
+  // after auth has already become configured; send it straight to Media connections instead.
   useEffect(() => {
     if (authStatus?.configured && step === "initial") {
-      void navigate({ to: "/dashboard" });
+      void navigate({ to: "/settings/sonarr-radarr" });
     }
   }, [authStatus?.configured, navigate, step]);
 

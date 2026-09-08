@@ -17,7 +17,6 @@ import {
   seasonDeletionPreviewIsUsable,
   seasonDestinationChoice,
   seasonDownloadCleanupVisible,
-  seasonDuplicateHistoricalPaths,
   seasonLaneMatchBasisLabel,
   seasonLogicalMediaSizeLabel,
   seasonProfilesDeletionPlan,
@@ -32,7 +31,6 @@ import type {
   SeasonDeletionPreviewResponse,
   SeasonVersionProfile,
 } from "../../lib/api.ts";
-import { sonarrRetainedPathsSummary } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 function version(mediaId: number): MediaVersion {
   return {
@@ -397,24 +395,6 @@ Deno.test("season Sonarr destination requires an actionable aligned version", ()
   assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: false }), false);
   assertEquals(seasonSonarrVisible("selection-a", { key: "selection-a", sonarr: true }), true);
   assertEquals(seasonSonarrVisible("selection-b", { key: "selection-a", sonarr: true }), false);
-});
-
-Deno.test("duplicate-season preview ignores historical paths", () => {
-  const paths = [{
-    path: "/downloads/episode.mkv",
-    managedPath: "/library/episode.mkv",
-    size: 100,
-    disposition: "retain_live_qbittorrent" as const,
-    reason: "live owner",
-  }];
-  const preview = { sonarrHistoricalPaths: paths } as SeasonDeletionPreviewResponse;
-  assertEquals(seasonDuplicateHistoricalPaths(preview, "none"), []);
-  assertEquals(seasonDuplicateHistoricalPaths(preview, "adopt_retained"), []);
-  assertEquals(seasonDuplicateHistoricalPaths(preview, "remove_and_unmonitor"), []);
-  assertEquals(
-    sonarrRetainedPathsSummary(seasonDuplicateHistoricalPaths(preview, "adopt_retained"))?.count,
-    undefined,
-  );
 });
 
 Deno.test("season destinations are independently authorized for only the exact selection", () => {

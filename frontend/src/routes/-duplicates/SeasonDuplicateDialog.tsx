@@ -27,13 +27,6 @@ import { largestVersionId } from "./versionDeletionState.ts";
 
 type ReviewMode = "profiles" | "episodes";
 
-export function seasonDuplicateHistoricalPaths(
-  _preview: SeasonDeletionPreviewResponse | undefined,
-  _selection: "none" | "adopt_retained" | "remove_and_unmonitor",
-): NonNullable<SeasonDeletionPreviewResponse["sonarrHistoricalPaths"]> {
-  return [];
-}
-
 export function initialSeasonReviewMode(
   season: Pick<DuplicateSeasonGroup, "duplicateGroupCount"> | null,
 ): ReviewMode {

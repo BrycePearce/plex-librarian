@@ -366,33 +366,6 @@ export function DeletionServiceMarks({
   );
 }
 
-export function wholeItemSonarrHistoricalPaths(
-  _itemType: WholeItemDeletionCandidate["type"],
-  _preview: DownloadCleanupPreviewItem | undefined,
-  _arrSelected: boolean,
-  _cleanupDownloads: boolean,
-): NonNullable<DownloadCleanupPreviewItem["sonarrHistoricalPaths"]> {
-  return [];
-}
-
-export function wholeItemOrphanFiles(
-  _itemType: WholeItemDeletionCandidate["type"],
-  _preview: DownloadCleanupPreviewItem | undefined,
-  _arrSelected: boolean,
-  _cleanupDownloads: boolean,
-): NonNullable<DownloadCleanupPreviewItem["orphanFiles"]> {
-  return [];
-}
-
-export function wholeItemRetainedPaths(
-  _itemType: WholeItemDeletionCandidate["type"],
-  _preview: DownloadCleanupPreviewItem | undefined,
-  _arrSelected: boolean,
-  _cleanupDownloads: boolean,
-): NonNullable<DownloadCleanupPreviewItem["retainedPaths"]> {
-  return [];
-}
-
 export function AdvancedDeletionTree({
   items,
   plexPreviews,
@@ -413,25 +386,6 @@ export function AdvancedDeletionTree({
       preview.downloadJobs.length > 0;
     const plexEntries = arrTargets.length === 0 ? plexPreviewPathEntries([item], plexPreviews) : [];
     const downloadJobs = itemCleanupSelected ? preview.downloadJobs : [];
-    const historicalPaths = wholeItemSonarrHistoricalPaths(
-      item.type,
-      preview,
-      arrTargets.length > 0,
-      cleanupDownloads,
-    );
-    const historicalPathSet = new Set(historicalPaths.map((entry) => entry.path));
-    const orphanFiles = wholeItemOrphanFiles(
-      item.type,
-      preview,
-      arrTargets.length > 0,
-      cleanupDownloads,
-    ).filter((entry) => !historicalPathSet.has(entry.path));
-    const retainedPaths = wholeItemRetainedPaths(
-      item.type,
-      preview,
-      arrTargets.length > 0,
-      cleanupDownloads,
-    ).filter((entry) => !historicalPathSet.has(entry.path));
     const retainedJobs = !itemCleanupSelected && preview?.status === "resolved"
       ? preview.downloadJobs
       : [];
@@ -440,17 +394,14 @@ export function AdvancedDeletionTree({
       arrTargets,
       plexEntries,
       downloadJobs,
-      orphanFiles,
-      historicalPaths,
-      retainedPaths,
       retainedJobs,
     };
   });
   const pathCount = plans.reduce(
     (count, plan) =>
       count + plan.arrTargets.length + plan.plexEntries.length +
-      plan.downloadJobs.length + plan.orphanFiles.length + plan.retainedPaths.length +
-      plan.historicalPaths.length + plan.retainedJobs.length,
+      plan.downloadJobs.length +
+      plan.retainedJobs.length,
     0,
   );
 
@@ -471,8 +422,6 @@ export function AdvancedDeletionTree({
         {plans.map((plan) => {
           const hasPaths = plan.arrTargets.length > 0 ||
             plan.plexEntries.length > 0 || plan.downloadJobs.length > 0 ||
-            plan.orphanFiles.length > 0 || plan.historicalPaths.length > 0 ||
-            plan.retainedPaths.length > 0 ||
             plan.retainedJobs.length > 0;
           return (
             <section
@@ -537,33 +486,6 @@ export function AdvancedDeletionTree({
                     info={downloadJobInfo(job)}
                   />
                 ))}
-                {plan.orphanFiles.map((file) => (
-                  <PathTreeRoot
-                    key={`hardlink:${file.path}`}
-                    path={file.path}
-                    source="Hardlink"
-                    files={[{
-                      path: file.path.split(/[\\/]+/).slice(-1)[0] ?? file.path,
-                      size: file.size,
-                    }]}
-                    note="Reverified before removal"
-                  />
-                ))}
-                {plan.historicalPaths.map((entry) => (
-                  <PathTreeRoot
-                    key={`historical:${entry.path}`}
-                    path={entry.path}
-                    source="Sonarr import history"
-                    note={`${
-                      entry.disposition === "delete"
-                        ? "Automatic unlink"
-                        : entry.disposition === "retain_live_qbittorrent"
-                        ? "Retained — live qBittorrent owner"
-                        : "Unverified"
-                    }: ${entry.reason}`}
-                    warning={entry.disposition !== "delete"}
-                  />
-                ))}
                 {plan.retainedJobs.map((job) => (
                   <PathTreeRoot
                     key={`retained-job:${job.instanceKey}:${job.jobId}`}
@@ -573,15 +495,6 @@ export function AdvancedDeletionTree({
                     totalFiles={job.fileCount}
                     note="Retained — qBittorrent is not selected"
                     info={downloadJobInfo(job)}
-                    warning
-                  />
-                ))}
-                {plan.retainedPaths.map((entry) => (
-                  <PathTreeRoot
-                    key={`retained:${entry.path}`}
-                    path={entry.path}
-                    source="Retained"
-                    note={entry.reason}
                     warning
                   />
                 ))}

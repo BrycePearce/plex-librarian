@@ -140,7 +140,14 @@ export function retryableRelocationSafeTargetCount(
 }
 
 export function canCancelDeletionTarget(
-  target: { status: string; upgradeHold?: boolean; upgradeHoldCancellable?: boolean },
+  target: {
+    status: string;
+    upgradeHold?: boolean;
+    upgradeHoldCancellable?: boolean;
+    ordinaryCancellable?: boolean;
+  },
 ): boolean {
-  return target.upgradeHold ? target.upgradeHoldCancellable === true : target.status === "queued";
+  return target.upgradeHold
+    ? target.upgradeHoldCancellable === true
+    : target.ordinaryCancellable ?? target.status === "queued";
 }

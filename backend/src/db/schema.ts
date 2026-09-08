@@ -181,6 +181,26 @@ export const arrLibraryMappings = sqliteTable(
 // Explicit container path translations for direct orphan-download cleanup. Library
 // mappings are read-only evidence locations; download mappings define the only roots
 // beneath which Plex Librarian may unlink verified hardlinks.
+// Ordinary API deletion uses servicePathRoots below. These local mappings remain
+// Advanced evidence for duplicate adoption; they never silently configure storage.
+export const servicePathRoots = sqliteTable('service_path_roots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  serviceKey: text('service_key').notNull(),
+  configurationIdentity: text('configuration_identity').notNull(),
+  serviceRoot: text('service_root').notNull(),
+  storageRoot: text('storage_root').notNull(),
+  caseSensitive: integer('case_sensitive', { mode: 'boolean' }).notNull().default(true),
+  hasAliases: integer('has_aliases', { mode: 'boolean' }).notNull().default(false),
+  revision: integer('revision').notNull().default(1),
+}, (table) => ({
+  scope: uniqueIndex('service_path_roots_scope').on(
+    table.serverId,
+    table.serviceKey,
+    table.serviceRoot,
+  ),
+}));
+
 export const arrPathMappings = sqliteTable(
   'arr_path_mappings',
   {

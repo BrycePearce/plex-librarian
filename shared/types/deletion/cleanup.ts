@@ -104,6 +104,8 @@ export interface DownloadCleanupPreviewItem {
   orphanFiles: ArrCleanupFile[];
   retainedPaths: ArrCleanupRetainedPath[];
   cleanupFingerprint?: string;
+  plexOnlyFingerprint?: string;
+  noJobReason?: string;
   plexOnlyStatus?: 'resolved' | 'unavailable' | 'error';
   plexPathAccessSample?: { ratingKey: string; mediaId: number; path: string; size: number };
   plexOnlyReason?: string;

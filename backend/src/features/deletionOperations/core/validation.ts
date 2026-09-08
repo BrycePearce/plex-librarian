@@ -17,6 +17,7 @@ import type { PersistedResolvedCleanupItem } from '../../mediaDeletion/cleanup.t
 import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.ts';
 import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
+import { ordinaryPlanFingerprint } from '../../mediaDeletion/ordinaryPlanning.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
 import {
   canonicalSeasonEpisodeEvidence,
@@ -45,6 +46,29 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  ordinaryPlan?: import('../../mediaDeletion/ordinaryPlanning.ts').OrdinaryDeletionPlan;
+  ordinaryReconciliations?: Record<
+    string,
+    {
+      service: string;
+      action: string;
+      path: string;
+      size: number;
+      sourceKeys: string[];
+      reconciledAt: number;
+    }
+  >;
+  ordinaryAttempts?: Record<
+    string,
+    {
+      service: string;
+      action: string;
+      startedAt: number;
+      response?: import('../../../../../shared/serviceStorage.ts').ServiceDeletionResponse;
+      failure?: { httpStatus?: number };
+      error?: string;
+    }
+  >;
   currentLocationPolicyVersion?: number;
   machineIdentifier: string;
   serverUrl: string;
@@ -168,6 +192,19 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (snapshot.ordinaryPlan) {
+    const plan = snapshot.ordinaryPlan;
+    const { fingerprint, ...evidence } = plan;
+    if (
+      plan.policyVersion !== 2 || snapshot.mediaId !== undefined ||
+      plan.selection.ratingKey !== snapshot.ratingKey || plan.libraryKey !== snapshot.libraryKey ||
+      plan.arrSelected !== (snapshot.mode === 'coordinated') ||
+      plan.qbSelected !== (snapshot.cleanupDownloads === true) || !plan.plexFiles.length ||
+      fingerprint !== ordinaryPlanFingerprint(evidence) || snapshot.wholeItemDownloadCleanup ||
+      snapshot.seasonDownloadCleanup || snapshot.sonarrHistoricalPaths?.length
+    ) throw new DeletionValidationError('Accepted service-owned deletion evidence is malformed');
+    return;
+  }
   if (currentLocationSnapshot(snapshot)) {
     if (snapshot.sonarrHistoricalPaths !== undefined) {
       throw new DeletionValidationError(

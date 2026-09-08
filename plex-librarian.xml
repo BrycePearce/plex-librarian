@@ -9,7 +9,7 @@
   <Support>https://github.com/BrycePearce/plex-librarian/issues</Support>
   <Project>https://github.com/BrycePearce/plex-librarian</Project>
   <!-- Sonarr, Radarr, and qBittorrent connections are normally configured in the web UI. -->
-  <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and reclaim disk space. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely.</Overview>
+  <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and review deletion destinations. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely. Optional Sonarr/Radarr and qBittorrent deletion starts unchecked for whole-item and stale-season selections. Confirm reusable service storage relationships in Media connections. Ordinary API deletion needs only the app-data volume, without Librarian media mounts. Selected media size is not a guarantee of disk space reclaimed.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL />
@@ -51,9 +51,9 @@
     Target="/media"
     Default=""
     Mode="ro"
-    Description="Optional for analytics. Mount the actual media folder here read-only for filesystem verification, including qBittorrent ownership protection during current media deletion. Select the host folder corresponding to the Arr library root configured in the app. Connecting Sonarr does not create this mount."
+    Description="Optional Advanced local access for duplicate-version adoption only. Ordinary service-owned deletion needs no Librarian media mounts. Configure reusable service storage relationships in Media connections."
     Type="Path"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="false" />
 
@@ -62,9 +62,9 @@
     Target="/downloads"
     Default=""
     Mode="ro"
-    Description="Optional for analytics. Mount only the current completed-download folder here read-only when a deletion requests file identity verification. Select the host folder corresponding to the Arr download root configured in the app. Service APIs delete their own files; writable media access is not required. Connecting Sonarr or qBittorrent does not create this mount."
+    Description="Optional Advanced local access for duplicate adoption checks only. Ordinary deletion uses current service records and configured service storage relationships; no Librarian download mount is required."
     Type="Path"
-    Display="always"
+    Display="advanced"
     Required="false"
     Mask="false" />
 

@@ -1007,7 +1007,12 @@ export class PlexClient {
   // surfaced as-is so the UI can show Plex's own reason rather than a generic failure.
   // Not retried: unlike get(), a failed delete is far more likely to be a real
   // rejection (deletion disabled, permissions) than a transient blip worth retrying.
-  async deleteItem(ratingKey: string): Promise<void> {
+  async deleteItem(
+    ratingKey: string,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
     const url = `${this.url}/library/metadata/${ratingKey}`;
     const headers = buildPlexHeaders(this.clientId, this.token);
     const res = await this.fetchImpl(url, {
@@ -1026,6 +1031,20 @@ export class PlexClient {
         res.status,
         `Plex ${res.status} deleting ${ratingKey}${text ? `: ${text}` : ''}`,
       );
+    }
+    if (onResponse) {
+      const body = (await res.text()).trim();
+      if (
+        body &&
+        !/^<\?xml[^>]*>\s*<MediaContainer\b[^>]*\/?>\s*(?:<\/MediaContainer>)?$/.test(body) &&
+        !/^<MediaContainer\b[^>]*\/?>\s*(?:<\/MediaContainer>)?$/.test(body)
+      ) {
+        throw new PlexDeleteError(res.status, 'Plex returned an ambiguous deletion response');
+      }
+      if (/\b(?:error|status)\s*=/i.test(body)) {
+        throw new PlexDeleteError(res.status, 'Plex returned an ambiguous deletion response');
+      }
+      onResponse({ status: res.status === 202 ? 'accepted' : 'succeeded', httpStatus: res.status });
     }
   }
 
@@ -1145,6 +1164,31 @@ export class PlexClient {
         episodes: mapEpisodes(reconciled),
         episodeMediaVersions: mapEpisodeMediaVersions(reconciled),
       };
+    }
+  }
+
+  /** Current directory entries for a streaming retained-media veto, never target discovery. */
+  async *libraryFileEntries(
+    libraryKey: string,
+    episodes: boolean,
+  ): AsyncGenerator<
+    Array<{ ratingKey: string; showRatingKey?: string; seasonRatingKey?: string; path: string }>
+  > {
+    for await (const page of this.paginatedMetadata(libraryKey, episodes ? 4 : 1)) {
+      yield page.flatMap((item) =>
+        (item.Media ?? []).flatMap((media) =>
+          (media.Part ?? []).flatMap((part) =>
+            part.file
+              ? [{
+                ratingKey: item.ratingKey,
+                showRatingKey: item.grandparentRatingKey,
+                seasonRatingKey: item.parentRatingKey,
+                path: part.file,
+              }]
+              : []
+          )
+        )
+      );
     }
   }
 

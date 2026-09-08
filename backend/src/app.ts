@@ -19,6 +19,7 @@ import qbittorrent from './features/qbittorrent/route.ts';
 import seerr from './features/seerr/route.ts';
 import integrationCompatibility from './features/integrationCompatibility/route.ts';
 import settings from './features/settings/route.ts';
+import serviceStorage from './features/settings/serviceStorageRoute.ts';
 import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
 import webhook from './features/webhook/route.ts';
@@ -64,6 +65,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/integrations/seerr', seerr);
   app.route('/api/integrations/compatibility', integrationCompatibility);
   app.route('/api/settings', settings);
+  app.route('/api/settings/service-storage', serviceStorage);
   app.route('/api/sync', sync);
   app.route('/api/users', users);
   app.route('/api/webhook', webhook);

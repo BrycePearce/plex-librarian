@@ -47,14 +47,17 @@ Deno.test("configured Arr remains visible when every selected item is unavailabl
   assertEquals(state.problems, preview.items);
 });
 
-Deno.test("configured Arr stays selected when no selected item resolves", () => {
+Deno.test("configured Arr never grants default deletion consent", () => {
   const preview = {
     coordinatedConfigured: true,
     downloadClientsConfigured: false,
     items: [{ ratingKey: "1", arrStatus: "unavailable" }],
   } as DownloadCleanupPreviewResponse;
 
-  assertEquals(shouldUseArrByDefault(preview), true);
+  assertEquals(shouldUseArrByDefault(preview), false);
+  assertEquals(shouldUseArrByDefault(undefined), false);
+  assertEquals(effectiveArrSelection(false, preview), false);
+  assertEquals(effectiveArrSelection(true, preview), true);
 });
 
 Deno.test("Arr is disabled by default only when no destination is configured", () => {
@@ -78,7 +81,7 @@ Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview 
   assertEquals(effectiveArrSelection(true, preview), false);
 });
 
-Deno.test("download cleanup requires a current verified job and never historical proof", () => {
+Deno.test("configured download destination stays visible while eligibility is checked", () => {
   const item = {
     ratingKey: "1",
     status: "resolved",
@@ -98,7 +101,7 @@ Deno.test("download cleanup requires a current verified job and never historical
       downloadClientsConfigured: true,
       items: [{ ...item, downloadJobs: [] }],
     } as unknown as DownloadCleanupPreviewResponse),
-    false,
+    true,
   );
   assertEquals(
     downloadCleanupDestinationVisible({

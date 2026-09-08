@@ -204,6 +204,7 @@ export class QbittorrentClient {
     init?: RequestInit,
     parse: 'json' | 'text' = 'json',
     maxBytes?: number,
+    onResponse?: (status: number) => void,
   ): Promise<T> {
     await this.ensureAccess();
     let response: Response;
@@ -260,8 +261,9 @@ export class QbittorrentClient {
         response.status,
       );
     }
-    if (parse === 'text') return text as T;
-    return (text ? JSON.parse(text) : undefined) as T;
+    const result = parse === 'text' ? text : text ? JSON.parse(text) : undefined;
+    onResponse?.(response.status);
+    return result as T;
   }
 
   async testConnection(): Promise<{ version: string; apiVersion: string }> {
@@ -476,12 +478,33 @@ export class QbittorrentClient {
     return (await this.discoverySummaries()).map((summary) => summary.hash);
   }
 
-  async deleteTorrent(hash: string): Promise<void> {
-    await this.request<void>('/torrents/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ hashes: hash, deleteFiles: 'true' }),
-    });
+  async deleteTorrent(
+    hash: string,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
+    let httpStatus = 0;
+    const response = await this.request<string>(
+      '/torrents/delete',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ hashes: hash, deleteFiles: 'true' }),
+      },
+      'text',
+      undefined,
+      (status) => {
+        httpStatus = status;
+      },
+    );
+    if (onResponse) {
+      if (!['', 'Ok.'].includes(response.trim())) {
+        throw new QbittorrentApiError('qBittorrent returned an unrecognized deletion response');
+      }
+      onResponse({ status: 'accepted', httpStatus });
+      return;
+    }
     // qBittorrent returns 200 even for some no-op cases. Confirm that the job really
     // disappeared before allowing Arr to remove the final library hardlink.
     if (await this.torrent(hash)) {

@@ -41,6 +41,8 @@ export interface DownloadDiscoveryCandidate {
 export type DownloadJobSummary = Pick<DownloadJob, 'id' | 'contentPath' | 'savePath' | 'size'>;
 
 export interface DownloadClient {
+  storagePaths?(): Promise<string[]>;
+  testConnection?(): Promise<unknown>;
   /** Stream the complete catalog with bounded memory, returning its stable fingerprint. */
   scanJobSummaries?(visit: (summary: DownloadJobSummary) => Promise<void>): Promise<string>;
   /** Complete bounded live catalog, used to map the paths the client actually owns. */
@@ -51,7 +53,15 @@ export interface DownloadClient {
   discoverJobs?(
     candidates: readonly DownloadDiscoveryCandidate[],
   ): Promise<DiscoveredDownloadJobs>;
-  deleteJob(downloadId: string, options: { deleteData: boolean }): Promise<void>;
+  deleteJob(
+    downloadId: string,
+    options: {
+      deleteData: boolean;
+      onResponse?: (
+        result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+      ) => void;
+    },
+  ): Promise<void>;
 }
 
 function stableJson(value: unknown): string {

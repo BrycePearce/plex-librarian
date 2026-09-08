@@ -1,27 +1,17 @@
+import { ordinaryPreviews } from './ordinaryPreview.ts';
+import { loadServiceRoots, serviceEndpoints } from './serviceStorage.ts';
 import { Hono, type MiddlewareHandler } from 'hono';
-import { protectWholeSonarrCleanup } from './livePathProtection.ts';
+
 import { and, inArray } from 'drizzle-orm';
-import { db, withTransaction } from '../../db/index.ts';
+import { db } from '../../db/index.ts';
 import { items } from '../../db/schema.ts';
 import { itemsByLibrary } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type { DownloadCleanupPreviewResponse } from '@plex-librarian/shared/types.ts';
-import { findAmbiguousExternalIds, getArrDeleteTargets } from '../arr/delete.ts';
-import {
-  bindSonarrPathOwnership,
-  cleanupAuthorizationFingerprint,
-  cleanupIsEligible,
-  publicCleanupItem,
-  reconcileSharedDownloadCleanups,
-} from './cleanup.ts';
-import {
-  loadAttemptedArrInstancesByItem,
-  loadAttemptedDownloadJobKeysByItem,
-  loadAttemptedOrphanFilesByItem,
-  resolveWholeItemDownloadCleanupBatch,
-} from './planning.ts';
+import { getArrDeleteTargets } from '../arr/delete.ts';
+
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
-import { loadPlexPathPreviews } from './plexPathPreview.ts';
+
 import { getDownloadClientTargets } from './targets.ts';
 import {
   assertRelocationWorkflowClear,
@@ -64,136 +54,28 @@ export function createDownloadCleanupPreviewRouter(
       tmdbId: items.tmdbId,
       tvdbId: items.tvdbId,
     }).from(items).where(and(itemsByLibrary(serverId, key), inArray(items.ratingKey, ratingKeys)));
-    // This live, bounded lookup is intentionally separate from Arr/download cleanup
-    // resolution. Plex paths are confirmation text only and never flow into hardlink,
-    // download-payload, or local-filesystem authorization.
-    const plexPathsPromise = loadPlexPathPreviews(owned);
-    const [arrTargets, downloadTargets, activeServer] = await Promise.all([
+    const [arrTargets, downloadTargets, activeServer, roots, connections] = await Promise.all([
       getArrDeleteTargets(serverId, key),
       getDownloadClientTargets(serverId),
       resolveActiveServer(),
+      loadServiceRoots(serverId),
+      serviceEndpoints(serverId),
     ]);
     if (activeServer.serverId !== serverId) {
-      return c.json({ error: 'the active Plex server changed during preview' }, 409);
+      return c.json({ error: 'The active Plex server changed' }, 409);
     }
-    const [attemptedKeys, attemptedOrphans, attemptedArrInstances] = await Promise.all([
-      loadAttemptedDownloadJobKeysByItem(serverId, owned.map((item) => item.ratingKey)),
-      loadAttemptedOrphanFilesByItem(serverId, owned.map((item) => item.ratingKey)),
-      loadAttemptedArrInstancesByItem(
-        serverId,
-        owned,
-        arrTargets.map((target) => target.instanceId),
-      ),
-    ]);
-    const ambiguousMovieIds = withTransaction((client) =>
-      findAmbiguousExternalIds(
-        client,
-        serverId,
-        'movie',
-        owned.flatMap((item) => item.type === 'movie' && item.tmdbId !== null ? [item.tmdbId] : []),
-      )
-    );
-    const plexPaths = await plexPathsPromise;
-    const resolvedCleanups = reconcileSharedDownloadCleanups(
-      await resolveWholeItemDownloadCleanupBatch(
-        serverId,
-        key,
-        owned,
-        arrTargets,
-        downloadTargets,
-        activeServer.client,
-        attemptedKeys,
-        attemptedOrphans,
-        attemptedArrInstances,
-      ),
-    );
-    const previews = await Promise.all(resolvedCleanups.map(async (resolved) => {
-      const item = owned.find((candidate) => candidate.ratingKey === resolved.ratingKey)!;
-      const pathPreview = plexPaths.get(resolved.ratingKey)!;
-      if (item.type === 'movie' && item.tmdbId !== null && ambiguousMovieIds.has(item.tmdbId)) {
-        const reason = `${item.title} shares its TMDB ID with another Plex item`;
-        return {
-          ...publicCleanupItem({
-            ...resolved,
-            status: 'error',
-            reason,
-            arrStatus: 'error',
-            arrReason: `${reason}; use Plex-only deletion or resolve the duplicate first`,
-            downloadJobs: [],
-            orphanFiles: [],
-            retainedPaths: [],
-          }),
-          ...pathPreview,
-        };
-      }
-      let sonarrBound = item.type === 'show' && resolved.arrStatus === 'resolved'
-        ? await bindSonarrPathOwnership(resolved, downloadTargets, false)
-        : null;
-      let qbitBound = item.type === 'show' && resolved.arrStatus === 'resolved'
-        ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
-        : resolved;
-      const plexProtection = {
+    const previews = await ordinaryPreviews(
+      owned.map((item) => ({
         serverId,
         libraryKey: key,
+        selection: { ...item, type: item.type as 'movie' | 'show' },
+        plex: activeServer.client,
         arrTargets,
         downloadTargets,
-        client: activeServer.client,
-        sonarrSelected: false,
-        itemType: item.type,
-      };
-      const plexOnly = await protectWholeSonarrCleanup({
-        ...plexProtection,
-        cleanup: { ...resolved, status: 'resolved', reason: undefined, downloadJobs: [] },
-      });
-      const qbittorrentOnly = await protectWholeSonarrCleanup({
-        ...plexProtection,
-        cleanup: item.type === 'show'
-          ? await bindSonarrPathOwnership(resolved, downloadTargets, true)
-          : resolved,
-      });
-      if (sonarrBound) {
-        const protection = {
-          serverId,
-          libraryKey: key,
-          arrTargets,
-          downloadTargets,
-          client: activeServer.client,
-        };
-        sonarrBound = await protectWholeSonarrCleanup({ ...protection, cleanup: sonarrBound });
-        qbitBound = await protectWholeSonarrCleanup({ ...protection, cleanup: qbitBound });
-      }
-      const publicQbit = publicCleanupItem(qbitBound);
-      const publicSonarr = sonarrBound ? publicCleanupItem(sonarrBound) : null;
-      return {
-        ...publicQbit,
-        plexOnlyStatus: plexOnly.status,
-        plexOnlyReason: plexOnly.reason,
-        qbittorrentOnlyStatus: qbittorrentOnly.status,
-        qbittorrentOnlyReason: qbittorrentOnly.reason,
-        ...(cleanupIsEligible(qbittorrentOnly)
-          ? { qbittorrentOnlyFingerprint: await cleanupAuthorizationFingerprint(qbittorrentOnly) }
-          : {}),
-        ...(publicSonarr
-          ? {
-            sonarrCleanupStatus: publicSonarr.status,
-            ...(publicSonarr.reason ? { sonarrCleanupReason: publicSonarr.reason } : {}),
-            orphanFiles: publicSonarr.orphanFiles,
-            retainedPaths: publicSonarr.retainedPaths,
-            sonarrHistoricalPaths: publicSonarr.sonarrHistoricalPaths,
-            qbittorrentOrphanFiles: publicQbit.orphanFiles,
-            qbittorrentRetainedPaths: publicQbit.retainedPaths,
-            qbittorrentSonarrHistoricalPaths: publicQbit.sonarrHistoricalPaths,
-          }
-          : {}),
-        ...pathPreview,
-        ...(cleanupIsEligible(qbitBound)
-          ? { cleanupFingerprint: await cleanupAuthorizationFingerprint(qbitBound) }
-          : {}),
-        ...(sonarrBound?.status === 'resolved'
-          ? { sonarrCleanupFingerprint: await cleanupAuthorizationFingerprint(sonarrBound) }
-          : {}),
-      };
-    }));
+        roots,
+        connections,
+      })),
+    );
     for (const ratingKey of ratingKeys) {
       if (owned.some((item) => item.ratingKey === ratingKey)) continue;
       previews.push({

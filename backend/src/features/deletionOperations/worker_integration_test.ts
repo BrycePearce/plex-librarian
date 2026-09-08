@@ -31,7 +31,7 @@ const {
   cancelDeletionOperation,
   DeletionConflictError,
   dismissDeletionOperation,
-  enqueueDeletionOperation,
+  enqueueDeletionOperation: enqueueRawDeletionOperation,
   enqueueDeletionOperations,
   getDeletionOperation,
   retryDeletionOperation,
@@ -66,9 +66,118 @@ const { clearPlexClientCache, resolveActiveServer } = await import(
 );
 const { createApp } = await import('../../app.ts');
 const rawApp = createApp();
+const { buildOrdinaryDeletionPlan } = await import('../mediaDeletion/ordinaryPlanning.ts');
+const { loadServiceRoots, serviceEndpoints } = await import('../mediaDeletion/serviceStorage.ts');
+const { getArrDeleteTargets } = await import('../arr/delete.ts');
+const { getDownloadClientTargets } = await import('../mediaDeletion/targets.ts');
+
+// Ordinary fixtures confirm reusable service relationships, without local access checks.
+async function ordinaryFixtureConfiguration() {
+  reportedPlexLibraries ??= [{ key: 'movies', title: 'Movies', type: 'movie' }, {
+    key: 'shows',
+    title: 'Shows',
+    type: 'show',
+  }];
+  const connections = await serviceEndpoints(1);
+  withTransaction((client) => {
+    for (const connection of connections) {
+      const prefixes = connection.key.startsWith('plex:')
+        ? ['/movies', '/tv', '/library']
+        : connection.key.startsWith('arr:')
+        ? ['/tv', '/library', '/downloads']
+        : ['/downloads', '/tv', '/library'];
+      for (const prefix of prefixes) {
+        client.prepare(
+          'INSERT OR IGNORE INTO service_path_roots (server_id,service_key,configuration_identity,service_root,storage_root,case_sensitive,has_aliases) VALUES (1,?,?,?,?,1,0)',
+        ).run(connection.key, connection.configurationIdentity, prefix, prefix);
+      }
+    }
+  });
+  return { connections, roots: await loadServiceRoots(1) };
+}
+async function enqueueDeletionOperation(input: Parameters<typeof enqueueRawDeletionOperation>[0]) {
+  if (input.kind === 'whole_item') {
+    for (const target of input.targets) {
+      const snapshot = target.snapshot as Record<string, unknown>;
+      if (
+        snapshot.currentLocationPolicyVersion !== CURRENT_LOCATION_POLICY_VERSION ||
+        snapshot.ordinaryPlan
+      ) continue;
+      // Low-level queue conflict/idempotency tests intentionally have no live target.
+      // Keep their incomplete snapshots held instead of inventing acceptance evidence.
+      if (live.get(String(snapshot.ratingKey))?.title !== snapshot.title) continue;
+      const config = await ordinaryFixtureConfiguration();
+      const active = await resolveActiveServer();
+      snapshot.ordinaryPlan = await buildOrdinaryDeletionPlan({
+        serverId: 1,
+        libraryKey: String(snapshot.libraryKey),
+        selection: {
+          ratingKey: String(snapshot.ratingKey),
+          title: String(snapshot.title),
+          type: snapshot.type as 'movie' | 'show' | 'season',
+          tmdbId: (snapshot.tmdbId as number | null) ?? null,
+          tvdbId: (snapshot.tvdbId as number | null) ?? null,
+          ...(snapshot.type === 'season'
+            ? {
+              showRatingKey: String(snapshot.showRatingKey),
+              seasonIndex: Number(snapshot.seasonIndex),
+            }
+            : {}),
+        },
+        arrSelected: snapshot.mode === 'coordinated',
+        qbSelected: snapshot.cleanupDownloads === true,
+        plex: active.client,
+        arrTargets: await getArrDeleteTargets(1, String(snapshot.libraryKey)),
+        downloadTargets: await getDownloadClientTargets(1),
+        ...config,
+      });
+    }
+  }
+  return enqueueRawDeletionOperation(input);
+}
 const app = {
-  request(input: string | Request, init?: RequestInit) {
+  async request(input: string | Request, init?: RequestInit) {
     const url = typeof input === 'string' ? input : input.url;
+    if (url.endsWith('/download-cleanup-preview')) await ordinaryFixtureConfiguration();
+    if (
+      /\/api\/libraries\/[^/]+\/items$/.test(url) && init?.method === 'DELETE' &&
+      typeof init.body === 'string'
+    ) {
+      const body = JSON.parse(init.body);
+      if (!body.cleanupPreviewFingerprints && Array.isArray(body.ratingKeys)) {
+        await ordinaryFixtureConfiguration();
+        const preview = await rawApp.request(`${url}/download-cleanup-preview`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ratingKeys: body.ratingKeys }),
+        });
+        const data = await preview.json();
+        if (data.items) {
+          body.cleanupPreviewFingerprints = Object.fromEntries(
+            data.items.flatMap(
+              (
+                item: {
+                  ratingKey: string;
+                  plexOnlyFingerprint?: string;
+                  sonarrCleanupFingerprint?: string;
+                  qbittorrentOnlyFingerprint?: string;
+                  cleanupFingerprint?: string;
+                },
+              ) => {
+                const arr = body.coordinatedRatingKeys?.includes(item.ratingKey) ||
+                  body.mode === 'coordinated';
+                const qb = body.cleanupDownloadRatingKeys?.includes(item.ratingKey);
+                const fingerprint = qb
+                  ? (arr ? item.cleanupFingerprint : item.qbittorrentOnlyFingerprint)
+                  : (arr ? item.sonarrCleanupFingerprint : item.plexOnlyFingerprint);
+                return fingerprint ? [[item.ratingKey, fingerprint]] : [];
+              },
+            ),
+          );
+        }
+        init = { ...init, body: JSON.stringify(body) };
+      }
+    }
     if (url.includes('/duplicates/seasons/') && typeof init?.body === 'string') {
       const body = JSON.parse(init.body) as Record<string, unknown>;
       if (typeof body.coordinateSonarr === 'boolean' && !Object.hasOwn(body, 'sonarrMode')) {
@@ -148,6 +257,9 @@ let failDeleteBeforeMutation = false;
 let plexMediaDeleteCount = 0;
 let coordinatedRatingKey: string | null = null;
 let arrPresent = false;
+let sonarrSeriesPath = '/tv/Show';
+let retainedLibraryReadHook: (() => void) | null = null;
+let retainedLibraryReads = 0;
 let arrDeleteCount = 0;
 const destinationOrder: string[] = [];
 let loseArrRemovalResponse = false;
@@ -296,6 +408,8 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }));
   }
   if (url.pathname === '/library/sections/movies/all') {
+    retainedLibraryReads++;
+    retainedLibraryReadHook?.();
     const metadata = [...live.values()].filter((item) => item.type === 'movie').map((item) =>
       bulkMetadataOverrides.get(item.ratingKey) ?? item
     );
@@ -304,6 +418,8 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     }));
   }
   if (url.pathname === '/library/sections/shows/all') {
+    retainedLibraryReads++;
+    retainedLibraryReadHook?.();
     const requestedType = url.searchParams.get('type');
     const metadata = [...live.values()].filter((item) =>
       requestedType === '4' ? item.type === 'episode' : item.type === 'show'
@@ -407,7 +523,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         id: 1,
         eventType: 'downloadFolderImported',
         downloadId: torrentHash,
-        data: { droppedPath: '/downloads/release/movie.mkv' },
+        data: { droppedPath: '/downloads/release/movie.mkv', importedPath: arrManagedPath },
       }]));
     }
     if (url.pathname === '/api/v3/history') {
@@ -524,7 +640,7 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
             id: 8,
             tvdbId: 20,
             title: 'Example Show',
-            path: '/tv/Show',
+            path: sonarrSeriesPath,
           }]
           : [],
       ));
@@ -1063,7 +1179,10 @@ function reset(): void {
   plexMediaDeleteCount = 0;
   coordinatedRatingKey = null;
   arrPresent = false;
+  retainedLibraryReadHook = null;
+  retainedLibraryReads = 0;
   arrDeleteCount = 0;
+  sonarrSeriesPath = '/tv/Show';
   destinationOrder.length = 0;
   loseArrRemovalResponse = false;
   radarrExclusion = null;
@@ -1170,6 +1289,7 @@ function reset(): void {
         'items',
         'arr_library_mappings',
         'arr_path_mappings',
+        'service_path_roots',
         'qbittorrent_path_mappings',
         'plex_path_mappings',
         'qbittorrent_instances',
@@ -2672,7 +2792,7 @@ Deno.test('Plex-only whole-season deletion preserves the show and finalizes seas
   );
 });
 
-Deno.test('whole-season replay finalizes when Plex already confirms season absence', async () => {
+Deno.test('whole-season unexplained absence holds its accepted projection', async () => {
   reset();
   addEpisode();
   live.set('season-1', {
@@ -2738,7 +2858,7 @@ Deno.test('whole-season replay finalizes when Plex already confirms season absen
   await settle();
 
   const operation = getDeletionOperation(result.operationId, 1)!;
-  assertEquals(operation.status, 'completed', JSON.stringify(operation));
+  assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
   assertEquals(live.has('show-1'), true);
   assertEquals(
     withTransaction((client) =>
@@ -2746,7 +2866,7 @@ Deno.test('whole-season replay finalizes when Plex already confirms season absen
         "SELECT COUNT(*) FROM seasons WHERE server_id = 1 AND rating_key = 'season-1'",
       ).value<[number]>()?.[0]
     ),
-    0,
+    1,
   );
 });
 
@@ -2883,7 +3003,7 @@ Deno.test('whole-season deletion rejects Plex membership and media drift', async
   }
 });
 
-async function enqueueCoordinatedWholeSeason(): Promise<string> {
+async function enqueueCoordinatedWholeSeason(cleanupDownloads = false): Promise<string> {
   live.set('season-1', {
     ratingKey: 'season-1',
     title: 'Season 1',
@@ -2947,7 +3067,7 @@ async function enqueueCoordinatedWholeSeason(): Promise<string> {
     serverId: 1,
     libraryKey: 'shows',
     kind: 'whole_item',
-    payload: { seasonRatingKey: 'season-1', coordinated: true },
+    payload: { seasonRatingKey: 'season-1', coordinated: true, cleanupDownloads },
     targets: [{
       kind: 'whole_item',
       key: 'season-1',
@@ -2964,7 +3084,7 @@ async function enqueueCoordinatedWholeSeason(): Promise<string> {
         tmdbId: null,
         tvdbId: 20,
         mode: 'coordinated',
-        cleanupDownloads: false,
+        cleanupDownloads,
         seasonCleanup: true,
         showTitle: 'Example Show',
         showRatingKey: 'show-1',
@@ -3050,7 +3170,7 @@ Deno.test('coordinated whole-season deletion accepts a complete multi-episode ow
   assertEquals(live.has('season-1'), false);
 });
 
-Deno.test('coordinated whole-season deletion stops when Sonarr leaves the exact file', async () => {
+Deno.test('coordinated whole-season deletion trusts service success when recycled files remain', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -3060,15 +3180,15 @@ Deno.test('coordinated whole-season deletion stops when Sonarr leaves the exact 
   await settle();
 
   const operation = getDeletionOperation(operationId, 1);
-  assertEquals(operation?.status, 'waiting_retry', JSON.stringify(operation));
-  assertStringIncludes(
-    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
-    'exact-file absence',
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(
+    (operation?.targets as Array<{ storageOutcome: string }>)[0].storageOutcome,
+    'unknown',
   );
-  assertEquals(live.has('season-1'), true);
+  assertEquals(live.has('season-1'), false);
 });
 
-Deno.test('coordinated whole-season deletion does not treat a filesystem 404 as absence', async () => {
+Deno.test('coordinated whole-season deletion does not depend on a filesystem inspection endpoint', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -3078,12 +3198,12 @@ Deno.test('coordinated whole-season deletion does not treat a filesystem 404 as 
   await settle();
 
   const operation = getDeletionOperation(operationId, 1);
-  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
   assertEquals(sonarrManagedFilePresent, false);
-  assertEquals(live.has('season-1'), true);
+  assertEquals(live.has('season-1'), false);
 });
 
-Deno.test('coordinated whole-season deletion stops on a dangling cross-season file reference', async () => {
+Deno.test('coordinated whole-season deletion does not use stale post-delete file references as physical verification', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -3093,16 +3213,16 @@ Deno.test('coordinated whole-season deletion stops on a dangling cross-season fi
   await settle();
 
   const operation = getDeletionOperation(operationId, 1);
-  assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
-  assertStringIncludes(
-    String((operation?.targets as Array<{ error?: string }>)[0]?.error),
-    'references a missing EpisodeFile',
+  assertEquals(operation?.status, 'completed', JSON.stringify(operation));
+  assertEquals(
+    (operation?.targets as Array<{ storageOutcome: string }>)[0].storageOutcome,
+    'unknown',
   );
   assertEquals(sonarrManagedFilePresent, false);
-  assertEquals(live.has('season-1'), true);
+  assertEquals(live.has('season-1'), false);
 });
 
-Deno.test('coordinated whole-season deletion rechecks Sonarr activity after protection', async () => {
+Deno.test('coordinated whole-season deletion rechecks Sonarr activity before any mutation', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -3115,12 +3235,12 @@ Deno.test('coordinated whole-season deletion rechecks Sonarr activity after prot
 
   const operation = getDeletionOperation(operationId, 1);
   assertEquals(operation?.status, 'needs_attention', JSON.stringify(operation));
-  assertEquals(sonarrMonitored, false);
+  assertEquals(sonarrMonitored, true);
   assertEquals(sonarrManagedFilePresent, true);
   assertEquals(live.has('season-1'), true);
 });
 
-Deno.test('coordinated multi-file season retries after an earlier file was removed', async () => {
+Deno.test('coordinated multi-file season holds a lost response without deleting the remaining files', async () => {
   reset();
   configureSonarr();
   addEpisode();
@@ -3129,15 +3249,15 @@ Deno.test('coordinated multi-file season retries after an earlier file was remov
   const operationId = await enqueueCoordinatedWholeSeason();
 
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'waiting_retry');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
   assertEquals(sonarrManagedFilePresent, false);
   assertEquals(second.managedFilePresent, true);
 
   makeRetryReady(operationId);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
-  assertEquals(second.managedFilePresent, false);
-  assertEquals(live.has('season-1'), false);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+  assertEquals(second.managedFilePresent, true);
+  assertEquals(live.has('season-1'), true);
 });
 
 Deno.test('coordinated whole-season deletion rejects fresh EpisodeFile identity drift', async () => {
@@ -3151,10 +3271,8 @@ Deno.test('coordinated whole-season deletion rejects fresh EpisodeFile identity 
     reset();
     configureSonarr();
     addEpisode();
-    sonarrSnapshotHook = () => {
-      if (sonarrSnapshotReadCount === 2) drift();
-    };
     const operationId = await enqueueCoordinatedWholeSeason();
+    drift();
 
     await settle();
 
@@ -3217,14 +3335,14 @@ Deno.test('target finalization atomically finalizes its parent operation', async
   );
 });
 
-Deno.test('whole-item replay finalizes when Plex already confirms absence', async () => {
+Deno.test('whole-item absence before acceptance cannot manufacture deletion success', async () => {
   reset();
   addMovie('whole-absent');
   live.delete('whole-absent');
   const operationId = await enqueueWhole('whole-absent');
   await settle();
   const operation = getDeletionOperation(operationId, 1)!;
-  assertEquals(operation.status, 'completed');
+  assertEquals(operation.status, 'needs_attention');
   assertEquals((operation.targets as Array<{ warning?: string | null }>)[0]?.warning, null);
   assertEquals(
     withTransaction((client) =>
@@ -3232,7 +3350,7 @@ Deno.test('whole-item replay finalizes when Plex already confirms absence', asyn
         'whole-absent',
       )?.[0]
     ),
-    0,
+    1,
   );
 });
 
@@ -3291,7 +3409,7 @@ Deno.test('coordinated whole-item deletion converges through Radarr before local
   );
 });
 
-Deno.test('coordinated Plex retries are phase-only, bounded, and warning-retryable', async () => {
+Deno.test('partial Arr success preserves uncertain Plex intent without replaying either service', async () => {
   reset();
   addMovie('coordinated-plex-retry', [11], 10);
   configureRadarr();
@@ -3299,43 +3417,34 @@ Deno.test('coordinated Plex retries are phase-only, bounded, and warning-retryab
   arrPresent = true;
   failDeleteBeforeMutation = true;
   const operationId = await enqueueCoordinated(['coordinated-plex-retry']);
-
-  const expectedDelays = [15, 60, 300];
-  for (const [index, delay] of expectedDelays.entries()) {
-    const before = Math.floor(Date.now() / 1000);
-    await settle();
-    const operation = getDeletionOperation(operationId, 1)!;
-    const target = (operation.targets as Array<Record<string, unknown>>)[0];
-    assertEquals(operation.status, 'waiting_retry', JSON.stringify(operation));
-    assertEquals(target.plexAttemptCount, index + 1);
-    assert(Number(target.nextRetryAt) >= before + delay);
-    assert(Number(target.nextRetryAt) <= Math.floor(Date.now() / 1000) + delay);
-    assertEquals(arrDeleteCount, 1);
-    makeRetryReady(operationId);
-  }
-
   await settle();
-  const warned = getDeletionOperation(operationId, 1)!;
-  assertEquals(warned.status, 'completed_with_warning', JSON.stringify(warned));
-  assertEquals(warned.warningCount, 1);
-  assertEquals(warned.removalConfirmedCount, 0);
-  assertEquals(warned.logicalSizeRemoved, 0);
-  assertEquals(
-    (warned.targets as Array<Record<string, unknown>>)[0].plexAttemptCount,
-    4,
-  );
+  const first = getDeletionOperation(operationId, 1)!;
+  assert(first.status !== 'completed');
   assertEquals(arrDeleteCount, 1);
-
+  const evidence = JSON.parse(
+    withTransaction((client) =>
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=?').value<
+        [string]
+      >(operationId)![0]
+    ),
+  ).ordinaryAttempts;
+  assertEquals(evidence['arr:1:7'].response.status, 'succeeded');
+  assertEquals(evidence['plex:coordinated-plex-retry'].response, undefined);
   failDeleteBeforeMutation = false;
-  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  makeRetryReady(operationId);
   await settle();
-  const completed = getDeletionOperation(operationId, 1)!;
-  assertEquals(completed.status, 'completed', JSON.stringify(completed));
-  assertEquals(completed.removalConfirmedCount, 1);
-  assertEquals(completed.logicalSizeRemoved, 100);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
   assertEquals(arrDeleteCount, 1);
+  assertEquals(live.has('coordinated-plex-retry'), true);
+  assertEquals(
+    withTransaction((client) =>
+      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id=?').value<[number]>(
+        operationId,
+      )![0]
+    ),
+    0,
+  );
 });
-
 Deno.test('warning retry refreshes aggregates before the worker reclaims the target', async () => {
   reset();
   addMovie('warning-aggregate', [11, 12]);
@@ -3504,7 +3613,7 @@ Deno.test('warning overlap is returned before Plex I/O or current projection loo
   assertEquals(fetchCount, beforeFetches);
 });
 
-Deno.test('warning retry needs current Arr absence but not a pruned legacy attempt row', async () => {
+Deno.test('pruning older Arr attempt rows cannot upgrade an uncertain ordinary response', async () => {
   reset();
   addMovie('warning-pruned-attempt', [11], 10);
   configureRadarr();
@@ -3512,36 +3621,32 @@ Deno.test('warning retry needs current Arr absence but not a pruned legacy attem
   arrPresent = true;
   failDeleteBeforeMutation = true;
   const operationId = await enqueueCoordinated(['warning-pruned-attempt']);
-  for (let index = 0; index < 4; index++) {
-    await settle();
-    if (index < 3) makeRetryReady(operationId);
-  }
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed_with_warning');
-
-  withTransaction((client) => {
-    client.prepare('DELETE FROM arr_delete_attempts WHERE rating_key = ?').run(
+  await settle();
+  const before = withTransaction((client) =>
+    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=?').value<[string]>(
+      operationId,
+    )![0]
+  );
+  withTransaction((client) =>
+    client.prepare('DELETE FROM arr_delete_attempts WHERE rating_key=?').run(
       'warning-pruned-attempt',
-    );
-    client.prepare('DELETE FROM items WHERE server_id = 1 AND rating_key = ?').run(
-      'warning-pruned-attempt',
-    );
-  });
+    )
+  );
   live.delete('warning-pruned-attempt');
   failDeleteBeforeMutation = false;
-
-  assertEquals(retryDeletionOperation(operationId, 1, 'warning'), true);
+  makeRetryReady(operationId);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
   assertEquals(
     withTransaction((client) =>
-      client.prepare('SELECT COUNT(*) FROM media_removals WHERE operation_id = ?').value<[number]>(
+      client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=?').value<[string]>(
         operationId,
-      )?.[0]
+      )![0]
     ),
-    0,
+    before,
   );
+  assertEquals(arrDeleteCount, 1);
 });
-
 Deno.test('warning retry treats a reappeared Arr record as a safety failure', async () => {
   reset();
   addMovie('warning-arr-reappeared', [11], 10);
@@ -3606,29 +3711,24 @@ Deno.test('qBittorrent-only whole-item deletion does not require Arr selection',
   assertEquals(destinationOrder, ['qbittorrent', 'plex']);
 });
 
-Deno.test('whole-show preview exposes an exact Sonarr-associated job with partial file history', async () => {
+Deno.test('whole-show preview rejects a shared pack with only partial current file coverage', async () => {
   reset();
   addEpisode();
   configureSonarr(true, true);
   seasonPackQbit = true;
   seasonPackMixed = true;
   qbitPresent = true;
-
-  const response = await app.request(
-    '/api/libraries/shows/items/download-cleanup-preview',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ratingKeys: ['show-1'] }),
-    },
-  );
-  assertEquals(response.status, 200, await response.clone().text());
+  const response = await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKeys: ['show-1'] }),
+  });
+  assertEquals(response.status, 200);
   const preview = await response.json();
-  assertEquals(preview.items[0].status, 'resolved', JSON.stringify(preview));
-  assertEquals(preview.items[0].downloadJobs.length, 1, JSON.stringify(preview));
-  assertEquals(preview.items[0].downloadJobs[0].fileCount, 2);
-
-  const stalePreviewResponse = await app.request('/api/libraries/shows/items', {
+  assertEquals(preview.items[0].status, 'error');
+  assertEquals(preview.items[0].cleanupFingerprint, undefined);
+  assertStringIncludes(preview.items[0].reason, 'unmatched files');
+  const accepted = await app.request('/api/libraries/shows/items', {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -3639,64 +3739,10 @@ Deno.test('whole-show preview exposes an exact Sonarr-associated job with partia
       cleanupPreviewFingerprints: { 'show-1': '0'.repeat(64) },
     }),
   });
-  assertEquals(stalePreviewResponse.status, 409, await stalePreviewResponse.clone().text());
-  assertStringIncludes((await stalePreviewResponse.json()).error, 'cleanup preview changed');
-
-  const surplusFingerprintResponse = await app.request('/api/libraries/shows/items', {
-    method: 'DELETE',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      clientRequestId: crypto.randomUUID(),
-      ratingKeys: ['show-1'],
-      coordinatedRatingKeys: [],
-      cleanupDownloadRatingKeys: ['show-1'],
-      cleanupPreviewFingerprints: {
-        'show-1': preview.items[0].cleanupFingerprint,
-        unrelated: '0'.repeat(64),
-      },
-    }),
-  });
-  assertEquals(
-    surplusFingerprintResponse.status,
-    409,
-    await surplusFingerprintResponse.clone().text(),
-  );
-  assertStringIncludes(
-    (await surplusFingerprintResponse.json()).error,
-    'cleanup preview changed',
-  );
-
-  const acceptedResponse = await app.request('/api/libraries/shows/items', {
-    method: 'DELETE',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      clientRequestId: crypto.randomUUID(),
-      ratingKeys: ['show-1'],
-      coordinatedRatingKeys: [],
-      cleanupDownloadRatingKeys: ['show-1'],
-      cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
-    }),
-  });
-  assertEquals(acceptedResponse.status, 202, await acceptedResponse.clone().text());
-  const { operationId } = await acceptedResponse.json() as { operationId: string };
-  const snapshotJson = withTransaction((client) =>
-    client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?').value<[string]>(
-      operationId,
-    )?.[0]
-  );
-  const snapshot = JSON.parse(snapshotJson!);
-  assertEquals(
-    snapshot.wholeItemDownloadCleanup.downloadJobs[0].authorizationMode,
-    'whole_show_hash',
-  );
-  assertEquals(snapshot.wholeItemDownloadCleanup.downloadJobs[0].manifestFiles, []);
-  assertEquals(snapshot.wholeItemDownloadCleanup.orphanFiles, []);
-  assertEquals(snapshot.wholeItemDownloadCleanup.sonarrReclamation, undefined);
-  await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
-  assertEquals(qbitDeleteCount, 1);
+  assertEquals(accepted.status, 409);
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(arrDeleteCount, 0);
 });
-
 Deno.test('whole-show hash preview rejects ambiguous Plex TVDB identity', async () => {
   reset();
   addEpisode();
@@ -3770,7 +3816,7 @@ Deno.test('Plex-only show cleanup records an unknown hardlink-data outcome', asy
   assertEquals(operation.unknownTargetCount, 1);
   const target = (operation.targets as Array<Record<string, unknown>>)[0]!;
   assertEquals(target.storageOutcome, 'unknown');
-  assertEquals(target.verifiedHardlinkDataRemoved, 0);
+  assertEquals(target.verifiedHardlinkDataRemoved, null);
   assertEquals(qbitDeleteCount, 1);
   assertEquals(destinationOrder, ['qbittorrent', 'plex']);
 });
@@ -3846,10 +3892,10 @@ Deno.test('Sonarr preview protects live QB files without historical hardlink pro
     assertEquals(response.status, 200);
     const preview = await response.json();
     assertEquals(preview.items[0].sonarrCleanupStatus, 'error', JSON.stringify(preview));
-    assertEquals(preview.items[0].sonarrHistoricalPaths, []);
+    assertEquals(preview.items[0].sonarrHistoricalPaths ?? [], []);
     assertStringIncludes(
       preview.items[0].sonarrCleanupReason,
-      mapped ? 'Retained because' : 'Could not verify',
+      'retained qBittorrent job',
     );
     assertEquals(arrDeleteCount, 0);
     assertEquals(qbitDeleteCount, 0);
@@ -3970,7 +4016,7 @@ Deno.test('whole-show Sonarr deletion does not persist an empty hardlink reclama
   );
   assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
   const preview = await previewResponse.json();
-  assertEquals(preview.items[0].sonarrHistoricalPaths, []);
+  assertEquals(preview.items[0].sonarrHistoricalPaths ?? [], []);
 
   const response = await app.request('/api/libraries/shows/items', {
     method: 'DELETE',
@@ -4118,8 +4164,8 @@ Deno.test({
       );
       assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
       const preview = await previewResponse.json();
-      assertEquals(preview.items[0].sonarrHistoricalPaths, []);
-      assertEquals(preview.items[0].qbittorrentSonarrHistoricalPaths, []);
+      assertEquals(preview.items[0].sonarrHistoricalPaths ?? [], []);
+      assertEquals(preview.items[0].qbittorrentSonarrHistoricalPaths ?? [], []);
 
       const response = await app.request('/api/libraries/shows/items', {
         method: 'DELETE',
@@ -4587,6 +4633,12 @@ Deno.test('Plex-only movie worker rechecks a QB owner appearing after preview', 
   seasonPackQbit = true;
   qbitPresent = false;
 
+  await ordinaryFixtureConfiguration();
+  withTransaction((client) =>
+    client.prepare(
+      "UPDATE service_path_roots SET storage_root='/downloads/release' WHERE server_id=1 AND service_key='plex:movies' AND service_root='/movies'",
+    ).run()
+  );
   const previewResponse = await app.request(
     '/api/libraries/movies/items/download-cleanup-preview',
     {
@@ -4606,7 +4658,9 @@ Deno.test('Plex-only movie worker rechecks a QB owner appearing after preview', 
       ratingKeys: ['plex-only-new-qb-owner'],
       coordinatedRatingKeys: [],
       cleanupDownloadRatingKeys: [],
-      cleanupPreviewFingerprints: {},
+      cleanupPreviewFingerprints: {
+        'plex-only-new-qb-owner': preview.items[0].plexOnlyFingerprint,
+      },
     }),
   });
   assertEquals(response.status, 202, await response.clone().text());
@@ -4614,14 +4668,14 @@ Deno.test('Plex-only movie worker rechecks a QB owner appearing after preview', 
   qbitPresent = true;
   await settle();
   const operation = getDeletionOperation(operationId, 1)!;
-  assertEquals(operation.status, 'waiting_retry', JSON.stringify(operation));
+  assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
   assertEquals(qbitDeleteCount, 0);
   assertEquals(destinationOrder, []);
   assertEquals(live.has('plex-only-new-qb-owner'), true);
   assertEquals((await Deno.lstat(localMovie)).isFile, true);
 });
 
-Deno.test('whole-item direct-manifest cleanup converges after a lost delete response', async () => {
+Deno.test('whole-item direct-manifest cleanup holds a lost response even when the torrent disappears', async () => {
   reset();
   addMovie('direct-whole-item', [11]);
   const localRoot = resolve(testDirectory, 'direct-whole-item').replaceAll('\\', '/');
@@ -4654,6 +4708,12 @@ Deno.test('whole-item direct-manifest cleanup converges after a lost delete resp
                '/downloads/release/old.mkv', ?, 40000, 1, 1, 1)`,
     ).run(localRoot, localMovie);
   });
+  await ordinaryFixtureConfiguration();
+  withTransaction((client) =>
+    client.prepare(
+      "UPDATE service_path_roots SET storage_root='/downloads/release' WHERE server_id=1 AND service_key='plex:movies' AND service_root='/movies'",
+    ).run()
+  );
   seasonPackQbit = true;
   qbitPresent = true;
   loseQbitDeleteResponse = true;
@@ -4692,29 +4752,24 @@ Deno.test('whole-item direct-manifest cleanup converges after a lost delete resp
     )?.[0]
   );
   const snapshot = JSON.parse(snapshotJson!);
-  assertEquals(snapshot.wholeItemDownloadCleanup.status, 'resolved');
-  assertEquals(
-    snapshot.wholeItemDownloadCleanup.downloadJobs.map((job: { provenance: string }) =>
-      job.provenance
-    ),
-    ['direct_manifest'],
-  );
+  assertEquals(snapshot.ordinaryPlan.jobs.length, 1);
+  assertEquals(snapshot.ordinaryPlan.jobs[0].job.manifestFiles.length, 1);
 
   await settle();
   assertEquals(
     getDeletionOperation(operationId, 1)?.status,
-    'waiting_retry',
+    'needs_attention',
     JSON.stringify(getDeletionOperation(operationId, 1)),
   );
   makeRetryReady(operationId);
   await settle();
   assertEquals(
     getDeletionOperation(operationId, 1)?.status,
-    'completed',
+    'needs_attention',
     JSON.stringify(getDeletionOperation(operationId, 1)),
   );
   assertEquals(qbitDeleteCount, 1);
-  assertEquals(destinationOrder, ['qbittorrent', 'plex']);
+  assertEquals(destinationOrder, ['qbittorrent']);
 });
 
 Deno.test('whole-item acceptance rejects a shared job split across cleanup selection', async () => {
@@ -4740,7 +4795,7 @@ Deno.test('whole-item acceptance rejects a shared job split across cleanup selec
   assertEquals(response.status, 409, await response.clone().text());
   assertStringIncludes(
     (await response.json()).error,
-    'shared by cleanup-selected and cleanup-unselected items',
+    'current service preview is required',
   );
   assertEquals(
     withTransaction((client) =>
@@ -4750,27 +4805,27 @@ Deno.test('whole-item acceptance rejects a shared job split across cleanup selec
   );
 });
 
-Deno.test('whole-item retry rejects changed evidence that splits a shared job', async () => {
+Deno.test('whole-item current history cannot authorize a job shared by ambiguous Plex titles', async () => {
   reset();
   configureRadarr(true);
   addMovie('retry-shared-selected', [11], 10);
   addMovie('retry-shared-unselected', [12], 10);
   arrPresent = true;
   qbitPresent = true;
-  await addMovieCurrentPathProtection(['retry-shared-selected', 'retry-shared-unselected']);
-  const operationId = await enqueueWholeDestinations(
-    ['retry-shared-selected', 'retry-shared-unselected'],
-    new Set(),
-    new Set(['retry-shared-selected']),
+  await assertRejects(
+    () =>
+      enqueueWholeDestinations(
+        ['retry-shared-selected', 'retry-shared-unselected'],
+        new Set(),
+        new Set(['retry-shared-selected']),
+      ),
+    Error,
+    'shares its TMDB ID',
   );
-
-  await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
   assertEquals(qbitDeleteCount, 0);
-  assertEquals(destinationOrder, ['plex']);
+  assertEquals(destinationOrder, []);
 });
-
-Deno.test('selected cleanup and Arr still execute after Plex metadata is already absent', async () => {
+Deno.test('unexplained Plex disappearance prevents starting selected service deletions', async () => {
   reset();
   configureRadarr(true);
   addMovie('absent-retry-destinations', [11, 12], 10);
@@ -4781,10 +4836,10 @@ Deno.test('selected cleanup and Arr still execute after Plex metadata is already
   live.delete('absent-retry-destinations');
 
   await settle();
-  assertEquals(qbitDeleteCount, 1);
-  assertEquals(arrDeleteCount, 1);
-  assertEquals(destinationOrder, ['qbittorrent', 'arr']);
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(destinationOrder, []);
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
 });
 
 Deno.test('active playback blocks selected destinations even after Plex metadata is absent', async () => {
@@ -4794,8 +4849,8 @@ Deno.test('active playback blocks selected destinations even after Plex metadata
   coordinatedRatingKey = 'absent-playing';
   arrPresent = true;
   qbitPresent = true;
-  activePlaybackRatingKey = 'absent-playing';
   const operationId = await enqueueCoordinated(['absent-playing'], true);
+  activePlaybackRatingKey = 'absent-playing';
   live.delete('absent-playing');
 
   await settle();
@@ -4805,7 +4860,7 @@ Deno.test('active playback blocks selected destinations even after Plex metadata
   assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
 });
 
-Deno.test('coordinated Radarr work never queries qBittorrent unless cleanup is selected', async () => {
+Deno.test('coordinated Radarr work reads configured QB ownership without deleting unchecked jobs', async () => {
   reset();
   configureRadarr(true);
   addMovie('no-qbit-inspection', [11, 12], 10);
@@ -4818,7 +4873,7 @@ Deno.test('coordinated Radarr work never queries qBittorrent unless cleanup is s
 
   const operation = getDeletionOperation(operationId, 1);
   assertEquals(operation?.status, 'completed', JSON.stringify(operation));
-  assertEquals(qbitRequestCount, 0);
+  assertEquals(qbitRequestCount > 0, true);
   assertEquals(qbitDeleteCount, 0);
   assertEquals(qbitPresent, true);
   assertEquals(arrDeleteCount, 1);
@@ -11756,7 +11811,7 @@ Deno.test('sync preserves a needs-attention whole-item projection until manual r
 
   assertEquals(retryDeletionOperation(operationId, 1), true);
   await settle();
-  assertEquals(getDeletionOperation(operationId, 1)?.status, 'completed');
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
 });
 
 Deno.test('manual retry cannot create two active operations for one library', async () => {
@@ -11930,4 +11985,249 @@ Deno.test('unresolved Radarr removal protects its retained Plex version', async 
     DeletionConflictError,
     'retry it from Activity first',
   );
+});
+
+Deno.test('recorded Sonarr success reconciles shared Plex absence while distinct Plex versions still receive deletion', async () => {
+  for (const shared of [true, false]) {
+    reset();
+    addEpisode();
+    configureSonarr();
+    const episode = live.get('episode-1')!;
+    episode.Media = [
+      { id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] },
+      ...(!shared
+        ? [{ id: 22, Part: [{ file: '/tv/Show/Season 01/separate.mkv', size: 40_000 }] }]
+        : []),
+    ];
+    sonarrSeriesDeleteHook = () => {
+      if (shared) {
+        live.delete('show-1');
+        live.delete('season-1');
+        live.delete('episode-1');
+      } else episode.Media = episode.Media!.filter((media) => media.id === 22);
+    };
+    const preview =
+      await (await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ratingKeys: ['show-1'] }),
+      })).json();
+    const response = await app.request('/api/libraries/shows/items', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: crypto.randomUUID(),
+        ratingKeys: ['show-1'],
+        coordinatedRatingKeys: ['show-1'],
+        cleanupDownloadRatingKeys: [],
+        cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
+      }),
+    });
+    assertEquals(response.status, 202, await response.clone().text());
+    const { operationId } = await response.json();
+    await settle();
+    assertEquals(
+      getDeletionOperation(operationId, 1)?.status,
+      'completed',
+      JSON.stringify(getDeletionOperation(operationId, 1)),
+    );
+    assertEquals(arrDeleteCount, 1);
+    assertEquals(qbitDeleteCount, 0);
+    assertEquals(destinationOrder, shared ? ['arr'] : ['arr', 'plex']);
+  }
+});
+
+Deno.test('ordinary Windows service prefixes stay eligible from preview through both service deletions', async () => {
+  reset();
+  addEpisode();
+  configureSonarr();
+  sonarrSeriesPath = 'D:\\TV\\Show'.replaceAll('\\\\', '\\');
+  sonarrManagedPath = 'D:\\TV\\Show\\Season 01\\old.mkv'.replaceAll('\\\\', '\\');
+  live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
+  const { connections } = await ordinaryFixtureConfiguration();
+  withTransaction((client) => {
+    for (const key of ['plex:shows', 'arr:2']) {
+      client.prepare(
+        'INSERT INTO service_path_roots (server_id,service_key,configuration_identity,service_root,storage_root,case_sensitive,has_aliases) VALUES (1,?,?,?, ?,1,0)',
+      ).run(
+        key,
+        connections.find((entry) => entry.key === key)!.configurationIdentity,
+        'D:/TV',
+        '/storage/tv',
+      );
+    }
+  });
+  const preview = await (await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKeys: ['show-1'] }),
+  })).json();
+  assertEquals(preview.items[0].sonarrCleanupStatus, 'resolved', JSON.stringify(preview));
+  const response = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: ['show-1'],
+      cleanupDownloadRatingKeys: [],
+      cleanupPreviewFingerprints: { 'show-1': preview.items[0].sonarrCleanupFingerprint },
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json();
+  await settle();
+  assertEquals(
+    getDeletionOperation(operationId, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(operationId, 1)),
+  );
+  assertEquals(destinationOrder, ['arr', 'plex']);
+});
+
+Deno.test('ordinary guard blocks a Plex version added after QB success before broad Arr deletion and on retry', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true, true);
+  seasonPackQbit = true;
+  qbitPresent = true;
+  qbitDeleteHook = () =>
+    live.get('episode-1')!.Media!.push({
+      id: 99,
+      Part: [{ file: '/tv/Show/Season 01/not-confirmed.mkv', size: 40_000 }],
+    });
+  const preview = await (await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKeys: ['show-1'] }),
+  })).json();
+  const response = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: ['show-1'],
+      cleanupDownloadRatingKeys: ['show-1'],
+      cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json();
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(arrDeleteCount, 0);
+  retryDeletionOperation(operationId, 1);
+  await settle();
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(arrDeleteCount, 0);
+  assert(live.get('episode-1')!.Media!.some((media) => media.id === 99));
+});
+
+Deno.test('ordinary season reconciles a missing shared Sonarr file only against recorded exact QB coverage', async () => {
+  for (const shared of [true, false]) {
+    reset();
+    addEpisode();
+    configureSonarr(true, true);
+    seasonPackQbit = true;
+    qbitPresent = true;
+    if (shared) {
+      live.get('episode-1')!.Media = [{
+        id: 21,
+        Part: [{ file: sonarrManagedPath, size: 40_000 }],
+      }];
+      qbitJobsOverride = [{
+        hash: torrentHash,
+        name: 'shared file',
+        size: 40_000,
+        contentPath: sonarrManagedPath,
+        savePath: '/tv',
+        files: [{ name: 'Show/Season 01/old.mkv', size: 40_000 }],
+      }];
+    }
+    qbitDeleteHook = () => {
+      sonarrManagedFilePresent = false;
+    };
+    const operationId = await enqueueCoordinatedWholeSeason(true);
+    await settle();
+    const operation = getDeletionOperation(operationId, 1)!;
+    assertEquals(
+      operation.status,
+      shared ? 'completed' : 'needs_attention',
+      JSON.stringify(operation),
+    );
+    assertEquals(qbitDeleteCount, 1);
+    assertEquals(versionDeleteOrder.includes('sonarr'), false);
+    const snapshot = withTransaction((client) =>
+      JSON.parse(
+        client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=?').value<
+          [string]
+        >(operationId)![0],
+      )
+    );
+    if (shared) {
+      assertEquals(snapshot.ordinaryReconciliations['arr-file:2:10'].sourceKeys, [
+        `qb:db:1:${torrentHash}`,
+      ]);
+      assertEquals(sonarrMonitored, false);
+    } else assertEquals(Object.keys(snapshot.ordinaryReconciliations ?? {}).length, 0);
+  }
+});
+
+Deno.test('ordinary 13-file season does not rescan Plex libraries for each unmonitor and file request', async () => {
+  reset();
+  addEpisode();
+  configureSonarr();
+  for (let episode = 2; episode <= 13; episode++) {
+    addAdditionalSonarrEpisode(episode, episode * 100, episode * 100 + 1);
+  }
+  const id = await enqueueCoordinatedWholeSeason();
+  retainedLibraryReadHook = null;
+  retainedLibraryReads = 0;
+  await settle();
+  assertEquals(
+    getDeletionOperation(id, 1)?.status,
+    'completed',
+    JSON.stringify(getDeletionOperation(id, 1)),
+  );
+  assert(
+    retainedLibraryReads <= 8,
+    `Expected bounded phase inspections, saw ${retainedLibraryReads} library scans`,
+  );
+});
+
+Deno.test('ordinary guard refreshes playback after a retained-library inspection before broad Arr deletion', async () => {
+  reset();
+  addEpisode();
+  configureSonarr(true, true);
+  seasonPackQbit = true;
+  qbitPresent = true;
+  qbitDeleteHook = () => {
+    retainedLibraryReadHook = () => {
+      activePlaybackRatingKey = 'show-1';
+    };
+  };
+  const preview = await (await app.request('/api/libraries/shows/items/download-cleanup-preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ratingKeys: ['show-1'] }),
+  })).json();
+  const response = await app.request('/api/libraries/shows/items', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      clientRequestId: crypto.randomUUID(),
+      ratingKeys: ['show-1'],
+      coordinatedRatingKeys: ['show-1'],
+      cleanupDownloadRatingKeys: ['show-1'],
+      cleanupPreviewFingerprints: { 'show-1': preview.items[0].cleanupFingerprint },
+    }),
+  });
+  assertEquals(response.status, 202, await response.clone().text());
+  const { operationId } = await response.json();
+  await settle();
+  assertEquals(getDeletionOperation(operationId, 1)?.status, 'needs_attention');
+  assertEquals(qbitDeleteCount, 1);
+  assertEquals(arrDeleteCount, 0);
 });

@@ -1,37 +1,23 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { ensureOrdinaryDeletion } from './ordinaryWorkflow.ts';
 import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgradePolicy.ts';
 import { db, withTransaction } from '../../../db/index.ts';
 import { assertArrDeletionPathsUnowned } from '../../mediaDeletion/livePathProtection.ts';
-import {
-  arrDeleteAttempts,
-  downloadFileDeleteAttempts,
-  items,
-  torrentDeleteAttempts,
-} from '../../../db/schema.ts';
+import { downloadFileDeleteAttempts, torrentDeleteAttempts } from '../../../db/schema.ts';
 import { tryAcquireLibraryOperation } from '../../../services/libraryOperations.ts';
 import {
-  arrDeleteDisposition,
   type ArrDeleteTarget,
-  assertArrDeleteIsUnambiguous,
   type CoordinatedDeleteItem,
-  deleteThroughArr,
-  findAmbiguousExternalIds,
   getArrDeleteTargets,
 } from '../../arr/delete.ts';
-import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
+
 import {
-  assertAcceptedWholeShowHashCleanup,
-  cleanupIsEligible,
   confirmedAttemptedDownloadJobAbsences,
   executeDownloadedFileCleanup,
-  mergeAcceptedSonarrCleanup,
   persistResolvedCleanup,
-  reconcileSharedDownloadCleanups,
   rehydrateResolvedCleanup,
   type ResolvedCleanupItem,
   resolveDownloadCleanup,
   revalidateAcceptedSonarrPathOwnership,
-  selectVerifiedDownloadCleanups,
 } from '../../mediaDeletion/cleanup.ts';
 import {
   assertVerifiedLibraryPathAbsent,
@@ -41,21 +27,16 @@ import {
   orphanRootIdentity,
 } from '../../mediaDeletion/hardlinks.ts';
 import {
-  assertAcceptedSonarrInventory,
   checkpointHardlinkStorageOutcome,
   deriveHardlinkStorageAggregate,
-  HARDLINK_OUTCOME_REASON,
   type PersistedSonarrReclamation,
   sonarrReclamationAccountingFileCount,
   unlinkConfirmedReclamationProofs,
 } from '../../mediaDeletion/sonarr/reclamation.ts';
-import { sonarrActivityConflictMessage } from '../../mediaDeletion/sonarr/seasonInspection.ts';
 import {
-  assertDownloadJobSelectionConsistent,
   loadAttemptedArrInstancesByItem,
   loadAttemptedDownloadJobKeysByItem,
   loadAttemptedOrphanFilesByItem,
-  resolveWholeShowDownloadCleanupBatch,
 } from '../../mediaDeletion/planning.ts';
 import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
 import {
@@ -93,13 +74,7 @@ import {
   type DeletionWorkTarget,
   PlexReconciliationError,
 } from '../core/types.ts';
-import {
-  assertWholeSeasonPlexEvidence,
-  assertWholeSeasonPlexMembership,
-  type DurableTargetSnapshot,
-  validateDeletionTarget,
-} from '../core/validation.ts';
-import { ArrApiError } from '../../../integrations/arr/client.ts';
+import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
 
 function persistRadarrRemovalDownloadCleanup(
   target: DeletionWorkTarget,
@@ -122,10 +97,6 @@ function persistRadarrRemovalDownloadCleanup(
   }
   snapshot.radarrRemovalDownloadCleanup = next.radarrRemovalDownloadCleanup;
   target.snapshot = JSON.stringify(next);
-}
-
-function externalId(item: CoordinatedDeleteItem): number | null {
-  return item.type === 'movie' ? item.tmdbId : item.type === 'show' ? item.tvdbId : null;
 }
 
 function assertAcceptedSeasonCoordination(
@@ -575,35 +546,6 @@ async function seasonCleanupHasAttemptEvidence(
   return cleanup.orphanFiles.some((file) => attemptedOrphanPaths.has(file.path));
 }
 
-async function markArrAttempt(
-  serverId: number,
-  snapshot: DurableTargetSnapshot,
-  target: ArrDeleteTarget,
-): Promise<void> {
-  await db
-    .insert(arrDeleteAttempts)
-    .values({
-      serverId,
-      ratingKey: snapshot.ratingKey,
-      libraryKey: snapshot.libraryKey,
-      arrInstanceId: target.instanceId,
-      externalId: externalId(snapshot)!,
-      startedAt: Math.floor(Date.now() / 1000),
-    })
-    .onConflictDoUpdate({
-      target: [
-        arrDeleteAttempts.serverId,
-        arrDeleteAttempts.ratingKey,
-        arrDeleteAttempts.arrInstanceId,
-      ],
-      set: {
-        libraryKey: snapshot.libraryKey,
-        externalId: externalId(snapshot)!,
-        startedAt: Math.floor(Date.now() / 1000),
-      },
-    });
-}
-
 export function canConfirmOrphanAbsenceForCleanup(
   cleanup: Pick<ResolvedCleanupItem, 'sonarrReclamation'>,
   path: string,
@@ -790,84 +732,6 @@ function persistRevalidatedSonarrOwnership(
   });
 }
 
-async function acceptedSonarrReclamationTarget(
-  target: DeletionWorkTarget,
-  snapshot: DurableTargetSnapshot,
-  accepted: PersistedSonarrReclamation,
-  allowAttemptedAbsence = false,
-): Promise<{ target: ArrDeleteTarget; configured: ArrDeleteTarget[]; present: boolean }> {
-  const configured = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
-  const acceptedTarget = configured.find((entry) =>
-    entry.instanceType === 'sonarr' && entry.instanceId === accepted.instanceId
-  );
-  if (!acceptedTarget) {
-    throw new ReclamationEvidenceMismatchError(
-      'The accepted Sonarr connection is no longer configured',
-    );
-  }
-  if (
-    acceptedTarget.instanceUrl !== accepted.instanceUrl ||
-    acceptedTarget.configurationUpdatedAt !== accepted.configurationUpdatedAt ||
-    acceptedTarget.mappingIdentity !== accepted.mappingIdentity
-  ) {
-    throw new ReclamationEvidenceMismatchError(
-      'The accepted Sonarr connection or path mapping changed',
-    );
-  }
-  const matches: Array<{ target: ArrDeleteTarget; id: number }> = [];
-  for (const candidate of configured.filter((entry) => entry.instanceType === 'sonarr')) {
-    const record = await candidate.client.lookup(accepted.tvdbId);
-    if (record) matches.push({ target: candidate, id: record.id });
-  }
-  if (matches.length === 0 && allowAttemptedAbsence) {
-    return { target: acceptedTarget, configured, present: false };
-  }
-  if (
-    matches.length !== 1 || matches[0]!.target.instanceId !== accepted.instanceId ||
-    matches[0]!.id !== accepted.seriesId
-  ) {
-    throw new ReclamationEvidenceMismatchError(
-      'The accepted series is no longer unique across mapped Sonarr instances',
-    );
-  }
-  const sonarr = matches[0]!.target;
-  try {
-    await assertAcceptedSonarrInventory(
-      accepted,
-      await sonarr.client.sonarrSeriesSnapshot(accepted.seriesId),
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('EpisodeFile inventory changed')) {
-      throw new ReclamationEvidenceMismatchError(error.message, { cause: error });
-    }
-    throw error;
-  }
-  const activity = await sonarr.client.sonarrSeriesActivity(accepted.seriesId);
-  if (!activity.quiet) {
-    throw new Error(sonarrActivityConflictMessage(activity.blocking.map((entry) => entry.name)));
-  }
-  return { target: sonarr, configured, present: true };
-}
-
-class ReclamationEvidenceMismatchError extends Error {}
-
-async function assertReclamationLibrarySurvivors(
-  accepted: PersistedSonarrReclamation,
-): Promise<void> {
-  try {
-    for (const proof of unlinkConfirmedReclamationProofs(accepted)) {
-      await assertVerifiedLibrarySurvivor(proof);
-    }
-  } catch (error) {
-    throw new ReclamationEvidenceMismatchError(
-      error instanceof Error
-        ? error.message
-        : 'The surviving Sonarr library hardlink changed after download cleanup',
-      { cause: error },
-    );
-  }
-}
-
 function persistStorageOutcome(
   target: DeletionWorkTarget,
   aggregate: ReturnType<typeof deriveHardlinkStorageAggregate>,
@@ -942,656 +806,6 @@ async function finalizeScopedSonarrReclamation(
       historicalReasons,
     ),
   );
-}
-
-function recordReclamationGateFailure(
-  target: DeletionWorkTarget,
-  snapshot: DurableTargetSnapshot,
-  error: unknown,
-): void {
-  const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-  if (!accepted || unlinkConfirmedReclamationProofs(accepted).length === 0) return;
-  if (error instanceof ReclamationEvidenceMismatchError) {
-    updateReclamationSnapshot(target, snapshot, (current) => {
-      const now = Math.floor(Date.now() / 1000);
-      for (const proof of current.proofs) {
-        if (proof.unlinkConfirmedAt !== undefined) proof.accountingIneligibleAt ??= now;
-      }
-    });
-  }
-  persistUnknownStorageOutcome(
-    target,
-    HARDLINK_OUTCOME_REASON.incompleteProof,
-    snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
-  );
-}
-
-async function ensureWholeItemDeleted(
-  target: DeletionWorkTarget,
-  snapshot: DurableTargetSnapshot,
-  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
-  _liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
-): Promise<void> {
-  const sessions = await client.activeSessions();
-  if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), sessions).size > 0) {
-    throw new Error('cannot delete media with active playback');
-  }
-  const item: CoordinatedDeleteItem = snapshot;
-  const needsArr = snapshot.mode === 'coordinated' || snapshot.unmonitorFromArr === true ||
-    snapshot.cleanupDownloads === true;
-  const arrTargets = needsArr
-    ? await getArrDeleteTargets(target.serverId, snapshot.libraryKey)
-    : [];
-
-  if (
-    (snapshot.cleanupDownloads || snapshot.wholeItemDownloadCleanup?.sonarrReclamation) &&
-    (target.phase === 'validating' || target.phase === 'download_cleanup')
-  ) {
-    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
-    const selectedKeys = snapshot.selectedRatingKeys ?? [snapshot.ratingKey];
-    const cleanupSelectedKeys = new Set(
-      snapshot.cleanupDownloadRatingKeys ?? [snapshot.ratingKey],
-    );
-    const selected = await db
-      .select({
-        ratingKey: items.ratingKey,
-        title: items.title,
-        type: items.type,
-        tmdbId: items.tmdbId,
-        tvdbId: items.tvdbId,
-      })
-      .from(items)
-      .where(and(eq(items.serverId, target.serverId), inArray(items.ratingKey, selectedKeys)));
-    const downloadTargets = await getDownloadClientTargets(target.serverId);
-    const attemptedJobs = await loadAttemptedDownloadJobKeysByItem(target.serverId, selectedKeys);
-    const attemptedOrphans = await loadAttemptedOrphanFilesByItem(target.serverId, selectedKeys);
-    const attemptedByItem = await loadAttemptedArrInstancesByItem(
-      target.serverId,
-      selected,
-      arrTargets.map((entry) => entry.instanceId),
-    );
-    const rawCleanups = await resolveWholeShowDownloadCleanupBatch(
-      target.serverId,
-      selected,
-      arrTargets,
-      downloadTargets,
-      attemptedJobs,
-      attemptedOrphans,
-      attemptedByItem,
-    );
-    if (snapshot.wholeItemDownloadCleanup) {
-      let accepted = rehydrateResolvedCleanup(
-        snapshot.wholeItemDownloadCleanup,
-        downloadTargets,
-      );
-      if (accepted.sonarrReclamation) {
-        const confirmedAbsences = await confirmedAttemptedOrphanAbsences(
-          target.serverId,
-          snapshot.ratingKey,
-          accepted,
-        );
-        accepted = await revalidateAcceptedSonarrPathOwnership(
-          accepted,
-          downloadTargets,
-          confirmedAbsences,
-        );
-        persistRevalidatedSonarrOwnership(target, snapshot, accepted);
-      }
-      const index = rawCleanups.findIndex((cleanup) => cleanup.ratingKey === snapshot.ratingKey);
-      if (index >= 0) {
-        if (accepted.downloadJobs.some((job) => job.authorizationMode === 'whole_show_hash')) {
-          assertAcceptedWholeShowHashCleanup(
-            rawCleanups[index]!,
-            accepted,
-            attemptedJobs.get(snapshot.ratingKey) ?? new Set(),
-          );
-          if (accepted.sonarrReclamation) {
-            rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted, true);
-          }
-        } else {
-          rawCleanups[index] = mergeAcceptedSonarrCleanup(rawCleanups[index]!, accepted, true);
-        }
-      } else rawCleanups.push(accepted);
-    }
-    assertDownloadJobSelectionConsistent(rawCleanups, cleanupSelectedKeys);
-    const cleanups = selectVerifiedDownloadCleanups(
-      reconcileSharedDownloadCleanups(rawCleanups),
-    );
-    const cleanup = cleanups.get(snapshot.ratingKey);
-    if (
-      !cleanup ||
-      (!cleanupIsEligible(cleanup) && !cleanup.reason?.includes('previously started') &&
-        !snapshot.wholeItemDownloadCleanup?.sonarrReclamation)
-    ) {
-      throw new Error(
-        cleanup?.reason ?? 'no verified download job or orphan hardlink is available',
-      );
-    }
-    let accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-    if (accepted) {
-      try {
-        await acceptedSonarrReclamationTarget(
-          target,
-          snapshot,
-          accepted,
-          accepted.arrDeleteAttemptedAt !== undefined,
-        );
-        const currentSessions = await client.activeSessions();
-        if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), currentSessions).size > 0) {
-          throw new Error('cannot delete media with active playback');
-        }
-      } catch (error) {
-        recordReclamationGateFailure(target, snapshot, error);
-        throw error;
-      }
-    }
-    let latestOwnershipCleanup = cleanup;
-    try {
-      await executeCleanup(
-        target.serverId,
-        cleanups,
-        cleanup,
-        undefined,
-        snapshot.wholeItemDownloadCleanup !== undefined,
-        accepted
-          ? {
-            authorizeOrphanDelete: async (file) => {
-              latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
-                latestOwnershipCleanup,
-                downloadTargets,
-              );
-              persistRevalidatedSonarrOwnership(target, snapshot, latestOwnershipCleanup);
-              return latestOwnershipCleanup.orphanFiles.some((entry) => entry.path === file.path);
-            },
-            beforeOrphanDelete: (file) => {
-              updateReclamationSnapshot(
-                target,
-                snapshot,
-                (current) => {
-                  const proof = current.proofs.find((entry) => entry.path === file.path);
-                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
-                  proof.unlinkAttemptedAt ??= Math.floor(Date.now() / 1000);
-                },
-              );
-              return Promise.resolve();
-            },
-            afterOrphanDelete: async (file) => {
-              // This callback also runs when a prior unlink attempt is now
-              // confirmed absent. Re-prove the exact one-link library survivor
-              // before durably crediting that interrupted unlink.
-              await assertVerifiedLibrarySurvivor(file);
-              updateReclamationSnapshot(
-                target,
-                snapshot,
-                (current) => {
-                  const proof = current.proofs.find((entry) => entry.path === file.path);
-                  if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
-                  proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
-                },
-              );
-            },
-          }
-          : {},
-      );
-      // Progress callbacks replace the nested cleanup in the durable snapshot.
-      // Keep subsequent Sonarr gates and accounting on that current object so
-      // confirmed unlinks and ownership downgrades are not read from the stale
-      // pre-cleanup reference.
-      accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-    } catch (error) {
-      const current = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-      if (current && unlinkConfirmedReclamationProofs(current).length > 0) {
-        persistUnknownStorageOutcome(
-          target,
-          HARDLINK_OUTCOME_REASON.incompleteProof,
-          current,
-        );
-      }
-      throw error;
-    }
-  }
-
-  if (snapshot.unmonitorFromArr) {
-    advancePhase(target, 'arr_coordination');
-    if (snapshot.type !== 'movie' || snapshot.tmdbId === null) {
-      throw new Error('Radarr movie identity is required before unmonitoring');
-    }
-    let matched = false;
-    for (const entry of arrTargets) {
-      const record = await entry.client.lookup(snapshot.tmdbId);
-      if (!record) continue;
-      const monitorTarget = await entry.client.monitorTarget(record.id);
-      if (!monitorTarget) continue;
-      matched = true;
-      await entry.client.setMonitorTarget(monitorTarget.id, false);
-      const confirmed = await entry.client.lookup(snapshot.tmdbId);
-      const confirmedTarget = confirmed ? await entry.client.monitorTarget(confirmed.id) : null;
-      if (!confirmedTarget || confirmedTarget.monitored !== false) {
-        throw new DeletionConvergenceError('Radarr did not retain the unmonitored state');
-      }
-    }
-    if (!matched) throw new Error('No matching Radarr movie was found to unmonitor');
-  }
-  if (snapshot.mode === 'plex-only') {
-    if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
-    if (snapshot.type === 'show' && snapshot.cleanupDownloads) {
-      const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-      persistUnknownStorageOutcome(
-        target,
-        accepted ? HARDLINK_OUTCOME_REASON.incompleteProof : HARDLINK_OUTCOME_REASON.liveJobOnly,
-        accepted,
-        true,
-      );
-    } else {
-      advancePhase(target, 'plex_reconciliation');
-    }
-    await reconcilePlexTarget(target, snapshot);
-    return;
-  }
-
-  if (arrTargets.length === 0) throw new Error('this library is not mapped to Sonarr or Radarr');
-  const id = externalId(item);
-  if (id === null) throw new Error('the target has no Arr external ID');
-  const ambiguous = withTransaction((sqlite) =>
-    findAmbiguousExternalIds(sqlite, target.serverId, item.type === 'movie' ? 'movie' : 'show', [
-      id,
-    ])
-  );
-  assertArrDeleteIsUnambiguous(item, ambiguous);
-  const attemptedArr = await loadAttemptedArrInstancesByItem(
-    target.serverId,
-    [{ ...item, ratingKey: snapshot.ratingKey }],
-    arrTargets.map((entry) => entry.instanceId),
-  );
-
-  const accepted = snapshot.wholeItemDownloadCleanup?.sonarrReclamation;
-  let reclamationArrTargets: ArrDeleteTarget[] | undefined;
-  if (accepted) {
-    try {
-      const gate = await acceptedSonarrReclamationTarget(
-        target,
-        snapshot,
-        accepted,
-        accepted.arrDeleteAttemptedAt !== undefined,
-      );
-      reclamationArrTargets = gate.configured;
-    } catch (error) {
-      recordReclamationGateFailure(target, snapshot, error);
-      throw error;
-    }
-  }
-
-  if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
-
-  const result = await deleteThroughArr(item, reclamationArrTargets ?? arrTargets, {
-    attemptedInstanceIds: accepted
-      ? accepted.arrDeleteAttemptedAt !== undefined ? new Set([accepted.instanceId]) : new Set()
-      : attemptedArr.get(snapshot.ratingKey),
-    acceptAlreadyAbsent: false,
-    onAttemptStarting: async (entry) => {
-      if (entry.instanceType === 'sonarr') {
-        const targets = await getDownloadClientTargets(target.serverId);
-        if (targets.length > 0) {
-          const record = await entry.client.lookup(id);
-          if (!record?.path) {
-            throw new Error('Sonarr did not return the series path before deletion');
-          }
-          await assertArrDeletionPathsUnowned({
-            serverId: target.serverId,
-            paths: [{ path: record.path, directory: true }],
-            mappings: entry.pathMappings,
-            targets,
-          });
-        }
-      }
-      if (accepted) {
-        if (entry.instanceId !== accepted.instanceId) {
-          const error = new ReclamationEvidenceMismatchError(
-            'The Sonarr deletion target changed before mutation',
-          );
-          recordReclamationGateFailure(target, snapshot, error);
-          throw error;
-        }
-        try {
-          const finalGate = await acceptedSonarrReclamationTarget(
-            target,
-            snapshot,
-            accepted,
-          );
-          if (!finalGate.present || finalGate.target.instanceId !== entry.instanceId) {
-            throw new ReclamationEvidenceMismatchError(
-              'The accepted Sonarr series changed before mutation',
-            );
-          }
-          const currentSessions = await client.activeSessions();
-          if (activeWholeItemRatingKeys(new Set([snapshot.ratingKey]), currentSessions).size > 0) {
-            throw new Error('cannot delete media with active playback');
-          }
-          await assertReclamationLibrarySurvivors(accepted);
-        } catch (error) {
-          recordReclamationGateFailure(target, snapshot, error);
-          throw error;
-        }
-      }
-      await markArrAttempt(target.serverId, snapshot, entry);
-      if (accepted) {
-        updateReclamationSnapshot(target, snapshot, (current) => {
-          current.arrDeleteAttemptedAt ??= Math.floor(Date.now() / 1000);
-        });
-      }
-    },
-    ...(accepted
-      ? {
-        exactMatch: { instanceId: accepted.instanceId, mediaId: accepted.seriesId },
-        confirmRecordAbsence: true,
-      }
-      : {}),
-  });
-  const disposition = arrDeleteDisposition(result);
-  if (disposition.status !== 'complete') {
-    if (snapshot.type === 'show' && result.deletedInstances.length > 0) {
-      persistUnknownStorageOutcome(
-        target,
-        HARDLINK_OUTCOME_REASON.incompleteProof,
-        snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
-      );
-    }
-    throw new Error(
-      result.failures.map((failure) => failure.error).join('; ') || 'Arr deletion failed',
-    );
-  }
-  if (accepted) {
-    let aggregate: ReturnType<typeof deriveHardlinkStorageAggregate>;
-    try {
-      for (const proof of unlinkConfirmedReclamationProofs(accepted)) {
-        await assertVerifiedLibraryPathAbsent(proof);
-      }
-      aggregate = deriveHardlinkStorageAggregate(accepted, [
-        ...(accepted.proofs.length === 0 ? [HARDLINK_OUTCOME_REASON.incompleteProof] : []),
-        ...sonarrHistoricalOutcomeReasons(snapshot, accepted),
-        ...accepted.proofs.flatMap((proof) =>
-          proof.ownershipDisposition !== 'delete' && proof.ownershipReason
-            ? [proof.ownershipReason]
-            : []
-        ),
-      ]);
-    } catch (error) {
-      updateReclamationSnapshot(target, snapshot, (current) => {
-        const now = Math.floor(Date.now() / 1000);
-        for (const proof of current.proofs) {
-          if (proof.unlinkConfirmedAt !== undefined) proof.accountingIneligibleAt ??= now;
-        }
-      });
-      persistUnknownStorageOutcome(
-        target,
-        HARDLINK_OUTCOME_REASON.incompleteProof,
-        snapshot.wholeItemDownloadCleanup?.sonarrReclamation,
-      );
-      throw error;
-    }
-    // Keep the durable write outside the evidence-invalidating catch. A transient
-    // checkpoint failure must retry without permanently disqualifying a valid proof.
-    persistStorageOutcome(target, aggregate, true);
-  } else if (snapshot.type === 'show') {
-    const historicalReasons = sonarrHistoricalOutcomeReasons(snapshot);
-    persistUnknownStorageOutcome(
-      target,
-      historicalReasons.length > 0 ? historicalReasons : HARDLINK_OUTCOME_REASON.incompleteProof,
-      undefined,
-      true,
-    );
-  }
-  if (target.phase !== 'plex_reconciliation') advancePhase(target, 'plex_reconciliation');
-  await reconcilePlexTarget(target, snapshot);
-}
-
-async function assertWholeSeasonSonarrPostcondition(
-  target: DeletionWorkTarget,
-  snapshot: DurableTargetSnapshot,
-  mode: 'preflight' | 'mutate' | 'confirm',
-): Promise<void> {
-  const plan = snapshot.wholeSeasonRemoval;
-  if (!plan) throw new Error('durable whole-season evidence is missing');
-  if (snapshot.mode !== 'coordinated') return;
-  const configured = await getArrDeleteTargets(target.serverId, snapshot.libraryKey);
-  for (const expected of plan.sonarrTargets) {
-    const matches = configured.filter((candidate) =>
-      candidate.instanceType === 'sonarr' && candidate.instanceId === expected.instanceId &&
-      candidate.instanceUrl === expected.instanceUrl &&
-      candidate.configurationUpdatedAt === expected.configurationUpdatedAt &&
-      candidate.mappingIdentity === expected.mappingIdentity
-    );
-    if (matches.length !== 1) {
-      throw new Error('The accepted Sonarr connection or path mapping changed');
-    }
-    const sonarr = matches[0]!;
-    const capabilities = await sonarr.client.sonarrSeasonCoordinationCapabilities();
-    if (!capabilities.available || capabilities.version !== expected.version) {
-      throw new Error(capabilities.reason ?? 'The accepted Sonarr version changed');
-    }
-    const series = await sonarr.client.lookup(snapshot.tvdbId!);
-    if (!series || series.id !== expected.seriesId || series.path !== expected.seriesPath) {
-      throw new Error('The accepted Sonarr series identity changed');
-    }
-    const activity = await sonarr.client.sonarrSeriesActivity(series.id);
-    if (!activity.quiet) {
-      throw new Error(sonarrActivityConflictMessage(
-        activity.blocking.map((entry) => entry.name),
-      ));
-    }
-    let current = await sonarr.client.sonarrSeriesSnapshot(series.id);
-    const expectedEpisodeIds = new Set(expected.episodes.map((episode) => episode.episodeId));
-    for (const episode of expected.episodes) {
-      const live = current.episodes.find((candidate) => candidate.id === episode.episodeId);
-      if (
-        !live || live.seriesId !== expected.seriesId ||
-        live.seasonNumber !== episode.seasonNumber ||
-        live.episodeNumber !== episode.episodeNumber ||
-        (live.episodeFileId !== episode.episodeFileId && live.episodeFileId !== 0)
-      ) throw new Error('The accepted Sonarr season episode identity changed');
-    }
-    for (const file of expected.files) {
-      if (file.episodeIds.some((id) => !expectedEpisodeIds.has(id))) {
-        throw new Error('The accepted Sonarr file crosses the season boundary');
-      }
-      const live = current.files.find((candidate) => candidate.id === file.id);
-      if (
-        live && (live.seriesId !== expected.seriesId || live.path !== file.path ||
-          live.size !== file.size ||
-          JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
-            JSON.stringify([...file.episodeIds].sort((a, b) => a - b)))
-      ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
-    }
-    if (mode === 'preflight') continue;
-    if (mode === 'mutate') {
-      for (const episode of expected.episodes) {
-        const live = current.episodes.find((candidate) => candidate.id === episode.episodeId)!;
-        if (live.monitored) {
-          await sonarr.client.setSonarrEpisodeMonitored({
-            episodeId: episode.episodeId,
-            seriesId: expected.seriesId,
-            seasonNumber: episode.seasonNumber,
-            episodeNumber: episode.episodeNumber,
-          }, false);
-        }
-      }
-      const protectedActivity = await sonarr.client.sonarrSeriesActivity(series.id);
-      if (!protectedActivity.quiet) {
-        throw new Error(sonarrActivityConflictMessage(
-          protectedActivity.blocking.map((entry) => entry.name),
-        ));
-      }
-      current = await sonarr.client.sonarrSeriesSnapshot(series.id);
-      for (const file of expected.files) {
-        const live = current.files.find((candidate) => candidate.id === file.id);
-        if (!live) {
-          if (
-            current.episodes.some((episode) => episode.episodeFileId === file.id) ||
-            await sonarr.client.sonarrExactFileExists(file.path)
-          ) {
-            throw new DeletionConvergenceError(
-              'Sonarr detached an accepted EpisodeFile without removing the exact file',
-            );
-          }
-          continue;
-        }
-        if (
-          live.seriesId !== expected.seriesId || live.path !== file.path ||
-          live.size !== file.size ||
-          JSON.stringify([...live.episodeIds].sort((a, b) => a - b)) !==
-            JSON.stringify([...file.episodeIds].sort((a, b) => a - b))
-        ) throw new Error('The accepted Sonarr EpisodeFile identity changed');
-        await assertArrDeletionPathsUnowned({
-          serverId: target.serverId,
-          paths: [{ path: file.path }],
-          mappings: sonarr.pathMappings,
-        });
-        try {
-          await sonarr.client.deleteManagedFile(file.id);
-        } catch (error) {
-          if (!(error instanceof ArrApiError && error.status === 404)) throw error;
-        }
-      }
-      current = await sonarr.client.sonarrSeriesSnapshot(series.id);
-    }
-    if (
-      expected.episodes.some((episode) => {
-        const live = current.episodes.find((candidate) => candidate.id === episode.episodeId);
-        return !live || live.monitored !== false || live.episodeFileId !== 0;
-      }) || expected.files.some((file) =>
-        current.files.some((candidate) =>
-          candidate.id === file.id
-        ) ||
-        current.episodes.some((episode) => episode.episodeFileId === file.id)
-      )
-    ) {
-      throw new DeletionConvergenceError(
-        'Sonarr season removal did not reach its safe final state',
-      );
-    }
-    for (const file of expected.files) {
-      if (await sonarr.client.sonarrExactFileExists(file.path)) {
-        throw new DeletionConvergenceError(
-          'Sonarr season removal did not reach exact-file absence',
-        );
-      }
-    }
-  }
-}
-
-async function ensureWholeSeasonDeleted(
-  target: DeletionWorkTarget,
-  snapshot: DurableTargetSnapshot,
-  client: Awaited<ReturnType<typeof validateDeletionTarget>>['client'],
-  liveAtStart: Awaited<ReturnType<typeof validateDeletionTarget>>['live'],
-): Promise<void> {
-  if (!snapshot.wholeSeasonRemoval) throw new Error('durable whole-season evidence is missing');
-  // A 404 from exact season metadata is already authoritative absence. Preserve the
-  // ordinary whole-item recovery path instead of requiring children from a root Plex
-  // no longer exposes; live seasons still require byte-for-byte accepted evidence.
-  if (target.phase === 'validating' && liveAtStart) {
-    await assertWholeSeasonPlexEvidence(client, snapshot);
-  }
-  if (liveAtStart) {
-    const sessions = await client.activeSessions();
-    if (
-      activeWholeItemRatingKeys(
-        new Set(snapshot.wholeSeasonRemoval.episodeRatingKeys),
-        sessions,
-      ).size > 0
-    ) throw new Error('cannot delete a season with active episode playback');
-  }
-  if (
-    snapshot.mode === 'coordinated' &&
-    (target.phase === 'validating' || target.phase === 'download_cleanup')
-  ) {
-    // Complete the accepted Sonarr identity, membership, file, and activity checks
-    // before qBittorrent data or historical links can be mutated.
-    await assertWholeSeasonSonarrPostcondition(target, snapshot, 'preflight');
-  }
-  if (
-    snapshot.seasonDownloadCleanup &&
-    (snapshot.cleanupDownloads || snapshot.seasonDownloadCleanup.sonarrReclamation) &&
-    (target.phase === 'validating' || target.phase === 'download_cleanup')
-  ) {
-    if (target.phase === 'validating') advancePhase(target, 'download_cleanup');
-    let cleanup = rehydrateResolvedCleanup(
-      snapshot.seasonDownloadCleanup,
-      await getDownloadClientTargets(target.serverId),
-    );
-    const accepted = cleanup.sonarrReclamation;
-    const downloadTargets = accepted ? await getDownloadClientTargets(target.serverId) : [];
-    if (accepted) {
-      const confirmedAbsences = await confirmedAttemptedOrphanAbsences(
-        target.serverId,
-        snapshot.showRatingKey!,
-        cleanup,
-      );
-      cleanup = await revalidateAcceptedSonarrPathOwnership(
-        cleanup,
-        downloadTargets,
-        confirmedAbsences,
-      );
-      persistRevalidatedSonarrOwnership(target, snapshot, cleanup);
-    }
-    let latestOwnershipCleanup = cleanup;
-    await executeCleanup(
-      target.serverId,
-      new Map([[snapshot.showRatingKey!, cleanup]]),
-      cleanup,
-      snapshot.showRatingKey!,
-      true,
-      accepted
-        ? {
-          authorizeOrphanDelete: async (file) => {
-            latestOwnershipCleanup = await revalidateAcceptedSonarrPathOwnership(
-              latestOwnershipCleanup,
-              downloadTargets,
-            );
-            persistRevalidatedSonarrOwnership(target, snapshot, latestOwnershipCleanup);
-            return latestOwnershipCleanup.orphanFiles.some((entry) => entry.path === file.path);
-          },
-          beforeOrphanDelete: (file) => {
-            updateReclamationSnapshot(target, snapshot, (current) => {
-              const proof = current.proofs.find((entry) => entry.path === file.path);
-              if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
-              proof.unlinkAttemptedAt ??= Math.floor(Date.now() / 1000);
-            });
-            return Promise.resolve();
-          },
-          afterOrphanDelete: async (file) => {
-            await assertVerifiedLibrarySurvivor(file);
-            updateReclamationSnapshot(target, snapshot, (current) => {
-              const proof = current.proofs.find((entry) => entry.path === file.path);
-              if (!proof) throw new Error('The accepted Sonarr hardlink proof changed');
-              proof.unlinkConfirmedAt ??= Math.floor(Date.now() / 1000);
-            });
-          },
-        }
-        : {},
-    );
-    await assertWholeSeasonPlexMembership(client, snapshot);
-  }
-  if (target.phase !== 'arr_coordination') advancePhase(target, 'arr_coordination');
-  await assertWholeSeasonSonarrPostcondition(target, snapshot, 'mutate');
-  const reclamation = snapshot.seasonDownloadCleanup?.sonarrReclamation;
-  const historicalReasons = sonarrHistoricalOutcomeReasons(snapshot, reclamation);
-  if (reclamation) {
-    for (const proof of unlinkConfirmedReclamationProofs(reclamation)) {
-      await assertVerifiedLibraryPathAbsent(proof);
-    }
-    persistStorageOutcome(
-      target,
-      deriveHardlinkStorageAggregate(
-        reclamation,
-        historicalReasons,
-      ),
-    );
-  } else if (historicalReasons.length > 0) {
-    persistUnknownStorageOutcome(target, historicalReasons);
-  }
-  advancePhase(target, 'plex_reconciliation');
-  await reconcilePlexTarget(target, snapshot);
 }
 
 async function ensureVersionDeleted(
@@ -2377,6 +1591,13 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   if (!release) throw new DeletionConvergenceError('the library is currently being modified');
   try {
     const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
+    if (target.targetKind === 'whole_item' && !snapshot.ordinaryPlan) {
+      throw new Error(UPGRADE_RECOVERY_MESSAGE);
+    }
+    if (target.targetKind === 'whole_item' && snapshot.ordinaryPlan) {
+      await ensureOrdinaryDeletion(target, snapshot);
+      return;
+    }
     if (target.targetKind !== 'whole_item' && snapshot.cleanupDownloads) {
       const cleanup = snapshot.seasonDownloadCleanup ?? snapshot.radarrRemovalDownloadCleanup;
       if (
@@ -2392,9 +1613,6 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
       }
     }
     if (target.phase === 'plex_reconciliation') {
-      if (snapshot.type === 'season') {
-        await assertWholeSeasonSonarrPostcondition(target, snapshot, 'confirm');
-      }
       if ((snapshot.arrReassignments?.length ?? 0) > 0) {
         const validation = await validateDeletionTarget(target.serverId, target);
         await reconcileArrReassignmentFinalState(target, snapshot, validation.client);
@@ -2404,25 +1622,7 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
     }
     if (await tryRecoverRadarrWithoutSelectedProjection(target, snapshot)) return;
     const validation = await validateDeletionTarget(target.serverId, target);
-    if (target.targetKind === 'whole_item') {
-      if (validation.snapshot.type === 'season') {
-        await ensureWholeSeasonDeleted(
-          target,
-          validation.snapshot,
-          validation.client,
-          validation.live,
-        );
-      } else {
-        await ensureWholeItemDeleted(
-          target,
-          validation.snapshot,
-          validation.client,
-          validation.live,
-        );
-      }
-    } else {
-      await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
-    }
+    await ensureVersionDeleted(target, validation.snapshot, validation.client, validation.live);
   } finally {
     release();
   }

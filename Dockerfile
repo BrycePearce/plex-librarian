@@ -48,7 +48,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD deno eval --allow-env --allow-net \
   "const port=Deno.env.get('PORT')??'8080';const r=await fetch('http://127.0.0.1:'+port+'/health');Deno.exit(r.ok?0:1)"
 
-# Deno requires --allow-all for /proc/self/mountinfo, used to distinguish
-# bind-mount aliases before deletion. --allow-read alone does not grant this.
+# Optional duplicate adoption can inspect /proc/self/mountinfo to distinguish
+# aliases. Ordinary service-owned deletion does not require local media access.
 # Docker mounts and OS permissions still bound the container's filesystem access.
 CMD ["deno", "run", "--allow-all", "src/server.ts"]

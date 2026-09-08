@@ -285,3 +285,69 @@ Deno.test('unknown legacy transition shapes remain held and viewable without rew
     });
   }
 });
+
+Deno.test('known older policy preserves cancelled/completed work and attempted reservations', () => {
+  const states = ['queued', 'waiting_retry', 'needs_attention', 'cancelled', 'completed'] as const;
+  const snapshots = states.map((_, index) =>
+    JSON.stringify({
+      currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION - 1,
+      ratingKey: `prior-policy-${index}`,
+      libraryKey: 'movies',
+      // An uncertain recorded attempt must survive even when cancellation was requested.
+      ...(index === 0 ? {} : { arrReassignments: [{ transition: { removalAttemptedAt: 5 } }] }),
+    })
+  );
+  withTransaction((client) => {
+    for (const [index, status] of states.entries()) {
+      const id = 100 + index;
+      const operationId = `prior-policy-${index}`;
+      client.prepare(
+        "INSERT INTO deletion_operations (id,client_request_id,request_hash,server_id,library_key,kind,status,target_count,created_at,updated_at) VALUES (?,?,?,1,'movies','movie_version',?,1,1,1)",
+      ).run(operationId, operationId, operationId, status);
+      client.prepare(
+        "INSERT INTO deletion_targets (id,operation_id,ordinal,target_kind,target_key,title,snapshot,status,phase,created_at,updated_at) VALUES (?,?,0,'movie_version',?,'Prior policy',?,?,?,1,1)",
+      ).run(
+        id,
+        operationId,
+        operationId,
+        snapshots[index],
+        status,
+        index === 0 ? 'validating' : 'arr_coordination',
+      );
+      client.prepare(
+        "INSERT INTO media_version_reservations (server_id,media_kind,media_id,rating_key,operation_id,target_id,created_at) VALUES (1,'movie',?,?,?,?,1)",
+      ).run(id, operationId, operationId, id);
+    }
+    holdLegacyDeletionTargets(client, 200);
+    recoverInterruptedDeletionWork(client, 201);
+    assertEquals(
+      client.prepare(
+        'SELECT status FROM deletion_targets WHERE id >= 100 ORDER BY id',
+      ).values(),
+      [['needs_attention'], ['needs_attention'], ['needs_attention'], ['cancelled'], ['completed']],
+    );
+    assertEquals(
+      client.prepare(
+        'SELECT COUNT(*) FROM media_version_reservations WHERE target_id >= 100',
+      ).value(),
+      [5],
+    );
+    for (const index of [3, 4]) {
+      assertEquals(
+        client.prepare('SELECT snapshot FROM deletion_targets WHERE id = ?').value(100 + index),
+        [snapshots[index]],
+      );
+    }
+    assertEquals(upgradeTargetCanCancel(client, 100), true);
+    for (const id of [101, 102, 103, 104]) assertEquals(upgradeTargetCanCancel(client, id), false);
+  });
+  assertEquals(cancelDeletionOperation('prior-policy-0', 1), true);
+  assertEquals(cancelDeletionOperation('prior-policy-1', 1), false);
+  withTransaction((client) => {
+    assertEquals(
+      client.prepare('SELECT COUNT(*) FROM media_version_reservations WHERE target_id >= 100')
+        .value(),
+      [4],
+    );
+  });
+});

@@ -15,16 +15,16 @@ export function arrDestinationState(
 }
 
 export function shouldUseArrByDefault(
-  preview: DownloadCleanupPreviewResponse | undefined,
+  _preview: DownloadCleanupPreviewResponse | undefined,
 ): boolean {
-  return preview?.coordinatedConfigured !== false;
+  return false;
 }
 
 export function effectiveArrSelection(
   selected: boolean,
   preview: DownloadCleanupPreviewResponse | undefined,
 ): boolean {
-  return selected && shouldUseArrByDefault(preview);
+  return selected && preview?.coordinatedConfigured !== false;
 }
 
 export function selectedSonarrOwnershipProblems(
@@ -40,11 +40,7 @@ export function downloadCleanupDestinationVisible(
   preview: DownloadCleanupPreviewResponse | undefined,
   _allowOrphanOnly = false,
 ): boolean {
-  return preview?.items.some((item) =>
-    preview.downloadClientsConfigured === true &&
-    ((item.status === "resolved" && item.downloadJobs.length > 0) ||
-      item.qbittorrentPathAccessJob !== undefined)
-  ) ?? false;
+  return preview?.downloadClientsConfigured === true;
 }
 
 export function eligibleDownloadCleanupItems(
@@ -54,7 +50,7 @@ export function eligibleDownloadCleanupItems(
 ) {
   return preview?.items.filter((item) =>
     item.status === "resolved" &&
-    item.downloadJobs.length > 0
+    (item.downloadJobs.length > 0 || item.noJobReason !== undefined)
   ) ?? [];
 }
 

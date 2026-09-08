@@ -112,11 +112,11 @@ export function holdLegacyDeletionTargets(client: SqliteClient, now: number): vo
        AND NOT (status = 'completed_with_warning' AND phase = 'finalizing')
        AND CASE WHEN json_valid(snapshot) THEN
          COALESCE(json_extract(snapshot, '$.currentLocationPolicyVersion'), -1) <> ${CURRENT_LOCATION_POLICY_VERSION}
+         OR (target_kind = 'whole_item' AND COALESCE(json_extract(snapshot, '$.ordinaryPlan.policyVersion'), -1) <> ${CURRENT_LOCATION_POLICY_VERSION})
          ELSE 1 END`,
   ).values<[number, string, string, string, string, string | null]>();
   const operations = new Set<string>();
   for (const [id, operationId, raw, status, _phase, previousError] of rows) {
-    if (currentLocationSnapshot(raw)) continue;
     let snapshot;
     try {
       snapshot = JSON.parse(raw);

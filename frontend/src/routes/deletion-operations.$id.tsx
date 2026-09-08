@@ -416,6 +416,22 @@ function DeletionOperationPage() {
                   <p className="text-sm text-error mt-1">{target.error}</p>
                 )}
                 {target.warning && <p className="text-sm text-warning mt-1">{target.warning}</p>}
+                {target.serviceOutcomes?.map((outcome, index) => (
+                  <p key={index} className="text-sm mt-1">
+                    {outcome.service}: {outcome.action} — {outcome.status === "accepted"
+                      ? "request accepted; physical completion is not verified"
+                      : outcome.status === "succeeded"
+                      ? "service reported success"
+                      : outcome.status === "reconciled"
+                      ? "absence covered by a recorded service response; no additional file deletion sent"
+                      : outcome.status === "failed"
+                      ? `request failed${
+                        outcome.httpStatus ? ` (HTTP ${outcome.httpStatus})` : ""
+                      }; automatic replay is held`
+                      : "outcome uncertain; automatic replay is held"}
+                    {outcome.error ? ` (${outcome.error})` : ""}
+                  </p>
+                ))}
                 <p className="text-xs text-base-content/45 mt-2">
                   {phaseLabel(target.phase)} ·{" "}
                   {target.removalConfirmedAt ? "Media removed" : "Removal pending"}

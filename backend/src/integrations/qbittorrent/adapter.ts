@@ -69,6 +69,12 @@ function couldOwnCandidate(
 
 /** Keeps qBittorrent hashes and API method names out of the deletion domain. */
 export class QbittorrentDownloadClient implements DownloadClient {
+  storagePaths(): Promise<string[]> {
+    return this.client.storagePaths();
+  }
+  testConnection(): Promise<unknown> {
+    return this.client.testConnection();
+  }
   constructor(readonly client: QbittorrentClient) {}
 
   async scanJobSummaries(visit: (summary: DownloadJobSummary) => Promise<void>): Promise<string> {
@@ -143,10 +149,18 @@ export class QbittorrentDownloadClient implements DownloadClient {
     return { jobs, summaryFingerprint: await summaryFingerprint(first) };
   }
 
-  deleteJob(downloadId: string, options: { deleteData: boolean }): Promise<void> {
+  deleteJob(
+    downloadId: string,
+    options: {
+      deleteData: boolean;
+      onResponse?: (
+        result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+      ) => void;
+    },
+  ): Promise<void> {
     if (!options.deleteData) {
       throw new Error('qBittorrent cleanup requires explicit payload deletion');
     }
-    return this.client.deleteTorrent(downloadId);
+    return this.client.deleteTorrent(downloadId, options.onResponse);
   }
 }

@@ -1,8 +1,19 @@
 interface DeletionOperationTargetBase {
+  serviceOutcomes?: Array<
+    {
+      service: string;
+      action: string;
+      startedAt: number;
+      status: 'succeeded' | 'accepted' | 'failed' | 'uncertain' | 'reconciled';
+      httpStatus?: number;
+      error?: string;
+    }
+  >;
   /** Paused because the accepted snapshot predates current-location deletion. */
   upgradeHold?: boolean;
   /** Durable evidence proves this held target has no external mutation attempt. */
   upgradeHoldCancellable?: boolean;
+  ordinaryCancellable?: boolean;
   id: number;
   ordinal: number;
   targetKind: 'whole_item' | 'movie_version' | 'episode_version';

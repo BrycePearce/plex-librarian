@@ -1,5 +1,5 @@
-import { ServicePathAccess } from "./ServicePathAccess.tsx";
-import { DeletionPathAccess } from "./DeletionPathAccess.tsx";
+import { OPTIONAL_DELETION_DESTINATIONS } from "../../../../shared/deletionPolicy.ts";
+import { DeletionSetupLink } from "./DeletionSetupLink.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -18,7 +18,6 @@ import {
   downloadCleanupDestinationVisible,
   effectiveArrSelection,
   eligibleDownloadCleanupItems,
-  shouldUseArrByDefault,
 } from "./deletionPreviewState.ts";
 import type { WholeItemDeletionCandidate } from "./types.ts";
 import { deletionImpact } from "./deletionImpact.ts";
@@ -34,7 +33,6 @@ import {
   useDeletionDialogCancelFocus,
 } from "./DeletionDialog.tsx";
 import { deletionConfirmationBlocked } from "./deletionConfirmation.ts";
-import "../../components/dataSurfaces.css";
 
 export function DeleteConfirmDialog({
   dialogRef,
@@ -59,8 +57,10 @@ export function DeleteConfirmDialog({
   }) => void;
   onCancel: () => void;
 }) {
-  const [deleteFromArr, setDeleteFromArr] = useState(true);
-  const [cleanupDownloads, setCleanupDownloads] = useState(false);
+  const [deleteFromArr, setDeleteFromArr] = useState<boolean>(OPTIONAL_DELETION_DESTINATIONS.arr);
+  const [cleanupDownloads, setCleanupDownloads] = useState<boolean>(
+    OPTIONAL_DELETION_DESTINATIONS.qbittorrent,
+  );
   const [cleanupConsentChanged, setCleanupConsentChanged] = useState(false);
   const [previewMode, setPreviewMode] = useState<"basic" | "advanced">("basic");
   const cleanupDefaultsKeyRef = useRef<string | null>(null);
@@ -75,10 +75,14 @@ export function DeleteConfirmDialog({
     selectionKey,
   );
   const preview = useQuery({
-    queryKey: queryKeys.downloadCleanupPreview.forItems(
-      libraryKey,
-      ratingKeys,
-    ),
+    queryKey: [
+      ...queryKeys.downloadCleanupPreview.forItems(
+        libraryKey,
+        ratingKeys,
+      ),
+      deleteFromArr,
+      cleanupDownloads,
+    ],
     queryFn: () => api.libraries.downloadCleanupPreview(libraryKey, ratingKeys),
     enabled: ratingKeys.length > 0,
     staleTime: 15_000,
@@ -134,13 +138,13 @@ export function DeleteConfirmDialog({
   const effectiveCleanupDownloads = cleanupDownloads && cleanupAuthorizationKey !== null &&
     acceptedCleanupKeyRef.current === cleanupAuthorizationKey;
   const cleanupProblems =
-    preview.data?.items.filter((item) =>
-      item.status !== "resolved" || item.downloadJobs.length === 0
+    cleanupDestinationPreview?.items.filter((item) =>
+      item.status !== "resolved" || item.downloadJobs.length === 0 && !item.noJobReason
     ) ?? [];
   const ownershipProblems = preview.data?.items.flatMap((item) => {
     const problem = currentLocationOwnershipProblem(
       item,
-      effectiveDeleteFromArr && arrService === "sonarr",
+      effectiveDeleteFromArr,
       cleanupDownloads,
     );
     return problem.blocked ? [{ ...item, ownershipReason: problem.reason }] : [];
@@ -148,20 +152,11 @@ export function DeleteConfirmDialog({
   useEffect(() => {
     cleanupDefaultsKeyRef.current = null;
     acceptedCleanupKeyRef.current = null;
-    setDeleteFromArr(true);
+    setDeleteFromArr(OPTIONAL_DELETION_DESTINATIONS.arr);
     setCleanupDownloads(false);
     setCleanupConsentChanged(false);
     setPreviewMode("basic");
   }, [selectionKey]);
-  useEffect(() => {
-    // When Arr is configured but no selected title can be resolved, keep the Arr
-    // destination selected so the explicit Plex-fallback acknowledgement below is
-    // still required. Only switch to Plex-only automatically when this library has
-    // no coordinated destination at all.
-    if (preview.data && !shouldUseArrByDefault(preview.data)) {
-      setDeleteFromArr(false);
-    }
-  }, [preview.data]);
   useEffect(() => {
     if (!preview.data) return;
     if (cleanupDefaultsKeyRef.current !== selectionKey) {
@@ -182,7 +177,6 @@ export function DeleteConfirmDialog({
       )
     ) {
       acceptedCleanupKeyRef.current = null;
-      setCleanupDownloads(false);
       setCleanupConsentChanged(true);
     }
   }, [
@@ -197,7 +191,7 @@ export function DeleteConfirmDialog({
   const cancel = () => {
     cleanupDefaultsKeyRef.current = null;
     acceptedCleanupKeyRef.current = null;
-    setDeleteFromArr(preview.data?.coordinatedConfigured ?? true);
+    setDeleteFromArr(OPTIONAL_DELETION_DESTINATIONS.arr);
     setCleanupDownloads(false);
     setCleanupConsentChanged(false);
     onCancel();
@@ -213,9 +207,10 @@ export function DeleteConfirmDialog({
   const confirmDisabled = deletionConfirmationBlocked({
     pending,
     hasSelection: items.length > 0,
-    preview: preview.isLoading ? "loading" : preview.isError ? "error" : "ready",
+    preview: preview.isFetching ? "loading" : preview.isError ? "error" : "ready",
     semanticBlock: ownershipProblems.length > 0 ||
-      (cleanupDownloads && cleanupAuthorizationKey === null),
+      (deleteFromArr && (!preview.data?.coordinatedConfigured || arrProblems.length > 0)) ||
+      (cleanupDownloads && (!effectiveCleanupDownloads || cleanupEligibleCount !== items.length)),
   });
 
   return (
@@ -235,9 +230,8 @@ export function DeleteConfirmDialog({
               plus {unknownSizeCount} unknown-size {unknownSizeCount === 1 ? "item" : "items"}
             </>
           )}
-          The selected items will be permanently removed. Actual disk space recovered may differ.
-          {" "}
-          This cannot be undone.
+          Librarian requests deletion through the selected services. Actual disk space recovered may
+          differ. This cannot be undone.
         </>
       }
     >
@@ -249,30 +243,7 @@ export function DeleteConfirmDialog({
                 {error instanceof Error ? error.message : "Delete failed"}
               </p>
             )}
-            {ownershipProblems.slice(0, 1).map((entry) => {
-              return effectiveDeleteFromArr && entry.arrTargets[0] &&
-                  /Sonarr library|Arr.*mapping/i.test(entry.ownershipReason ?? "")
-                ? (
-                  <DeletionPathAccess
-                    key={entry.ratingKey}
-                    libraryKey={libraryKey}
-                    ratingKey={entry.ratingKey}
-                    target={entry.arrTargets[0]}
-                    reason={entry.ownershipReason}
-                    onResolved={() => void preview.refetch()}
-                  />
-                )
-                : (
-                  <ServicePathAccess
-                    key={entry.ratingKey}
-                    libraryKey={libraryKey}
-                    reason={entry.ownershipReason}
-                    plexSample={entry.plexPathAccessSample}
-                    job={entry.qbittorrentPathAccessJob ?? entry.downloadJobs[0]}
-                    onResolved={() => void preview.refetch()}
-                  />
-                );
-            })}
+            <DeletionSetupLink reason={ownershipProblems[0]?.ownershipReason} />
             <DeletionPreviewStatus
               error={preview.isError
                 ? preview.error.message
@@ -284,11 +255,7 @@ export function DeleteConfirmDialog({
                   ? [
                     `${arrProblems.length} ${
                       arrProblems.length === 1 ? "item has" : "items have"
-                    } no verified Arr destination. Plex and any independently selected qBittorrent cleanup will still run. ${
-                      arrProblems.length === 1 ? "It" : "They"
-                    } may be downloaded again if ${
-                      arrProblems.length === 1 ? "it remains" : "they remain"
-                    } monitored.`,
+                    } no verified Arr destination. Review the selection or explicitly turn off ${arrLabel} to continue with Plex only.`,
                   ]
                   : []),
                 ...(effectiveCleanupDownloads && cleanupProblems.length > 0
@@ -370,6 +337,13 @@ export function DeleteConfirmDialog({
                 />
               }
             />
+            {cleanupDownloads &&
+              cleanupDestinationPreview?.items.some((item) => item.noJobReason) && (
+              <p className="mt-2 text-xs">
+                Some selected media has no matching live qBittorrent job. Those items have no
+                qBittorrent deletion target.
+              </p>
+            )}
             {hasMultiVersionItems && (
               <p className="mt-1.5 text-xs text-base-content/40">
                 Items marked with multiple versions lose all of them here. To remove just one, use
@@ -392,7 +366,7 @@ export function DeleteConfirmDialog({
                 true &&
               !effectiveCleanupDownloads}
             options={[
-              ...(coordinatedRatingKeys.length > 0
+              ...(arrDestination.visible || deleteFromArr
                 ? [{
                   id: "arr" as const,
                   service: arrService,
@@ -400,15 +374,15 @@ export function DeleteConfirmDialog({
                   info: arrService === "sonarr"
                     ? "Delete current matched Sonarr media. Verified qBittorrent files are kept unless qBittorrent is also selected."
                     : `Delete the selected media and its files from ${arrLabel}.`,
-                  checked: effectiveDeleteFromArr,
-                  disabled: pending || preview.isLoading,
+                  checked: deleteFromArr,
+                  disabled: pending || preview.isFetching,
                   warning: arrProblems.length > 0,
                   onChange: (checked: boolean) => {
                     setDeleteFromArr(checked);
                   },
                 }]
                 : []),
-              ...(cleanupDestinationVisible
+              ...(cleanupDestinationVisible || cleanupDownloads
                 ? [{
                   id: "cleanup" as const,
                   service: "qbittorrent" as const,
@@ -416,7 +390,7 @@ export function DeleteConfirmDialog({
                   info:
                     "Delete matching torrents and their files. Only verified matches are deleted; unselected media and shared downloads are protected.",
                   checked: cleanupDownloads,
-                  disabled: pending || preview.isLoading,
+                  disabled: pending || preview.isFetching,
                   warning: effectiveCleanupDownloads && cleanupProblems.length > 0,
                   onChange: (checked: boolean) => {
                     acceptedCleanupKeyRef.current = checked ? cleanupAuthorizationKey : null;
@@ -434,7 +408,7 @@ export function DeleteConfirmDialog({
             pending={pending}
             preparing={showPreviewLoading}
             confirmDisabled={confirmDisabled}
-            confirmLabel="Delete permanently"
+            confirmLabel="Confirm deletion"
             onCancel={cancel}
             onConfirm={() =>
               onConfirm({
@@ -445,17 +419,14 @@ export function DeleteConfirmDialog({
                 cleanupPreviewFingerprints: Object.fromEntries(
                   items.flatMap((item) => {
                     const itemPreview = previewByRatingKey.get(item.ratingKey);
-                    const fingerprint = effectiveDeleteFromArr
-                      ? itemPreview?.cleanupFingerprint
-                      : itemPreview?.qbittorrentOnlyFingerprint;
-                    if (effectiveCleanupDownloads && fingerprint) {
-                      return [[item.ratingKey, fingerprint]];
-                    }
-                    if (
-                      effectiveDeleteFromArr && item.type === "show" &&
-                      itemPreview?.sonarrCleanupFingerprint
-                    ) return [[item.ratingKey, itemPreview.sonarrCleanupFingerprint]];
-                    return [];
+                    const fingerprint = effectiveCleanupDownloads
+                      ? (effectiveDeleteFromArr
+                        ? itemPreview?.cleanupFingerprint
+                        : itemPreview?.qbittorrentOnlyFingerprint)
+                      : (effectiveDeleteFromArr
+                        ? itemPreview?.sonarrCleanupFingerprint
+                        : itemPreview?.plexOnlyFingerprint);
+                    return fingerprint ? [[item.ratingKey, fingerprint]] : [];
                   }),
                 ),
               })}

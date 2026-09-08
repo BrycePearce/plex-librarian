@@ -1,13 +1,10 @@
 import { assertEquals } from "@std/assert";
-import type { SeasonRemovalPreviewResponse } from "@shared/types";
 import {
   seasonCleanupAvailable,
-  seasonRemovalHistoricalPaths,
   seasonSonarrActionAvailable,
   seasonSonarrOptionInfo,
   usableSeasonRemovalPreview,
 } from "./SeasonRemovalDialog.tsx";
-import { sonarrRetainedPathsSummary } from "../../features/mediaDeletion/SonarrRetainedPathsWarning.tsx";
 
 Deno.test("season cleanup option appears only for a detected qBittorrent job", () => {
   assertEquals(seasonCleanupAvailable(undefined), false);
@@ -32,23 +29,6 @@ Deno.test("season Sonarr option appears only for a detected action", () => {
   assertEquals(seasonSonarrActionAvailable(undefined), false);
   assertEquals(seasonSonarrActionAvailable({ sonarrActionAvailable: false }), false);
   assertEquals(seasonSonarrActionAvailable({ sonarrActionAvailable: true }), true);
-});
-
-Deno.test("stale-season preview ignores historical paths", () => {
-  const paths = [{
-    path: "/downloads/episode.mkv",
-    managedPath: "/library/episode.mkv",
-    size: 100,
-    disposition: "unverified" as const,
-    reason: "ownership inspection failed",
-  }];
-  const preview = { sonarrHistoricalPaths: paths } as SeasonRemovalPreviewResponse;
-  assertEquals(seasonRemovalHistoricalPaths(preview, false), []);
-  assertEquals(seasonRemovalHistoricalPaths(preview, true), []);
-  assertEquals(
-    sonarrRetainedPathsSummary(seasonRemovalHistoricalPaths(preview, true))?.unverifiedCount,
-    undefined,
-  );
 });
 
 Deno.test("a failed season preview never exposes retained placeholder data", () => {

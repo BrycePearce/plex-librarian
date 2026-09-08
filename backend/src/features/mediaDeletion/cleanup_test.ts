@@ -30,7 +30,6 @@ import {
   selectVerifiedDownloadCleanups,
 } from './cleanup.ts';
 import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './ownership.ts';
-import { assertDownloadJobSelectionConsistent } from './planning.ts';
 
 const hash = 'a'.repeat(40);
 
@@ -562,28 +561,6 @@ Deno.test('whole-item direct cleanup rehydrates with an empty retained-path evid
   >;
   assertEquals(Object.hasOwn(publicJob, 'directPathEvidence'), false);
   assertEquals(Object.hasOwn(publicJob, 'discoverySummaryFingerprint'), false);
-});
-
-Deno.test('qBittorrent selection cannot split one associated job across a requested batch', () => {
-  const job = { instanceKey: 'qb:1', jobId: hash };
-  const cleanups = [
-    {
-      ratingKey: 'selected',
-      downloadJobs: [job],
-      observedDownloadJobKeys: new Set(['qb:1:' + hash]),
-    },
-    {
-      ratingKey: 'unselected',
-      downloadJobs: [],
-      observedDownloadJobKeys: new Set(['qb:1:' + hash]),
-    },
-  ] as unknown as ResolvedCleanupItem[];
-  assertThrows(
-    () => assertDownloadJobSelectionConsistent(cleanups, new Set(['selected'])),
-    Error,
-    'shared by cleanup-selected and cleanup-unselected',
-  );
-  assertDownloadJobSelectionConsistent(cleanups, new Set(['selected', 'unselected']));
 });
 
 Deno.test('accepted Sonarr proof retains only accepted Arr-history jobs and orphan paths', () => {

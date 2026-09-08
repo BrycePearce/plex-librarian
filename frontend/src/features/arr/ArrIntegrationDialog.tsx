@@ -12,6 +12,7 @@ import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectio
 import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
 import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard.tsx";
 import { IntegrationCompatibilityIndicator } from "../integrationCompatibility/IntegrationCompatibilityIndicator.tsx";
+import { ServiceStorageSetup } from "./ServiceStorageSetup.tsx";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -87,6 +88,7 @@ export function ArrIntegrationDialog() {
   const remove = useMutation({
     mutationFn: api.arr.deleteInstance,
     onSuccess: async () => {
+      qc.removeQueries({ queryKey: ["service-storage"] });
       await qc.invalidateQueries({ queryKey: queryKeys.arrIntegrations.all });
       await qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
       setPendingRemoval(null);
@@ -114,6 +116,7 @@ export function ArrIntegrationDialog() {
   const removeQbittorrent = useMutation({
     mutationFn: api.qbittorrent.deleteInstance,
     onSuccess: async () => {
+      qc.removeQueries({ queryKey: ["service-storage"] });
       await qc.invalidateQueries({
         queryKey: queryKeys.qbittorrentIntegrations.all,
       });
@@ -329,6 +332,7 @@ export function ArrIntegrationDialog() {
                 setView("remove-qbittorrent");
               }}
             />
+            <ServiceStorageSetup />
             <SeerrConnections
               onConfigure={openSeerrWizard}
               onRemove={(instance) => {
@@ -342,7 +346,7 @@ export function ArrIntegrationDialog() {
                 <div className="min-w-0 flex-1">
                   <h3 className="text-sm font-medium">Advanced</h3>
                   <p className="mt-0.5 text-xs text-base-content/50">
-                    Configure filesystem namespaces for uncommon Plex and Radarr layouts.
+                    Optional local access for duplicate-version adoption.
                   </p>
                 </div>
                 {(plexPathMappings?.length ?? 0) > 0 && (
@@ -355,9 +359,9 @@ export function ArrIntegrationDialog() {
                 <div>
                   <h3 className="font-medium">Plex file namespace mappings</h3>
                   <p className="mt-1 text-xs leading-relaxed text-base-content/55">
-                    Map a Plex-visible prefix to the same files mounted inside Plex Librarian. A
-                    live Plex Part and exact local file size validate each server- and
-                    library-specific mapping. Equal-looking paths are never inferred.
+                    Duplicate adoption only: map a Plex-visible prefix to the same files mounted
+                    inside Plex Librarian. A live Plex Part and exact local file size validate each
+                    server- and library-specific mapping. Equal-looking paths are never inferred.
                   </p>
                 </div>
                 {plexPathMappings?.map((mapping) => (
@@ -482,13 +486,14 @@ export function ArrIntegrationDialog() {
           librariesError={librariesError}
           initialType={initialType}
           editingInstanceId={editingInstanceId}
-          onCancel={() => dialogRef.current?.close()}
+          onCancel={() => setView("manager")}
           onSaved={() => {
+            qc.removeQueries({ queryKey: ["service-storage"] });
             void qc.invalidateQueries({
               queryKey: queryKeys.arrIntegrations.all,
             });
             void qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
-            dialogRef.current?.close();
+            setView("manager");
           }}
         />
       )}
@@ -498,13 +503,14 @@ export function ArrIntegrationDialog() {
           key={qbittorrentWizardKey}
           instance={editingQbittorrent}
           arrInstances={data.instances}
-          onCancel={() => dialogRef.current?.close()}
+          onCancel={() => setView("manager")}
           onSaved={() => {
+            qc.removeQueries({ queryKey: ["service-storage"] });
             void qc.invalidateQueries({
               queryKey: queryKeys.qbittorrentIntegrations.all,
             });
             void qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
-            dialogRef.current?.close();
+            setView("manager");
           }}
         />
       )}

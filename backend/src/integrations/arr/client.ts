@@ -224,6 +224,7 @@ export class ArrApiError extends Error {
     message: string,
     readonly status?: number,
     readonly retryable = false,
+    readonly deletionRejected = false,
   ) {
     super(message);
   }
@@ -336,7 +337,11 @@ export class ArrClient {
     this.baseUrl = `${normalizeArrUrl(url)}/api/v3`;
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init?: RequestInit,
+    onResponse?: (status: number) => void,
+  ): Promise<T> {
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -366,9 +371,49 @@ export class ArrClient {
       );
     }
 
-    if (response.status === 204) return undefined as T;
+    if (response.status === 204) {
+      onResponse?.(response.status);
+      return undefined as T;
+    }
     const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
+    const result = text ? (JSON.parse(text) as T) : (undefined as T);
+    if (onResponse && text && (!result || typeof result !== 'object')) {
+      throw new ArrApiError(
+        'The media manager returned an ambiguous deletion response',
+        response.status,
+      );
+    }
+    if (onResponse && result && typeof result === 'object') {
+      const body = result as Record<string, unknown>;
+      if (
+        body.error || body.errorMessage ||
+        body.errors && (!Array.isArray(body.errors) || body.errors.length > 0) ||
+        ['failed', 'error', 'aborted'].includes(String(body.status).toLowerCase())
+      ) {
+        throw new ArrApiError(
+          'The media manager rejected the deletion request',
+          response.status,
+          false,
+          true,
+        );
+      }
+      if (
+        Array.isArray(result) || body.error || body.errors || body.errorMessage ||
+        ['failed', 'error', 'aborted'].includes(String(body.status).toLowerCase()) ||
+        Object.keys(body).length > 0 && !(response.status === 202 &&
+            Number.isSafeInteger(body.id) && Number(body.id) > 0 &&
+            ['queued', 'started', 'pending', 'completed'].includes(
+              String(body.status).toLowerCase(),
+            ))
+      ) {
+        throw new ArrApiError(
+          'The media manager returned a failed or ambiguous deletion response',
+          response.status,
+        );
+      }
+    }
+    onResponse?.(response.status);
+    return result;
   }
 
   private async boundedRequest<T>(
@@ -1300,9 +1345,19 @@ export class ArrClient {
     return { quiet: blocking.length === 0, blocking };
   }
 
-  async deleteManagedFile(fileId: number): Promise<void> {
+  async deleteManagedFile(
+    fileId: number,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
     const resource = this.type === 'radarr' ? 'moviefile' : 'episodefile';
-    await this.request<void>(`/${resource}/${fileId}`, { method: 'DELETE' });
+    await this.request<void>(
+      `/${resource}/${fileId}`,
+      { method: 'DELETE' },
+      (httpStatus) =>
+        onResponse?.({ status: httpStatus === 202 ? 'accepted' : 'succeeded', httpStatus }),
+    );
   }
 
   async sonarrEpisodeFile(fileId: number): Promise<SonarrSeriesEpisodeFile | null> {
@@ -2009,12 +2064,60 @@ export class ArrClient {
     return false;
   }
 
-  async deleteMedia(id: number, addImportExclusion: boolean): Promise<void> {
+  async deleteMedia(
+    id: number,
+    addImportExclusion: boolean,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
     const resource = this.type === 'radarr' ? 'movie' : 'series';
     const exclusionParam = this.type === 'radarr' ? 'addImportExclusion' : 'addImportListExclusion';
+    let httpStatus = 0;
     await this.request<void>(
       `/${resource}/${id}?deleteFiles=true&${exclusionParam}=${addImportExclusion}`,
       { method: 'DELETE' },
+      (status) => {
+        httpStatus = status;
+      },
+    );
+    onResponse?.({ status: httpStatus === 202 ? 'accepted' : 'succeeded', httpStatus });
+  }
+
+  /** Bounded service inventory for directory effects, never a filesystem traversal. */
+  async managedScopes(): Promise<Array<{ id: number; path: string }>> {
+    const raw = await this.boundedRequest<unknown>(
+      this.type === 'sonarr' ? '/series' : '/movie',
+      16 * 1024 * 1024,
+      'managed folder inventory',
+    );
+    if (!Array.isArray(raw) || raw.length > 20000) {
+      throw new ArrApiError('Managed folder inventory is incomplete or too large');
+    }
+    const seen = new Set<number>();
+    return raw.map((record) => {
+      if (
+        !record || !Number.isSafeInteger(record.id) || record.id <= 0 ||
+        typeof record.path !== 'string' || !record.path || seen.has(record.id)
+      ) throw new ArrApiError('Managed folder inventory contains invalid identities');
+      seen.add(record.id);
+      return { id: record.id, path: record.path };
+    });
+  }
+
+  async remotePathHints(): Promise<Array<{ remotePath: string; localPath: string }>> {
+    const raw = await this.boundedRequest<unknown>(
+      '/remotepathmapping',
+      1024 * 1024,
+      'remote mapping hints',
+    );
+    if (!Array.isArray(raw) || raw.length > 1000) {
+      throw new ArrApiError('Invalid remote mapping hints');
+    }
+    return raw.flatMap((row) =>
+      typeof row?.remotePath === 'string' && typeof row?.localPath === 'string'
+        ? [{ remotePath: row.remotePath, localPath: row.localPath }]
+        : []
     );
   }
 
