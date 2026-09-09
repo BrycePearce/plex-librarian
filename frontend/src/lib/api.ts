@@ -259,6 +259,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   serviceStorage: {
+    confirm: (fingerprint: string) =>
+      apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
+        "/settings/service-storage/confirm",
+        {
+          method: "POST",
+          body: JSON.stringify({ fingerprint, confirmed: true }),
+        },
+      ),
     get: (discover = false) =>
       apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
         `/settings/service-storage?discover=${discover}`,

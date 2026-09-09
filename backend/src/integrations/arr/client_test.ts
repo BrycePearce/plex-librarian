@@ -7,6 +7,25 @@ import {
   normalizeArrUrl,
 } from './client.ts';
 
+Deno.test('remote mapping suggestions preserve their download-client host and omit unscoped records', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    (() =>
+      Promise.resolve(Response.json([
+        { host: 'qb-one', remotePath: '/downloads', localPath: '/data/downloads' },
+        { host: 'qb-two', remotePath: '/downloads', localPath: '/other/downloads' },
+        { remotePath: '/unscoped', localPath: '/data/unscoped' },
+        { host: '', remotePath: '/empty', localPath: '/data/empty' },
+      ]))) as typeof fetch,
+  );
+  assertEquals(await client.remotePathHints(), [
+    { host: 'qb-one', remotePath: '/downloads', localPath: '/data/downloads' },
+    { host: 'qb-two', remotePath: '/downloads', localPath: '/other/downloads' },
+  ]);
+});
+
 Deno.test('ArrClient reads Sonarr and Radarr root folders in stable order with duplicates', async () => {
   const response = [
     { id: 2, path: ' /data/TV ' },

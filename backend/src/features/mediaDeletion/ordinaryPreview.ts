@@ -3,9 +3,13 @@ import { buildOrdinaryDeletionPlan, type OrdinaryDeletionPlan } from './ordinary
 import { retainedPlexScopeErrors, type RetainedPlexScopeInput } from './ordinaryScope.ts';
 type Input = Omit<
   Parameters<typeof buildOrdinaryDeletionPlan>[0],
-  'arrSelected' | 'qbSelected' | 'retainedPlexCheck'
+  'arrSelected' | 'qbSelected' | 'retainedPlexCheck' | 'onPlexFiles'
 >;
-type Scope = { plan?: OrdinaryDeletionPlan; error?: string };
+type Scope = {
+  plan?: OrdinaryDeletionPlan;
+  error?: string;
+  discoveredPlexFiles?: OrdinaryDeletionPlan['plexFiles'];
+};
 
 export async function ordinaryPreview(input: Input): Promise<DownloadCleanupPreviewItem> {
   return (await ordinaryPreviews([input]))[0];
@@ -34,6 +38,9 @@ export async function ordinaryPreviews(
           ...input,
           arrSelected,
           qbSelected,
+          onPlexFiles: (files) => {
+            scope.discoveredPlexFiles = files;
+          },
           retainedPlexCheck: (value) => {
             check = value;
             return Promise.resolve();
@@ -71,12 +78,13 @@ function presentPreview(input: Input, scopes: Scope[]): DownloadCleanupPreviewIt
   const shown = both.plan ?? qb.plan ?? arr.plan ?? plex.plan;
   const managed = both.plan ?? arr.plan;
   const downloads = both.plan ?? qb.plan;
+  const plexFiles = shown?.plexFiles ?? plex.discoveredPlexFiles;
   return {
     ratingKey: input.selection.ratingKey,
-    plexPaths: shown?.plexFiles.map((file) => file.path) ?? [],
-    plexPathStatus: shown ? 'resolved' : 'error',
+    plexPaths: plexFiles?.map((file) => file.path) ?? [],
+    plexPathStatus: plexFiles ? 'resolved' : 'error',
     plexPathsTruncated: false,
-    plexPathReason: shown ? undefined : plex.error,
+    plexPathReason: plexFiles ? undefined : plex.error,
     status: cleanup.plan ? 'resolved' : 'error',
     reason: cleanup.error,
     arrStatus: managed ? 'resolved' : 'unavailable',

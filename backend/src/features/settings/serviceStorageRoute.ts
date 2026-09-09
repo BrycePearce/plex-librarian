@@ -1,20 +1,101 @@
 import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
-import { db, withTransaction } from '../../db/index.ts';
+import { db, type SqliteClient, withTransaction } from '../../db/index.ts';
 import { servicePathRoots } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
-import { loadServiceRoots, serviceEndpoints } from '../mediaDeletion/serviceStorage.ts';
+import {
+  evidenceFingerprint,
+  loadServiceRoots,
+  serviceEndpoints,
+} from '../mediaDeletion/serviceStorage.ts';
 import { storageContains, storagePath } from '../../../../shared/serviceStorage.ts';
+import { automaticStorage } from './automaticStorage.ts';
+
+// Bind a slow discovery request to the configuration present when it began.
+// Credentials remain inside this digest and are never returned to clients.
+function configurationSnapshot(client: SqliteClient, serverId: number): string {
+  return evidenceFingerprint([
+    client.prepare('SELECT active_server_id FROM settings WHERE id=1').all(),
+    client.prepare('SELECT id,machine_identifier,url,access_token FROM servers WHERE id=?').all(
+      serverId,
+    ),
+    client.prepare('SELECT key,type FROM libraries WHERE server_id=? ORDER BY key').all(serverId),
+    client.prepare(
+      'SELECT * FROM arr_library_mappings WHERE server_id=? ORDER BY library_key,arr_instance_id',
+    ).all(serverId),
+    ...['arr_instances', 'qbittorrent_instances', 'service_path_roots'].map((table) =>
+      client.prepare(`SELECT * FROM ${table} WHERE server_id=? ORDER BY id`).all(serverId)
+    ),
+  ]);
+}
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 router.get('/', async (c) => {
   const serverId = c.get('activeServerId');
   if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+  const discover = c.req.query('discover') === 'true';
+  const endpoints = await serviceEndpoints(serverId, discover);
+  const relationships = await loadServiceRoots(serverId);
   return c.json({
-    endpoints: await serviceEndpoints(serverId, c.req.query('discover') === 'true'),
-    relationships: await loadServiceRoots(serverId),
+    endpoints,
+    relationships,
+    ...(discover ? { automation: automaticStorage(endpoints, relationships) } : {}),
   });
+});
+router.post('/confirm', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+  const body = await c.req.json().catch(() => null);
+  if (body?.confirmed !== true || typeof body.fingerprint !== 'string') {
+    return c.json({ error: 'Confirm the proposed shared storage layout' }, 400);
+  }
+  try {
+    const before = withTransaction((client) => configurationSnapshot(client, serverId));
+    const endpoints = await serviceEndpoints(serverId, true);
+    const roots = await loadServiceRoots(serverId);
+    const automation = automaticStorage(endpoints, roots);
+    const proposal = automation.proposal;
+    if (
+      automation.status !== 'confirmation_required' || !proposal ||
+      proposal.fingerprint !== body.fingerprint
+    ) {
+      throw new Error(
+        'The proposed storage layout changed. Refresh connections and review it again.',
+      );
+    }
+    withTransaction((client) => {
+      if (configurationSnapshot(client, serverId) !== before) {
+        throw new Error(
+          'Connections or storage relationships changed during discovery. Refresh setup.',
+        );
+      }
+      for (const root of proposal.relationships) {
+        client.prepare(
+          'INSERT INTO service_path_roots (server_id,service_key,configuration_identity,service_root,storage_root,case_sensitive,has_aliases) VALUES (?,?,?,?,?,?,?)',
+        ).run(
+          serverId,
+          root.serviceKey,
+          root.configurationIdentity,
+          root.serviceRoot,
+          root.storageRoot,
+          Number(root.caseSensitive),
+          Number(root.hasAliases),
+        );
+      }
+    });
+    const relationships = await loadServiceRoots(serverId);
+    return c.json({
+      endpoints,
+      relationships,
+      automation: automaticStorage(endpoints, relationships),
+    }, 201);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : 'Storage confirmation failed' },
+      409,
+    );
+  }
 });
 router.post('/', async (c) => {
   const serverId = c.get('activeServerId');

@@ -11,6 +11,7 @@ import {
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { ArrClient } from '../../integrations/arr/client.ts';
 import { getDownloadClientTargets } from './targets.ts';
+import { plexStorageDiscovery } from './plexStorageDiscovery.ts';
 import type { ServicePathRoot, ServiceStorageEndpoint } from '../../../../shared/serviceStorage.ts';
 
 export function evidenceFingerprint(value: unknown): string {
@@ -48,6 +49,9 @@ export async function serviceEndpoints(
   );
   const qb = await getDownloadClientTargets(serverId);
   const endpoints: ServiceStorageEndpoint[] = [];
+  const plexDiscovery = discover
+    ? await plexStorageDiscovery(active.client).catch(() => undefined)
+    : undefined;
   async function add(
     endpoint: ServiceStorageEndpoint,
     read: (tested: () => void) => Promise<string[]>,
@@ -73,6 +77,7 @@ export async function serviceEndpoints(
       key: `plex:${library.key}`,
       name: `Plex · ${library.title}`,
       libraryKeys: [library.key],
+      supportedMedia: library.type === 'movie' || library.type === 'show',
       roots: [],
       configurationIdentity: evidenceFingerprint([
         serverId,
@@ -80,14 +85,15 @@ export async function serviceEndpoints(
         server?.machineIdentifier,
         Deno.env.get('PLEX_TOKEN') || server?.accessToken,
       ]),
-    }, async (tested) => {
-      await active.client.identity();
+    }, (tested) => {
+      if (!plexDiscovery) throw new Error('Plex connection test failed');
       tested();
-      return (await active.client.libraryLocations(library.key)).locations.map((root) => root.path);
+      if (!plexDiscovery.read) throw new Error('Plex root discovery failed');
+      return Promise.resolve(plexDiscovery.read(library.key).locations.map((root) => root.path));
     });
   }
   for (const arr of arrRows) {
-    await add({
+    const endpoint: ServiceStorageEndpoint = {
       key: `arr:${arr.id}`,
       name: arr.name,
       libraryKeys: mappings.filter((mapping) => mapping.arrInstanceId === arr.id).map((mapping) =>
@@ -95,12 +101,22 @@ export async function serviceEndpoints(
       ),
       roots: [],
       configurationIdentity: evidenceFingerprint([arr.id, arr.url, arr.apiKey, arr.updatedAt]),
-    }, async (tested) => {
+      supportedMedia: mappings.some((mapping) =>
+        mapping.arrInstanceId === arr.id &&
+        libraryRows.some((library) =>
+          library.key === mapping.libraryKey &&
+          (library.type === 'movie' || library.type === 'show')
+        )
+      ),
+    };
+    await add(endpoint, async (tested) => {
       const client = new ArrClient(arr.type, arr.url, arr.apiKey);
       await client.testConnection();
       tested();
       const roots = (await client.rootFolders()).map((root) => root.path);
-      for (const hint of await client.remotePathHints()) roots.push(hint.localPath);
+      // Host-scoped suggestions only: never turn these into trusted relationships.
+      endpoint.remotePathHints = await client.remotePathHints();
+      for (const hint of endpoint.remotePathHints) roots.push(hint.localPath);
       // Current records include moved media outside the configured default roots.
       for (const scope of await client.managedScopes()) {
         if (!roots.some((root) => scope.path === root || scope.path.startsWith(`${root}/`))) {
@@ -116,6 +132,8 @@ export async function serviceEndpoints(
       name: target.instanceName,
       configurationIdentity: evidenceFingerprint(target.configurationIdentity),
       libraryKeys: libraryRows.map((library) => library.key),
+      supportedMedia: true,
+      connectionHost: target.instanceUrl ? new URL(target.instanceUrl).hostname : undefined,
       roots: [],
     }, async (tested) => {
       if (!target.client.scanJobSummaries) throw new Error('Current job inventory is unavailable');

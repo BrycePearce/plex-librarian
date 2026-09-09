@@ -90,6 +90,8 @@ export async function buildOrdinaryDeletionPlan(input: {
   connections: ServiceStorageEndpoint[];
   seasonEpisodes?: readonly PlexSeasonDeletionEpisode[];
   retainedPlexCheck?: RetainedPlexCheck;
+  /** Display-only discovery; it never grants eligibility or supplies accepted evidence. */
+  onPlexFiles?: (files: OrdinaryDeletionPlan['plexFiles']) => void;
 }): Promise<OrdinaryDeletionPlan> {
   const { selection, arrSelected, qbSelected } = input;
   if (qbSelected && input.downloadTargets.length === 0) {
@@ -137,12 +139,6 @@ export async function buildOrdinaryDeletionPlan(input: {
   const roots = input.roots.filter((root) => serviceKeys.has(root.serviceKey)).sort((a, b) =>
     a.id - b.id
   );
-  if (arrSelected || input.downloadTargets.length) {
-    assertRootConfigurations(
-      roots.filter((root) => root.serviceKey.startsWith('plex:')),
-      connections,
-    );
-  }
   const mapped = (key: string, path: string) => {
     assertRootConfigurations(
       roots.filter((root) =>
@@ -195,6 +191,13 @@ export async function buildOrdinaryDeletionPlan(input: {
       throw new Error('Conflicting Plex file sizes');
     }
     uniquePlex.set(file.path, file);
+  }
+  input.onPlexFiles?.([...uniquePlex.values()].map((file) => ({ ...file })));
+  if (arrSelected || input.downloadTargets.length) {
+    assertRootConfigurations(
+      roots.filter((root) => root.serviceKey.startsWith('plex:')),
+      connections,
+    );
   }
   const arr: OrdinaryArrScope[] = [];
   const retained: Array<{ serviceKey: string; path: string }> = [];

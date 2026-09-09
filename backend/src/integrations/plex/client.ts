@@ -568,25 +568,40 @@ export class PlexClient {
   }
 
   async libraryLocations(libraryKey: string): Promise<PlexLibraryLocationEvidence> {
+    return (await this.libraryLocationReader())(libraryKey);
+  }
+
+  /** One bounded, request-scoped snapshot; every requested library is validated separately. */
+  async libraryLocationReader(): Promise<(libraryKey: string) => PlexLibraryLocationEvidence> {
     const data = await this.getBounded<{
       MediaContainer?: { Directory?: PlexLibrary[]; size?: number };
     }>(
-      `/library/sections/${encodeURIComponent(libraryKey)}`,
+      // The section detail endpoint returns navigation directories (all, unwatched,
+      // etc.). Storage Location records belong to the section listing instead.
+      '/library/sections',
       1024 * 1024,
       'library-section response',
     );
     const directories = data.MediaContainer?.Directory;
-    if (!Array.isArray(directories) || directories.length !== 1) {
-      throw new Error('Plex returned an incomplete exact library-section response');
+    if (!Array.isArray(directories)) {
+      throw new Error('Plex returned an incomplete library-section listing');
     }
-    const section = directories[0]!;
-    if (String(section.key) !== libraryKey || !Array.isArray(section.Location)) {
+    return (libraryKey) => this.readLibraryLocations(directories, libraryKey);
+  }
+
+  private readLibraryLocations(
+    directories: PlexLibrary[],
+    libraryKey: string,
+  ): PlexLibraryLocationEvidence {
+    const matches = directories.filter((section) => String(section.key) === libraryKey);
+    const sectionLocations = matches[0]?.Location;
+    if (matches.length !== 1 || !Array.isArray(sectionLocations)) {
       throw new Error('Plex returned a conflicting library section or omitted its locations');
     }
-    if (section.Location.length === 0 || section.Location.length > 100) {
+    if (sectionLocations.length === 0 || sectionLocations.length > 100) {
       throw new Error('Plex library location coverage is empty or exceeds the safety limit');
     }
-    const locations = section.Location.map((location) => {
+    const locations = sectionLocations.map((location) => {
       const id = Number(location.id);
       const path = location.path?.trim() ?? '';
       if (!Number.isSafeInteger(id) || id < 0 || !path) {

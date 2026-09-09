@@ -2105,7 +2105,7 @@ export class ArrClient {
     });
   }
 
-  async remotePathHints(): Promise<Array<{ remotePath: string; localPath: string }>> {
+  async remotePathHints(): Promise<Array<{ host: string; remotePath: string; localPath: string }>> {
     const raw = await this.boundedRequest<unknown>(
       '/remotepathmapping',
       1024 * 1024,
@@ -2115,8 +2115,10 @@ export class ArrClient {
       throw new ArrApiError('Invalid remote mapping hints');
     }
     return raw.flatMap((row) =>
-      typeof row?.remotePath === 'string' && typeof row?.localPath === 'string'
-        ? [{ remotePath: row.remotePath, localPath: row.localPath }]
+      typeof row?.host === 'string' && row.host.trim() &&
+        typeof row.remotePath === 'string' && row.remotePath.trim() &&
+        typeof row.localPath === 'string' && row.localPath.trim()
+        ? [{ host: row.host.trim(), remotePath: row.remotePath, localPath: row.localPath }]
         : []
     );
   }

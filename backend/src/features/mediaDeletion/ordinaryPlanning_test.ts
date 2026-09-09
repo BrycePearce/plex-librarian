@@ -12,6 +12,48 @@ await runMigrations(Deno.env.get('DB_PATH')!, resolve(import.meta.dirname!, '../
 const { buildOrdinaryDeletionPlan } = await import('./ordinaryPlanning.ts');
 const { ordinaryPreview } = await import('./ordinaryPreview.ts');
 
+Deno.test('blocked storage setup preserves discovered Plex paths without authorizing any destination', async () => {
+  for (const problem of ['missing', 'uncovered', 'overlap', 'aliases', 'connection'] as const) {
+    const { input } = fixture();
+    let expected: string;
+    if (problem === 'missing') {
+      input.roots = [];
+      expected = 'No storage relationship covers the selected files for plex:tv';
+    } else if (problem === 'uncovered') {
+      input.roots[0].serviceRoot = '/another-library';
+      expected = 'No storage relationship covers the selected files for plex:tv';
+    } else if (problem === 'overlap') {
+      input.roots.push({ ...input.roots[0], id: 50, serviceRoot: '/plex/Jessica' });
+      expected = 'Overlapping storage relationships cover the selected files for plex:tv';
+    } else if (problem === 'aliases') {
+      input.roots[0].hasAliases = true;
+      expected = 'declares aliases';
+    } else {
+      input.roots[0].configurationIdentity = 'old connection';
+      expected = 'needs confirmation after its connection changed';
+    }
+    const preview = await ordinaryPreview(input);
+    assertEquals(preview.plexPathStatus, 'resolved', problem);
+    assertEquals(
+      preview.plexPaths,
+      [1, 2, 3].map((id) => `/plex/Jessica/Season ${id}/episode.mkv`),
+    );
+    assertEquals(preview.plexOnlyStatus, 'error', problem);
+    assertEquals(preview.sonarrCleanupStatus, 'error', problem);
+    assertEquals(preview.qbittorrentOnlyStatus, 'error', problem);
+    assertEquals(preview.status, 'error', problem);
+    assertEquals(preview.plexOnlyReason?.includes(expected), true, problem);
+    assertEquals(preview.plexOnlyReason?.includes('/plex'), false, problem);
+    assertEquals([
+      preview.plexOnlyFingerprint,
+      preview.sonarrCleanupFingerprint,
+      preview.qbittorrentOnlyFingerprint,
+      preview.cleanupFingerprint,
+    ], [undefined, undefined, undefined, undefined]);
+    await assertRejects(() => buildOrdinaryDeletionPlan(input), Error, expected);
+  }
+});
+
 function fixture() {
   const selection = {
     ratingKey: 'show',

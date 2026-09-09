@@ -19,11 +19,29 @@ export interface ServiceStorageEndpoint {
   roots: string[];
   discoveryError?: string;
   connectionTestedAt?: number;
+  supportedMedia?: boolean;
+  connectionHost?: string;
+  remotePathHints?: { host: string; remotePath: string; localPath: string }[];
+}
+
+export type ProposedServiceRoot = Omit<ServicePathRoot, 'id' | 'serverId' | 'revision'>;
+
+export interface ServiceStorageAutomation {
+  unavailableServices?: Array<{ serviceKey: string; name: string; reason: string }>;
+  status: 'ready' | 'confirmation_required' | 'unavailable';
+  reason?: string;
+  proposal?: {
+    fingerprint: string;
+    sharedRoot: string;
+    serviceNames: string[];
+    relationships: ProposedServiceRoot[];
+  };
 }
 
 export interface ServiceStorageSettings {
   endpoints: ServiceStorageEndpoint[];
   relationships: ServicePathRoot[];
+  automation?: ServiceStorageAutomation;
 }
 
 export interface ServiceDeletionResponse {
@@ -64,9 +82,19 @@ export function configuredStoragePath(
     root.serviceKey === serviceKey &&
     storageContains(root.serviceRoot, normalized, root.caseSensitive)
   );
-  if (matches.length !== 1 || matches[0].hasAliases) {
+  if (matches.length === 0) {
     throw new Error(
-      `Storage relationship is missing, ambiguous, or has declared aliases for ${serviceKey}. Review Media connections.`,
+      `No storage relationship covers the selected files for ${serviceKey}. In Media connections, add a relationship for this service's media root.`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Overlapping storage relationships cover the selected files for ${serviceKey}. In Media connections, keep one unambiguous relationship for these files.`,
+    );
+  }
+  if (matches[0].hasAliases) {
+    throw new Error(
+      `The storage relationship for ${serviceKey} declares aliases. Review this relationship in Media connections; deletion is unavailable while its paths have unresolved aliases.`,
     );
   }
   const root = matches[0];

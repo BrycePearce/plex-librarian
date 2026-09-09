@@ -17,6 +17,13 @@ export function ServiceStorageSetup() {
   const [editing, setEditing] = useState<
     { endpoint: ServiceStorageEndpoint; root?: ServicePathRoot }
   >();
+  const [advanced, setAdvanced] = useState(false);
+  const confirm = useMutation({
+    mutationFn: (fingerprint: string) => api.serviceStorage.confirm(fingerprint),
+    onSuccess: (data) => {
+      qc.setQueryData(["service-storage"], data);
+    },
+  });
   if (query.isPending) {
     return <p role="status">Testing connections and discovering current service roots…</p>;
   }
@@ -32,77 +39,150 @@ export function ServiceStorageSetup() {
   }
   return (
     <section className="space-y-3" aria-label="Deletion readiness">
-      <h3 className="font-semibold">Storage relationships</h3>
+      <h3 className="font-semibold">Deletion setup</h3>
       <p className="text-sm">
-        Confirm how your services name the same storage. Librarian sends deletion requests to those
-        services; it does not need a media mount. Sonarr/Radarr and qBittorrent remain optional and
-        unchecked when deleting.
+        Librarian discovers your services and reuses saved setup for future media. Sonarr/Radarr and
+        qBittorrent remain optional and unchecked when deleting.
       </p>
+      <p className="text-sm">
+        {query.data.endpoints.filter((endpoint) => endpoint.supportedMedia !== false).map((
+          endpoint,
+        ) => (
+          <span key={endpoint.key} className="inline-block mr-3">
+            {endpoint.name}:{" "}
+            {endpoint.connectionTestedAt ? "Connected" : "Connection needs attention"}
+          </span>
+        ))}
+      </p>
+      {query.data.automation?.status === "ready" && (
+        <p role="status" className="text-success">
+          {query.data.automation.unavailableServices?.length
+            ? "Setup ready for the available services. "
+            : "Setup ready. "}
+          Librarian will reuse this setup for future media.
+        </p>
+      )}
+      {query.data.automation?.status === "confirmation_required" &&
+        query.data.automation.proposal && (
+        <div className="rounded-lg border border-base-300 p-3 space-y-2">
+          <p>
+            One confirmation: does <code>{query.data.automation.proposal.sharedRoot}</code>{" "}
+            point to the same storage in {query.data.automation.proposal.serviceNames.join(", ")}?
+          </p>
+          <p className="text-sm">
+            Confirm only if these services share that directory, with case-sensitive paths and no
+            hidden path aliases. Librarian will save the relationships together; no media mount or
+            per-title setup is needed.
+          </p>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={confirm.isPending || confirm.isError || query.isFetching}
+            onClick={() => confirm.mutate(query.data.automation!.proposal!.fingerprint)}
+          >
+            {confirm.isPending ? "Saving setup…" : "Yes, these services share this storage"}
+          </button>
+        </div>
+      )}
+      {(!query.data.automation || query.data.automation.status === "unavailable") && (
+        <p role="status" className="text-warning">
+          {query.data.automation?.reason ??
+            "Automatic setup is unavailable for this configuration."}{" "}
+          Affected deletion choices remain unavailable. Browsing and independently eligible deletion
+          choices remain available.
+        </p>
+      )}
+      {query.data.automation?.unavailableServices?.map((service) => (
+        <p key={service.serviceKey} role="status" className="text-warning">
+          {service.name} deletion is not ready. {service.reason}{" "}
+          You can continue with the other available services.
+        </p>
+      ))}
+      {confirm.error && (
+        <p role="alert">
+          Setup was not confirmed: {confirm.error.message}{" "}
+          Refresh connections and review the current proposal before trying again.
+        </p>
+      )}
       <button
         type="button"
         className="btn btn-sm"
         disabled={query.isFetching}
-        onClick={() => void query.refetch()}
+        onClick={() => {
+          confirm.reset();
+          void query.refetch();
+        }}
       >
-        Test connections and refresh roots
+        Refresh connections
       </button>
-      {query.data.endpoints.map((endpoint) => {
-        const saved = query.data.relationships.filter((root) => root.serviceKey === endpoint.key);
-        const ready = saved.length > 0 && saved.every((root) =>
-          !root.hasAliases && root.configurationIdentity === endpoint.configurationIdentity
-        ) && endpoint.roots.every((path) =>
-          saved.some((root) =>
-            storageContains(root.serviceRoot, path, root.caseSensitive)
-          )
-        );
-        return (
-          <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">
-            <p>
-              <strong>{endpoint.name}</strong> ·{" "}
-              {endpoint.connectionTestedAt ? "Connected" : "Connection needs attention"} ·{" "}
-              {ready ? "Relationships confirmed" : "Confirm storage relationships"}
-            </p>
-            {endpoint.discoveryError && (
-              <p className="text-sm text-warning">{endpoint.discoveryError}</p>
-            )}
-            {endpoint.roots.length === 0 && (
-              <p className="text-sm">
-                No roots were discovered. You can enter a reusable root now, including for an empty
-                library.
+      <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
+        <summary>Advanced</summary>
+        <p className="text-sm my-2">
+          Service paths and manual relationships for custom layouts. These are configuration
+          assertions, not filesystem verification.
+        </p>
+        {advanced && query.data.endpoints.map((endpoint) => {
+          const saved = query.data.relationships.filter((root) => root.serviceKey === endpoint.key);
+          const ready = saved.length > 0 && saved.every((root) =>
+            !root.hasAliases && root.configurationIdentity === endpoint.configurationIdentity
+          ) && endpoint.roots.every((path) =>
+            saved.some((root) =>
+              storageContains(root.serviceRoot, path, root.caseSensitive)
+            )
+          );
+          return (
+            <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">
+              <p>
+                <strong>{endpoint.name}</strong> ·{" "}
+                {endpoint.connectionTestedAt ? "Connected" : "Connection needs attention"} ·{" "}
+                {ready ? "Relationships confirmed" : "Confirm storage relationships"}
               </p>
-            )}
-            {saved.map((root) => (
-              <div key={root.id} className="text-sm break-all">
-                {root.serviceRoot} → {root.storageRoot}
-                {root.configurationIdentity !== endpoint.configurationIdentity
-                  ? " · Connection changed; confirm again"
-                  : ""}
-                {root.hasAliases ? " · Aliases declared; affected deletion is blocked" : ""}{" "}
-                <button
-                  type="button"
-                  className="btn btn-xs"
-                  onClick={() => setEditing({ endpoint, root })}
-                >
-                  Edit
-                </button>
-              </div>
-            ))}
-            <button type="button" className="btn btn-sm" onClick={() => setEditing({ endpoint })}>
-              Add relationship
-            </button>
-          </div>
-        );
-      })}
-      {editing && (
-        <RelationshipForm
-          key={`${editing.endpoint.key}:${editing.root?.id ?? "new"}`}
-          {...editing}
-          onDone={() => {
-            setEditing(undefined);
-            void qc.invalidateQueries({ queryKey: ["service-storage"] });
-          }}
-        />
-      )}
+              {endpoint.discoveryError && (
+                <p className="text-sm text-warning">{endpoint.discoveryError}</p>
+              )}
+              {endpoint.roots.length === 0 && (
+                <p className="text-sm">
+                  No roots were discovered. You can enter a reusable root now, including for an
+                  empty library.
+                </p>
+              )}
+              {saved.map((root) => (
+                <div key={root.id} className="text-sm break-all">
+                  {root.serviceRoot} → {root.storageRoot}
+                  {root.configurationIdentity !== endpoint.configurationIdentity
+                    ? " · Connection changed; confirm again"
+                    : ""}
+                  {root.hasAliases ? " · Aliases declared; affected deletion is blocked" : ""}{" "}
+                  <button
+                    type="button"
+                    className="btn btn-xs"
+                    onClick={() => setEditing({ endpoint, root })}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setEditing({ endpoint })}
+              >
+                Add relationship
+              </button>
+            </div>
+          );
+        })}
+        {advanced && editing && (
+          <RelationshipForm
+            key={`${editing.endpoint.key}:${editing.root?.id ?? "new"}`}
+            {...editing}
+            onDone={() => {
+              setEditing(undefined);
+              void qc.invalidateQueries({ queryKey: ["service-storage"] });
+            }}
+          />
+        )}
+      </details>
       <p className="text-xs">
         Readiness confirms configuration coverage. Each deletion preview still checks the current
         selection, complete download manifests, and retained media.

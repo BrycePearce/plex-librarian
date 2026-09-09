@@ -1,6 +1,11 @@
 /** Open setup separately so the current media selection and dialog remain intact. */
 export function DeletionSetupLink({ reason }: { reason?: string }) {
-  if (!reason || !/mapping|namespace|mount|cannot access|not visible|storage root/i.test(reason)) {
+  if (
+    !reason ||
+    !/mapping|namespace|mount|cannot access|not visible|storage root|storage relationship/i.test(
+      reason,
+    )
+  ) {
     return null;
   }
   return (

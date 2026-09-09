@@ -5,6 +5,7 @@ import {
   type RetainedPlexScopeInput,
 } from './ordinaryScope.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
+import { automaticStorage } from '../settings/automaticStorage.ts';
 
 function fixture() {
   const scans: string[] = [];
@@ -54,6 +55,51 @@ function fixture() {
 Deno.test('retained inspection streams only libraries whose confirmed current roots can intersect', async () => {
   const { input, scans } = fixture();
   await assertRetainedPlexScope(input);
+  assertEquals(scans, ['tv']);
+});
+
+Deno.test('group-generated Plex relationships preserve library pruning and still detect retained files', async () => {
+  const { input, scans } = fixture();
+  const endpoints = [
+    { key: 'plex:tv', name: 'TV', roots: ['/data/TV', '/data/TV/Nested'] },
+    { key: 'plex:movies', name: 'Movies', roots: ['/data/Movies'] },
+    { key: 'arr:1', name: 'Sonarr', roots: ['/data/TV'] },
+  ].map((endpoint) => ({
+    ...endpoint,
+    configurationIdentity: endpoint.key,
+    connectionTestedAt: 1,
+    libraryKeys: [],
+  }));
+  const proposal = automaticStorage(endpoints, []).proposal!;
+  input.roots = proposal.relationships.map((root, index) => ({
+    ...root,
+    id: index + 1,
+    serverId: 1,
+    revision: 1,
+  }));
+  assertEquals(
+    input.roots.filter((root) => root.serviceKey === 'plex:tv').map((root) => root.serviceRoot),
+    ['/data/TV'],
+  );
+  assertEquals(automaticStorage(endpoints, input.roots).status, 'ready');
+  input.scopes = [{ path: '/data/TV/Selected', directory: true }];
+  input.plex.libraryLocations = (key) =>
+    Promise.resolve({
+      libraryKey: key,
+      locations: [{ id: 1, path: key === 'tv' ? '/data/TV' : '/data/Movies' }],
+    });
+  await assertRetainedPlexScope(input);
+  assertEquals(scans, ['tv']);
+  scans.length = 0;
+  input.plex.libraryFileEntries = async function* (key) {
+    scans.push(key);
+    yield [{
+      ratingKey: 'retained',
+      showRatingKey: 'retained',
+      path: '/data/TV/Selected/shared.mkv',
+    }];
+  };
+  await assertRejects(() => assertRetainedPlexScope(input), Error, 'retained in Plex');
   assertEquals(scans, ['tv']);
 });
 Deno.test('missing library-root discovery falls back to complete inspection, not unverified exclusion', async () => {

@@ -1,6 +1,73 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import { extractExternalIds, mapActiveSessions, PlexClient } from './client.ts';
 
+Deno.test('libraryLocations reads roots from the section listing, not the navigation endpoint', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = ((input) => {
+    const path = new URL(String(input)).pathname;
+    requests.push(path);
+    return Promise.resolve(
+      Response.json({
+        MediaContainer: {
+          Directory: path === '/library/sections'
+            ? [
+              { key: '1', title: 'Movies', Location: [{ id: 1, path: '/movies' }] },
+              {
+                key: '2',
+                title: 'TV Shows',
+                Location: [{ id: 2, path: '/tv' }, { id: 3, path: '/archive/tv' }],
+              },
+            ]
+            : [{ key: 'all', title: 'All' }, { key: 'unwatched', title: 'Unwatched' }],
+        },
+      }),
+    );
+  }) as typeof fetch;
+  try {
+    const client = new PlexClient('http://fixture.invalid', 'fixture-token');
+    assertEquals(await client.libraryLocations('2'), {
+      libraryKey: '2',
+      locations: [{ id: 2, path: '/tv' }, { id: 3, path: '/archive/tv' }],
+    });
+    assertEquals(requests, ['/library/sections']);
+    await assertRejects(
+      () => client.libraryLocations('missing'),
+      Error,
+      'conflicting library section',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test('libraryLocations rejects ambiguous, missing, malformed and duplicate location evidence', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (
+      const Directory of [
+        [{ key: '2' }],
+        [{ key: '2', Location: [] }],
+        [{ key: '2', Location: [{ id: 1, path: '/tv' }] }, {
+          key: '2',
+          Location: [{ id: 2, path: '/other' }],
+        }],
+        [{ key: '2', Location: [{ id: -1, path: '/tv' }] }],
+        [{ key: '2', Location: [{ id: 1, path: '' }] }],
+        [{ key: '2', Location: [{ id: 1, path: '/tv' }, { id: 2, path: '/TV' }] }],
+      ]
+    ) {
+      globalThis.fetch = (() =>
+        Promise.resolve(Response.json({ MediaContainer: { Directory } }))) as typeof fetch;
+      await assertRejects(() =>
+        new PlexClient('http://fixture.invalid', 'fixture-token').libraryLocations('2')
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test('extractExternalIds reads modern Plex GUID arrays', () => {
   assertEquals(
     extractExternalIds({ Guid: [{ id: 'tmdb://550' }, { id: 'tvdb://81189' }] }),

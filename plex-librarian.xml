@@ -9,7 +9,7 @@
   <Support>https://github.com/BrycePearce/plex-librarian/issues</Support>
   <Project>https://github.com/BrycePearce/plex-librarian</Project>
   <!-- Sonarr, Radarr, and qBittorrent connections are normally configured in the web UI. -->
-  <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and review deletion destinations. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely. Optional Sonarr/Radarr and qBittorrent deletion starts unchecked for whole-item and stale-season selections. Confirm reusable service storage relationships in Media connections. Ordinary API deletion needs only the app-data volume, without Librarian media mounts. Selected media size is not a guarantee of disk space reclaimed.</Overview>
+  <Overview>Library health insights for your Plex server. Find stale content, track viewing patterns, and review deletion destinations. Includes a Sign in with Plex setup wizard — or set PLEX_URL and PLEX_TOKEN to skip OAuth entirely. Optional Sonarr/Radarr and qBittorrent deletion starts unchecked for whole-item and stale-season selections. Media connections discovers storage roots and reuses saved setup. A shared /data layout needs one grouped confirmation; custom relationships are under Advanced. Ordinary API deletion needs only the app-data volume, without Librarian media mounts. Selected media size is not a guarantee of disk space reclaimed.</Overview>
   <Category>MediaApp:Other</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <TemplateURL />
@@ -51,7 +51,7 @@
     Target="/media"
     Default=""
     Mode="ro"
-    Description="Optional Advanced local access for duplicate-version adoption only. Ordinary service-owned deletion needs no Librarian media mounts. Configure reusable service storage relationships in Media connections."
+    Description="Optional Advanced local access for duplicate-version adoption only. Ordinary service-owned deletion needs no Librarian media mounts. Media connections offers grouped shared-storage setup and automatic reuse."
     Type="Path"
     Display="advanced"
     Required="false"
