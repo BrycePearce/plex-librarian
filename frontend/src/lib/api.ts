@@ -259,13 +259,26 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   serviceStorage: {
-    confirm: (fingerprint: string) =>
+    discovery: (action: "enable" | "retry" | "disable") =>
+      apiFetch<import("../../../shared/serviceStorage.ts").HostDiscoveryStatus>(
+        `/settings/service-storage/discovery/${action}`,
+        { method: "POST" },
+      ),
+    dockerPreview: (report: string, selections?: Record<string, string>) =>
+      apiFetch<import("../../../shared/serviceStorage.ts").DockerStoragePreview>(
+        "/settings/service-storage/docker-preview",
+        { method: "POST", body: JSON.stringify({ report, selections }) },
+      ),
+    dockerConfirm: (value: {
+      report: string;
+      fingerprint: string;
+      confirmed: true;
+      replaceExisting?: boolean;
+      selections?: Record<string, string>;
+    }) =>
       apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
-        "/settings/service-storage/confirm",
-        {
-          method: "POST",
-          body: JSON.stringify({ fingerprint, confirmed: true }),
-        },
+        "/settings/service-storage/docker-confirm",
+        { method: "POST", body: JSON.stringify(value) },
       ),
     get: (discover = false) =>
       apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(

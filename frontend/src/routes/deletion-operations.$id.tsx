@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { AlertTriangle, CheckCircle2, Clock3, RotateCcw, XCircle } from "lucide-react";
+import { ServiceDeletionOutcomes } from "../features/deletionOperations/ServiceDeletionOutcomes.tsx";
 import { api } from "../lib/api.ts";
 import { formatKilobytes } from "../lib/format.ts";
 import { requireAuth } from "../lib/requireAuth.ts";
@@ -102,6 +103,8 @@ function DeletionOperationPage() {
     );
   }
   const operation = query.data;
+  const serviceOwned = operation.targets.length > 0 &&
+    operation.targets.every((target) => target.serviceOwnedDeletion);
   const current = operation.targets.find((target) => target.status === "running") ??
     operation.targets.find(
       (target) => target.status === "waiting_retry" || target.status === "queued",
@@ -185,14 +188,27 @@ function DeletionOperationPage() {
               label="Logical size removed"
               value={formatKilobytes(operation.logicalSizeRemoved)}
             />
-            <Stat
-              label="Verified hardlink data removed"
-              value={formatKilobytes(operation.verifiedHardlinkDataRemoved ?? 0)}
-            />
-            <Stat
-              label="Hardlink outcome"
-              value={hardlinkOutcomeSummary(operation) ?? "Pending / not applicable"}
-            />
+            {serviceOwned && (
+              <Stat
+                label="Selected logical size"
+                value={formatKilobytes(
+                  operation.targets.reduce((sum, target) => sum + (target.logicalSize ?? 0), 0),
+                )}
+              />
+            )}
+            {!serviceOwned && (
+              <Stat
+                label="Verified hardlink data removed"
+                value={formatKilobytes(operation.verifiedHardlinkDataRemoved ?? 0)}
+              />
+            )}
+            {!serviceOwned && (
+              <Stat
+                label="Hardlink outcome"
+                value={hardlinkOutcomeSummary(operation) ?? "Pending / not applicable"}
+              />
+            )}
+            {serviceOwned && <Stat label="Disk space recovered" value="Unknown — not measured" />}
             <Stat
               label="Cancelled"
               value={String(
@@ -201,7 +217,7 @@ function DeletionOperationPage() {
             />
             <Stat label="Superseded" value={String(operation.supersededCount)} />
           </div>
-          {noVerifiedDiskSpaceReclaimed(operation) && (
+          {!serviceOwned && noVerifiedDiskSpaceReclaimed(operation) && (
             <div
               role="alert"
               className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning/5 p-4 text-sm"
@@ -401,7 +417,7 @@ function DeletionOperationPage() {
                 <p className="text-sm text-base-content/50">
                   {target.logicalSize != null ? formatKilobytes(target.logicalSize) : ""}
                 </p>
-                {target.storageOutcome && (
+                {!target.serviceOwnedDeletion && target.storageOutcome && (
                   <p className="text-xs text-base-content/55 mt-1">
                     Hardlink data: {target.storageOutcome === "verified"
                       ? `${formatKilobytes(target.verifiedHardlinkDataRemoved ?? 0)} verified`
@@ -416,22 +432,7 @@ function DeletionOperationPage() {
                   <p className="text-sm text-error mt-1">{target.error}</p>
                 )}
                 {target.warning && <p className="text-sm text-warning mt-1">{target.warning}</p>}
-                {target.serviceOutcomes?.map((outcome, index) => (
-                  <p key={index} className="text-sm mt-1">
-                    {outcome.service}: {outcome.action} — {outcome.status === "accepted"
-                      ? "request accepted; physical completion is not verified"
-                      : outcome.status === "succeeded"
-                      ? "service reported success"
-                      : outcome.status === "reconciled"
-                      ? "absence covered by a recorded service response; no additional file deletion sent"
-                      : outcome.status === "failed"
-                      ? `request failed${
-                        outcome.httpStatus ? ` (HTTP ${outcome.httpStatus})` : ""
-                      }; automatic replay is held`
-                      : "outcome uncertain; automatic replay is held"}
-                    {outcome.error ? ` (${outcome.error})` : ""}
-                  </p>
-                ))}
+                <ServiceDeletionOutcomes outcomes={target.serviceOutcomes} />
                 <p className="text-xs text-base-content/45 mt-2">
                   {phaseLabel(target.phase)} ·{" "}
                   {target.removalConfirmedAt ? "Media removed" : "Removal pending"}

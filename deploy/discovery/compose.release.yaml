@@ -1,0 +1,33 @@
+# Release installation for a NEW Librarian stack on native Linux Docker.
+# Images must be published first. Do not combine with an existing app deployment.
+name: plex-librarian
+services:
+  librarian:
+    image: ghcr.io/brycepearce/plex-librarian:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8288:8080"
+    volumes:
+      - database:/data
+      - discovery:/discovery:ro
+  discovery-helper:
+    image: ghcr.io/brycepearce/plex-librarian-discovery:latest
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SYS_PTRACE, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - discovery:/discovery
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+volumes:
+  database:
+  discovery:

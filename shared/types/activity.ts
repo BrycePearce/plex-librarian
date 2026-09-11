@@ -9,6 +9,7 @@ export type EventType =
   | 'user.removed';
 
 export interface DeletionCompletedPayload {
+  serviceOwnedDeletion?: boolean;
   operationId: string;
   libraryKey: string;
   kind: 'whole_item' | 'movie_version' | 'episode_version';

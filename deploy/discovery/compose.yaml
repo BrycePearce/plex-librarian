@@ -1,0 +1,27 @@
+# Add this file to your existing Compose project. Your Librarian service must be
+# named librarian, or rename that key below to match. Native Linux Docker only.
+services:
+  librarian:
+    volumes:
+      - discovery:/discovery:ro
+  discovery-helper:
+    build:
+      context: ../..
+      dockerfile: deploy/discovery/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SYS_PTRACE, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - discovery:/discovery
+    tmpfs:
+      - /tmp:size=16m
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+volumes:
+  discovery:

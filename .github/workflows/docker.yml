@@ -16,11 +16,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
+          - image: app
+            suffix: ""
+            dockerfile: Dockerfile
+            platform: linux/amd64
             runner: ubuntu-latest
-          - platform: linux/arm64
+          - image: app
+            suffix: ""
+            dockerfile: Dockerfile
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - image: discovery
+            suffix: "-discovery"
+            dockerfile: deploy/discovery/Dockerfile
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - image: discovery
+            suffix: "-discovery"
+            dockerfile: deploy/discovery/Dockerfile
+            platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    env:
+      GHCR_IMAGE: ghcr.io/brycepearce/plex-librarian${{ matrix.suffix }}
     permissions:
       contents: read
       packages: write
@@ -49,9 +67,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.platform }}
           outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -63,14 +82,24 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v7
         with:
-          name: digests-${{ env.PLATFORM_PAIR }}
+          name: digests-${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
+    strategy:
+      matrix:
+        include:
+          - image: app
+            suffix: ""
+          - image: discovery
+            suffix: "-discovery"
     runs-on: ubuntu-latest
     needs: build
+    env:
+      GHCR_IMAGE: ghcr.io/brycepearce/plex-librarian${{ matrix.suffix }}
+      DOCKERHUB_IMAGE: docker.io/edon231/plex-librarian${{ matrix.suffix }}
     permissions:
       contents: read
       packages: write
@@ -80,7 +109,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
-          pattern: digests-*
+          pattern: digests-${{ matrix.image }}-*
           merge-multiple: true
 
       - name: Log in to GHCR

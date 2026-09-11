@@ -46,6 +46,82 @@ function options(renderer: TestRenderer.ReactTestRenderer) {
   }>;
 }
 
+Deno.test("simple Plex confirmation requires no optional selection or storage setup and passes accepted evidence", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const original = api.libraries.downloadCleanupPreview;
+  const fingerprint = "b".repeat(64);
+  api.libraries.downloadCleanupPreview = () =>
+    Promise.resolve({
+      coordinatedConfigured: false,
+      downloadClientsConfigured: false,
+      items: [{
+        ratingKey: "show",
+        status: "unavailable",
+        arrStatus: "unavailable",
+        plexOnlyStatus: "resolved",
+        plexOnlyFingerprint: fingerprint,
+        arrTargets: [],
+        downloadJobs: [],
+        orphanFiles: [],
+        retainedPaths: [],
+        sources: [],
+        plexPaths: ["/plex/Fixture/Season 1/episode.mkv"],
+        plexPathsTruncated: false,
+        plexPathStatus: "resolved",
+      }],
+    });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const confirmed: unknown[] = [];
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await act(() => {
+      renderer = TestRenderer.create(
+        <QueryClientProvider client={client}>
+          <DeleteConfirmDialog
+            dialogRef={{ current: null }}
+            embedded
+            libraryKey="tv"
+            items={[{
+              ratingKey: "show",
+              libraryKey: "tv",
+              title: "Fixture",
+              type: "show",
+              fileSize: 100,
+            }]}
+            pending={false}
+            error={null}
+            onConfirm={(value) => confirmed.push(value)}
+            onCancel={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assertEquals(renderer!.root.findAllByProps({ href: "/settings/sonarr-radarr" }).length, 0);
+    assertEquals(options(renderer!), []);
+    assertEquals(renderer!.root.findAllByProps({ type: "checkbox" }).length, 0);
+    const footer = renderer!.root.findByType(DeletionDialogFooter);
+    assertEquals(footer.props.confirmDisabled, false);
+    await act(() => footer.props.onConfirm());
+    assertEquals(confirmed, [{
+      coordinatedRatingKeys: [],
+      cleanupDownloadRatingKeys: [],
+      cleanupPreviewFingerprints: { show: fingerprint },
+    }]);
+  } finally {
+    await act(() => {
+      renderer?.unmount();
+    });
+    client.clear();
+    api.libraries.downloadCleanupPreview = original;
+    globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
+
 Deno.test("season destinations start unchecked and failed refresh never removes consent", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
@@ -189,115 +265,186 @@ Deno.test("whole-item Arr choice cannot silently omit an unresolved bulk item", 
   }
 });
 
-Deno.test("changed QB evidence preserves the checkbox but requires renewed consent", async () => {
-  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
-  const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
-  globals.IS_REACT_ACT_ENVIRONMENT = true;
-  const original = api.libraries.downloadCleanupPreview;
-  let fingerprint = "a".repeat(64);
-  api.libraries.downloadCleanupPreview = () =>
-    Promise.resolve({
-      coordinatedConfigured: false,
-      downloadClientsConfigured: true,
-      items: [{
-        ratingKey: "show",
-        status: "resolved",
-        arrStatus: "unavailable",
-        qbittorrentOnlyStatus: "resolved",
-        qbittorrentOnlyFingerprint: fingerprint,
-        arrTargets: [],
-        orphanFiles: [],
-        retainedPaths: [],
-        sources: [],
-        plexPaths: [],
-        plexPathsTruncated: false,
-        plexPathStatus: "resolved",
-        downloadJobs: [{
-          jobId: "hash",
-          provider: "qbittorrent",
-          instanceKey: "qb",
-          instanceName: "QB",
-          name: "Fixture",
-          size: 100,
-          state: "uploading",
-          uploaded: 100,
-          ratio: 1,
-          seedingTime: 60,
-          completedAt: 1,
-          contentPath: "/downloads/Fixture.mkv",
-          savePath: "/downloads",
-          trackerHost: null,
-          sourcePath: "/downloads/Fixture.mkv",
-          files: [],
-          fileCount: 1,
-          filesTruncated: false,
+for (const change of ["refetch", "Sonarr selection"] as const) {
+  Deno.test(`changed QB scope after ${change} visibly resets consent and requires an explicit choice`, async () => {
+    const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
+    globals.IS_REACT_ACT_ENVIRONMENT = true;
+    const original = api.libraries.downloadCleanupPreview;
+    let fingerprint = "a".repeat(64);
+    const combinedFingerprint = "c".repeat(64);
+    let fail = false;
+    api.libraries.downloadCleanupPreview = () =>
+      fail ? Promise.reject(new Error("Preview unavailable")) : Promise.resolve({
+        coordinatedConfigured: change === "Sonarr selection",
+        downloadClientsConfigured: true,
+        items: [{
+          ratingKey: "show",
+          status: "resolved",
+          arrStatus: "resolved",
+          cleanupFingerprint: combinedFingerprint,
+          sonarrCleanupStatus: "resolved",
+          sonarrCleanupFingerprint: "d".repeat(64),
+          plexOnlyStatus: "resolved",
+          plexOnlyFingerprint: "e".repeat(64),
+          qbittorrentOnlyStatus: "resolved",
+          qbittorrentOnlyFingerprint: fingerprint,
+          arrTargets: [],
+          orphanFiles: [],
+          retainedPaths: [],
+          sources: [],
+          plexPaths: [],
+          plexPathsTruncated: false,
+          plexPathStatus: "resolved",
+          downloadJobs: [{
+            jobId: "hash",
+            provider: "qbittorrent",
+            instanceKey: "qb",
+            instanceName: "QB",
+            name: "Fixture",
+            size: 100,
+            state: "uploading",
+            uploaded: 100,
+            ratio: 1,
+            seedingTime: 60,
+            completedAt: 1,
+            contentPath: "/downloads/Fixture.mkv",
+            savePath: "/downloads",
+            trackerHost: null,
+            sourcePath: "/downloads/Fixture.mkv",
+            files: [],
+            fileCount: 1,
+            filesTruncated: false,
+          }],
         }],
-      }],
-    } as DownloadCleanupPreviewResponse);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  let renderer: TestRenderer.ReactTestRenderer | undefined;
-  try {
-    await act(() => {
-      renderer = TestRenderer.create(
-        <QueryClientProvider client={client}>
-          <DeleteConfirmDialog
-            dialogRef={{ current: null }}
-            embedded
-            libraryKey="tv"
-            items={[{
-              ratingKey: "show",
-              libraryKey: "tv",
-              title: "Fixture",
-              type: "show",
-              fileSize: 100,
-            }]}
-            pending={false}
-            error={null}
-            onConfirm={() => {}}
-            onCancel={() => {}}
-          />
-        </QueryClientProvider>,
+      } as DownloadCleanupPreviewResponse);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const confirmed: unknown[] = [];
+    let renderer: TestRenderer.ReactTestRenderer | undefined;
+    try {
+      await act(() => {
+        renderer = TestRenderer.create(
+          <QueryClientProvider client={client}>
+            <DeleteConfirmDialog
+              dialogRef={{ current: null }}
+              embedded
+              libraryKey="tv"
+              items={[{
+                ratingKey: "show",
+                libraryKey: "tv",
+                title: "Fixture",
+                type: "show",
+                fileSize: 100,
+              }]}
+              pending={false}
+              error={null}
+              onConfirm={(value) => confirmed.push(value)}
+              onCancel={() => {}}
+            />
+          </QueryClientProvider>,
+        );
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      const cleanup = () => options(renderer!).find((option) => option.id === "cleanup")!;
+      const keep = () =>
+        renderer!.root.findAllByType("button").find((button) =>
+          button.children.join("") === "Keep qBittorrent files"
+        );
+      assertEquals(cleanup().checked, false);
+      assertEquals(keep(), undefined);
+      await act(() => {
+        cleanup().onChange(true);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
+      // An unchanged successful refetch preserves the choice, while a failed
+      // refetch blocks confirmation without silently discarding that choice.
+      for (const unavailable of [false, true, false]) {
+        fail = unavailable;
+        await act(async () => {
+          await client.invalidateQueries();
+        });
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+        assertEquals(cleanup().checked, true);
+        assertEquals(
+          renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled,
+          unavailable,
+        );
+      }
+      if (change === "refetch") fingerprint = "b".repeat(64);
+      await act(async () => {
+        if (change === "refetch") await client.invalidateQueries();
+        else options(renderer!).find((option) => option.id === "arr")!.onChange(true);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      // Clearing the invalid choice starts the unchecked preview query. Let that
+      // render finish before interacting with its temporarily disabled option.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assertEquals(cleanup().checked, false);
+      assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
+      assertEquals(!!keep(), true);
+      assertEquals(
+        JSON.stringify(renderer!.toJSON()).includes("Select Delete from qBittorrent again"),
+        true,
       );
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
-    assertEquals(options(renderer!)[0].checked, false);
-    await act(() => {
-      options(renderer!)[0].onChange(true);
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
-    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
-    fingerprint = "b".repeat(64);
-    await act(async () => {
-      await client.invalidateQueries();
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
-    assertEquals(options(renderer!)[0].checked, true);
-    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
-    await act(() => {
-      options(renderer!)[0].onChange(false);
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
-    await act(() => {
-      options(renderer!)[0].onChange(true);
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
-    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
-  } finally {
-    await act(() => {
-      renderer?.unmount();
-    });
-    client.clear();
-    api.libraries.downloadCleanupPreview = original;
-    globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
-  }
-});
+      await act(() => {
+        cleanup().onChange(true);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assertEquals(cleanup().checked, true);
+      assertEquals(keep(), undefined);
+      assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
+      await act(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());
+      assertEquals(confirmed, [{
+        coordinatedRatingKeys: change === "Sonarr selection" ? ["show"] : [],
+        cleanupDownloadRatingKeys: ["show"],
+        cleanupPreviewFingerprints: {
+          show: change === "Sonarr selection" ? combinedFingerprint : fingerprint,
+        },
+      }]);
+      // A subsequent scope change also permits an explicit choice to retain QB.
+      await act(async () => {
+        if (change === "refetch") {
+          fingerprint = "f".repeat(64);
+          await client.invalidateQueries();
+        } else options(renderer!).find((option) => option.id === "arr")!.onChange(false);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      assertEquals(cleanup().checked, false);
+      assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      await act(() => keep()!.props.onClick());
+      assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
+      assertEquals(keep(), undefined);
+      await act(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());
+      assertEquals(confirmed.at(-1), {
+        coordinatedRatingKeys: [],
+        cleanupDownloadRatingKeys: [],
+        cleanupPreviewFingerprints: { show: "e".repeat(64) },
+      });
+    } finally {
+      await act(() => {
+        renderer?.unmount();
+      });
+      client.clear();
+      api.libraries.downloadCleanupPreview = original;
+      globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
+    }
+  });
+}

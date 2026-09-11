@@ -1374,6 +1374,7 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
           targetResult.status === 'needs_attention' &&
           upgradeTargetCanCancel(client, Number(target[0]));
         if (snapshot.ordinaryPlan !== undefined) {
+          targetResult.serviceOwnedDeletion = true;
           targetResult.ordinaryCancellable =
             ['queued', 'waiting_retry', 'needs_attention'].includes(String(targetResult.status)) &&
             upgradeTargetCanCancel(client, Number(target[0]));

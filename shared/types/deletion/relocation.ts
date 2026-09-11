@@ -1,4 +1,6 @@
 interface DeletionOperationTargetBase {
+  /** Ordinary service-owned workflow, including queued targets without attempts. */
+  serviceOwnedDeletion?: boolean;
   serviceOutcomes?: Array<
     {
       service: string;

@@ -2,195 +2,189 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api.ts";
 import {
+  type HostDiscoveryStatus,
   type ServicePathRoot,
   type ServiceStorageEndpoint,
-  storageContains,
 } from "../../../../shared/serviceStorage.ts";
+
+export function discoveryRefreshInterval(status?: HostDiscoveryStatus): number | false {
+  if (!status?.enabled) return false;
+  return status.checking ? 2000 : 30_000;
+}
 
 export function ServiceStorageSetup() {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["service-storage"],
-    queryFn: () => api.serviceStorage.get(true),
+    queryFn: () => api.serviceStorage.get(),
     retry: false,
+    refetchInterval: (query) => discoveryRefreshInterval(query.state.data?.discovery),
+    refetchIntervalInBackground: false,
   });
   const [editing, setEditing] = useState<
     { endpoint: ServiceStorageEndpoint; root?: ServicePathRoot }
   >();
   const [advanced, setAdvanced] = useState(false);
-  const confirm = useMutation({
-    mutationFn: (fingerprint: string) => api.serviceStorage.confirm(fingerprint),
-    onSuccess: (data) => {
-      qc.setQueryData(["service-storage"], data);
-    },
+  const discovery = useMutation({
+    mutationFn: (action: "enable" | "retry" | "disable") => api.serviceStorage.discovery(action),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["service-storage"] }),
   });
-  if (query.isPending) {
-    return <p role="status">Testing connections and discovering current service roots…</p>;
-  }
+  if (query.isPending) return <p role="status">Checking discovery status…</p>;
   if (query.error) {
     return (
       <div role="alert">
-        Could not load storage relationships.{" "}
+        Could not load discovery status.{" "}
         <button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>
           Retry
         </button>
       </div>
     );
   }
+  const status = query.data.discovery;
+  const endpoints = query.data.endpoints.filter((endpoint) => endpoint.supportedMedia !== false);
+  const needsAttention = !!status?.reason ||
+    endpoints.some((endpoint) =>
+      status?.services.find((service) => service.serviceKey === endpoint.key)?.state !== "ready"
+    );
+  const showAction = !status?.enabled || needsAttention || !!discovery.error;
+  const discoveryButton = (
+    <button
+      type="button"
+      className="btn btn-sm"
+      disabled={discovery.isPending || status?.checking}
+      onClick={() => discovery.mutate(status?.enabled ? "retry" : "enable")}
+    >
+      {status?.enabled ? "Retry discovery" : "Enable host discovery"}
+    </button>
+  );
   return (
-    <section className="space-y-3" aria-label="Deletion readiness">
-      <h3 className="font-semibold">Deletion setup</h3>
+    <section className="space-y-3" aria-label="Host discovery">
+      <h3 className="font-semibold">Host discovery</h3>
       <p className="text-sm">
-        Librarian discovers your services and reuses saved setup for future media. Sonarr/Radarr and
-        qBittorrent remain optional and unchecked when deleting.
+        Connect your services, then enable discovery once for this Linux Docker host. Sonarr/Radarr
+        and qBittorrent remain optional and unchecked when deleting.
       </p>
-      <p className="text-sm">
-        {query.data.endpoints.filter((endpoint) => endpoint.supportedMedia !== false).map((
-          endpoint,
-        ) => (
-          <span key={endpoint.key} className="inline-block mr-3">
-            {endpoint.name}:{" "}
-            {endpoint.connectionTestedAt ? "Connected" : "Connection needs attention"}
-          </span>
-        ))}
-      </p>
-      {query.data.automation?.status === "ready" && (
-        <p role="status" className="text-success">
-          {query.data.automation.unavailableServices?.length
-            ? "Setup ready for the available services. "
-            : "Setup ready. "}
-          Librarian will reuse this setup for future media.
-        </p>
-      )}
-      {query.data.automation?.status === "confirmation_required" &&
-        query.data.automation.proposal && (
-        <div className="rounded-lg border border-base-300 p-3 space-y-2">
-          <p>
-            One confirmation: does <code>{query.data.automation.proposal.sharedRoot}</code>{" "}
-            point to the same storage in {query.data.automation.proposal.serviceNames.join(", ")}?
+      {endpoints.map((endpoint) => {
+        const service = status?.services.find((s) => s.serviceKey === endpoint.key);
+        return (
+          <p key={endpoint.key}>
+            <strong>{endpoint.name}</strong> ·{" "}
+            {(service?.connected ?? !!endpoint.connectionTestedAt)
+              ? "Connected"
+              : "Connection not tested"} · Discovery: {!status?.enabled
+              ? "Not enabled"
+              : status.checking
+              ? "Checking"
+              : service?.state === "ready"
+              ? "Ready"
+              : "Needs attention"}
           </p>
-          <p className="text-sm">
-            Confirm only if these services share that directory, with case-sensitive paths and no
-            hidden path aliases. Librarian will save the relationships together; no media mount or
-            per-title setup is needed.
-          </p>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={confirm.isPending || confirm.isError || query.isFetching}
-            onClick={() => confirm.mutate(query.data.automation!.proposal!.fingerprint)}
+        );
+      })}
+      {status?.checking && <p role="status">Checking host and connected services…</p>}
+      {!status?.enabled && (
+        <p className="text-sm">
+          Discovery requires the optional host helper. If it is not installed, follow the{" "}
+          <a
+            className="link"
+            href="https://github.com/BrycePearce/plex-librarian/blob/main/deploy/discovery/README.md"
+            target="_blank"
+            rel="noreferrer"
           >
-            {confirm.isPending ? "Saving setup…" : "Yes, these services share this storage"}
-          </button>
-        </div>
-      )}
-      {(!query.data.automation || query.data.automation.status === "unavailable") && (
-        <p role="status" className="text-warning">
-          {query.data.automation?.reason ??
-            "Automatic setup is unavailable for this configuration."}{" "}
-          Affected deletion choices remain unavailable. Browsing and independently eligible deletion
-          choices remain available.
+            Docker/Unraid installation guide
+          </a>. Plex-only use does not require a helper.
         </p>
       )}
-      {query.data.automation?.unavailableServices?.map((service) => (
-        <p key={service.serviceKey} role="status" className="text-warning">
-          {service.name} deletion is not ready. {service.reason}{" "}
-          You can continue with the other available services.
-        </p>
-      ))}
-      {confirm.error && (
+      {showAction && discoveryButton}
+      {discovery.error && (
         <p role="alert">
-          Setup was not confirmed: {confirm.error.message}{" "}
-          Refresh connections and review the current proposal before trying again.
+          {status?.enabled
+            ? "Discovery could not be updated. Retry, or open Advanced for details."
+            : "Discovery could not be enabled. Check the host helper using the installation guide above, then try again. Details are in Advanced."}
         </p>
       )}
-      <button
-        type="button"
-        className="btn btn-sm"
-        disabled={query.isFetching}
-        onClick={() => {
-          confirm.reset();
-          void query.refetch();
-        }}
-      >
-        Refresh connections
-      </button>
+      {status?.enabled && !status.checking && (
+        <p role="status" className="text-sm">
+          {needsAttention
+            ? "Some services need attention. Retry discovery, or open Advanced for details."
+            : "Discovery refreshes automatically. Each service’s status is shown above."}
+        </p>
+      )}
       <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
         <summary>Advanced</summary>
-        <p className="text-sm my-2">
-          Service paths and manual relationships for custom layouts. These are configuration
-          assertions, not filesystem verification.
-        </p>
-        {advanced && query.data.endpoints.map((endpoint) => {
-          const saved = query.data.relationships.filter((root) => root.serviceKey === endpoint.key);
-          const ready = saved.length > 0 && saved.every((root) =>
-            !root.hasAliases && root.configurationIdentity === endpoint.configurationIdentity
-          ) && endpoint.roots.every((path) =>
-            saved.some((root) =>
-              storageContains(root.serviceRoot, path, root.caseSensitive)
-            )
-          );
-          return (
-            <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">
-              <p>
-                <strong>{endpoint.name}</strong> ·{" "}
-                {endpoint.connectionTestedAt ? "Connected" : "Connection needs attention"} ·{" "}
-                {ready ? "Relationships confirmed" : "Confirm storage relationships"}
-              </p>
-              {endpoint.discoveryError && (
-                <p className="text-sm text-warning">{endpoint.discoveryError}</p>
-              )}
-              {endpoint.roots.length === 0 && (
-                <p className="text-sm">
-                  No roots were discovered. You can enter a reusable root now, including for an
-                  empty library.
-                </p>
-              )}
-              {saved.map((root) => (
-                <div key={root.id} className="text-sm break-all">
-                  {root.serviceRoot} → {root.storageRoot}
-                  {root.configurationIdentity !== endpoint.configurationIdentity
-                    ? " · Connection changed; confirm again"
-                    : ""}
-                  {root.hasAliases ? " · Aliases declared; affected deletion is blocked" : ""}{" "}
-                  <button
-                    type="button"
-                    className="btn btn-xs"
-                    onClick={() => setEditing({ endpoint, root })}
-                  >
-                    Edit
-                  </button>
-                </div>
-              ))}
+        {advanced && (
+          <>
+            {!showAction && discoveryButton}
+            {discovery.error && <p role="alert">{discovery.error.message}</p>}
+            {status?.reason && <p className="text-sm text-warning">{status.reason}</p>}
+            <p className="text-sm my-2">
+              Manual relationships for unsupported layouts are explicit configuration assertions.
+              Automatic discovery preserves these overrides. Remove a manual relationship to let
+              discovery manage it again.
+            </p>
+            {status?.enabled && (
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => setEditing({ endpoint })}
+                disabled={discovery.isPending}
+                onClick={() => discovery.mutate("disable")}
               >
-                Add relationship
+                Disable host discovery
               </button>
-            </div>
-          );
-        })}
-        {advanced && editing && (
-          <RelationshipForm
-            key={`${editing.endpoint.key}:${editing.root?.id ?? "new"}`}
-            {...editing}
-            onDone={() => {
-              setEditing(undefined);
-              void qc.invalidateQueries({ queryKey: ["service-storage"] });
-            }}
-          />
+            )}
+            {query.data.endpoints.map((endpoint) => {
+              const service = status?.services.find((s) => s.serviceKey === endpoint.key);
+              const saved = query.data.relationships.filter((r) => r.serviceKey === endpoint.key);
+              return (
+                <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">
+                  <strong>{endpoint.name}</strong>
+                  {service?.reason && <p className="text-sm text-warning">{service.reason}</p>}
+                  {saved.map((root) => (
+                    <div key={root.id} className="text-sm break-all">
+                      {root.serviceRoot} → {root.storageRoot}
+                      {root.configurationIdentity !== endpoint.configurationIdentity
+                        ? " · Evidence needs attention"
+                        : ""}
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        onClick={() => setEditing({ endpoint, root })}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() =>
+                      setEditing({ endpoint })}
+                  >
+                    Add relationship
+                  </button>
+                </div>
+              );
+            })}
+            {editing && (
+              <RelationshipForm
+                key={`${editing.endpoint.key}:${editing.root?.id ?? "new"}`}
+                {...editing}
+                onDone={() => {
+                  setEditing(undefined);
+                  void qc.invalidateQueries({ queryKey: ["service-storage"] });
+                }}
+              />
+            )}
+          </>
         )}
       </details>
       <p className="text-xs">
-        Readiness confirms configuration coverage. Each deletion preview still checks the current
-        selection, complete download manifests, and retained media.
+        Discovery describes configuration coverage. Each deletion preview separately checks the
+        selected media, destinations, current downloads, and retained content.
       </p>
     </section>
   );
 }
-
 function RelationshipForm(
   { endpoint, root, onDone }: {
     endpoint: ServiceStorageEndpoint;

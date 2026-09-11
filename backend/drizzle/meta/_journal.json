@@ -400,6 +400,13 @@
       "when": 1788831538043,
       "tag": "0057_nappy_spirit",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1789000000000,
+      "tag": "0058_host_discovery",
+      "breakpoints": true
     }
   ]
 }

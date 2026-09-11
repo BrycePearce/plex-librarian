@@ -28,8 +28,8 @@ export async function assertCurrentOrdinaryProtection(
   retainedCheck: RetainedPlexCheck = assertRetainedPlexScope,
 ): Promise<void> {
   const map = (key: string, path: string) => configuredStoragePath(plan.roots, key, path);
-  const mapped = plan.arrSelected || downloadTargets.length > 0;
-  const scopes: OrdinaryStorageScope[] = [
+  let mapped = plan.arrSelected || plan.jobs.length > 0;
+  const buildScopes = (): OrdinaryStorageScope[] => [
     ...plan.plexFiles.map((file) => ({
       path: mapped ? map(`plex:${plan.libraryKey}`, file.path) : file.path,
       directory: false,
@@ -46,19 +46,16 @@ export async function assertCurrentOrdinaryProtection(
       }))
     ),
   ];
-  await retainedCheck({
-    plex,
-    libraryKey: plan.libraryKey,
-    selection: plan.selection,
-    roots: plan.roots,
-    scopes,
-    mapped,
-  });
+  let scopes = buildScopes();
   for (const target of downloadTargets) {
     if (!target.client.scanJobSummaries) {
       throw new Error('Current download inventory is unavailable');
     }
     await target.client.scanJobSummaries(async (summary) => {
+      if (!mapped) {
+        mapped = true;
+        scopes = buildScopes();
+      }
       const folder = map(`qb:${target.instanceKey}`, summary.contentPath);
       if (
         !scopes.some((scope) =>
@@ -94,6 +91,14 @@ export async function assertCurrentOrdinaryProtection(
       ) throw new Error('A retained download now owns a selected file or directory entry');
     });
   }
+  await retainedCheck({
+    plex,
+    libraryKey: plan.libraryKey,
+    selection: plan.selection,
+    roots: plan.roots,
+    scopes,
+    mapped,
+  });
   const inventories = new Map<number, Array<{ id: number; path: string }>>();
   for (const target of plan.arrSelected ? arrTargets : []) {
     const inventory = await target.client.managedScopes();

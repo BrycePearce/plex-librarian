@@ -30,14 +30,32 @@ export function evidenceFingerprint(value: unknown): string {
 }
 
 export async function loadServiceRoots(serverId: number): Promise<ServicePathRoot[]> {
-  return await db.select().from(servicePathRoots).where(eq(servicePathRoots.serverId, serverId))
+  const { refreshHostDiscovery, currentDiscoveryRoots } = await import(
+    '../settings/hostDiscovery.ts'
+  );
+  await refreshHostDiscovery(serverId);
+  const roots = await db.select().from(servicePathRoots).where(
+    eq(servicePathRoots.serverId, serverId),
+  )
     .orderBy(servicePathRoots.id);
+  return currentDiscoveryRoots(serverId, roots);
+}
+
+function connectionAddress(value: string | undefined): Partial<ServiceStorageEndpoint> {
+  if (!value) return {};
+  const url = new URL(value);
+  return {
+    connectionHost: url.hostname,
+    connectionPort: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
+    connectionPath: url.pathname,
+  };
 }
 
 /** Configuration identity is non-secret and changes with the configured endpoint/credential. */
 export async function serviceEndpoints(
   serverId: number,
   discover = false,
+  reuseDiscovery: readonly ServiceStorageEndpoint[] = [],
 ): Promise<ServiceStorageEndpoint[]> {
   const active = await resolveActiveServer();
   if (active.serverId !== serverId) throw new Error('The active server changed');
@@ -56,6 +74,18 @@ export async function serviceEndpoints(
     endpoint: ServiceStorageEndpoint,
     read: (tested: () => void) => Promise<string[]>,
   ) {
+    const reused = reuseDiscovery.find((entry) =>
+      entry.key === endpoint.key && entry.configurationIdentity === endpoint.configurationIdentity
+    );
+    if (discover && reused) {
+      endpoints.push({
+        ...endpoint,
+        roots: [...reused.roots],
+        connectionTestedAt: reused.connectionTestedAt,
+        discoveryError: reused.discoveryError,
+      });
+      return;
+    }
     if (discover) {
       try {
         endpoint.roots = [
@@ -78,6 +108,7 @@ export async function serviceEndpoints(
       name: `Plex · ${library.title}`,
       libraryKeys: [library.key],
       supportedMedia: library.type === 'movie' || library.type === 'show',
+      ...connectionAddress(active.client.serverUrl),
       roots: [],
       configurationIdentity: evidenceFingerprint([
         serverId,
@@ -101,6 +132,7 @@ export async function serviceEndpoints(
       ),
       roots: [],
       configurationIdentity: evidenceFingerprint([arr.id, arr.url, arr.apiKey, arr.updatedAt]),
+      ...connectionAddress(arr.url),
       supportedMedia: mappings.some((mapping) =>
         mapping.arrInstanceId === arr.id &&
         libraryRows.some((library) =>
@@ -133,7 +165,7 @@ export async function serviceEndpoints(
       configurationIdentity: evidenceFingerprint(target.configurationIdentity),
       libraryKeys: libraryRows.map((library) => library.key),
       supportedMedia: true,
-      connectionHost: target.instanceUrl ? new URL(target.instanceUrl).hostname : undefined,
+      ...connectionAddress(target.instanceUrl),
       roots: [],
     }, async (tested) => {
       if (!target.client.scanJobSummaries) throw new Error('Current job inventory is unavailable');

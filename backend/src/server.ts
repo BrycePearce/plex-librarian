@@ -6,6 +6,7 @@ import { startScheduler, startupSyncIfStale } from './features/sync/scheduler.ts
 import { startPlexSessionMonitor } from './features/users/sessionMonitor.ts';
 import { createPlexClient, PlexConfigError } from './integrations/plex/index.ts';
 import { startDeletionWorker } from './features/deletionOperations/service.ts';
+import { startHostDiscovery } from './features/settings/hostDiscovery.ts';
 
 await runMigrations(
   Deno.env.get('DB_PATH') ?? './data/librarian.db',
@@ -18,6 +19,7 @@ await failAllPendingSyncs();
 void startupSyncIfStale();
 startScheduler();
 startPlexSessionMonitor();
+startHostDiscovery();
 
 const app = createApp();
 startDeletionWorker();

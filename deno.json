@@ -8,8 +8,8 @@
     "fmt": "deno fmt",
     "fmt:check": "deno fmt --check",
     "lint": "deno lint",
-    "check": "deno check backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/**/*.ts tools/**/*.ts",
-    "test": "deno test --allow-all backend/src frontend/src",
+    "check": "deno check backend/src/**/*.ts frontend/src/**/*.{ts,tsx} shared/**/*.ts tools/**/*.ts deploy/discovery/*.ts",
+    "test": "deno test --allow-all backend/src frontend/src deploy/discovery",
     "precommit": "deno task fmt:check && deno task lint",
     "verify": "deno task fmt:check && deno task lint && deno task check && deno task test && deno task build",
     "hooks:install": "deno run --allow-run=git --allow-write=.githooks tools/install_hooks.ts"
@@ -26,7 +26,8 @@
       "frontend/src/**/*.tsx",
       "shared/deno.json",
       "shared/**/*.ts",
-      "tools/**/*.ts"
+      "tools/**/*.ts",
+      "deploy/discovery/**/*.ts"
     ],
     "exclude": ["frontend/src/routeTree.gen.ts"],
     "indentWidth": 2,
@@ -35,7 +36,7 @@
     "semiColons": true
   },
   "lint": {
-    "include": ["backend/src", "frontend/src", "shared", "tools"],
+    "include": ["backend/src", "frontend/src", "shared", "tools", "deploy/discovery"],
     "exclude": ["frontend/src/routeTree.gen.ts"],
     "rules": {
       "tags": ["recommended", "react"]

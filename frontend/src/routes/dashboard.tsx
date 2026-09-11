@@ -632,7 +632,7 @@ function StatsStrip({
         tone="primary"
         label="Media removed"
         value={formatKilobytes(animatedRemovedSize)}
-        title="Logical media size explicitly deleted through Plex Librarian and confirmed absent from Plex. Actual disk space recovered can differ because of hardlinks, snapshots, open file handles, compression, or deduplication."
+        title="Logical media size from completed deletion workflows. Ordinary deletions use service-reported success or acceptance; disk space recovered is not measured."
       />
       <StatTile
         icon={<Clock className="w-5 h-5" />}

@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>plex-librarian-discovery</Name>
+  <Repository>ghcr.io/brycepearce/plex-librarian-discovery:latest</Repository>
+  <Network>host</Network>
+  <Privileged>false</Privileged>
+  <ExtraParams>--pid=host --read-only --cap-drop=ALL --cap-add=SYS_PTRACE --cap-add=DAC_READ_SEARCH --security-opt=no-new-privileges:true --memory=128m --cpus=0.5 --pids-limit=64 --tmpfs=/tmp:size=16m --mount=type=volume,source=plex-librarian-discovery,target=/discovery</ExtraParams>
+  <Overview>Optional host discovery for Plex Librarian. Fresh installations share the private transport volume automatically; no path entry is needed. Install one helper per host, then Enable host discovery in Librarian's Media connections. Docker socket access is host-administrator-equivalent despite the read-only mount. Exposes only authenticated mount and endpoint evidence on a private Unix socket. No media mounts. Release preparation: the referenced image and Community Applications listing must be published before public installation is available. Existing bind-based discovery installations must preserve their original transport directory and pairing key.</Overview>
+  <Config Name="Docker socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="ro" Description="Helper-only Docker API access; never add this to Librarian." Type="Path" Display="advanced" Required="true" Mask="false">/var/run/docker.sock</Config>
+</Container>

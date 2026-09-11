@@ -156,6 +156,7 @@ function appendMediaPaths(
   limit: number,
   fileSizes?: Record<string, number | null>,
   accessSample?: { value?: { ratingKey: string; mediaId: number; path: string; size: number } },
+  versionFiles?: PlexMediaPathPreview['versionFiles'],
 ): boolean {
   for (const item of metadata) {
     for (const media of item.Media ?? []) {
@@ -163,6 +164,21 @@ function appendMediaPaths(
         // Keep Plex's path byte-for-byte. Normalizing separators or case would corrupt
         // valid Windows/UNC paths and can also merge distinct Linux paths.
         const size = Number.isSafeInteger(part.size) && part.size! > 0 ? part.size! : null;
+        if (versionFiles) {
+          if (versionFiles.length >= limit) return true;
+          if (
+            !item.ratingKey || !Number.isSafeInteger(Number(media.id)) || Number(media.id) <= 0 ||
+            size === null
+          ) {
+            throw new Error('Complete Plex version identity is required for deletion');
+          }
+          versionFiles.push({
+            ratingKey: String(item.ratingKey),
+            mediaId: Number(media.id),
+            path: part.file,
+            size,
+          });
+        }
         if (seen.has(part.file)) {
           if (fileSizes && fileSizes[part.file] !== size) fileSizes[part.file] = null;
           continue;
@@ -822,7 +838,7 @@ export class PlexClient {
     }
   }
 
-  // Fetches current Plex-reported Part paths solely for confirmation UI. Movies and
+  // Fetches bounded current Plex Part paths for previews and ordinary deletion evidence. Movies and
   // other leaf items expose Media directly; shows and artists require allLeaves because
   // this app intentionally does not persist every episode/track. The cap prevents a
   // bulk preview from accumulating an unbounded TV/music library in memory.
@@ -832,15 +848,21 @@ export class PlexClient {
     limit = MAX_PREVIEW_MEDIA_PATHS,
     signal?: AbortSignal,
     includeFileSizes = false,
+    includeVersionFiles = false,
   ): Promise<PlexMediaPathPreview> {
     const paths: string[] = [];
     const fileSizes: Record<string, number | null> | undefined = includeFileSizes ? {} : undefined;
+    const versionFiles: PlexMediaPathPreview['versionFiles'] = includeVersionFiles ? [] : undefined;
     const accessSample: {
       value?: { ratingKey: string; mediaId: number; path: string; size: number };
     } = {};
     const extraEvidence = () =>
       fileSizes
-        ? { fileSizes, ...(accessSample.value ? { pathAccessSample: accessSample.value } : {}) }
+        ? {
+          fileSizes,
+          ...(versionFiles ? { versionFiles } : {}),
+          ...(accessSample.value ? { pathAccessSample: accessSample.value } : {}),
+        }
         : {};
     const seen = new Set<string>();
     const encodedKey = encodeURIComponent(ratingKey);
@@ -857,6 +879,7 @@ export class PlexClient {
         limit,
         fileSizes,
         includeFileSizes ? accessSample : undefined,
+        versionFiles,
       );
       return { paths, truncated, ...extraEvidence() };
     }
@@ -882,6 +905,7 @@ export class PlexClient {
           limit,
           fileSizes,
           includeFileSizes ? accessSample : undefined,
+          versionFiles,
         )
       ) {
         return { paths, truncated: true, ...extraEvidence() };

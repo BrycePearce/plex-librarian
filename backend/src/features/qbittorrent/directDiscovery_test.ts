@@ -5,10 +5,33 @@ import {
   associatedCurrentJobCandidates,
   completeDirectManifestSelection,
   directDiscoveryCandidates,
+  directFilesystemIdentity,
   type DirectLocalIdentity,
   directManifestRemotePaths,
   directManifestSelection,
 } from './directDiscovery.ts';
+
+Deno.test('direct discovery rejects rounded filesystem IDs before they can authorize another file', () => {
+  const selectedInode = Number(10133099163766247n);
+  const retainedPayloadInode = Number(10133099163766249n);
+  assertEquals(selectedInode, retainedPayloadInode);
+  for (const ino of [selectedInode, retainedPayloadInode]) {
+    assertThrows(
+      () => directFilesystemIdentity({ dev: 1, ino }),
+      Error,
+      'no exact filesystem identity',
+    );
+  }
+  for (const value of [NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assertThrows(() => directFilesystemIdentity({ dev: value, ino: 7 }));
+    assertThrows(() => directFilesystemIdentity({ dev: 1, ino: value }));
+  }
+  assertThrows(() => directFilesystemIdentity({ dev: 1, ino: null }));
+  assertEquals(directFilesystemIdentity({ dev: 1, ino: Number.MAX_SAFE_INTEGER }), {
+    device: '1',
+    inode: String(Number.MAX_SAFE_INTEGER),
+  });
+});
 
 Deno.test('Arr association finds a separate moved current payload without authorizing old paths', async () => {
   const target = {

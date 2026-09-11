@@ -45,7 +45,7 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD deno eval --allow-env --allow-net \
+  CMD deno eval \
   "const port=Deno.env.get('PORT')??'8080';const r=await fetch('http://127.0.0.1:'+port+'/health');Deno.exit(r.ok?0:1)"
 
 # Optional duplicate adoption can inspect /proc/self/mountinfo to distinguish

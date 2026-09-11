@@ -24,6 +24,11 @@ const {
 const { ensureDeletionTarget } = await import('../deletionOperations/workflow/targetWorkflow.ts');
 type WorkTarget = Parameters<typeof ensureDeletionTarget>[0];
 
+async function hasExactStatIds(...paths: string[]): Promise<boolean> {
+  const stats = await Promise.all(paths.map((path) => Deno.lstat(path)));
+  return stats.every((info) => Number.isSafeInteger(info.dev) && Number.isSafeInteger(info.ino));
+}
+
 withTransaction((client) => {
   client.prepare(
     "INSERT INTO servers (id,machine_identifier,name,url,access_token,last_connected_at) VALUES (1,'fixture','Fixture','http://fixture','token',1)",
@@ -223,7 +228,11 @@ Deno.test('season current proof scopes history without hiding unresolved selecte
         retained: [{ plexPath: '/plex/retained.mkv', size: 13 }],
         inspect: true,
       });
-      if (scenario === 'other season') {
+      if (!await hasExactStatIds(f.selected, f.retained)) {
+        assertEquals(plan?.status, 'unavailable');
+        assertEquals(plan?.downloadJobs, []);
+        assertStringIncludes(plan!.reason!, 'no exact filesystem identity');
+      } else if (scenario === 'other season') {
         assertEquals(plan?.status, 'resolved');
         assertEquals(plan?.downloadJobs.map((job) => job.jobId), ['hash']);
       } else {
@@ -250,7 +259,12 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
       assertEquals((await f.raw()).status, 'resolved');
       const plan = await f.plan('/retained/a.mkv');
       assertEquals(plan.status, 'unavailable');
-      assertStringIncludes(plan.reason!, 'aliases an unselected retained Plex version');
+      assertStringIncludes(
+        plan.reason!,
+        await hasExactStatIds(f.selected, f.payload)
+          ? 'aliases an unselected retained Plex version'
+          : 'no exact filesystem identity',
+      );
       assertEquals(plan.downloadJobs, []);
       assertEquals(f.deleted(), 0);
       assertEquals(await Deno.readTextFile(f.payload), 'fixture bytes');
@@ -272,8 +286,14 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
         retained: [{ plexPath: '/retained/a.mkv', size: 13 }],
       });
       assertEquals(plan?.status, 'unavailable');
-      assertStringIncludes(plan!.reason!, 'aliases an unselected retained Plex version');
+      assertStringIncludes(
+        plan!.reason!,
+        await hasExactStatIds(f.selected, f.payload)
+          ? 'aliases an unselected retained Plex version'
+          : 'no exact filesystem identity',
+      );
       assertEquals(plan!.downloadJobs, []);
+      assertEquals(f.deleted(), 0);
     },
   );
   await t.step('a distinct retained hardlink survives accepted persisted cleanup', async () => {
@@ -281,6 +301,15 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
     await Deno.remove(f.retained);
     await Deno.link(f.payload, f.retained);
     const accepted = await f.plan();
+    if (!await hasExactStatIds(f.selected, f.retained)) {
+      assertEquals(accepted.status, 'unavailable');
+      assertEquals(accepted.downloadJobs, []);
+      assertStringIncludes(accepted.reason!, 'no exact filesystem identity');
+      assertEquals(f.deleted(), 0);
+      assertEquals(await Deno.readTextFile(f.payload), 'fixture bytes');
+      assertEquals(await Deno.readTextFile(f.retained), 'fixture bytes');
+      return;
+    }
     assertEquals(accepted.status, 'resolved');
     assertEquals(accepted.downloadJobs[0]!.provenance, 'direct_manifest');
     const persisted = persistResolvedCleanupIdentity(accepted);
@@ -294,7 +323,17 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
     'retained identity drift blocks persisted execution before the QB request',
     async () => {
       const f = await fixture();
-      const accepted = persistResolvedCleanupIdentity(await f.plan());
+      const plan = await f.plan();
+      if (!await hasExactStatIds(f.selected, f.retained)) {
+        assertEquals(plan.status, 'unavailable');
+        assertEquals(plan.downloadJobs, []);
+        assertStringIncludes(plan.reason!, 'no exact filesystem identity');
+        assertEquals(f.deleted(), 0);
+        assertEquals(await Deno.readTextFile(f.payload), 'fixture bytes');
+        assertEquals(await Deno.readTextFile(f.retained), 'another bytes');
+        return;
+      }
+      const accepted = persistResolvedCleanupIdentity(plan);
       await Deno.rename(f.retained, resolve(f.library, 'old.mkv'));
       await Deno.writeTextFile(f.retained, 'changed bytes');
       await assertRejects(
@@ -320,8 +359,14 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
       f.job.manifestFiles.push({ path: 'unselected.mkv', size: 9 });
       const plan = await f.plan();
       assertEquals(plan.status, 'unavailable');
-      assertStringIncludes(plan.reason!, 'unselected or unverifiable');
+      assertStringIncludes(
+        plan.reason!,
+        await hasExactStatIds(f.selected, f.retained)
+          ? 'unselected or unverifiable'
+          : 'no exact filesystem identity',
+      );
       assertEquals(plan.downloadJobs, []);
+      assertEquals(f.deleted(), 0);
     },
   );
   await t.step('missing retained mapping identifies the file that needs access', async () => {
@@ -330,8 +375,12 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
     assertEquals(plan.status, 'unavailable');
     assertStringIncludes(
       plan.reason!,
-      'retained Plex path has no single validated local mapping: /missing/retained.mkv',
+      await hasExactStatIds(f.selected)
+        ? 'retained Plex path has no single validated local mapping: /missing/retained.mkv'
+        : 'no exact filesystem identity',
     );
+    assertEquals(plan.downloadJobs, []);
+    assertEquals(f.deleted(), 0);
   });
   await t.step(
     'worker holds already persisted history-only version proofs before any service action',

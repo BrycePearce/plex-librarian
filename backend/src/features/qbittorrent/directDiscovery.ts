@@ -100,6 +100,16 @@ export function directDiscoveryCandidates(
   ])).values()];
 }
 
+export function directFilesystemIdentity(
+  info: Pick<Deno.FileInfo, 'dev' | 'ino'>,
+): Pick<DirectLocalIdentity, 'device' | 'inode'> {
+  // Numeric stat IDs can round distinct files to the same value (notably on Windows).
+  if (!Number.isSafeInteger(info.dev) || !Number.isSafeInteger(info.ino)) {
+    throw new Error('Direct qBittorrent path has no exact filesystem identity');
+  }
+  return { device: String(info.dev), inode: String(info.ino) };
+}
+
 async function exactLocalIdentity(
   path: string,
   size: number,
@@ -113,13 +123,13 @@ async function exactLocalIdentity(
       'Direct qBittorrent path is missing, linked, or has no exact filesystem identity',
     );
   }
+  const filesystemIdentity = directFilesystemIdentity(info);
   const identity = await resolveEntry(path, true);
   return {
     path,
     size,
     canonical,
-    device: String(info.dev),
-    inode: String(info.ino),
+    ...filesystemIdentity,
     entry: identity.possibleEntry,
   };
 }

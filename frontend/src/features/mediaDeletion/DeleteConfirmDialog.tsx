@@ -158,7 +158,7 @@ export function DeleteConfirmDialog({
     setPreviewMode("basic");
   }, [selectionKey]);
   useEffect(() => {
-    if (!preview.data) return;
+    if (!preview.data || preview.isFetching || preview.isError) return;
     if (cleanupDefaultsKeyRef.current !== selectionKey) {
       cleanupDefaultsKeyRef.current = selectionKey;
       if (defaultOrphanOnlyCleanup && effectiveDeleteFromArr) {
@@ -177,10 +177,13 @@ export function DeleteConfirmDialog({
       )
     ) {
       acceptedCleanupKeyRef.current = null;
+      setCleanupDownloads(false);
       setCleanupConsentChanged(true);
     }
   }, [
     preview.data,
+    preview.isFetching,
+    preview.isError,
     cleanupEligibleCount,
     cleanupAuthorizationKey,
     cleanupDownloads,
@@ -208,7 +211,7 @@ export function DeleteConfirmDialog({
     pending,
     hasSelection: items.length > 0,
     preview: preview.isFetching ? "loading" : preview.isError ? "error" : "ready",
-    semanticBlock: ownershipProblems.length > 0 ||
+    semanticBlock: cleanupConsentChanged || ownershipProblems.length > 0 ||
       (deleteFromArr && (!preview.data?.coordinatedConfigured || arrProblems.length > 0)) ||
       (cleanupDownloads && (!effectiveCleanupDownloads || cleanupEligibleCount !== items.length)),
   });
@@ -270,11 +273,21 @@ export function DeleteConfirmDialog({
                   : []),
                 ...(cleanupConsentChanged
                   ? [
-                    "Preview updated. Review the cleanup option before continuing.",
+                    "Preview changed. Select Delete from qBittorrent again, or choose Keep qBittorrent files.",
                   ]
                   : []),
               ]}
             />
+            {cleanupConsentChanged && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={pending || preview.isFetching}
+                onClick={() => setCleanupConsentChanged(false)}
+              >
+                Keep qBittorrent files
+              </button>
+            )}
           </>
         }
         review={

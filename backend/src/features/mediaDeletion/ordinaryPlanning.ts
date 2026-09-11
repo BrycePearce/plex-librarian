@@ -10,7 +10,11 @@ import {
   storageContains,
   storagePath,
 } from '../../../../shared/serviceStorage.ts';
-import { assertRootConfigurations, evidenceFingerprint } from './serviceStorage.ts';
+import {
+  assertRootConfigurations,
+  evidenceFingerprint,
+  loadServiceRoots,
+} from './serviceStorage.ts';
 import { appendRemotePath } from './ownership.ts';
 import { activeWholeItemRatingKeys } from './activePlayback.ts';
 import { withTransaction } from '../../db/index.ts';
@@ -62,6 +66,8 @@ export interface OrdinaryDeletionPlan {
   connections: ServiceStorageEndpoint[];
   roots: ServicePathRoot[];
   plexFiles: Array<{ path: string; size: number }>;
+  /** Absent only on previously accepted plans. Never infer IDs for legacy evidence. */
+  plexVersionFiles?: Array<{ ratingKey: string; mediaId: number; path: string; size: number }>;
   arr: OrdinaryArrScope[];
   jobs: OrdinaryJob[];
   qbInventory: Array<{ serviceKey: string; fingerprint: string }>;
@@ -77,7 +83,7 @@ export function ordinaryPlanFingerprint(plan: Omit<OrdinaryDeletionPlan, 'finger
 }
 
 /** One eligibility policy shared by preview, enqueue and the durable worker. No filesystem IO. */
-export async function buildOrdinaryDeletionPlan(input: {
+interface OrdinaryPlanningInput {
   serverId: number;
   libraryKey: string;
   selection: OrdinarySelection;
@@ -92,7 +98,44 @@ export async function buildOrdinaryDeletionPlan(input: {
   retainedPlexCheck?: RetainedPlexCheck;
   /** Display-only discovery; it never grants eligibility or supplies accepted evidence. */
   onPlexFiles?: (files: OrdinaryDeletionPlan['plexFiles']) => void;
-}): Promise<OrdinaryDeletionPlan> {
+}
+
+class MissingDownloadRoot extends Error {
+  constructor(readonly serviceKey: string, readonly path: string) {
+    super(
+      `Current qBittorrent storage needs discovery refresh for ${serviceKey}. Review Media connections if it remains unavailable.`,
+    );
+  }
+}
+
+export async function buildOrdinaryDeletionPlan(
+  input: OrdinaryPlanningInput,
+): Promise<OrdinaryDeletionPlan> {
+  try {
+    return await prepareOrdinaryDeletionPlan(input);
+  } catch (error) {
+    if (!(error instanceof MissingDownloadRoot)) throw error;
+    const { refreshMissingDownloadRoot } = await import('../settings/hostDiscovery.ts');
+    await refreshMissingDownloadRoot(input.serverId, error.serviceKey);
+    const roots = await loadServiceRoots(input.serverId);
+    if (
+      !roots.some((root) =>
+        root.serviceKey === error.serviceKey &&
+        storageContains(root.serviceRoot, error.path, root.caseSensitive)
+      )
+    ) throw error;
+    // Rebuild all comparisons and the fingerprint; never patch an accepted plan or
+    // reuse path comparisons made before discovery published a different mapping.
+    return await prepareOrdinaryDeletionPlan({
+      ...input,
+      roots,
+    });
+  }
+}
+
+async function prepareOrdinaryDeletionPlan(
+  input: OrdinaryPlanningInput,
+): Promise<OrdinaryDeletionPlan> {
   const { selection, arrSelected, qbSelected } = input;
   if (qbSelected && input.downloadTargets.length === 0) {
     throw new Error('qBittorrent is not configured for the selected scope');
@@ -149,6 +192,7 @@ export async function buildOrdinaryDeletionPlan(input: {
     return configuredStoragePath(roots, key, path);
   };
   const plexFiles: OrdinaryDeletionPlan['plexFiles'] = [];
+  let plexVersionFiles: OrdinaryDeletionPlan['plexVersionFiles'];
   if (selection.type === 'season') {
     const episodes = input.seasonEpisodes ??
       await input.plex.seasonDeletionEpisodes(selection.ratingKey);
@@ -159,10 +203,17 @@ export async function buildOrdinaryDeletionPlan(input: {
         episode.seasonIndex !== selection.seasonIndex
       )
     ) throw new Error('The selected Plex season membership changed');
+    plexVersionFiles = [];
     for (const episode of episodes) {
       for (const media of episode.media) {
         for (const part of media.paths) {
           plexFiles.push({ path: storagePath(part.path), size: part.byteSize });
+          plexVersionFiles.push({
+            ratingKey: episode.ratingKey,
+            mediaId: media.mediaId,
+            path: storagePath(part.path),
+            size: part.byteSize,
+          });
         }
       }
     }
@@ -173,7 +224,12 @@ export async function buildOrdinaryDeletionPlan(input: {
       undefined,
       undefined,
       true,
+      true,
     );
+    plexVersionFiles = paths.versionFiles?.map((file) => ({
+      ...file,
+      path: storagePath(file.path),
+    }));
     if (paths.truncated) {
       throw new Error('The complete current Plex file scope exceeds the preview limit');
     }
@@ -193,7 +249,7 @@ export async function buildOrdinaryDeletionPlan(input: {
     uniquePlex.set(file.path, file);
   }
   input.onPlexFiles?.([...uniquePlex.values()].map((file) => ({ ...file })));
-  if (arrSelected || input.downloadTargets.length) {
+  if (arrSelected) {
     assertRootConfigurations(
       roots.filter((root) => root.serviceKey.startsWith('plex:')),
       connections,
@@ -343,29 +399,42 @@ export async function buildOrdinaryDeletionPlan(input: {
     }
   }
   const jobs: OrdinaryJob[] = [], qbInventory: OrdinaryDeletionPlan['qbInventory'] = [];
+  let historyRequired = false;
   let currentJobCount = 0;
   if (input.downloadTargets.length) {
-    const selectedPaths = [...uniquePlex.values()].map((file) => ({
-      ...file,
-      storage: mapped(`plex:${input.libraryKey}`, file.path),
-    }));
+    // A complete empty inventory has no ownership dependency on storage mappings.
+    // Resolve paths only when a current job actually needs to be compared.
+    let selectedPaths: Array<{ path: string; size: number; storage: string }> = [];
+    let deleteScopes: Array<{ path: string; directory: boolean }> = [];
+    let retainedPaths: string[] = [];
+    const preparePaths = () => {
+      if (selectedPaths.length) return;
+      assertRootConfigurations(
+        roots.filter((root) => root.serviceKey.startsWith('plex:')),
+        connections,
+      );
+      selectedPaths = [...uniquePlex.values()].map((file) => ({
+        ...file,
+        storage: mapped(`plex:${input.libraryKey}`, file.path),
+      }));
+      deleteScopes = [
+        ...selectedPaths.map((file) => ({ path: file.storage, directory: false })),
+        ...(arrSelected
+          ? arr.flatMap((scope) =>
+            scope.directory
+              ? [{ path: mapped(scope.serviceKey, scope.path), directory: true }]
+              : scope.files.map((file) => ({
+                path: mapped(scope.serviceKey, file.path),
+                directory: false,
+              }))
+          )
+          : []),
+      ];
+      retainedPaths = retained.map((file) => mapped(file.serviceKey, file.path));
+    };
     const selectedManaged = arr.flatMap((scope) =>
       scope.files.map((file) => ({ ...file, serviceKey: scope.serviceKey }))
     );
-    const deleteScopes = [
-      ...selectedPaths.map((file) => ({ path: file.storage, directory: false })),
-      ...(arrSelected
-        ? arr.flatMap((scope) =>
-          scope.directory
-            ? [{ path: mapped(scope.serviceKey, scope.path), directory: true }]
-            : scope.files.map((file) => ({
-              path: mapped(scope.serviceKey, file.path),
-              directory: false,
-            }))
-        )
-        : []),
-    ];
-    const retainedPaths = retained.map((file) => mapped(file.serviceKey, file.path));
     for (const target of input.downloadTargets) {
       if (!target.client.scanJobSummaries) {
         throw new Error('Complete current qBittorrent inventory is unavailable');
@@ -381,6 +450,15 @@ export async function buildOrdinaryDeletionPlan(input: {
       );
       const first = await target.client.scanJobSummaries((summary) => {
         currentJobCount++;
+        preparePaths();
+        if (
+          !roots.some((root) =>
+            root.serviceKey === key &&
+            storageContains(root.serviceRoot, summary.contentPath, root.caseSensitive)
+          )
+        ) {
+          throw new MissingDownloadRoot(key, summary.contentPath);
+        }
         const path = mapped(key, summary.contentPath);
         if (
           associated.has(summary.id) ||
@@ -428,7 +506,7 @@ export async function buildOrdinaryDeletionPlan(input: {
           const direct = selectedPaths.some((selected) =>
             selected.storage === file.storage && selected.size === file.size
           );
-          const associatedFile = histories.some((source) => {
+          const associatedFile = !direct && histories.some((source) => {
             if (source.hash !== hash || !source.sourcePath || !source.importedPath) return false;
             const managed = selectedManaged.find((selected) =>
               selected.serviceKey === source.serviceKey &&
@@ -449,6 +527,7 @@ export async function buildOrdinaryDeletionPlan(input: {
           )
         );
         if (usesHistory) {
+          historyRequired = true;
           assertArrDeleteIsUnambiguous(
             selection,
             withTransaction((client) =>
@@ -534,9 +613,20 @@ export async function buildOrdinaryDeletionPlan(input: {
     selection,
     arrSelected,
     qbSelected,
-    connections,
-    roots,
+    connections: connections.filter((entry) =>
+      arrSelected || historyRequired || retained.length > 0 || !entry.key.startsWith('arr:')
+    ),
+    roots: roots.filter((root) =>
+      arrSelected || historyRequired || retained.length > 0 || !root.serviceKey.startsWith('arr:')
+    ),
     plexFiles: [...uniquePlex.values()].sort((a, b) => a.path.localeCompare(b.path)),
+    ...(plexVersionFiles
+      ? {
+        plexVersionFiles: plexVersionFiles.sort((a, b) =>
+          JSON.stringify(a).localeCompare(JSON.stringify(b))
+        ),
+      }
+      : {}),
     arr: arrSelected ? arr : [],
     jobs,
     qbInventory,

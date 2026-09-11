@@ -21,7 +21,27 @@ export interface ServiceStorageEndpoint {
   connectionTestedAt?: number;
   supportedMedia?: boolean;
   connectionHost?: string;
+  connectionPort?: number;
+  connectionPath?: string;
   remotePathHints?: { host: string; remotePath: string; localPath: string }[];
+}
+
+export interface DockerStoragePreview {
+  invalidatedServices?: Array<{ serviceKey: string; name: string }>;
+  status: 'ready' | 'confirmation_required' | 'unavailable';
+  fingerprint?: string;
+  replacementRequired: boolean;
+  reason?: string;
+  services: Array<{
+    serviceKey: string;
+    name: string;
+    containerName?: string;
+    evidenceIdentity?: string;
+    candidates?: Array<{ id: string; name: string }>;
+    matchedBy?: 'address' | 'selection';
+    roots: Array<{ serviceRoot: string; storageRoot: string; hostPath?: string }>;
+    reason?: string;
+  }>;
 }
 
 export type ProposedServiceRoot = Omit<ServicePathRoot, 'id' | 'serverId' | 'revision'>;
@@ -42,6 +62,22 @@ export interface ServiceStorageSettings {
   endpoints: ServiceStorageEndpoint[];
   relationships: ServicePathRoot[];
   automation?: ServiceStorageAutomation;
+  discovery?: HostDiscoveryStatus;
+}
+
+export interface HostDiscoveryStatus {
+  enabled: boolean;
+  checking: boolean;
+  reason?: string;
+  services: Array<
+    {
+      serviceKey: string;
+      name: string;
+      connected: boolean;
+      state: 'ready' | 'needs_attention';
+      reason?: string;
+    }
+  >;
 }
 
 export interface ServiceDeletionResponse {

@@ -97,7 +97,12 @@ export function ArrIntegrationDialog() {
   });
   const test = useMutation({
     mutationFn: api.arr.testInstance,
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+        qc.invalidateQueries({ queryKey: ["service-storage"] }),
+      ]);
+    },
   });
   const createNamespaceMapping = useMutation({
     mutationFn: api.settings.createPlexPathMapping,

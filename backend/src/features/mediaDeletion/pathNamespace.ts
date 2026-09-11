@@ -216,8 +216,11 @@ function parent(path: string): string {
   return path.slice(0, path.lastIndexOf('/')) || '/';
 }
 
-function identity(info: Deno.FileInfo, description: string): { dev: string; ino: string } {
-  if (info.dev === null || info.ino === null) {
+export function physicalFilesystemIdentity(
+  info: Pick<Deno.FileInfo, 'dev' | 'ino'>,
+  description: string,
+): { dev: string; ino: string } {
+  if (!Number.isSafeInteger(info.dev) || !Number.isSafeInteger(info.ino)) {
     throw new Error(`${description} has no stable filesystem identity on this platform`);
   }
   return { dev: String(info.dev), ino: String(info.ino) };
@@ -250,10 +253,10 @@ export async function provePhysicalDeletionIndependence(
   if (selectedCanonical === retainedCanonical) {
     throw new Error('The selected and retained paths are aliases of one directory entry');
   }
-  const selectedIdentity = identity(selected, 'Selected file');
-  const retainedIdentity = identity(retained, 'Retained file');
-  const selectedParentIdentity = identity(selectedParent, 'Selected parent');
-  const retainedParentIdentity = identity(retainedParent, 'Retained parent');
+  const selectedIdentity = physicalFilesystemIdentity(selected, 'Selected file');
+  const retainedIdentity = physicalFilesystemIdentity(retained, 'Retained file');
+  const selectedParentIdentity = physicalFilesystemIdentity(selectedParent, 'Selected parent');
+  const retainedParentIdentity = physicalFilesystemIdentity(retainedParent, 'Retained parent');
   const sameParent = selectedParentIdentity.dev === retainedParentIdentity.dev &&
     selectedParentIdentity.ino === retainedParentIdentity.ino;
   const selectedName = selectedCanonical.split('/').at(-1)?.toLocaleLowerCase('en-US');

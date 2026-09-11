@@ -61,11 +61,13 @@ export function deletionWarningSummary(
 }
 
 export function hardlinkOutcomeSummary(outcome: {
+  serviceOwnedDeletion?: boolean;
   verifiedHardlinkDataRemoved?: number;
   verifiedTargetCount?: number;
   unknownTargetCount?: number;
   mixedTargetCount?: number;
 }): string | null {
+  if (outcome.serviceOwnedDeletion) return "Disk space recovered unknown — not measured";
   const verifiedTargets = (outcome.verifiedTargetCount ?? 0) +
     (outcome.mixedTargetCount ?? 0);
   const uncertainTargets = (outcome.unknownTargetCount ?? 0) +

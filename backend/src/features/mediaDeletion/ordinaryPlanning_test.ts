@@ -4,6 +4,10 @@ import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
 import type { ServicePathRoot } from '../../../../shared/serviceStorage.ts';
+import {
+  type ConnectionSnapshot,
+  discoverCandidateTranslations,
+} from '../../../../tools/service_connection_sanity.ts';
 
 const temporary = await Deno.makeTempDir();
 Deno.env.set('DB_PATH', resolve(temporary, 'ordinary-planning.db'));
@@ -211,6 +215,248 @@ function fixture() {
     },
   };
 }
+
+function connectionSnapshot(): ConnectionSnapshot {
+  const fields = (values: Record<string, unknown>) =>
+    Object.entries(values).map(([name, value]) => ({ name, value }));
+  return {
+    plexUrl: 'http://plex.invalid:32400',
+    qbUrl: 'http://qb.invalid:8080',
+    notifications: [{
+      implementation: 'PlexServer',
+      fields: fields({
+        host: 'plex.invalid',
+        port: 32400,
+        useSsl: false,
+        mapFrom: '/arr',
+        mapTo: '/plex',
+      }),
+    }],
+    downloadClients: [{
+      implementation: 'QBittorrent',
+      fields: fields({ host: 'qb.invalid', port: 8080, useSsl: false }),
+    }],
+    remoteMappings: [{ host: 'qb.invalid', remotePath: '/downloads', localPath: '/source' }],
+  };
+}
+function assumedRootsForProbe(snapshot: ConnectionSnapshot): ServicePathRoot[] {
+  const links = discoverCandidateTranslations(snapshot, '/arr/Jessica', '/downloads');
+  const paths = [
+    ...(links.plex
+      ? [['plex:tv', links.plex.plexPrefix, links.plex.arrPrefix], [
+        'arr:1',
+        links.plex.arrPrefix,
+        links.plex.arrPrefix,
+      ]]
+      : []),
+    ...(links.qb
+      ? [['qb:db:1', links.qb.qbPrefix, links.qb.arrPrefix], [
+        'arr:1',
+        links.qb.arrPrefix,
+        links.qb.arrPrefix,
+      ]]
+      : []),
+  ];
+  return paths.filter((path, i) =>
+    paths.findIndex((other) => JSON.stringify(other) === JSON.stringify(path)) === i
+  ).map(([serviceKey, serviceRoot, storageRoot], i) => ({
+    id: i + 1,
+    serverId: 1,
+    serviceKey,
+    serviceRoot,
+    storageRoot,
+    configurationIdentity: serviceKey,
+    revision: 1,
+    caseSensitive: true,
+    hasAliases: false,
+  }));
+}
+
+Deno.test('mechanical sanity: all rows plan if discovered translation candidates are assumed to describe shared storage', async () => {
+  // Conditional integration probe. Notification mappings alone do not justify
+  // promotion to ServicePathRoot; a separate counterexample explicitly tests this.
+  for (const kind of ['show', 'season'] as const) {
+    for (
+      const [arrSelected, qbSelected, qbConfigured] of [
+        [false, false, false],
+        [true, false, false],
+        [true, false, true],
+        [true, true, true],
+        [false, false, true],
+        [false, true, true],
+      ]
+    ) {
+      const { input, state } = fixture();
+      const selection = kind === 'show'
+        ? input.selection
+        : { ...input.selection, type: 'season' as const, showRatingKey: 'show', seasonIndex: 1 };
+      input.plex.metadataIdentity = (() =>
+        Promise.resolve({
+          ...selection,
+          librarySectionId: 'tv',
+          media: [],
+          parentRatingKey: kind === 'season' ? 'show' : null,
+          grandparentRatingKey: null,
+          index: kind === 'season' ? 1 : null,
+        })) as typeof input.plex.metadataIdentity;
+      if (kind === 'season') {
+        input.plex.mediaPathPreview = (() =>
+          Promise.resolve({
+            paths: ['/plex/Jessica/Season 1/episode.mkv'],
+            fileSizes: { '/plex/Jessica/Season 1/episode.mkv': 100 },
+            truncated: false,
+          })) as typeof input.plex.mediaPathPreview;
+      }
+      const roots = !arrSelected && !qbConfigured ? [] : assumedRootsForProbe(connectionSnapshot());
+      const plan = await buildOrdinaryDeletionPlan({
+        ...input,
+        selection,
+        ...(kind === 'season'
+          ? {
+            seasonEpisodes: [{
+              ratingKey: 'ep1',
+              title: 'Episode 1',
+              showRatingKey: 'show',
+              seasonRatingKey: selection.ratingKey,
+              seasonIndex: 1,
+              episodeIndex: 1,
+              media: [{
+                mediaId: 1,
+                paths: [{ path: '/plex/Jessica/Season 1/episode.mkv', byteSize: 100 }],
+              }],
+            }],
+          }
+          : {}),
+        roots,
+        arrSelected,
+        qbSelected,
+        downloadTargets: qbConfigured ? input.downloadTargets : [],
+      });
+      assertEquals(plan.arr.length, arrSelected ? 1 : 0);
+      assertEquals(plan.jobs.length, qbSelected ? kind === 'show' ? state.jobs.length : 1 : 0);
+    }
+  }
+});
+
+Deno.test('UX sanity: common empty Plex mapping is still a setup blocker even with QB remote mapping discovered', async () => {
+  const snapshot = connectionSnapshot();
+  snapshot.notifications[0].fields = snapshot.notifications[0].fields.filter((f) =>
+    !['mapFrom', 'mapTo'].includes(f.name)
+  );
+  const { input } = fixture();
+  const roots = assumedRootsForProbe(snapshot);
+  assertEquals(roots.some((r) => r.serviceKey.startsWith('qb:')), true);
+  assertEquals(roots.some((r) => r.serviceKey.startsWith('plex:')), false);
+  for (
+    const [arrSelected, qbSelected] of [[true, false], [true, true], [false, true], [false, false]]
+  ) {
+    await assertRejects(
+      () => buildOrdinaryDeletionPlan({ ...input, roots, arrSelected, qbSelected }),
+      Error,
+      'No storage relationship',
+    );
+  }
+});
+
+Deno.test('complete empty QB needs no roots for Plex with either QB choice', async () => {
+  const { input, state } = fixture();
+  state.jobs = [];
+  for (const qbSelected of [false, true]) {
+    const plan = await buildOrdinaryDeletionPlan({ ...input, roots: [], qbSelected });
+    assertEquals(plan.jobs, []);
+    assertEquals(plan.arr, []);
+    assertEquals(plan.qbInventory.length, 1);
+  }
+  const preview = await ordinaryPreview({ ...input, roots: [] });
+  assertEquals(preview.plexOnlyStatus, 'resolved');
+  assertEquals(preview.qbittorrentOnlyStatus, 'resolved');
+  assertEquals(preview.sonarrCleanupStatus, 'error');
+});
+
+Deno.test('empty QB never bypasses failed inventory, a newly appearing job, or selected Arr mapping', async () => {
+  for (const failure of ['unavailable', 'appeared', 'arr'] as const) {
+    const { input, state } = fixture();
+    const jobs = state.jobs;
+    state.jobs = [];
+    if (failure === 'unavailable') {
+      input.downloadTargets[0].client.scanJobSummaries = () =>
+        Promise.reject(new Error('Inventory failed'));
+    } else if (failure === 'appeared') {
+      let scans = 0;
+      const scan = input.downloadTargets[0].client.scanJobSummaries!;
+      input.downloadTargets[0].client.scanJobSummaries = (visit) => {
+        if (++scans === 2) state.jobs = jobs;
+        return scan(visit);
+      };
+    }
+    await assertRejects(() =>
+      buildOrdinaryDeletionPlan({ ...input, roots: [], arrSelected: failure === 'arr' })
+    );
+  }
+});
+
+Deno.test('direct Plex QB evidence does not depend on unselected Arr roots or availability', async () => {
+  const { input, state } = fixture();
+  state.jobs = state.jobs.map((job, index) => ({
+    ...job,
+    contentPath: state.files[index].path.replace('/arr', '/plex'),
+    savePath: '/plex',
+    manifestFiles: [{ path: `Jessica/Season ${index + 1}/episode.mkv`, size: 100 }],
+  }));
+  input.roots = input.roots.filter((root) => !root.serviceKey.startsWith('arr:'));
+  Object.assign(input.roots.find((root) => root.serviceKey.startsWith('qb:'))!, {
+    serviceRoot: '/plex',
+    storageRoot: '/storage/library',
+  });
+  const available = await buildOrdinaryDeletionPlan({ ...input, qbSelected: true });
+  state.arrUnavailable = true;
+  const unavailable = await buildOrdinaryDeletionPlan({ ...input, qbSelected: true });
+  assertEquals(available.fingerprint, unavailable.fingerprint);
+  assertEquals(available.jobs.length, 3);
+  assertEquals(available.connections.some((entry) => entry.key.startsWith('arr:')), false);
+});
+
+Deno.test('UX sanity: automatically reused mappings preserve shared-entry, folder and pack protection', async () => {
+  for (const conflict of ['unchecked_entry', 'retained_folder', 'shared_pack'] as const) {
+    const { input, state } = fixture();
+    const snapshot = connectionSnapshot();
+    if (conflict === 'unchecked_entry') {
+      snapshot.remoteMappings[0].localPath = '/arr';
+      state.jobs[0].savePath = '/downloads/Jessica/Season 1';
+      state.jobs[0].contentPath = '/downloads/Jessica/Season 1/episode.mkv';
+      state.jobs[0].manifestFiles = [{ path: 'episode.mkv', size: 100 }];
+    }
+    if (conflict === 'retained_folder') {
+      state.retained.push({
+        ratingKey: 'other',
+        showRatingKey: 'other',
+        seasonRatingKey: 'other',
+        path: '/plex/Jessica/Other/retained.mkv',
+      });
+    }
+    if (conflict === 'shared_pack') {
+      state.jobs[0].manifestFiles.push({ path: 'season99/retained.mkv', size: 100 });
+    }
+    const error = await assertRejects(() =>
+      buildOrdinaryDeletionPlan({
+        ...input,
+        roots: assumedRootsForProbe(snapshot),
+        arrSelected: true,
+        qbSelected: conflict === 'shared_pack',
+      }), Error);
+    assertEquals(
+      error.message.includes(
+        conflict === 'unchecked_entry'
+          ? 'retained qBittorrent job'
+          : conflict === 'retained_folder'
+          ? 'retained in Plex'
+          : 'manifest',
+      ),
+      true,
+      error.message,
+    );
+  }
+});
 
 Deno.test('all five ordinary scenario rows work with non-existent local paths and reusable service roots', async () => {
   const { input } = fixture();

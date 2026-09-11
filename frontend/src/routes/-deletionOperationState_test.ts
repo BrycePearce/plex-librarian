@@ -13,6 +13,13 @@ import {
   storageOutcomeExplanations,
 } from "./-deletionOperationState.ts";
 
+Deno.test("ordinary activity reports unmeasured disk recovery instead of a hardlink warning", () => {
+  assertEquals(
+    hardlinkOutcomeSummary({ serviceOwnedDeletion: true, unknownTargetCount: 1 }),
+    "Disk space recovered unknown — not measured",
+  );
+});
+
 Deno.test("deletion operation UI polls only while work can still change", () => {
   assertEquals(deletionOperationPollInterval("queued"), 2000);
   assertEquals(deletionOperationPollInterval("waiting_retry"), 10000);

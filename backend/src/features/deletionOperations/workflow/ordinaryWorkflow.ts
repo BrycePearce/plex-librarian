@@ -71,6 +71,15 @@ export async function ensureOrdinaryDeletion(
       serviceEndpoints(target.serverId),
     ]);
     const keys = new Set(plan.connections.map((entry) => entry.key));
+    const requiresArr = plan.connections.some((entry) => entry.key.startsWith('arr:'));
+    if (
+      connections.some((entry) =>
+        !keys.has(entry.key) &&
+        (entry.key.startsWith('qb:') ||
+          requiresArr && entry.key.startsWith('arr:') &&
+            entry.libraryKeys.includes(plan.libraryKey))
+      )
+    ) throw new Error('The applicable service destinations changed after confirmation');
     const current = connections.filter((entry) => keys.has(entry.key)).map((entry) => ({
       ...entry,
       roots: [],
@@ -339,7 +348,12 @@ export async function ensureOrdinaryDeletion(
     const paths = plan.selection.type === 'season'
       ? (await plex.seasonDeletionEpisodes(snapshot.ratingKey)).flatMap((episode) =>
         episode.media.flatMap((media) =>
-          media.paths.map((part) => ({ path: storagePath(part.path), size: part.byteSize }))
+          media.paths.map((part) => ({
+            ratingKey: episode.ratingKey,
+            mediaId: media.mediaId,
+            path: storagePath(part.path),
+            size: part.byteSize,
+          }))
         )
       )
       : await plex.mediaPathPreview(
@@ -348,13 +362,28 @@ export async function ensureOrdinaryDeletion(
         undefined,
         undefined,
         true,
+        true,
       ).then((result) => {
         if (result.truncated) throw new Error('Plex file scope is incomplete');
+        if (plan.plexVersionFiles) {
+          if (!result.versionFiles) throw new Error('Plex version scope is incomplete');
+          return result.versionFiles.map((file) => ({ ...file, path: storagePath(file.path) }));
+        }
         return result.paths.map((path) => ({
           path: storagePath(path),
           size: result.fileSizes?.[path] ?? 0,
         }));
       });
+    if (
+      plan.plexVersionFiles &&
+      paths.some((file) =>
+        !plan.plexVersionFiles!.some((accepted) =>
+          'mediaId' in file && 'ratingKey' in file && accepted.mediaId === file.mediaId &&
+          accepted.ratingKey === file.ratingKey && accepted.path === file.path &&
+          accepted.size === file.size
+        )
+      )
+    ) throw new Error('New or changed Plex versions are outside the accepted scope');
     if (
       paths.some((file) =>
         !plan.plexFiles.some((accepted) =>
@@ -378,6 +407,16 @@ export async function ensureOrdinaryDeletion(
       'Delete selected media',
       (record) => plex.deleteItem(snapshot.ratingKey, record),
     );
+  } else if (!attempts[plexKey]?.response && !reconciliations[plexKey]) {
+    // checkCurrentPlexScope required covering durable responses for every accepted file.
+    reconciliations[plexKey] = {
+      service: 'Plex',
+      action: 'Selected Plex absence reconciled',
+      size: plan.plexFiles.reduce((sum, file) => sum + file.size, 0),
+      sourceKeys: [...new Set(plan.plexFiles.flatMap((file) => responseSourceKeys(file)))],
+      reconciledAt: Date.now(),
+    };
+    save();
   }
   advancePhase(target, 'plex_reconciliation');
   withTransaction((client) => {

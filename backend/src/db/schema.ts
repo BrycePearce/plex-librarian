@@ -201,6 +201,28 @@ export const servicePathRoots = sqliteTable('service_path_roots', {
   ),
 }));
 
+// Freshness is separate from accepted root snapshots. Existing roots remain manual.
+export const hostDiscovery = sqliteTable('host_discovery', {
+  serverId: integer('server_id').primaryKey().references(() => servers.id, { onDelete: 'cascade' }),
+  pairingId: text('pairing_id').notNull(),
+  daemonId: text('daemon_id').notNull(),
+  keyHash: text('key_hash').notNull(),
+  generation: integer('generation').notNull().default(1),
+  configuration: text('configuration'),
+  reportRevision: text('report_revision'),
+  scannedAt: integer('scanned_at').notNull().default(0),
+  checkedAt: integer('checked_at').notNull().default(0),
+  status: text('status').notNull().default('[]'),
+  reason: text('reason'),
+});
+export const hostDiscoveryRoots = sqliteTable('host_discovery_roots', {
+  rootId: integer('root_id').primaryKey().references(() => servicePathRoots.id, {
+    onDelete: 'cascade',
+  }),
+  evidenceIdentity: text('evidence_identity').notNull(),
+  checkedAt: integer('checked_at').notNull(),
+});
+
 export const arrPathMappings = sqliteTable(
   'arr_path_mappings',
   {

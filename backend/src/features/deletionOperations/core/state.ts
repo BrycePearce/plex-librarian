@@ -83,12 +83,16 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
     operationId,
   );
   if (active === 0 && ['queued', 'running', 'waiting_retry'].includes(operation[3])) {
+    const serviceOwned = client.prepare(
+      "SELECT COUNT(*) FROM deletion_targets WHERE operation_id = ? AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.ordinaryPlan.policyVersion') = 2",
+    ).value<[number]>(operationId)?.[0] === operation[4];
     client.prepare(
       "INSERT INTO events (server_id, type, payload, created_at) VALUES (?, 'deletion.completed', ?, ?)",
     ).run(
       operation[0],
       JSON.stringify({
         operationId,
+        ...(serviceOwned ? { serviceOwnedDeletion: true } : {}),
         libraryKey: operation[1],
         kind: operation[2],
         status,

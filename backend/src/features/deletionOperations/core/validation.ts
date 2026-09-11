@@ -52,7 +52,8 @@ export interface DurableTargetSnapshot {
     {
       service: string;
       action: string;
-      path: string;
+      /** Individual file, or omitted when covering the plan's entire Plex selection. */
+      path?: string;
       size: number;
       sourceKeys: string[];
       reconciledAt: number;

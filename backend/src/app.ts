@@ -24,6 +24,8 @@ import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
 import webhook from './features/webhook/route.ts';
 import episodeGaps from './features/episodeGaps/route.ts';
+import { withTransaction } from './db/index.ts';
+import { triggerHostDiscovery } from './features/settings/hostDiscovery.ts';
 
 export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   const app = new Hono();
@@ -43,6 +45,22 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   );
   app.use('*', bodyLimit({ maxSize: 1 * 1024 * 1024 }));
   app.use('/api/*', durableDeletionAdapter);
+  app.use('/api/*', async (c, next) => {
+    await next();
+    // Run only after successful handlers commit their connection/mapping changes.
+    // Discovery cannot turn a valid save into a failed connection response.
+    if (
+      c.res.ok && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method) &&
+      /^\/api\/(integrations\/(arr|qbittorrent)\/(instances|libraries)(\/|$)|auth\/plex\/server$)/
+        .test(c.req.path)
+    ) {
+      const id = withTransaction((client) =>
+        client.prepare('SELECT active_server_id FROM settings WHERE id=1').value<[number | null]>()
+          ?.[0]
+      );
+      if (id != null) triggerHostDiscovery(id);
+    }
+  });
 
   app.onError((err, c) => {
     console.error(err);

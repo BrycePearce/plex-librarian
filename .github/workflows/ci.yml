@@ -22,3 +22,14 @@ jobs:
 
       - name: Verify
         run: deno task verify
+
+      # Build-only validation: no registry credentials, publishing, or host socket.
+      - name: Build discovery helper
+        run: docker build -f deploy/discovery/Dockerfile -t librarian-discovery-ci .
+
+      - name: Test packaged Unix socket transport
+        run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,size=64m
+          --mount "type=bind,source=${{ github.workspace }},target=/workspace,readonly"
+          --workdir /workspace --entrypoint deno librarian-discovery-ci
+          test --no-config --allow-all backend/src/features/settings/discoveryTransport_test.ts

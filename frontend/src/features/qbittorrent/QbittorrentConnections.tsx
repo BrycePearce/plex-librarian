@@ -27,8 +27,12 @@ export function QbittorrentConnections({
   });
   const test = useMutation({
     mutationFn: api.qbittorrent.testInstance,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
+        queryClient.invalidateQueries({ queryKey: ["service-storage"] }),
+      ]);
+    },
   });
   const [mapping, setMapping] = useState({
     instanceKey: "",

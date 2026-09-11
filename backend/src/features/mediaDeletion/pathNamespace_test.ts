@@ -1,10 +1,34 @@
-import { assertEquals, assertRejects } from '@std/assert';
+import { assertEquals, assertRejects, assertThrows } from '@std/assert';
 import {
   lstatChain,
+  physicalFilesystemIdentity,
   type PlexNamespaceMappingRecord,
   provePhysicalDeletionIndependence,
   resolvePathNamespace,
 } from './pathNamespace.ts';
+
+Deno.test('physical evidence rejects rounded file and parent IDs before persisting them', () => {
+  const original = Number(10133099163766247n);
+  const replacement = Number(10133099163766249n);
+  assertEquals(original, replacement);
+  for (const ino of [original, replacement, null, NaN, Infinity, 1.5]) {
+    assertThrows(
+      () => physicalFilesystemIdentity({ dev: 1, ino }, 'Selected file'),
+      Error,
+      'no stable filesystem identity',
+    );
+  }
+  assertThrows(() => physicalFilesystemIdentity({ dev: original, ino: 7 }, 'Selected parent'));
+  assertEquals(physicalFilesystemIdentity({ dev: 1, ino: 7 }, 'Selected file'), {
+    dev: '1',
+    ino: '7',
+  });
+});
+
+async function hasExactStatIds(paths: string[]): Promise<boolean> {
+  const stats = await Promise.all(paths.map((path) => Deno.lstat(path)));
+  return stats.every((info) => Number.isSafeInteger(info.dev) && Number.isSafeInteger(info.ino));
+}
 
 Deno.test('local identity rejects a symlink in any parent component', async () => {
   const root = await Deno.makeTempDir();
@@ -80,9 +104,17 @@ Deno.test('physical deletion-independence rejects aliases and accepts distinct f
     const retained = `${retainedDir}/kept.mkv`;
     await Deno.writeTextFile(selected, 'old');
     await Deno.writeTextFile(retained, 'kept');
-    const evidence = await provePhysicalDeletionIndependence(selected, retained, 3, 4);
-    assertEquals(evidence.selectedSize, 3);
-    assertEquals(evidence.retainedSize, 4);
+    if (await hasExactStatIds([selected, retained, selectedDir, retainedDir])) {
+      const evidence = await provePhysicalDeletionIndependence(selected, retained, 3, 4);
+      assertEquals(evidence.selectedSize, 3);
+      assertEquals(evidence.retainedSize, 4);
+    } else {
+      await assertRejects(
+        () => provePhysicalDeletionIndependence(selected, retained, 3, 4),
+        Error,
+        'no stable filesystem identity',
+      );
+    }
 
     const alias = `${root}/alias.mkv`;
     try {
@@ -117,9 +149,17 @@ Deno.test('physical deletion-independence accepts two independently named hardli
     await Deno.writeTextFile(selected, 'video');
     await Deno.link(selected, retained);
 
-    const evidence = await provePhysicalDeletionIndependence(selected, retained, 5, 5);
-    assertEquals(evidence.selectedInode, evidence.retainedInode);
-    assertEquals(evidence.selectedCanonicalPath === evidence.retainedCanonicalPath, false);
+    if (await hasExactStatIds([selected, retained, selectedDir, retainedDir])) {
+      const evidence = await provePhysicalDeletionIndependence(selected, retained, 5, 5);
+      assertEquals(evidence.selectedInode, evidence.retainedInode);
+      assertEquals(evidence.selectedCanonicalPath === evidence.retainedCanonicalPath, false);
+    } else {
+      await assertRejects(
+        () => provePhysicalDeletionIndependence(selected, retained, 5, 5),
+        Error,
+        'no stable filesystem identity',
+      );
+    }
   } finally {
     await Deno.remove(root, { recursive: true });
   }
