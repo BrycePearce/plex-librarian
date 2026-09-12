@@ -373,7 +373,7 @@ router.post('/episodes/:ratingKey/media/deletion-preview', async (c) => {
             ...(acceptedCleanup.reason ? { sonarrCleanupReason: acceptedCleanup.reason } : {}),
           }
           : {}),
-        ...(acceptedCleanup?.status === 'resolved'
+        ...(acceptedCleanup?.status === 'resolved' || sonarrPlan.versionStorageEvidence
           ? { planFingerprint: await episodeVersionSonarrPlanFingerprint(sonarrPlan) }
           : {}),
         ...(qbitAcceptedCleanup

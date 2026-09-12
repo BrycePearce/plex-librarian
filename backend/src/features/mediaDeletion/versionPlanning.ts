@@ -13,6 +13,11 @@ import {
 } from './livePathProtection.ts';
 import { getDownloadClientTargets } from './targets.ts';
 import {
+  assertVersionStoragePathsUnowned,
+  captureVersionStorageEvidence,
+  type VersionStorageEvidence,
+} from './versionStorageEvidence.ts';
+import {
   bestMediaVersionCandidate,
   type MediaVersionQualityCandidate,
 } from '@plex-librarian/shared/mediaVersionRanking.ts';
@@ -49,6 +54,7 @@ export interface EligibleVersionArrTarget {
 }
 
 export interface VersionDeletionPlan {
+  versionStorageEvidence?: VersionStorageEvidence;
   preview: VersionDeletionPreviewResponse;
   eligibleArrTargets: EligibleVersionArrTarget[];
   eligibleArrReassignments: EligibleArrReassignment[];
@@ -92,6 +98,7 @@ export async function episodeVersionSonarrPlanFingerprint(
   return await stableFingerprint({
     currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     preview: plan.preview,
+    ...(plan.versionStorageEvidence ? { versionStorageEvidence: plan.versionStorageEvidence } : {}),
     arrMappingIdentities: plan.arrMappingIdentities,
     arrOwnerships: plan.arrOwnerships,
     arrOwnershipValid: plan.arrOwnershipValid,
@@ -638,9 +645,16 @@ export async function buildVersionDeletionPlan({
   });
   const offeredRadarrPathOverride = radarrRemovalFallback ? radarrPathOverride : undefined;
   let livePathReason: string | undefined;
+  let versionStorageEvidence: VersionStorageEvidence | undefined;
   if (mediaType === 'episode' && serverId !== undefined && libraryKey !== undefined) {
     try {
       const targets = await getDownloadClientTargets(serverId);
+      if (
+        eligibleArrReassignments.length === 0 && !cleanup?.downloadJobs.length &&
+        !cleanup?.orphanFiles.length
+      ) {
+        versionStorageEvidence = await captureVersionStorageEvidence(serverId, libraryKey);
+      }
       const selectedJobKeys = new Set(
         (cleanup?.downloadJobs ?? []).map((job) => `${job.instanceKey}:${job.jobId}`),
       );
@@ -648,14 +662,25 @@ export async function buildVersionDeletionPlan({
         selectedMediaIds.has(version.mediaId)
       );
       if (remainingSelected.length > 0) {
-        await assertPlexDeletionPathsUnowned({
-          serverId,
-          libraryKey,
-          paths: remainingSelected.flatMap((version) => version.paths),
-          truncated: remainingSelected.some((version) => version.truncated),
-          targets,
-          selectedJobKeys,
-        });
+        if (versionStorageEvidence) {
+          if (remainingSelected.some((version) => version.truncated)) {
+            throw new Error('Could not verify all selected Plex version paths');
+          }
+          await assertVersionStoragePathsUnowned(
+            versionStorageEvidence,
+            remainingSelected.flatMap((version) => version.paths),
+            targets,
+          );
+        } else {
+          await assertPlexDeletionPathsUnowned({
+            serverId,
+            libraryKey,
+            paths: remainingSelected.flatMap((version) => version.paths),
+            truncated: remainingSelected.some((version) => version.truncated),
+            targets,
+            selectedJobKeys,
+          });
+        }
       }
       for (const entry of eligibleArrReassignments) {
         if (
@@ -691,6 +716,7 @@ export async function buildVersionDeletionPlan({
     : undefined;
   return {
     eligibleArrTargets,
+    ...(versionStorageEvidence ? { versionStorageEvidence } : {}),
     eligibleArrReassignments,
     arrMappingIdentities,
     arrOwnerships: arrOwnerships.sort((left, right) => left.instanceId - right.instanceId),

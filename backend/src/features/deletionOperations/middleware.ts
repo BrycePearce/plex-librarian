@@ -854,6 +854,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
       ]);
       const planInput = {
         mediaType: 'episode' as const,
+        serverId,
+        libraryKey,
+        plexClient: activeServer.client,
         item,
         selectedMediaIds: new Set(mediaIds),
         liveVersions,
@@ -971,7 +974,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
             episodeCleanups.set(mediaId, persistResolvedCleanupIdentity(perVersion));
           }
         }
-      } else if (requestedPlanFingerprint !== null) {
+      } else if (requestedPlanFingerprint !== null && !ownershipPlan.versionStorageEvidence) {
         return c.json({ error: 'the accepted Sonarr coordination decision changed' }, 409);
       }
       if ([...cleanupMediaIds].some((mediaId) => !episodeCleanups.has(mediaId))) {
@@ -984,7 +987,7 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         resolvedCleanup: acceptedCleanup,
       });
       if (
-        managedByMedia.size > 0 &&
+        (managedByMedia.size > 0 || acceptedPlan.versionStorageEvidence !== undefined) &&
         requestedPlanFingerprint !== await episodeVersionSonarrPlanFingerprint(acceptedPlan)
       ) {
         return c.json(
@@ -1019,6 +1022,9 @@ export async function durableDeletionAdapter(c: Context, next: Next): Promise<Re
         snapshot: {
           currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier: target.machine,
+          ...(acceptedPlan?.versionStorageEvidence
+            ? { versionStorageEvidence: acceptedPlan.versionStorageEvidence }
+            : {}),
           serverUrl,
           libraryKey,
           ratingKey,

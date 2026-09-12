@@ -9,6 +9,7 @@ import {
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
 import { ArrApiError } from '../../integrations/arr/client.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
+import { assertVersionStorageEvidenceUnchanged } from '../mediaDeletion/versionStorageEvidence.ts';
 import { activeServerMatches } from './core/coordination.ts';
 import { isRetryableDeletionFailure } from './core/policy.ts';
 import { recoverInterruptedDeletionWork } from './core/recovery.ts';
@@ -720,6 +721,10 @@ export async function enqueueDeletionOperations(
       throw new DeletionConflictError('no deletion targets were found', 404);
     }
     for (const target of input.targets) {
+      const storage = (target.snapshot as unknown as DurableTargetSnapshot).versionStorageEvidence;
+      if (storage) {
+        await assertVersionStorageEvidenceUnchanged(input.serverId, input.libraryKey, storage);
+      }
       if (
         target.snapshot.skipArrCoordination === true || currentLocationSnapshot(target.snapshot)
       ) {

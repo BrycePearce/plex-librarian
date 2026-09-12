@@ -18,6 +18,10 @@ import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.t
 import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
 import { ordinaryPlanFingerprint } from '../../mediaDeletion/ordinaryPlanning.ts';
+import {
+  assertVersionStorageEvidenceUnchanged,
+  type VersionStorageEvidence,
+} from '../../mediaDeletion/versionStorageEvidence.ts';
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
 import {
   canonicalSeasonEpisodeEvidence,
@@ -46,6 +50,7 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  versionStorageEvidence?: VersionStorageEvidence;
   ordinaryPlan?: import('../../mediaDeletion/ordinaryPlanning.ts').OrdinaryDeletionPlan;
   ordinaryReconciliations?: Record<
     string,
@@ -816,6 +821,21 @@ export async function validateDeletionTarget(
   }
   const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
   validateArrMonitoringEvidence(snapshot);
+  if (snapshot.versionStorageEvidence) {
+    if (
+      target.targetKind !== 'episode_version' || snapshot.cleanupDownloads ||
+      snapshot.arrReassignments?.length || snapshot.seasonBreakGlass
+    ) {
+      throw new DeletionValidationError(
+        'Automatic version storage cannot authorize service cleanup',
+      );
+    }
+    await assertVersionStorageEvidenceUnchanged(
+      serverId,
+      snapshot.libraryKey,
+      snapshot.versionStorageEvidence,
+    );
+  }
   if (snapshot.serverUrl !== active.client.serverUrl) mismatch('Plex server address');
   if ((await active.client.identity()) !== snapshot.machineIdentifier) {
     mismatch('Plex machine identity');

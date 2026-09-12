@@ -38,6 +38,11 @@ import {
 } from '../mediaDeletion/cleanup.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import {
+  assertVersionStoragePathsUnowned,
+  captureVersionStorageEvidence,
+  type VersionStorageEvidence,
+} from '../mediaDeletion/versionStorageEvidence.ts';
+import {
   type PersistedArrMappingIdentity,
   type PersistedArrOwnership,
   selectVersionDownloadCleanup,
@@ -114,6 +119,7 @@ export interface AuthoritativeSeasonPlan {
   sonarrInspectedInstanceIds: number[];
   sonarrMode: SeasonSonarrMode;
   cleanupDownloads: boolean;
+  versionStorageEvidence?: VersionStorageEvidence;
   selections: SeasonDeletionSelection[];
   plexOnlyChildren: Array<{
     episodeRatingKey: string;
@@ -995,19 +1001,34 @@ export async function buildAuthoritativeSeasonPlan(input: {
       });
     }
   }
+  let versionStorageEvidence: VersionStorageEvidence | undefined;
   try {
+    if ((!input.sonarrMode || input.sonarrMode === 'none') && !input.cleanupDownloads) {
+      versionStorageEvidence = await captureVersionStorageEvidence(
+        input.serverId,
+        first.libraryKey,
+      );
+    }
     const selectedJobKeys = new Set(
       cleanupPlans.flatMap((plan) =>
         plan.cleanup.downloadJobs.map((job) => `${job.instanceKey}:${job.jobId}`)
       ),
     );
-    await assertPlexDeletionPathsUnowned({
-      serverId: input.serverId,
-      libraryKey: first.libraryKey,
-      paths: selectedEntries.map((entry) => entry.media.path),
-      targets: downloadTargets,
-      selectedJobKeys,
-    });
+    if (versionStorageEvidence) {
+      await assertVersionStoragePathsUnowned(
+        versionStorageEvidence,
+        selectedEntries.map((entry) => entry.media.path),
+        downloadTargets,
+      );
+    } else {
+      await assertPlexDeletionPathsUnowned({
+        serverId: input.serverId,
+        libraryKey: first.libraryKey,
+        paths: selectedEntries.map((entry) => entry.media.path),
+        targets: downloadTargets,
+        selectedJobKeys,
+      });
+    }
     for (const group of managedGroups.values()) {
       const target = targets.find((entry) => entry.instanceId === group.arrInstanceId)!;
       await assertArrDeletionPathsUnowned({
@@ -1064,6 +1085,7 @@ export async function buildAuthoritativeSeasonPlan(input: {
     },
   );
   const evidence = {
+    ...(versionStorageEvidence ? { versionStorageEvidence } : {}),
     currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
     serverId: input.serverId,
     machineIdentifier: input.machineIdentifier,
@@ -1340,6 +1362,9 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
         title: `${plan.showTitle} — ${child.episodeTitle}`,
         logicalSize: selected.logicalSize,
         snapshot: {
+          ...(plan.versionStorageEvidence
+            ? { versionStorageEvidence: plan.versionStorageEvidence }
+            : {}),
           currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
           machineIdentifier: plan.machineIdentifier,
           serverUrl: plan.serverUrl,
@@ -1378,7 +1403,9 @@ export function authoritativeSeasonTargets(plan: AuthoritativeSeasonPlan): NewDe
                 : {}),
             }
             : {}),
-          ...(child.breakGlass ? { seasonBreakGlass: child.breakGlass } : {}),
+          ...(plan.sonarrMode !== 'none' && child.breakGlass
+            ? { seasonBreakGlass: child.breakGlass }
+            : {}),
           ...(selectedTechnical ? { classificationTechnicalDetails: selectedTechnical } : {}),
           expectedRetainedVersion: expectedRetainedVersions[0],
           expectedRetainedVersions,

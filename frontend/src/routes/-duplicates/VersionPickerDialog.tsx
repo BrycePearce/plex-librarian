@@ -727,7 +727,7 @@ export function VersionPickerDialog({
                   .planFingerprint,
               }
               : {}),
-            ...(item.mediaType === "episode" && effectiveDeleteFromArr &&
+            ...(item.mediaType === "episode" &&
                 (cleanupDownloads
                   ? preview.data?.qbittorrentPlanFingerprint
                   : preview.data?.planFingerprint)

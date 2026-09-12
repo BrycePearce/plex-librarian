@@ -4950,6 +4950,116 @@ Deno.test('episode-version deletion converges and updates show and season rollup
   );
 });
 
+Deno.test('duplicate episode service storage survives preview and enqueue and holds mapping drift', async (t) => {
+  for (
+    const mutation of ['none', 'before-enqueue-revision', 'root-revision', 'new-owner'] as const
+  ) {
+    await t.step(mutation, async () => {
+      reset();
+      addEpisode();
+      withTransaction((client) => {
+        client.prepare(
+          "INSERT INTO qbittorrent_instances (id, server_id, name, url, username, password, created_at, updated_at) VALUES (1, 1, 'qBittorrent', 'http://qbit', '', '', 1, 1)",
+        ).run();
+      });
+      qbitJobsOverride = [];
+      // Reuse configured service-storage fixtures, deliberately without any legacy local mappings.
+      // This exercises application integration; these supplied roots are not host-discovery acceptance.
+      await ordinaryFixtureConfiguration();
+      const previewResponse = await rawApp.request(
+        '/api/duplicates/episodes/episode-1/media/deletion-preview',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mediaIds: [21], inspectDownloadCleanup: false }),
+        },
+      );
+      assertEquals(previewResponse.status, 200, await previewResponse.clone().text());
+      const preview = await previewResponse.json();
+      assertEquals(preview.planFingerprint?.length, 64);
+      if (mutation === 'before-enqueue-revision') {
+        withTransaction((client) =>
+          client.prepare(
+            "UPDATE service_path_roots SET revision = revision + 1 WHERE server_id = 1 AND service_key = 'plex:shows'",
+          ).run()
+        );
+      }
+      const response = await rawApp.request('/api/duplicates/episodes/episode-1/media', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clientRequestId: crypto.randomUUID(),
+          mediaIds: [21],
+          cleanupMediaIds: [],
+          planFingerprint: preview.planFingerprint,
+        }),
+      });
+      if (mutation === 'before-enqueue-revision') {
+        assertEquals(response.status, 409, await response.clone().text());
+        assertEquals(
+          withTransaction((client) =>
+            client.prepare(
+              'SELECT COUNT(*) FROM deletion_operations',
+            ).value<[number]>()?.[0]
+          ),
+          0,
+        );
+        assertEquals(plexMediaDeleteCount, 0);
+        assertEquals(qbitDeleteCount, 0);
+        assertEquals(arrDeleteCount, 0);
+        assertEquals(live.get('episode-1')!.Media!.map((entry) => entry.id), [21, 22]);
+        return;
+      }
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json();
+      const accepted = withTransaction((client) =>
+        client.prepare(
+          'SELECT snapshot FROM deletion_targets WHERE operation_id = ?',
+        ).value<[string]>(operationId)
+      );
+      assert(accepted);
+      const snapshot = JSON.parse(accepted[0]);
+      assertEquals(snapshot.versionStorageEvidence.libraryKey, 'shows');
+      assertEquals(
+        snapshot.versionStorageEvidence.connections.map((entry: { key: string }) => entry.key),
+        ['plex:shows', 'qb:db:1'],
+      );
+      assert(snapshot.versionStorageEvidence.roots.length > 0);
+      assertEquals(snapshot.cleanupDownloads, false);
+      if (mutation === 'root-revision') {
+        withTransaction((client) =>
+          client.prepare(
+            "UPDATE service_path_roots SET revision = revision + 1 WHERE server_id = 1 AND service_key = 'plex:shows'",
+          ).run()
+        );
+      } else if (mutation === 'new-owner') {
+        qbitJobsOverride = [{
+          hash: torrentHash,
+          name: 'New selected-version owner',
+          size: 40_000,
+          contentPath: '/tv/show-1-21.mkv',
+          savePath: '/tv',
+          files: [{ name: 'show-1-21.mkv', size: 40_000 }],
+        }];
+      }
+      await settle();
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(
+        operation.status,
+        mutation === 'none' ? 'completed' : 'needs_attention',
+        JSON.stringify(operation),
+      );
+      assertEquals(plexMediaDeleteCount, mutation === 'none' ? 1 : 0);
+      assertEquals(
+        live.get('episode-1')!.Media!.map((entry) => entry.id),
+        mutation === 'none' ? [22] : [21, 22],
+      );
+      assertEquals(arrDeleteCount, 0);
+      assertEquals(qbitDeleteCount, 0);
+    });
+  }
+});
+
 Deno.test('duplicate episode submission rejects a changed Sonarr retained-version plan', async () => {
   reset();
   addEpisode();
@@ -7686,6 +7796,7 @@ Deno.test('Plex-only season cleanup deletes managed and unmanaged selected sibli
   reset();
   configureSonarr();
   addEpisode();
+  await ordinaryFixtureConfiguration();
   withTransaction((client) => {
     client.prepare(
       "INSERT INTO episode_media_versions (server_id, media_id, episode_rating_key, season_rating_key, show_rating_key, library_key, episode_title, episode_index, season_index, file_size, updated_at) VALUES (1, 23, 'episode-1', 'season-1', 'show-1', 'shows', 'Pilot', 1, 1, 40, 1)",
@@ -7732,12 +7843,12 @@ Deno.test('Plex-only season cleanup deletes managed and unmanaged selected sibli
   assertEquals(
     withTransaction((client) =>
       client.prepare(
-        "SELECT target_key, json_extract(snapshot, '$.seasonSonarrInspection.managedSelectedMediaIds') FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal",
+        "SELECT target_key, json_extract(snapshot, '$.seasonSonarrInspection.managedSelectedMediaIds'), json_extract(snapshot, '$.versionStorageEvidence.libraryKey'), json_type(snapshot, '$.seasonBreakGlass') FROM deletion_targets WHERE operation_id = ? ORDER BY ordinal",
       ).values(result.operationId)
     ),
     [
-      ['episode-1:21', [21]],
-      ['episode-1:22', []],
+      ['episode-1:21', [21], 'shows', null],
+      ['episode-1:22', [], 'shows', null],
     ],
   );
 
@@ -7749,6 +7860,10 @@ Deno.test('Plex-only season cleanup deletes managed and unmanaged selected sibli
     JSON.stringify(getDeletionOperation(result.operationId, 1)),
   );
   assertEquals(sonarrRescanCount, 0);
+  assertEquals(sonarrMonitorMutationCount, 0);
+  assertEquals(arrDeleteCount, 0);
+  assertEquals(qbitDeleteCount, 0);
+  assertEquals(plexMediaDeleteCount, 2);
   assertEquals(live.get('episode-1')?.Media?.map((media) => media.id), [23]);
 });
 

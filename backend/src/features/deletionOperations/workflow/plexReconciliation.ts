@@ -2,6 +2,11 @@ import { type SqliteClient, withTransaction } from '../../../db/index.ts';
 import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgradePolicy.ts';
 import { PlexDeleteError } from '../../../integrations/plex/client.ts';
 import { assertPlexTargetUnowned } from '../../mediaDeletion/livePathProtection.ts';
+import {
+  assertVersionStorageEvidenceUnchanged,
+  assertVersionStoragePathsUnowned,
+} from '../../mediaDeletion/versionStorageEvidence.ts';
+import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
 import { resolveActiveServer } from '../../../integrations/plex/index.ts';
 import { getArrDeleteTargets } from '../../arr/delete.ts';
 import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
@@ -323,18 +328,38 @@ export async function deleteExactPlexTarget(
     throw new PlexReconciliationError('cannot delete media with active playback', true);
   }
   const attemptStartedAt = Math.floor(Date.now() / 1000);
-  await assertPlexTargetUnowned({
-    serverId: target.serverId,
-    libraryKey: snapshot.libraryKey,
-    ratingKey: snapshot.ratingKey,
-    type: snapshot.type,
-    protectPlexOnlyMovie: target.targetKind === 'whole_item' && snapshot.type === 'movie' &&
-      snapshot.mode !== 'coordinated',
-    client,
-    allowMissingPaths: target.phase === 'plex_reconciliation' &&
-      (snapshot.mode === 'coordinated' || snapshot.cleanupDownloads || target.plexAttemptCount > 0),
-    ...(target.targetKind !== 'whole_item' ? { mediaId: snapshot.mediaId! } : {}),
-  });
+  if (snapshot.versionStorageEvidence) {
+    const selected = (await client.mediaVersionPathPreviews(snapshot.ratingKey)).find((entry) =>
+      entry.mediaId === snapshot.mediaId
+    );
+    if (selected?.truncated) throw new Error('Could not verify all Plex deletion paths');
+    if (selected) {
+      await assertVersionStoragePathsUnowned(
+        snapshot.versionStorageEvidence,
+        selected.paths,
+        await getDownloadClientTargets(target.serverId),
+      );
+    }
+    await assertVersionStorageEvidenceUnchanged(
+      target.serverId,
+      snapshot.libraryKey,
+      snapshot.versionStorageEvidence,
+    );
+  } else {
+    await assertPlexTargetUnowned({
+      serverId: target.serverId,
+      libraryKey: snapshot.libraryKey,
+      ratingKey: snapshot.ratingKey,
+      type: snapshot.type,
+      protectPlexOnlyMovie: target.targetKind === 'whole_item' && snapshot.type === 'movie' &&
+        snapshot.mode !== 'coordinated',
+      client,
+      allowMissingPaths: target.phase === 'plex_reconciliation' &&
+        (snapshot.mode === 'coordinated' || snapshot.cleanupDownloads ||
+          target.plexAttemptCount > 0),
+      ...(target.targetKind !== 'whole_item' ? { mediaId: snapshot.mediaId! } : {}),
+    });
+  }
   const attemptChanged = withTransaction((sqlite) =>
     sqlite
       .prepare(
