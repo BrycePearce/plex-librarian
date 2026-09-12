@@ -264,22 +264,6 @@ export const api = {
         `/settings/service-storage/discovery/${action}`,
         { method: "POST" },
       ),
-    dockerPreview: (report: string, selections?: Record<string, string>) =>
-      apiFetch<import("../../../shared/serviceStorage.ts").DockerStoragePreview>(
-        "/settings/service-storage/docker-preview",
-        { method: "POST", body: JSON.stringify({ report, selections }) },
-      ),
-    dockerConfirm: (value: {
-      report: string;
-      fingerprint: string;
-      confirmed: true;
-      replaceExisting?: boolean;
-      selections?: Record<string, string>;
-    }) =>
-      apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
-        "/settings/service-storage/docker-confirm",
-        { method: "POST", body: JSON.stringify(value) },
-      ),
     get: (discover = false) =>
       apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
         `/settings/service-storage?discover=${discover}`,
