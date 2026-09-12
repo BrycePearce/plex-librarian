@@ -33,7 +33,7 @@ Deno.test("automatic setup has no manual editor even in details and never labels
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
-  const originalGet = api.serviceStorage.get, originalSave = api.serviceStorage.save;
+  const originalGet = api.serviceStorage.get;
   const data: ServiceStorageSettings = {
     endpoints: [{
       key: "plex:tv",
@@ -48,12 +48,7 @@ Deno.test("automatic setup has no manual editor even in details and never labels
       reason: "No shared layout could be established for Empty TV library.",
     },
   };
-  const saved: unknown[] = [];
   api.serviceStorage.get = () => Promise.resolve(structuredClone(data));
-  api.serviceStorage.save = (value) => {
-    saved.push(value);
-    return Promise.resolve({ id: 1 });
-  };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let renderer: TestRenderer.ReactTestRenderer | undefined;
   try {
@@ -80,7 +75,6 @@ Deno.test("automatic setup has no manual editor even in details and never labels
     assert(JSON.stringify(renderer!.toJSON()).includes("Existing saved mappings are preserved"));
     assert(!JSON.stringify(renderer!.toJSON()).includes("Add relationship"));
     assertEquals(renderer!.root.findAllByType("input").length, 0);
-    assertEquals(saved, []);
     data.endpoints[0].connectionTestedAt = Date.now();
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["service-storage"] });
@@ -109,7 +103,6 @@ Deno.test("automatic setup has no manual editor even in details and never labels
     await act(() => renderer?.unmount());
     client.clear();
     api.serviceStorage.get = originalGet;
-    api.serviceStorage.save = originalSave;
     globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
   }
 });

@@ -268,18 +268,6 @@ export const api = {
       apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
         `/settings/service-storage?discover=${discover}`,
       ),
-    save: (
-      value:
-        & Omit<
-          import("../../../shared/serviceStorage.ts").ServicePathRoot,
-          "id" | "serverId" | "revision"
-        >
-        & { id?: number; revision?: number; confirmed: true },
-    ) =>
-      apiFetch<{ id: number }>("/settings/service-storage", {
-        method: "POST",
-        body: JSON.stringify(value),
-      }),
     remove: (id: number) =>
       apiFetch<{ ok: true }>(`/settings/service-storage/${id}`, { method: "DELETE" }),
   },
@@ -702,10 +690,6 @@ export const api = {
       apiFetch<{ id: number; revision: number }>("/settings/plex-path-mappings", {
         method: "POST",
         body: JSON.stringify(mapping),
-      }),
-    deletePlexPathMapping: (id: number) =>
-      apiFetch<void>(`/settings/plex-path-mappings/${id}`, {
-        method: "DELETE",
       }),
     ignoredContent: () => apiFetch<IgnoredContentResponse>("/settings/ignored-content"),
     searchIgnoredContent: (query: string) =>
