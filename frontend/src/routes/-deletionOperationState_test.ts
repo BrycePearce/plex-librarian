@@ -1,12 +1,15 @@
 import { canCancelDeletionTarget } from "./-deletionOperationState.ts";
 import { assertEquals } from "@std/assert";
 import {
+  deletionAttemptSummary,
   deletionAttentionSummary,
   deletionOperationPollInterval,
   deletionOperationTitle,
+  deletionTargetProgress,
   deletionWarningSummary,
   hardlinkOutcomeSummary,
   isRelocationGuidanceActive,
+  lastConfirmedDeletionAction,
   nonSupersededCancelledCount,
   noVerifiedDiskSpaceReclaimed,
   retryableRelocationSafeTargetCount,
@@ -82,11 +85,61 @@ Deno.test("generic retry counts exclude every present relocation workflow state"
   assertEquals(retryableRelocationSafeTargetCount(targets, "completed_with_warning"), 1);
 });
 
-Deno.test("terminal Plex warnings identify the pending service", () => {
+Deno.test("generic terminal warnings do not assume confirmed removal or a particular service", () => {
   assertEquals(
     deletionOperationTitle("completed_with_warning"),
-    "Media removed; Plex metadata needs attention",
+    "Deletion completed with warning",
   );
+});
+
+Deno.test("queued and validating work do not claim deletion has started", () => {
+  assertEquals(deletionOperationTitle("queued", "validating"), "Deletion queued");
+  assertEquals(deletionOperationTitle("running", "validating"), "Checking deletion safety");
+  assertEquals(
+    deletionTargetProgress({ status: "waiting_retry", phase: "plex_reconciliation" }),
+    "Waiting to retry",
+  );
+  assertEquals(
+    deletionOperationTitle("running", "plex_reconciliation"),
+    "Removing media and reconciling Plex",
+  );
+  assertEquals(
+    lastConfirmedDeletionAction({ removalConfirmedAt: null, plexReconciledAt: null }),
+    "No media removal confirmed",
+  );
+  assertEquals(
+    lastConfirmedDeletionAction({ removalConfirmedAt: 10, plexReconciledAt: null }),
+    "Media removal confirmed",
+  );
+  assertEquals(
+    lastConfirmedDeletionAction({ removalConfirmedAt: 10, plexReconciledAt: 11 }),
+    "Plex reconciliation confirmed",
+  );
+});
+
+Deno.test("ordinary service checkpoints take precedence over the legacy phase and counter", () => {
+  assertEquals(
+    lastConfirmedDeletionAction({
+      serviceOwnedDeletion: true,
+      removalConfirmedAt: 10,
+      plexReconciledAt: 10,
+    }),
+    "Service deletion workflow completed",
+  );
+  const target = {
+    status: "running",
+    phase: "validating",
+    serviceOwnedDeletion: true,
+    plexAttemptCount: 0,
+    serviceOutcomes: [{ status: "failed" }, { status: "reconciled" }],
+  };
+  assertEquals(deletionTargetProgress(target), "Processing service deletion");
+  assertEquals(deletionAttemptSummary(target), "Recorded service requests: 1");
+  assertEquals(
+    deletionAttemptSummary({ ...target, serviceOutcomes: [{ status: "uncertain" }] }),
+    "Recorded service requests: 1",
+  );
+  assertEquals(deletionAttemptSummary({ plexAttemptCount: 2 }), "Plex deletion attempts: 2");
 });
 
 Deno.test("terminal failures are presented as needing attention", () => {

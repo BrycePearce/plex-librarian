@@ -16,15 +16,60 @@ export function deletionOperationPollInterval(
   return Math.min(10_000, Math.max(250, nextRetryAt * 1000 - Date.now() + 100));
 }
 
-export function deletionOperationTitle(status: string): string {
+export function deletionOperationTitle(status: string, phase?: string): string {
   if (status === "completed") return "Deletion complete";
   if (status === "completed_with_warning") {
-    return "Media removed; Plex metadata needs attention";
+    return "Deletion completed with warning";
   }
   if (status === "needs_attention") return "Deletion needs attention";
   if (status === "cancelled") return "Deletion cancelled";
   if (status === "waiting_retry") return "Waiting to retry";
-  return "Deleting media";
+  if (status === "queued") return "Deletion queued";
+  return deletionTargetProgress({ status, phase });
+}
+
+export function deletionTargetProgress(
+  target: { status: string; phase?: string; serviceOutcomes?: { status: string }[] },
+): string {
+  if (target.status === "queued") return "Queued";
+  if (target.status === "waiting_retry") return "Waiting to retry";
+  if (target.phase === "validating") {
+    return target.serviceOutcomes?.length
+      ? "Processing service deletion"
+      : "Checking deletion safety";
+  }
+  if (target.phase === "download_cleanup") return "Cleaning selected downloads";
+  if (target.phase === "arr_coordination") return "Coordinating with Sonarr/Radarr";
+  if (target.phase === "plex_reconciliation") return "Removing media and reconciling Plex";
+  if (target.phase === "finalizing") return "Finalizing deletion";
+  return "Processing deletion";
+}
+
+export function deletionAttemptSummary(
+  target: {
+    serviceOwnedDeletion?: boolean;
+    serviceOutcomes?: { status: string }[];
+    plexAttemptCount: number;
+  },
+): string {
+  return target.serviceOwnedDeletion
+    ? `Recorded service requests: ${
+      (target.serviceOutcomes ?? []).filter((outcome) => outcome.status !== "reconciled").length
+    }`
+    : `Plex deletion attempts: ${target.plexAttemptCount}`;
+}
+
+export function lastConfirmedDeletionAction(target: {
+  serviceOwnedDeletion?: boolean;
+  plexReconciledAt: number | null;
+  removalConfirmedAt: number | null;
+}): string {
+  if (target.serviceOwnedDeletion && target.plexReconciledAt) {
+    return "Service deletion workflow completed";
+  }
+  if (target.plexReconciledAt) return "Plex reconciliation confirmed";
+  if (target.removalConfirmedAt) return "Media removal confirmed";
+  return "No media removal confirmed";
 }
 
 export function isRelocationGuidanceActive(target: {

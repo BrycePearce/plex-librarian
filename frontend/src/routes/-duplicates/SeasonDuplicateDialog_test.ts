@@ -1,4 +1,10 @@
 import { assertEquals } from "@std/assert";
+import { createElement } from "react";
+import TestRenderer, { act } from "react-test-renderer";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { summarizeDuplicateComparisons } from "@shared/mediaComparison";
+import { DestinationOptions } from "../../features/mediaDeletion/DeletionPlanSummary.tsx";
+import { SeasonDuplicateDialog } from "./SeasonDuplicateDialog.tsx";
 import {
   countedLabels,
   episodeCoverageLabel,
@@ -24,7 +30,7 @@ import {
   seasonSelectedDestinationServices,
   seasonSonarrVisible,
 } from "./SeasonDuplicateDialog.tsx";
-import { ApiError } from "../../lib/api.ts";
+import { api, ApiError } from "../../lib/api.ts";
 import type {
   DuplicateEpisodeGroup,
   MediaVersion,
@@ -409,7 +415,7 @@ Deno.test("season destinations are independently authorized for only the exact s
   });
   assertEquals(seasonDestinationChoice("selection-b", authorized), {
     sonarrMode: "none",
-    cleanupDownloads: true,
+    cleanupDownloads: false,
   });
   assertEquals(
     seasonDestinationChoice("selection-a", { ...authorized, sonarrMode: "none" }),
@@ -466,4 +472,119 @@ Deno.test("season profile selection expands only explicit members into deletion 
   const selection = seasonProfileSelection(profile, ["episode-1", "episode-2", "exception"]);
   assertEquals([...selection.selected], ["episode-1", "episode-2"]);
   assertEquals([...selection.deleteMediaIds], [["episode-1", [11]], ["episode-2", [21]]]);
+});
+
+Deno.test("mounted season duplicate destinations require fresh consent for each selection", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const prior = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const originalAnalysis = api.duplicates.analyzeSeasonVersions;
+  const originalPreview = api.duplicates.seasonDeletionPreview;
+  api.duplicates.analyzeSeasonVersions = () => Promise.reject(new Error("No lane analysis"));
+  const requests: Array<{ sonarrMode: string; cleanupDownloads: boolean }> = [];
+  api.duplicates.seasonDeletionPreview = (_season, _selections, choice) => {
+    requests.push(choice);
+    return Promise.resolve({
+      seasonRatingKey: "season",
+      completeEpisodeCount: 2,
+      selectedEpisodeCount: 1,
+      selectedVersionCount: 1,
+      plexOnlyCount: 1,
+      automaticAdoptionCount: 0,
+      blockers: [],
+      members: [],
+      sonarrAvailable: true,
+      sonarrConfigured: true,
+      cleanupConfigured: true,
+      cleanupEligibleVersionCount: 1,
+      cleanupReason: null,
+      fingerprint: "fixture",
+      expiresAt: 9999999999,
+    });
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+  try {
+    const season = {
+      mediaType: "season" as const,
+      libraryKey: "shows",
+      showRatingKey: "show",
+      seasonRatingKey: "season",
+      showTitle: "Fixture",
+      showThumb: null,
+      seasonIndex: 1,
+      totalEpisodeCount: 2,
+      duplicateGroupCount: 2,
+      combinedFileSize: 40,
+      reclaimableFileSize: 20,
+      comparisonSummary: summarizeDuplicateComparisons([]),
+      episodes: [episode("a", [1, 2]), episode("b", [3, 4])],
+    };
+    await act(() => {
+      renderer = TestRenderer.create(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(SeasonDuplicateDialog, {
+            dialogRef: { current: null },
+            season,
+            pending: false,
+            error: null,
+            onConfirm: () => {},
+            onClose: () => {},
+          }),
+        ),
+      );
+    });
+    await settle();
+    await act(() =>
+      renderer!.root.findAllByType("button")
+        .find((button) => button.props.children === "Episode versions")!.props.onClick()
+    );
+    const choices = () =>
+      renderer!.root.findByType(DestinationOptions).props.options as Array<{
+        id: string;
+        checked: boolean;
+        onChange: (checked: boolean) => void;
+      }>;
+    assertEquals(choices().every((choice) => !choice.checked), true);
+    const episodeCheckboxes = () =>
+      renderer!.root.findAllByType("label")
+        .filter((label) => label.props.title === "Include this episode")
+        .map((label) => label.findByType("input"));
+    await act(() => episodeCheckboxes()[0].props.onChange());
+    await settle();
+    assertEquals(
+      requests.every((choice) => choice.sonarrMode === "none" && !choice.cleanupDownloads),
+      true,
+    );
+    assertEquals(choices().map(({ id, checked }) => [id, checked]), [["arr", false], [
+      "cleanup",
+      false,
+    ]]);
+    await act(() => choices().find((choice) => choice.id === "arr")!.onChange(true));
+    await settle();
+    await act(() => choices().find((choice) => choice.id === "cleanup")!.onChange(true));
+    await settle();
+    assertEquals(choices().every((choice) => choice.checked), true);
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+    await settle();
+    assertEquals(choices().every((choice) => choice.checked), true);
+    await act(() => episodeCheckboxes()[1].props.onChange());
+    await settle();
+    assertEquals(choices().every((choice) => !choice.checked), true);
+    assertEquals(requests.at(-1), { sonarrMode: "none", cleanupDownloads: false });
+  } finally {
+    await act(() => renderer?.unmount());
+    client.clear();
+    api.duplicates.analyzeSeasonVersions = originalAnalysis;
+    api.duplicates.seasonDeletionPreview = originalPreview;
+    globals.IS_REACT_ACT_ENVIRONMENT = prior;
+  }
 });

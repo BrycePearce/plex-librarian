@@ -176,9 +176,8 @@ export function VersionPickerDialog({
     [];
 
   useEffect(() => {
-    const destination = versionDestinationState(preview.data);
-    if (!deletingWholeMovie) {
-      setDeleteFromArr(destination.arrSelectedByDefault);
+    if (item?.mediaType === "episode") {
+      setDeleteFromArr(versionDestinationState(preview.data).arrSelectedByDefault);
     }
     setUseRadarrPathOverride(false);
   }, [
@@ -195,7 +194,8 @@ export function VersionPickerDialog({
   // QB intent so an unresolved selected job blocks confirmation instead of silently
   // changing the request. A different media selection starts a new decision.
   useEffect(() => {
-    if (!deletingWholeMovie) setCleanupDownloads(false);
+    if (item?.mediaType === "movie") setDeleteFromArr(false);
+    setCleanupDownloads(false);
   }, [itemKey, mediaIds.join("|"), deletingWholeMovie]);
 
   const wholeItemPreview = useQuery({
@@ -229,8 +229,8 @@ export function VersionPickerDialog({
     if (wholeItemDefaultsKeyRef.current !== wholeItemDefaultsKey) {
       wholeItemDefaultsKeyRef.current = wholeItemDefaultsKey;
       acceptedWholeItemCleanupFingerprintRef.current = wholeItemCleanupFingerprint;
-      setCleanupDownloads(wholeItemCleanupFingerprint !== null);
-      setDeleteFromArr(wholeItemArrAvailable);
+      setCleanupDownloads(false);
+      setDeleteFromArr(false);
       return;
     }
     if (

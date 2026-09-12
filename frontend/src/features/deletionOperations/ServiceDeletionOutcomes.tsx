@@ -23,8 +23,8 @@ export function ServiceDeletionOutcomes({ outcomes }: {
             : outcome.status === "reconciled"
             ? "absence covered by a recorded service response; no additional file deletion sent"
             : outcome.status === "failed"
-            ? "request failed; automatic replay is held"
-            : "outcome uncertain; automatic replay is held"}
+            ? "request failed"
+            : "outcome uncertain"}
         </p>
       ))}
       <details className="mt-2 text-xs text-base-content/55">

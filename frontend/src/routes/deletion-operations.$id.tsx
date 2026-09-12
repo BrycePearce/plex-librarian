@@ -14,9 +14,12 @@ import { DismissRecoveryDialog } from "../features/deletionOperations/DismissRec
 import {
   activeDeletionStatuses,
   canCancelDeletionTarget,
+  deletionAttemptSummary,
   deletionOperationPollInterval,
   deletionOperationTitle,
+  deletionTargetProgress,
   hardlinkOutcomeSummary,
+  lastConfirmedDeletionAction,
   nonSupersededCancelledCount,
   noVerifiedDiskSpaceReclaimed,
   retryableRelocationSafeTargetCount,
@@ -147,7 +150,9 @@ function DeletionOperationPage() {
               : operation.status === "completed_with_warning" &&
                   operation.removalConfirmedCount === 0
               ? "Arr removal completed; Plex removal was not confirmed"
-              : deletionOperationTitle(operation.status)}
+              : operation.status === "running" && current
+              ? deletionTargetProgress(current)
+              : deletionOperationTitle(operation.status, current?.phase)}
           </h1>
           <p className="text-sm text-base-content/55 mt-2">Operation {operation.id}</p>
         </div>
@@ -205,7 +210,8 @@ function DeletionOperationPage() {
             {!serviceOwned && (
               <Stat
                 label="Hardlink outcome"
-                value={hardlinkOutcomeSummary(operation) ?? "Pending / not applicable"}
+                value={hardlinkOutcomeSummary(operation) ??
+                  "Disk space recovered unknown — not measured"}
               />
             )}
             {serviceOwned && <Stat label="Disk space recovered" value="Unknown — not measured" />}
@@ -276,13 +282,7 @@ function DeletionOperationPage() {
               <div className="min-w-0">
                 <p className="font-medium truncate">{current.title}</p>
                 <p className="text-sm text-base-content/55">
-                  {current.status === "waiting_retry"
-                    ? current.phase === "plex_reconciliation"
-                      ? "Updating Plex — waiting to retry"
-                      : "Waiting to retry"
-                    : current.status === "running"
-                    ? current.phase === "plex_reconciliation" ? "Updating Plex" : "Deleting"
-                    : "Queued"}
+                  {deletionTargetProgress(current)}
                   {current.nextRetryAt
                     ? ` · retrying ${new Date(current.nextRetryAt * 1000).toLocaleTimeString()}`
                     : ""}
@@ -435,13 +435,13 @@ function DeletionOperationPage() {
                 <ServiceDeletionOutcomes outcomes={target.serviceOutcomes} />
                 <p className="text-xs text-base-content/45 mt-2">
                   {phaseLabel(target.phase)} ·{" "}
-                  {target.removalConfirmedAt ? "Media removed" : "Removal pending"}
+                  {target.removalConfirmedAt ? "Media removed" : "Removal not confirmed"}
                   {target.nextRetryAt
                     ? ` · next attempt ${new Date(target.nextRetryAt * 1000).toLocaleString()}`
                     : ""}
                 </p>
                 <p className="text-xs text-base-content/45 mt-1">
-                  Last confirmed action: {lastConfirmedAction(target)}
+                  Last confirmed action: {lastConfirmedDeletionAction(target)}
                 </p>
                 {target.phase === "plex_reconciliation" && target.error && (
                   <p className="text-xs text-error mt-1">Last Plex error: {target.error}</p>
@@ -590,14 +590,20 @@ function TargetTimeline({
   target: import("@plex-librarian/shared/types.ts").DeletionOperationTarget;
 }) {
   const stages = [
-    ["validating", "Safety checks"],
+    [
+      "validating",
+      target.serviceOwnedDeletion ? "Safety checks and service requests" : "Safety checks",
+    ],
     ...(target.downloadCleanupSelected
       ? ([["download_cleanup", "Download cleanup"]] as const)
       : []),
     ...(target.arrCoordinationConfigured
       ? ([["arr_coordination", "Sonarr/Radarr coordination"]] as const)
       : []),
-    ["plex_reconciliation", "Plex reconciliation"],
+    [
+      "plex_reconciliation",
+      target.serviceOwnedDeletion ? "Record service results" : "Plex reconciliation",
+    ],
     ["finalizing", "Finalization"],
   ] as const;
   const current = stages.findIndex(([phase]) => phase === target.phase);
@@ -617,7 +623,7 @@ function TargetTimeline({
           {label}
         </li>
       ))}
-      <li>Plex attempts: {target.plexAttemptCount}</li>
+      <li>{deletionAttemptSummary(target)}</li>
     </ol>
   );
 }
@@ -651,18 +657,4 @@ function phaseLabel(phase: string): string {
       } as Record<string, string>
     )[phase] ?? phase
   );
-}
-
-function lastConfirmedAction(
-  target: import("@plex-librarian/shared/types.ts").DeletionOperationTarget,
-): string {
-  if (target.plexReconciledAt) return "Plex reconciliation confirmed";
-  if (target.removalConfirmedAt) return "Media removal confirmed";
-  if (target.phase === "plex_reconciliation" && target.arrCoordinationConfigured) {
-    return "Sonarr/Radarr coordination confirmed";
-  }
-  if (target.phase === "arr_coordination" && target.downloadCleanupSelected) {
-    return "Download cleanup confirmed";
-  }
-  return "Safety checks confirmed";
 }

@@ -1,16 +1,19 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { CheckCircle2, Clock3, TriangleAlert, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
+import { useDeletionOutcomeRefresh } from "./useDeletionOutcomeRefresh.ts";
 import {
   activeDeletionStatuses,
   deletionAttentionSummary,
   deletionOperationPollInterval,
+  deletionOperationTitle,
+  deletionTargetProgress,
   deletionWarningSummary,
   retryableRelocationSafeTargetCount,
 } from "../../routes/-deletionOperationState.ts";
@@ -86,7 +89,6 @@ function DeletionOperationToast({
 }) {
   const qc = useQueryClient();
   const reduceMotion = useReducedMotion();
-  const terminalHandled = useRef(false);
   const viewingThisOperation = useRouterState({
     select: (state) =>
       state.matches.some((match) =>
@@ -120,17 +122,7 @@ function DeletionOperationToast({
     },
   });
 
-  useEffect(() => {
-    if (active) {
-      terminalHandled.current = false;
-      return;
-    }
-    if (!data || terminalHandled.current) return;
-    terminalHandled.current = true;
-    for (const queryKey of operation.invalidateQueryKeys) {
-      void qc.invalidateQueries({ queryKey });
-    }
-  }, [active, data, operation, qc]);
+  useDeletionOutcomeRefresh(data, operation.invalidateQueryKeys);
 
   useEffect(() => {
     if (
@@ -192,23 +184,23 @@ function DeletionOperationToast({
               ? "Deletion cancelled"
               : query.isError
               ? "Checking deletion status…"
-              : "Deleting media…"}
+              : data
+              ? data.status === "running" && current
+                ? deletionTargetProgress(current)
+                : deletionOperationTitle(data.status, current?.phase)
+              : "Checking deletion status…"}
           </p>
           <p className="mt-0.5 truncate text-sm text-base-content/60">
             {completed && data
-              ? `${data.completedCount} item${data.completedCount === 1 ? "" : "s"} removed · ${
-                formatKilobytes(data.logicalSizeRemoved)
-              } logical size removed`
+              ? `${data.removalConfirmedCount} item${
+                data.removalConfirmedCount === 1 ? "" : "s"
+              } removed · ${formatKilobytes(data.logicalSizeRemoved)} logical size removed`
               : warning && data
               ? deletionWarningSummary(data.removalConfirmedCount, data.warningCount)
               : needsAttention && data
               ? deletionAttentionSummary(data.removalConfirmedCount, data.failedCount)
               : current
-              ? `${current.title} · ${
-                current.phase === "plex_reconciliation"
-                  ? "Updating Plex"
-                  : current.status.replace(/_/g, " ")
-              }`
+              ? `${current.title} · ${deletionTargetProgress(current)}`
               : data
               ? `${data.removalConfirmedCount} removed · ${data.failedCount} failed`
               : "Starting operation"}

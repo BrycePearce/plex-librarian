@@ -226,7 +226,7 @@ export function seasonDestinationChoice(
       sonarrMode: choice.sonarrMode,
       cleanupDownloads: choice.cleanupDownloads,
     }
-    : { sonarrMode: "none", cleanupDownloads: true };
+    : { sonarrMode: "none", cleanupDownloads: false };
 }
 
 export function seasonChoiceWithoutSonarr(
@@ -707,7 +707,7 @@ export function SeasonDuplicateDialog({
   }>({
     key: "",
     sonarrMode: "none",
-    cleanupDownloads: true,
+    cleanupDownloads: false,
   });
   const [filter, setFilter] = useState<EpisodeFilter>("all");
   const allCheckboxRef = useRef<HTMLInputElement>(null);
@@ -734,7 +734,7 @@ export function SeasonDuplicateDialog({
     setModeState({ key: seasonKey, value: initialSeasonReviewMode(season) });
     setSelectedProfileIds(new Set());
     setPreviewOpen(false);
-    setDestinationChoice({ key: "", sonarrMode: "none", cleanupDownloads: true });
+    setDestinationChoice({ key: "", sonarrMode: "none", cleanupDownloads: false });
     setFilter("all");
   }, [plans, seasonKey]);
 
@@ -893,8 +893,8 @@ export function SeasonDuplicateDialog({
     if (destinationChoice.key !== authorizationKey) {
       setDestinationChoice({
         key: authorizationKey,
-        sonarrMode: deletionPreview.data.sonarrAvailable ? "adopt_retained" : "none",
-        cleanupDownloads: deletionPreview.data.cleanupEligibleVersionCount > 0,
+        sonarrMode: "none",
+        cleanupDownloads: false,
       });
     } else if (!deletionPreview.data.sonarrAvailable) {
       setDestinationChoice((current) => seasonChoiceWithoutSonarr(authorizationKey, current));

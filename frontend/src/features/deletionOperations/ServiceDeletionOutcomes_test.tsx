@@ -4,6 +4,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ServiceDeletionOutcomes } from "./ServiceDeletionOutcomes.tsx";
 import type { DeletionOperationTarget } from "@shared/types";
 
+Deno.test("historical rejection stays visible after reconciliation without claiming a current hold", () => {
+  const markup = renderToStaticMarkup(createElement(ServiceDeletionOutcomes, {
+    outcomes: [
+      {
+        service: "Plex",
+        action: "Delete selected item",
+        startedAt: 1,
+        status: "failed",
+        httpStatus: 404,
+        error: "Plex returned 404",
+      },
+      { service: "Plex", action: "Delete selected item", startedAt: 2, status: "reconciled" },
+    ],
+  }));
+  assertStringIncludes(markup, "request failed");
+  assertStringIncludes(markup, "HTTP 404");
+  assertStringIncludes(markup, "Plex returned 404");
+  assertStringIncludes(markup, "no additional file deletion sent");
+  assertEquals(markup.includes("replay is held"), false);
+});
+
 Deno.test("repeated season outcomes have a compact summary and preserve every request in Advanced", () => {
   const outcomes: NonNullable<DeletionOperationTarget["serviceOutcomes"]> = [
     ...Array.from({ length: 25 }, (_, index) => ({
@@ -60,8 +81,8 @@ Deno.test("grouping keeps mixed statuses, different services and actions distinc
       "service reported success",
       "request accepted",
       "no additional file deletion sent",
-      "request failed; automatic replay is held",
-      "outcome uncertain; automatic replay is held",
+      "request failed",
+      "outcome uncertain",
     ]
   ) assertStringIncludes(summary, message);
   assertEquals((evidence.match(/<p /g) ?? []).length, 12);

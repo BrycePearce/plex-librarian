@@ -681,6 +681,14 @@ Deno.test('Plex 404 reconciles fresh absence only with covering Arr success, ret
     assertEquals(snapshot.ordinaryAttempts['plex:one'].failure.httpStatus, 404);
     assertEquals(snapshot.ordinaryAttempts['plex:one'].response, undefined);
     assertEquals(snapshot.ordinaryReconciliations['plex:one'].sourceKeys, ['arr:3:7']);
+    const plexOutcomes = operation.targets[0].serviceOutcomes!.filter((outcome) =>
+      outcome.service === 'Plex'
+    );
+    assertEquals(
+      plexOutcomes.some((outcome) => outcome.status === 'failed' && outcome.httpStatus === 404),
+      true,
+    );
+    assertEquals(plexOutcomes.some((outcome) => outcome.status === 'reconciled'), true);
   }
 });
 
