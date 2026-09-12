@@ -19,6 +19,7 @@ const {
   retryDeletionOperation,
 } = await import('./service.ts');
 const { clearPlexClientCache } = await import('../../integrations/plex/index.ts');
+const { ordinaryPlanFingerprint } = await import('../mediaDeletion/ordinaryPlanning.ts');
 setAutomaticDeletionWorkerForTest(false);
 const app = createApp();
 let responseStatus = 200, lost = false, deleteCalls = 0;
@@ -27,6 +28,10 @@ let automaticSetup = false;
 let arrUnavailable = false;
 let arrConnectionTests = 0;
 let arrCurrentMedia = false;
+let arrDeleteCalls = 0;
+let plexAbsent = false;
+let disappearOnPlexDelete = false;
+let machineIdentifier = 'ordinary-fixture';
 let retainedInArrFolder = false;
 let retainedSameFile = false;
 let playing = false;
@@ -48,6 +53,11 @@ const raw = {
 globalThis.fetch = ((input, init) => {
   const url = new URL(String(input));
   if (automaticSetup && url.hostname === 'arr-setup-fixture.invalid') {
+    if (init?.method === 'DELETE' && url.pathname === '/api/v3/movie/7') {
+      arrDeleteCalls++;
+      arrCurrentMedia = false;
+      return Promise.resolve(new Response(null, { status: 200 }));
+    }
     if (url.pathname === '/api/v3/system/status') arrConnectionTests++;
     if (init?.method && init.method !== 'GET') throw new Error('Unexpected Arr mutation');
     if (arrUnavailable) {
@@ -99,12 +109,16 @@ globalThis.fetch = ((input, init) => {
   }
   if (init?.method === 'DELETE') {
     deleteCalls++;
+    if (disappearOnPlexDelete) plexAbsent = true;
     if (lost) return Promise.reject(new TypeError('Lost fixture response'));
     return Promise.resolve(new Response(null, { status: responseStatus }));
   }
   const path = url.pathname;
+  if (plexAbsent && path === `/library/metadata/${raw.ratingKey}`) {
+    return Promise.resolve(new Response(null, { status: 404 }));
+  }
   const body = path === '/identity'
-    ? { MediaContainer: { machineIdentifier: 'ordinary-fixture' } }
+    ? { MediaContainer: { machineIdentifier } }
     : path === '/library/sections'
     ? {
       MediaContainer: {
@@ -162,6 +176,10 @@ function reset() {
   arrUnavailable = false;
   arrConnectionTests = 0;
   arrCurrentMedia = false;
+  arrDeleteCalls = 0;
+  plexAbsent = false;
+  disappearOnPlexDelete = false;
+  machineIdentifier = 'ordinary-fixture';
   retainedInArrFolder = false;
   retainedSameFile = false;
   playing = false;
@@ -508,7 +526,7 @@ Deno.test('host discovery service backoff stops failed service scans while refre
     Date.now = originalNow;
   }
 });
-async function enqueue(ratingKey = 'one') {
+async function enqueue(ratingKey = 'one', arrSelected = false) {
   const preview = await app.request('/api/libraries/movies/items/download-cleanup-preview', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -520,9 +538,13 @@ async function enqueue(ratingKey = 'one') {
   const body = {
     clientRequestId: crypto.randomUUID(),
     ratingKeys: [ratingKey],
-    coordinatedRatingKeys: [],
+    coordinatedRatingKeys: arrSelected ? [ratingKey] : [],
     cleanupDownloadRatingKeys: [],
-    cleanupPreviewFingerprints: { [ratingKey]: data.items[0].plexOnlyFingerprint },
+    cleanupPreviewFingerprints: {
+      [ratingKey]: arrSelected
+        ? data.items[0].sonarrCleanupFingerprint
+        : data.items[0].plexOnlyFingerprint,
+    },
   };
   const accepted = await app.request('/api/libraries/movies/items', {
     method: 'DELETE',
@@ -613,6 +635,126 @@ Deno.test('simple Plex flow stops before mutation if playback, selected files or
     const operation = getDeletionOperation(id, 1) as unknown as DeletionOperation;
     assert(operation.status !== 'completed', `${change}: ${JSON.stringify(operation)}`);
     assertEquals(deleteCalls, 0, change);
+  }
+});
+
+Deno.test('Plex 404 reconciles fresh absence only with covering Arr success, retaining the rejection and never replaying', async () => {
+  for (const race of [true, false]) {
+    prepareAutomaticSetup();
+    arrCurrentMedia = true;
+    const setup = await storageSetup();
+    assertEquals((await confirmLayout(setup.automation.proposal.fingerprint)).status, 201);
+    const id = await enqueue('one', true);
+    responseStatus = 404;
+    disappearOnPlexDelete = race;
+    await runDeletionWorkerOnceForTest();
+    let operation = getDeletionOperation(id, 1) as unknown as DeletionOperation;
+    assertEquals(
+      operation.status,
+      race ? 'completed' : 'needs_attention',
+      JSON.stringify(operation),
+    );
+    assertEquals(arrDeleteCalls, 1);
+    assertEquals(deleteCalls, 1);
+    if (!race) {
+      retryDeletionOperation(id, 1);
+      await runDeletionWorkerOnceForTest();
+      assertEquals(
+        (getDeletionOperation(id, 1) as unknown as DeletionOperation).status,
+        'needs_attention',
+      );
+      assertEquals(deleteCalls, 1);
+      plexAbsent = true;
+      retryDeletionOperation(id, 1);
+      await runDeletionWorkerOnceForTest();
+      operation = getDeletionOperation(id, 1) as unknown as DeletionOperation;
+      assertEquals(operation.status, 'completed', JSON.stringify(operation));
+    }
+    assertEquals(arrDeleteCalls, 1);
+    assertEquals(deleteCalls, 1);
+    const saved = withTransaction((client) =>
+      client.prepare(
+        'SELECT snapshot FROM deletion_targets WHERE operation_id = ?',
+      ).value<[string]>(id)
+    );
+    const snapshot = JSON.parse(saved![0]);
+    assertEquals(snapshot.ordinaryAttempts['plex:one'].failure.httpStatus, 404);
+    assertEquals(snapshot.ordinaryAttempts['plex:one'].response, undefined);
+    assertEquals(snapshot.ordinaryReconciliations['plex:one'].sourceKeys, ['arr:3:7']);
+  }
+});
+
+Deno.test('Plex 404 and fresh absence without covering service success stay unresolved', async () => {
+  reset();
+  const id = await enqueue();
+  responseStatus = 404;
+  disappearOnPlexDelete = true;
+  await runDeletionWorkerOnceForTest();
+  assertEquals(
+    (getDeletionOperation(id, 1) as unknown as DeletionOperation).status,
+    'needs_attention',
+  );
+  retryDeletionOperation(id, 1);
+  await runDeletionWorkerOnceForTest();
+  assertEquals(
+    (getDeletionOperation(id, 1) as unknown as DeletionOperation).status,
+    'needs_attention',
+  );
+  assertEquals(deleteCalls, 1);
+});
+
+Deno.test('Arr success never bypasses recovery identity, mapping, every-file coverage or uncertain-response safeguards', async () => {
+  for (const change of ['identity', 'mapping', 'partial_coverage', 'lost_response'] as const) {
+    prepareAutomaticSetup();
+    arrCurrentMedia = true;
+    const setup = await storageSetup();
+    assertEquals((await confirmLayout(setup.automation.proposal.fingerprint)).status, 201);
+    const id = await enqueue('one', true);
+    responseStatus = 404;
+    lost = change === 'lost_response';
+    await runDeletionWorkerOnceForTest();
+    assertEquals(
+      (getDeletionOperation(id, 1) as unknown as DeletionOperation).status,
+      'needs_attention',
+    );
+    plexAbsent = true;
+    lost = false;
+    if (change === 'identity') machineIdentifier = 'different-server';
+    if (change === 'mapping') {
+      withTransaction((client) =>
+        client.prepare(
+          "UPDATE service_path_roots SET revision = revision + 1 WHERE service_key = 'arr:3'",
+        ).run()
+      );
+    }
+    if (change === 'partial_coverage') {
+      // Exercise restored durable evidence containing another accepted Plex file
+      // outside the successful Arr directory. Absence of just that file is unproven.
+      withTransaction((client) => {
+        const row = client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id = ?')
+          .value<[string]>(id)!;
+        const snapshot = JSON.parse(row[0]);
+        snapshot.ordinaryPlan.plexFiles.push({ path: '/data/Movies/Other/movie.mkv', size: 100 });
+        delete snapshot.ordinaryPlan.fingerprint;
+        snapshot.ordinaryPlan.fingerprint = ordinaryPlanFingerprint(snapshot.ordinaryPlan);
+        client.prepare('UPDATE deletion_targets SET snapshot = ? WHERE operation_id = ?')
+          .run(JSON.stringify(snapshot), id);
+      });
+    }
+    retryDeletionOperation(id, 1);
+    await runDeletionWorkerOnceForTest();
+    const operation = getDeletionOperation(id, 1) as unknown as DeletionOperation;
+    assertEquals(operation.status, 'needs_attention', `${change}: ${JSON.stringify(operation)}`);
+    if (change === 'partial_coverage') {
+      assert(
+        JSON.stringify(operation).includes(
+          'Plex disappeared without a recorded service response covering the accepted files',
+        ),
+        JSON.stringify(operation),
+      );
+    }
+    assertEquals(arrDeleteCalls, 1, change);
+    assertEquals(deleteCalls, 1, change);
   }
 });
 

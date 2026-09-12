@@ -54,7 +54,12 @@ export async function ensureOrdinaryDeletion(
       'An earlier service attempt lacks current response evidence; automatic replay is held',
     );
   }
-  if (Object.values(attempts).some((attempt) => !attempt.response)) {
+  const plexNotFound = () => attempts[plexKey]?.failure?.httpStatus === 404;
+  if (
+    Object.entries(attempts).some(([key, attempt]) =>
+      !attempt.response && !(key === plexKey && plexNotFound())
+    )
+  ) {
     throw new Error(
       'A service request has an uncertain or failed outcome. Automatic replay is disabled; retain this operation for recovery.',
     );
@@ -153,6 +158,11 @@ export async function ensureOrdinaryDeletion(
     mutate: (record: (response: ServiceDeletionResponse) => void) => Promise<void>,
   ) {
     if (attempts[key]?.response) return;
+    if (plexNotFound()) {
+      throw new Error(
+        'A rejected Plex deletion can only be rechecked; further service requests are held',
+      );
+    }
     await guard();
     attempts[key] = { service, action, startedAt: Date.now() };
     save();
@@ -400,14 +410,30 @@ export async function ensureOrdinaryDeletion(
     return true;
   }
   phase = 'plex';
-  if (await checkCurrentPlexScope()) {
-    await request(
-      plexKey,
-      'Plex',
-      'Delete selected media',
-      (record) => plex.deleteItem(snapshot.ratingKey, record),
-    );
-  } else if (!attempts[plexKey]?.response && !reconciliations[plexKey]) {
+  let plexPresent = await checkCurrentPlexScope();
+  if (plexPresent) {
+    if (plexNotFound()) {
+      throw new Error(
+        'Plex still exists after a rejected deletion request; automatic replay is held',
+      );
+    }
+    try {
+      await request(
+        plexKey,
+        'Plex',
+        'Delete selected media',
+        (record) => plex.deleteItem(snapshot.ratingKey, record),
+      );
+    } catch (error) {
+      if (!plexNotFound()) throw error;
+      // Arr may remove the item while Plex's request is in flight. Preserve the
+      // actual 404 and reconcile only fresh absence with covering service evidence.
+      await guard();
+      plexPresent = await checkCurrentPlexScope();
+      if (plexPresent) throw error;
+    }
+  }
+  if (!plexPresent && !attempts[plexKey]?.response && !reconciliations[plexKey]) {
     // checkCurrentPlexScope required covering durable responses for every accepted file.
     reconciliations[plexKey] = {
       service: 'Plex',
