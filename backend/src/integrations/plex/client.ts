@@ -1213,8 +1213,37 @@ export class PlexClient {
   ): AsyncGenerator<
     Array<{ ratingKey: string; showRatingKey?: string; seasonRatingKey?: string; path: string }>
   > {
-    for await (const page of this.paginatedMetadata(libraryKey, episodes ? 4 : 1)) {
-      yield page.flatMap((item) =>
+    // Deletion exclusion requires complete current inventory. The general sync
+    // iterator tolerates partial pages; do not use that tolerance as negative
+    // evidence that another item does not own a selected entry.
+    const fetchPage = (start: number) =>
+      this.get<{ MediaContainer: { Metadata?: PlexRawMetadata[]; totalSize?: number } }>(
+        `/library/sections/${libraryKey}/all?type=${episodes ? 4 : 1}`,
+        {
+          'X-Plex-Container-Start': String(start),
+          'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
+        },
+      );
+    const first = await fetchPage(0);
+    const total = first.MediaContainer.totalSize;
+    if (!Number.isSafeInteger(total) || total! < 0) {
+      throw new Error(`Plex deletion inventory has no valid total for library ${libraryKey}`);
+    }
+    const validate = (response: Awaited<ReturnType<typeof fetchPage>>, start: number) => {
+      const container = response.MediaContainer;
+      const page = container.Metadata ?? [];
+      if (
+        container.totalSize !== total || !Array.isArray(page) ||
+        page.length !== Math.min(ITEMS_PAGE_SIZE, total! - start)
+      ) {
+        throw new Error(
+          `Plex deletion inventory is incomplete or changed for library ${libraryKey}`,
+        );
+      }
+      return page;
+    };
+    const entries = (page: PlexRawMetadata[]) =>
+      page.flatMap((item) =>
         (item.Media ?? []).flatMap((media) =>
           (media.Part ?? []).flatMap((part) =>
             part.file
@@ -1228,6 +1257,19 @@ export class PlexClient {
           )
         )
       );
+    yield entries(validate(first, 0));
+    for (
+      let batchStart = ITEMS_PAGE_SIZE;
+      batchStart < total!;
+      batchStart += ITEMS_PAGE_SIZE * FETCH_CONCURRENCY
+    ) {
+      const starts = Array.from(
+        { length: FETCH_CONCURRENCY },
+        (_, index) => batchStart + index * ITEMS_PAGE_SIZE,
+      ).filter((start) => start < total!);
+      const batch = await Promise.all(starts.map(fetchPage));
+      // Validate the entire bounded batch before exposing any of its entries.
+      yield batch.flatMap((response, index) => entries(validate(response, starts[index])));
     }
   }
 

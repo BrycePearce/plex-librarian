@@ -29,7 +29,7 @@ Deno.test("discovery status keeps refreshing through ready, failure and recovery
   assertEquals(discoveryRefreshInterval(undefined), false);
 });
 
-Deno.test("empty-library setup confirms reusable roots without sample media and never labels an untested connection Connected", async () => {
+Deno.test("automatic setup has no manual editor even in details and never labels an untested connection Connected", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -77,40 +77,10 @@ Deno.test("empty-library setup confirms reusable roots without sample media and 
     await act(() =>
       renderer!.root.findByType("details").props.onToggle({ currentTarget: { open: true } })
     );
-    assert(
-      JSON.stringify(renderer!.toJSON()).includes("Manual relationships for unsupported layouts"),
-    );
-    await act(() =>
-      renderer!.root.findAllByType("button").find((button) =>
-        button.children.includes("Add relationship")
-      )!.props.onClick()
-    );
-    const inputs = renderer!.root.findAllByType("input").filter((input) =>
-      input.props.type !== "file"
-    );
-    assertEquals(inputs.filter((input) => input.props.type !== "checkbox").length, 2);
-    const submit = () =>
-      renderer!.root.findAllByType("button").find((button) => button.props.type === "submit")!;
-    assertEquals(submit().props.disabled, true);
-    await act(() => {
-      inputs[0].props.onChange({ target: { value: "/tv" } });
-      inputs[1].props.onChange({ target: { value: "/storage/tv" } });
-      inputs.at(-1)!.props.onChange({ target: { checked: true } });
-    });
-    assertEquals(submit().props.disabled, false);
-    await act(() => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    assertEquals(saved, [{
-      serviceKey: "plex:tv",
-      configurationIdentity: "identity",
-      serviceRoot: "/tv",
-      storageRoot: "/storage/tv",
-      caseSensitive: true,
-      hasAliases: false,
-      confirmed: true,
-    }]);
+    assert(JSON.stringify(renderer!.toJSON()).includes("Existing saved mappings are preserved"));
+    assert(!JSON.stringify(renderer!.toJSON()).includes("Add relationship"));
+    assertEquals(renderer!.root.findAllByType("input").length, 0);
+    assertEquals(saved, []);
     data.endpoints[0].connectionTestedAt = Date.now();
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["service-storage"] });
@@ -344,6 +314,84 @@ Deno.test("successful explicit QB test refreshes mounted discovery status withou
     api.qbittorrent.get = original.qb;
     api.qbittorrent.testInstance = original.test;
     api.integrationCompatibility.get = original.compatibility;
+    globals.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});
+
+Deno.test("saved mappings remain untouched until explicit confirmed removal and can be backed up", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const originalGet = api.serviceStorage.get, originalRemove = api.serviceStorage.remove;
+  const data: ServiceStorageSettings = {
+    endpoints: [{
+      key: "arr:1",
+      name: "Sonarr",
+      configurationIdentity: "fixture",
+      roots: [],
+      libraryKeys: [],
+    }],
+    relationships: [{
+      id: 8,
+      serverId: 1,
+      serviceKey: "arr:1",
+      configurationIdentity: "fixture",
+      serviceRoot: "/custom-tv",
+      storageRoot: "/old-tv",
+      caseSensitive: true,
+      hasAliases: false,
+      revision: 3,
+    }],
+  };
+  const removed: number[] = [];
+  api.serviceStorage.get = () => Promise.resolve(structuredClone(data));
+  api.serviceStorage.remove = (id) => {
+    removed.push(id);
+    data.relationships = [];
+    return Promise.resolve({ ok: true });
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const flush = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  const button = (label: string) =>
+    renderer!.root.findAllByType("button").find((item) => item.children.includes(label))!;
+  try {
+    await act(() => {
+      renderer = TestRenderer.create(
+        <QueryClientProvider client={client}>
+          <ServiceStorageSetup />
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    await act(() =>
+      renderer!.root.findByType("details").props.onToggle({ currentTarget: { open: true } })
+    );
+    const backup = renderer!.root.findAllByType("a").find((item) => item.props.download)!;
+    assertEquals(
+      JSON.parse(decodeURIComponent(backup.props.href.split(",").slice(1).join(","))),
+      data.relationships,
+    );
+    assertEquals(removed, []);
+    assert(!JSON.stringify(renderer!.toJSON()).includes("Add relationship"));
+    await act(() => button("Remove mapping").props.onClick());
+    assertEquals(removed, []);
+    assert(JSON.stringify(renderer!.toJSON()).includes("does not delete"));
+    await act(() => button("Cancel").props.onClick());
+    assertEquals(removed, []);
+    await act(() => button("Remove mapping").props.onClick());
+    await act(() => button("Confirm remove mapping").props.onClick());
+    await flush();
+    assertEquals(removed, [8]);
+    assert(!JSON.stringify(renderer!.toJSON()).includes("/custom-tv"));
+  } finally {
+    await act(() => renderer?.unmount());
+    client.clear();
+    api.serviceStorage.get = originalGet;
+    api.serviceStorage.remove = originalRemove;
     globals.IS_REACT_ACT_ENVIRONMENT = previous;
   }
 });

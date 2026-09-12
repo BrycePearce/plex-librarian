@@ -4,7 +4,6 @@ import { api } from "../../lib/api.ts";
 import {
   type HostDiscoveryStatus,
   type ServicePathRoot,
-  type ServiceStorageEndpoint,
 } from "../../../../shared/serviceStorage.ts";
 
 export function discoveryRefreshInterval(status?: HostDiscoveryStatus): number | false {
@@ -21,13 +20,18 @@ export function ServiceStorageSetup() {
     refetchInterval: (query) => discoveryRefreshInterval(query.state.data?.discovery),
     refetchIntervalInBackground: false,
   });
-  const [editing, setEditing] = useState<
-    { endpoint: ServiceStorageEndpoint; root?: ServicePathRoot }
-  >();
-  const [advanced, setAdvanced] = useState(false);
+  const [removing, setRemoving] = useState<ServicePathRoot>();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const discovery = useMutation({
     mutationFn: (action: "enable" | "retry" | "disable") => api.serviceStorage.discovery(action),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["service-storage"] }),
+  });
+  const remove = useMutation({
+    mutationFn: (root: ServicePathRoot) => api.serviceStorage.remove(root.id),
+    onSuccess: async () => {
+      setRemoving(undefined);
+      await qc.invalidateQueries({ queryKey: ["service-storage"] });
+    },
   });
   if (query.isPending) return <p role="status">Checking discovery status…</p>;
   if (query.error) {
@@ -61,7 +65,8 @@ export function ServiceStorageSetup() {
     <section className="space-y-3" aria-label="Host discovery">
       <h3 className="font-semibold">Host discovery</h3>
       <p className="text-sm">
-        Connect your services, then enable discovery once for this Linux Docker host. Sonarr/Radarr
+        Run Plex and your connected services on the same Unraid or Linux Docker host. Install the
+        helper, then enable discovery once. Different container paths are supported. Sonarr/Radarr
         and qBittorrent remain optional and unchecked when deleting.
       </p>
       {endpoints.map((endpoint) => {
@@ -84,7 +89,8 @@ export function ServiceStorageSetup() {
       {status?.checking && <p role="status">Checking host and connected services…</p>}
       {!status?.enabled && (
         <p className="text-sm">
-          Discovery requires the optional host helper. If it is not installed, follow the{" "}
+          First install the host helper and connect its shared discovery directory to Librarian
+          using the{" "}
           <a
             className="link"
             href="https://github.com/BrycePearce/plex-librarian/blob/main/deploy/discovery/README.md"
@@ -92,36 +98,46 @@ export function ServiceStorageSetup() {
             rel="noreferrer"
           >
             Docker/Unraid installation guide
-          </a>. Plex-only use does not require a helper.
+          </a>. Updating Librarian or reconnecting a service does not install the helper. Plex-only
+          use does not require it.
         </p>
       )}
       {showAction && discoveryButton}
       {discovery.error && (
         <p role="alert">
           {status?.enabled
-            ? "Discovery could not be updated. Retry, or open Advanced for details."
-            : "Discovery could not be enabled. Check the host helper using the installation guide above, then try again. Details are in Advanced."}
+            ? "Discovery could not be updated. Retry, or open Discovery details."
+            : "Discovery could not be enabled. Check the host helper using the installation guide above, then try again. Open Discovery details for the error."}
         </p>
       )}
       {status?.enabled && !status.checking && (
         <p role="status" className="text-sm">
           {needsAttention
-            ? "Some services need attention. Retry discovery, or open Advanced for details."
+            ? "Some services need attention. Retry discovery, or open Discovery details."
             : "Discovery refreshes automatically. Each service’s status is shown above."}
         </p>
       )}
-      <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
-        <summary>Advanced</summary>
-        {advanced && (
+      <details open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>Discovery details</summary>
+        {detailsOpen && (
           <>
             {!showAction && discoveryButton}
             {discovery.error && <p role="alert">{discovery.error.message}</p>}
             {status?.reason && <p className="text-sm text-warning">{status.reason}</p>}
             <p className="text-sm my-2">
-              Manual relationships for unsupported layouts are explicit configuration assertions.
-              Automatic discovery preserves these overrides. Remove a manual relationship to let
-              discovery manage it again.
+              Discovery supports services on one Unraid or Linux Docker host. Unsupported or
+              ambiguous layouts stay unavailable. Existing saved mappings are preserved.
             </p>
+            {!!query.data.relationships.length && (
+              <a
+                className="btn btn-sm"
+                download="librarian-storage-mappings.json"
+                href={"data:application/json;charset=utf-8," +
+                  encodeURIComponent(JSON.stringify(query.data.relationships, null, 2))}
+              >
+                Download mapping backup
+              </a>
+            )}
             {status?.enabled && (
               <button
                 type="button"
@@ -142,38 +158,59 @@ export function ServiceStorageSetup() {
                   {saved.map((root) => (
                     <div key={root.id} className="text-sm break-all">
                       {root.serviceRoot} → {root.storageRoot}
-                      {root.configurationIdentity !== endpoint.configurationIdentity
-                        ? " · Evidence needs attention"
-                        : ""}
                       <button
                         type="button"
                         className="btn btn-xs"
-                        onClick={() => setEditing({ endpoint, root })}
+                        disabled={remove.isPending || discovery.isPending || status?.checking}
+                        onClick={() => {
+                          remove.reset();
+                          setRemoving(root);
+                        }}
                       >
-                        Edit
+                        Remove mapping
                       </button>
+                      {root.configurationIdentity !== endpoint.configurationIdentity
+                        ? " · Evidence needs attention"
+                        : ""}
                     </div>
                   ))}
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() =>
-                      setEditing({ endpoint })}
-                  >
-                    Add relationship
-                  </button>
                 </div>
               );
             })}
-            {editing && (
-              <RelationshipForm
-                key={`${editing.endpoint.key}:${editing.root?.id ?? "new"}`}
-                {...editing}
-                onDone={() => {
-                  setEditing(undefined);
-                  void qc.invalidateQueries({ queryKey: ["service-storage"] });
-                }}
-              />
+            {removing && (
+              <div
+                className="rounded-lg border border-warning p-3 space-y-2"
+                role="group"
+                aria-label="Remove saved mapping"
+              >
+                <p>
+                  Remove the saved mapping for{" "}
+                  <code>{removing.serviceRoot}</code>? Download a backup first. This does not delete
+                  media. Deletion through this path may become unavailable until discovery
+                  identifies it again.
+                </p>
+                {remove.error && <p role="alert">{remove.error.message}</p>}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={remove.isPending}
+                  onClick={() => setRemoving(undefined)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(removing)}
+                >
+                  Confirm remove mapping
+                </button>
+                <p className="text-xs">
+                  After removing the old mappings for a service, use Retry discovery to check its
+                  current paths.
+                </p>
+              </div>
             )}
           </>
         )}
@@ -183,136 +220,5 @@ export function ServiceStorageSetup() {
         selected media, destinations, current downloads, and retained content.
       </p>
     </section>
-  );
-}
-function RelationshipForm(
-  { endpoint, root, onDone }: {
-    endpoint: ServiceStorageEndpoint;
-    root?: ServicePathRoot;
-    onDone: () => void;
-  },
-) {
-  const [serviceRoot, setServiceRoot] = useState(root?.serviceRoot ?? endpoint.roots[0] ?? "");
-  const [storageRoot, setStorageRoot] = useState(root?.storageRoot ?? "");
-  const [caseSensitive, setCaseSensitive] = useState(root?.caseSensitive ?? true);
-  const [hasAliases, setHasAliases] = useState(root?.hasAliases ?? false);
-  const [confirmed, setConfirmed] = useState(false);
-  const save = useMutation({
-    mutationFn: () =>
-      api.serviceStorage.save({
-        serviceKey: endpoint.key,
-        configurationIdentity: endpoint.configurationIdentity,
-        serviceRoot,
-        storageRoot,
-        caseSensitive,
-        hasAliases,
-        confirmed: true,
-        ...(root ? { id: root.id, revision: root.revision } : {}),
-      }),
-    onSuccess: onDone,
-  });
-  const remove = useMutation({
-    mutationFn: () => api.serviceStorage.remove(root!.id),
-    onSuccess: onDone,
-  });
-  return (
-    <form
-      className="space-y-3 rounded-lg border border-primary p-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (confirmed) save.mutate();
-      }}
-    >
-      <h4 className="font-semibold">{endpoint.name}: confirm a storage relationship</h4>
-      <label className="block">
-        Path in this service<input
-          className="input w-full"
-          list="service-root-hints"
-          value={serviceRoot}
-          onChange={(event) => {
-            setServiceRoot(event.target.value);
-            setConfirmed(false);
-          }}
-          placeholder="/tv"
-          required
-        />
-      </label>
-      <datalist id="service-root-hints">
-        {endpoint.roots.map((path) => <option key={path} value={path} />)}
-      </datalist>
-      <label className="block">
-        Shared storage root<input
-          className="input w-full"
-          value={storageRoot}
-          onChange={(event) => {
-            setStorageRoot(event.target.value);
-            setConfirmed(false);
-          }}
-          placeholder="/storage/media/TV"
-          required
-        />
-      </label>
-      <p className="text-sm">
-        Use the same shared prefix for the same directory across services. For example, Plex /tv and
-        Sonarr /data/media/TV can both map to /storage/media/TV. This is a comparison namespace, not
-        a folder to mount in Librarian.
-      </p>
-      <details>
-        <summary>Advanced</summary>
-        <label className="flex gap-2">
-          <input
-            type="checkbox"
-            checked={caseSensitive}
-            onChange={(event) => {
-              setCaseSensitive(event.target.checked);
-              setConfirmed(false);
-            }}
-          />Paths are case-sensitive
-        </label>
-        <label className="flex gap-2">
-          <input
-            type="checkbox"
-            checked={hasAliases}
-            onChange={(event) => {
-              setHasAliases(event.target.checked);
-              setConfirmed(false);
-            }}
-          />This root contains unresolved symlink, bind-mount, or path aliases
-        </label>
-        <p className="text-xs">
-          Declared aliases block affected deletion until resolved. Use distinct shared prefixes for
-          different copies. Hardlinks with different directory entries may be retained
-          independently; reclaimed disk space is not measured.
-        </p>
-      </details>
-      <label className="flex gap-2">
-        <input
-          type="checkbox"
-          checked={confirmed}
-          onChange={(event) => setConfirmed(event.target.checked)}
-        />I confirm this relationship and the declared case and alias rules.
-      </label>
-      {(save.error || remove.error) && <p role="alert">{(save.error ?? remove.error)?.message}</p>}
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          className="btn btn-primary btn-sm"
-          disabled={!confirmed || save.isPending || remove.isPending}
-        >
-          Save relationship
-        </button>
-        <button type="button" className="btn btn-sm" onClick={onDone}>Cancel</button>
-        {root && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={save.isPending || remove.isPending}
-            onClick={() => remove.mutate()}
-          >
-            Remove relationship
-          </button>
-        )}
-      </div>
-    </form>
   );
 }

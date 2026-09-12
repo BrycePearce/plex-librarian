@@ -52,10 +52,11 @@ Deno.test("simple Plex confirmation requires no optional selection or storage se
   globals.IS_REACT_ACT_ENVIRONMENT = true;
   const original = api.libraries.downloadCleanupPreview;
   const fingerprint = "b".repeat(64);
+  let unrelatedServicesConnected = false;
   api.libraries.downloadCleanupPreview = () =>
     Promise.resolve({
-      coordinatedConfigured: false,
-      downloadClientsConfigured: false,
+      coordinatedConfigured: unrelatedServicesConnected,
+      downloadClientsConfigured: unrelatedServicesConnected,
       items: [{
         ratingKey: "show",
         status: "unavailable",
@@ -112,6 +113,16 @@ Deno.test("simple Plex confirmation requires no optional selection or storage se
       cleanupDownloadRatingKeys: [],
       cleanupPreviewFingerprints: { show: fingerprint },
     }]);
+    unrelatedServicesConnected = true;
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    assertEquals(options(renderer!), [], "Connected services without matching targets stay hidden");
+    assertEquals(JSON.stringify(renderer!.toJSON()).includes("explicitly turn off"), false);
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
   } finally {
     await act(() => {
       renderer?.unmount();
@@ -157,7 +168,6 @@ Deno.test("season destinations start unchecked and failed refresh never removes 
     assertEquals(requests[0], { coordinated: false, cleanupDownloads: false });
     assertEquals(options(renderer!).map(({ id, checked }) => [id, checked]), [
       ["arr", false],
-      ["cleanup", false],
     ]);
     await act(() => {
       options(renderer!)[0].onChange(true);
@@ -274,8 +284,10 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
     let fingerprint = "a".repeat(64);
     const combinedFingerprint = "c".repeat(64);
     let fail = false;
-    api.libraries.downloadCleanupPreview = () =>
-      fail ? Promise.reject(new Error("Preview unavailable")) : Promise.resolve({
+    let previewCalls = 0;
+    api.libraries.downloadCleanupPreview = () => {
+      previewCalls++;
+      return fail ? Promise.reject(new Error("Preview unavailable")) : Promise.resolve({
         coordinatedConfigured: change === "Sonarr selection",
         downloadClientsConfigured: true,
         items: [{
@@ -318,6 +330,7 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
           }],
         }],
       } as DownloadCleanupPreviewResponse);
+    };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const confirmed: unknown[] = [];
     let renderer: TestRenderer.ReactTestRenderer | undefined;
@@ -354,6 +367,7 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
         );
       assertEquals(cleanup().checked, false);
       assertEquals(keep(), undefined);
+      assertEquals(previewCalls, 1);
       await act(() => {
         cleanup().onChange(true);
       });
@@ -361,9 +375,11 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
         await new Promise((resolve) => setTimeout(resolve, 30));
       });
       assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
+      assertEquals(previewCalls, 1, "QB selection reuses the complete preview");
       // An unchanged successful refetch preserves the choice, while a failed
       // refetch blocks confirmation without silently discarding that choice.
       for (const unavailable of [false, true, false]) {
+        const callsBeforeRefetch = previewCalls;
         fail = unavailable;
         await act(async () => {
           await client.invalidateQueries();
@@ -373,10 +389,16 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
         });
         assertEquals(cleanup().checked, true);
         assertEquals(
+          previewCalls,
+          callsBeforeRefetch + 1,
+          "Explicit invalidation refreshes evidence",
+        );
+        assertEquals(
           renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled,
           unavailable,
         );
       }
+      const callsBeforeScopeChange = previewCalls;
       if (change === "refetch") fingerprint = "b".repeat(64);
       await act(async () => {
         if (change === "refetch") await client.invalidateQueries();
@@ -385,11 +407,7 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
       });
-      // Clearing the invalid choice starts the unchecked preview query. Let that
-      // render finish before interacting with its temporarily disabled option.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
+      assertEquals(previewCalls, callsBeforeScopeChange + (change === "refetch" ? 1 : 0));
       assertEquals(cleanup().checked, false);
       assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
       assertEquals(!!keep(), true);
@@ -404,6 +422,7 @@ for (const change of ["refetch", "Sonarr selection"] as const) {
         await new Promise((resolve) => setTimeout(resolve, 30));
       });
       assertEquals(cleanup().checked, true);
+      assertEquals(previewCalls, callsBeforeScopeChange + (change === "refetch" ? 1 : 0));
       assertEquals(keep(), undefined);
       assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, false);
       await act(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());

@@ -8,6 +8,9 @@ helper refuses Desktop/WSL.
 
 ## Access boundary and pairing
 
+Upgrading an existing Unraid app? Follow the [existing-installation steps](UPGRADING.md).
+An image update alone does not install the helper or attach its private connection.
+
 Only the helper mounts `/var/run/docker.sock`. **That socket gives the helper
 host-administrator-equivalent Docker API access even when mounted read-only.** The fixed collector
 uses read-only commands; socket mounting does not enforce that. The helper has host PID and network

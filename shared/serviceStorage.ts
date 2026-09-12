@@ -120,17 +120,17 @@ export function configuredStoragePath(
   );
   if (matches.length === 0) {
     throw new Error(
-      `No storage relationship covers the selected files for ${serviceKey}. In Media connections, add a relationship for this service's media root.`,
+      `No storage relationship covers the selected files for ${serviceKey}. In Media connections, enable or retry host discovery to identify this service's media root.`,
     );
   }
   if (matches.length > 1) {
     throw new Error(
-      `Overlapping storage relationships cover the selected files for ${serviceKey}. In Media connections, keep one unambiguous relationship for these files.`,
+      `Overlapping storage relationships cover the selected files for ${serviceKey}. Check Discovery details in Media connections and resolve overlapping saved mappings before retrying discovery.`,
     );
   }
   if (matches[0].hasAliases) {
     throw new Error(
-      `The storage relationship for ${serviceKey} declares aliases. Review this relationship in Media connections; deletion is unavailable while its paths have unresolved aliases.`,
+      `The storage relationship for ${serviceKey} declares aliases. Check Discovery details in Media connections; deletion is unavailable while its paths have unresolved aliases.`,
     );
   }
   const root = matches[0];

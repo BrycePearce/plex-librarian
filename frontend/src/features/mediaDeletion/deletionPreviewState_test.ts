@@ -34,7 +34,7 @@ Deno.test("selected whole-show Sonarr ownership errors block with their exact re
   assertEquals(selectedSonarrOwnershipProblems(unsafe, false), []);
 });
 
-Deno.test("configured Arr remains visible when every selected item is unavailable", () => {
+Deno.test("configured Arr is hidden when no selected item has a matched destination", () => {
   const preview = {
     coordinatedConfigured: true,
     downloadClientsConfigured: false,
@@ -43,8 +43,21 @@ Deno.test("configured Arr remains visible when every selected item is unavailabl
 
   const state = arrDestinationState(preview);
 
-  assertEquals(state.visible, true);
+  assertEquals(state.visible, false);
   assertEquals(state.problems, preview.items);
+});
+
+Deno.test("a matched Arr destination stays visible with blockers in a mixed selection", () => {
+  const preview = {
+    coordinatedConfigured: true,
+    downloadClientsConfigured: false,
+    items: [
+      { ratingKey: "1", arrStatus: "resolved" },
+      { ratingKey: "2", arrStatus: "unavailable" },
+    ],
+  } as DownloadCleanupPreviewResponse;
+  assertEquals(arrDestinationState(preview).visible, true);
+  assertEquals(arrDestinationState(preview).problems.map((item) => item.ratingKey), ["2"]);
 });
 
 Deno.test("configured Arr never grants default deletion consent", () => {
@@ -81,7 +94,7 @@ Deno.test("stale Arr selection is suppressed as soon as an unconfigured preview 
   assertEquals(effectiveArrSelection(true, preview), false);
 });
 
-Deno.test("configured download destination stays visible while eligibility is checked", () => {
+Deno.test("download destination requires a relevant job, not just a connected client", () => {
   const item = {
     ratingKey: "1",
     status: "resolved",
@@ -101,7 +114,7 @@ Deno.test("configured download destination stays visible while eligibility is ch
       downloadClientsConfigured: true,
       items: [{ ...item, downloadJobs: [] }],
     } as unknown as DownloadCleanupPreviewResponse),
-    true,
+    false,
   );
   assertEquals(
     downloadCleanupDestinationVisible({

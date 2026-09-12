@@ -864,3 +864,30 @@ Deno.test('all four preview destination combinations share one streaming retaine
   assertEquals(preview.status, 'resolved');
   assertEquals(scans, 1);
 });
+
+Deno.test('an incomplete retained inventory blocks every prepared preview destination', async () => {
+  const { input } = fixture();
+  input.plex.libraryFileEntries = async function* () {
+    yield [];
+    throw new Error('Plex deletion inventory is incomplete or changed');
+  };
+  const preview = await ordinaryPreview(input);
+  assertEquals(
+    [
+      preview.plexOnlyStatus,
+      preview.sonarrCleanupStatus,
+      preview.qbittorrentOnlyStatus,
+      preview.status,
+    ],
+    ['error', 'error', 'error', 'error'],
+  );
+  assertEquals(
+    [
+      preview.plexOnlyFingerprint,
+      preview.sonarrCleanupFingerprint,
+      preview.qbittorrentOnlyFingerprint,
+      preview.cleanupFingerprint,
+    ],
+    [undefined, undefined, undefined, undefined],
+  );
+});

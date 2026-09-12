@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ArrStorageVerificationResponse } from "@plex-librarian/shared/types.ts";
 import type { FormEvent } from "react";
 import { PlugZap } from "lucide-react";
@@ -10,7 +10,6 @@ import type {
   ArrRootFoldersRequest,
   ArrRootFoldersResponse,
   LibrariesResponse,
-  QbittorrentStoragePathsResponse,
 } from "../../lib/api.ts";
 import { ArrLibrarySelectionStep } from "./ArrLibrarySelectionStep.tsx";
 import { ArrUrlHelp } from "./ArrUrlHelp.tsx";
@@ -279,26 +278,6 @@ function draftFor(
   };
 }
 
-function pathMappings(type: ArrType, draft: ArrDraft) {
-  void type;
-  return [
-    draft.libraryArrPath.trim() && draft.libraryLocalPath.trim()
-      ? {
-        kind: "library" as const,
-        arrPath: draft.libraryArrPath.trim(),
-        localPath: draft.libraryLocalPath.trim(),
-      }
-      : null,
-    draft.downloadArrPath.trim() && draft.downloadLocalPath.trim()
-      ? {
-        kind: "download" as const,
-        arrPath: draft.downloadArrPath.trim(),
-        localPath: draft.downloadLocalPath.trim(),
-      }
-      : null,
-  ].filter((mapping) => mapping !== null);
-}
-
 export function arrConnectionComplete(draft: ArrDraft): boolean {
   return Boolean(
     draft.name.trim() &&
@@ -404,7 +383,6 @@ export function ArrConnectionWizard({
   onSaved: () => void;
 }) {
   const [type, setType] = useState<ArrType>(initialType);
-  const [advancedPaths, setAdvancedPaths] = useState(false);
   const [step, setStep] = useState<"connection" | "libraries">("connection");
   const [drafts, setDrafts] = useState<Record<ArrType, ArrDraft>>(() => ({
     radarr: draftFor("radarr", data, libraryData, editingInstanceId),
@@ -415,79 +393,11 @@ export function ArrConnectionWizard({
     sonarr: initialRootFolderDiscoveryState(),
   }));
   const discoveriesRef = useRef(discoveries);
-  const [storagePaths, setStoragePaths] = useState<StoragePathDiscoveryState>({
-    status: "idle",
-    paths: [],
-  });
-  const storagePathsAttempted = useRef(false);
   const draft = drafts[type];
-  const [verifications, setVerifications] = useState<
-    Record<string, ArrStorageVerificationResponse>
-  >({});
-  const verificationKeys = (["radarr", "sonarr"] as const).map((candidate) => {
-    const value = drafts[candidate];
-    const plan = rootFolderDiscoveryPlan(candidate, value, data.instances);
-    return advancedPaths && arrConnectionComplete(value) &&
-        storageCleanupProblem(value) === null && pathMappings(candidate, value).length > 0 &&
-        plan.kind === "request"
-      ? JSON.stringify({
-        ...plan.request,
-        pathMappings: pathMappings(candidate, value),
-        libraryKeys: [...value.libraryKeys],
-      })
-      : "";
-  });
-  const verificationKey = verificationKeys[type === "radarr" ? 0 : 1];
-  const verificationBatch = JSON.stringify(verificationKeys.filter(Boolean));
-  const [verificationAttempt, setVerificationAttempt] = useState(0);
-  function retryVerification() {
-    setVerifications((values) => {
-      const next = { ...values };
-      delete next[verificationKey];
-      return next;
-    });
-    setVerificationAttempt((attempt) => attempt + 1);
-  }
-  useEffect(() => {
-    let current = true;
-    const timeouts: ReturnType<typeof setTimeout>[] = [];
-    const timer = setTimeout(() => {
-      for (const key of JSON.parse(verificationBatch) as string[]) {
-        if (verifications[key]) continue;
-        let timeout: ReturnType<typeof setTimeout>;
-        const deadline = new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Storage check timed out")), 30000);
-          timeouts.push(timeout);
-        });
-        void Promise.race([api.arr.verifyStorage(JSON.parse(key)), deadline]).then(
-          (result) => {
-            if (current) setVerifications((values) => ({ ...values, [key]: result }));
-          },
-          () => {
-            if (current) {
-              setVerifications((values) => ({
-                ...values,
-                [key]: {
-                  status: "unverified",
-                  reason:
-                    "Could not verify storage. Check the connection and mounted paths. You can still save these settings.",
-                },
-              }));
-            }
-          },
-        ).finally(() => clearTimeout(timeout));
-      }
-    }, 600);
-    return () => {
-      current = false;
-      clearTimeout(timer);
-      timeouts.forEach(clearTimeout);
-    };
-  }, [verificationBatch, verificationAttempt]);
   const completeTypes = useMemo(
     () =>
       (["radarr", "sonarr"] as const).filter((candidate) =>
-        arrConnectionComplete(drafts[candidate]) && storageCleanupCanSave(drafts[candidate])
+        arrConnectionComplete(drafts[candidate])
       ),
     [drafts],
   );
@@ -527,17 +437,6 @@ export function ArrConnectionWizard({
     );
   }
 
-  function discoverStoragePaths(retry = false) {
-    if (storagePathsAttempted.current && !retry) return;
-    storagePathsAttempted.current = true;
-    setStoragePaths({ status: "loading", paths: [] });
-    void api.qbittorrent.storagePaths().then(
-      ({ paths }: QbittorrentStoragePathsResponse) =>
-        setStoragePaths({ status: paths.length > 0 ? "suggested" : "empty", paths }),
-      () => setStoragePaths({ status: "error", paths: [] }),
-    );
-  }
-
   const save = useMutation({
     mutationFn: async () => {
       await Promise.all(
@@ -551,14 +450,16 @@ export function ArrConnectionWizard({
               apiKey: value.apiKey,
               libraryKeys: [...value.libraryKeys],
               addImportExclusion: value.addImportExclusion,
-              pathMappings: pathMappings(candidate, value),
+              pathMappings: [],
             })
             : api.arr.updateInstance(value.instanceId, {
               name: value.name,
               url: value.url,
               libraryKeys: [...value.libraryKeys],
               addImportExclusion: value.addImportExclusion,
-              pathMappings: pathMappings(candidate, value),
+              pathMappings: data.instances.find((instance) =>
+                instance.id === value.instanceId
+              )?.pathMappings ?? [],
               ...(value.apiKey.trim() ? { apiKey: value.apiKey } : {}),
             });
         }),
@@ -738,34 +639,10 @@ export function ArrConnectionWizard({
                 addImportExclusion={draft.addImportExclusion}
                 setAddImportExclusion={(addImportExclusion) => updateDraft({ addImportExclusion })}
               />
-              <details
-                onToggle={(event) => {
-                  const open = event.currentTarget.open;
-                  setAdvancedPaths(open);
-                  if (open) {
-                    discoverRootFolders(type);
-                    discoverStoragePaths();
-                  }
-                }}
-              >
-                <summary className="cursor-pointer text-sm">Advanced: optional path access</summary>
-                <StorageCleanupStep
-                  type={type}
-                  draft={draft}
-                  discovery={discoveries[type]}
-                  storagePaths={storagePaths}
-                  verification={verificationKey
-                    ? {
-                      loading: !verifications[verificationKey],
-                      result: verifications[verificationKey],
-                    }
-                    : undefined}
-                  onVerificationRetry={retryVerification}
-                  onRetry={() => discoverRootFolders(type, true)}
-                  onStorageRetry={() => discoverStoragePaths(true)}
-                  onUpdate={updateDraft}
-                />
-              </details>
+              <p className="text-sm text-base-content/60">
+                Host discovery identifies paths after you save. Enable it in Media connections once
+                the host helper is installed.
+              </p>
             </>
           )}
 
@@ -792,8 +669,7 @@ export function ArrConnectionWizard({
             type="submit"
             className="btn btn-primary btn-sm"
             disabled={save.isPending || librariesLoading ||
-              (step === "connection" && !arrConnectionComplete(draft)) ||
-              (step === "libraries" && !storageCleanupCanSave(draft))}
+              (step === "connection" && !arrConnectionComplete(draft))}
           >
             {step === "connection" ? "Test connection and continue" : (
               <>

@@ -247,7 +247,7 @@ export function SeasonRemovalDialog({
     if (!item || !value || !cleanupDownloads) return;
     if (cleanupAvailableNow) setVerifiedCleanupKey(item.ratingKey);
   }, [cleanupAvailableNow, cleanupDownloads, item, value]);
-  const cleanupAvailable = value?.cleanupConfigured === true || cleanupAvailableNow ||
+  const cleanupAvailable = cleanupAvailableNow ||
     verifiedCleanupKey === item?.ratingKey;
   const showPreviewLoading = useDelayedFlag(preview.isFetching, 350);
   const blocked = !value || value.blockers.length > 0 || preview.isFetching ||
@@ -366,7 +366,7 @@ export function SeasonRemovalDialog({
             <DestinationOptions
               keepDownloads={(value?.downloadJobs.length ?? 0) > 0 && !cleanupDownloads}
               options={[
-                ...(value?.coordinatedConfigured || sonarrActionAvailable || coordinated
+                ...(sonarrActionAvailable || coordinated
                   ? [{
                     id: "arr" as const,
                     service: "sonarr" as const,

@@ -75,14 +75,8 @@ export function DeleteConfirmDialog({
     selectionKey,
   );
   const preview = useQuery({
-    queryKey: [
-      ...queryKeys.downloadCleanupPreview.forItems(
-        libraryKey,
-        ratingKeys,
-      ),
-      deleteFromArr,
-      cleanupDownloads,
-    ],
+    // This response contains every destination scope; choices select its evidence locally.
+    queryKey: queryKeys.downloadCleanupPreview.forItems(libraryKey, ratingKeys),
     queryFn: () => api.libraries.downloadCleanupPreview(libraryKey, ratingKeys),
     enabled: ratingKeys.length > 0,
     staleTime: 15_000,
@@ -254,7 +248,7 @@ export function DeleteConfirmDialog({
               onRetry={() => void preview.refetch()}
               retrying={preview.isFetching}
               warnings={[
-                ...(preview.data?.coordinatedConfigured && arrProblems.length > 0
+                ...(deleteFromArr && arrProblems.length > 0
                   ? [
                     `${arrProblems.length} ${
                       arrProblems.length === 1 ? "item has" : "items have"

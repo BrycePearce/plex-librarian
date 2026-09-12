@@ -718,11 +718,30 @@ Deno.test("one advance launches both discoveries without waiting for either resp
   assertEquals(states.radarr.status, "empty");
 });
 
-Deno.test("optional library verification waits for Advanced and ignores stale results", async () => {
+Deno.test("automatic connection setup preserves saved paths without a local access editor", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const oldEnvironment = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const existingMappings = [
+    { kind: "library" as const, arrPath: "/tv", localPath: "/media" },
+    { kind: "library" as const, arrPath: "/anime", localPath: "/animation" },
+    { kind: "download" as const, arrPath: "/downloads", localPath: "/payloads" },
+    { kind: "download" as const, arrPath: "/archive", localPath: "/archive-copy" },
+  ];
   const originalVerify = api.arr.verifyStorage;
+  const originalUpdate = api.arr.updateInstance;
+  const updates: Parameters<typeof api.arr.updateInstance>[1][] = [];
+  api.arr.updateInstance = (_id, value) => {
+    updates.push(value);
+    return Promise.resolve({
+      id: 7,
+      type: "sonarr",
+      name: "Sonarr",
+      url: "http://sonarr",
+      apiKeyConfigured: true,
+      pathMappings: value.pathMappings ?? [],
+    });
+  };
   const originalRoots = api.arr.rootFolders;
   const originalStorage = api.qbittorrent.storagePaths;
   const first = deferred<Awaited<ReturnType<typeof api.arr.verifyStorage>>>();
@@ -749,9 +768,7 @@ Deno.test("optional library verification waits for Advanced and ignores stale re
                 name: "Sonarr",
                 url: "http://sonarr",
                 apiKeyConfigured: true,
-                pathMappings: [
-                  { kind: "library", arrPath: "/tv", localPath: "/media" },
-                ],
+                pathMappings: existingMappings,
               }],
               mappings: [],
             }}
@@ -767,56 +784,32 @@ Deno.test("optional library verification waits for Advanced and ignores stale re
       );
     });
     const submit = () => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
-    await act(submit);
+    await act(async () => {
+      submit();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
     assertEquals(calls, 0, "normal connection setup does not inspect storage");
-    await act(() =>
-      renderer!.root.findAllByType("details").find((element) => element.props.onToggle)!.props
-        .onToggle({ currentTarget: { open: true } })
-    );
-    const saveButton = () =>
-      renderer!.root.findAllByType("button").find((button) => button.props.type === "submit");
+    assertEquals(renderer!.root.findAllByType(StorageCleanupStep).length, 0);
     assertEquals(
-      saveButton()?.props.disabled,
-      false,
-      "optional verification does not block saving credentials",
+      JSON.stringify(renderer!.toJSON()).includes("Host discovery identifies paths"),
+      true,
     );
+    const saveButton = renderer!.root.findAllByType("button").find((button) =>
+      button.props.type === "submit"
+    );
+    assertEquals(saveButton?.props.disabled, false);
+    assertEquals(calls, 0);
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 650));
+      submit();
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    assertEquals(calls, 1);
-    assertEquals(saveButton()?.props.disabled, false, "optional verification remains advisory");
-    await act(() =>
-      renderer!.root.findByType(StorageCleanupStep).props.onUpdate({
-        libraryArrPath: "/other/library",
-      })
-    );
-    await act(() => first.resolve({ status: "verified", reason: "Stale verification" }));
-    assertEquals(JSON.stringify(renderer!.toJSON()).includes("Stale verification"), false);
-    assertEquals(
-      saveButton()?.props.disabled,
-      false,
-      "save remains available without verified optional storage",
-    );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 650));
-    });
-    assertEquals(calls, 2);
-    await act(() => second.resolve({ status: "unverified", reason: "No current sample" }));
-    assertEquals(JSON.stringify(renderer!.toJSON()).includes("No current sample"), true);
-    const save = renderer!.root.findAllByType("button").find((button) =>
-      button.children.join("").includes("Test and save")
-    );
-    assertEquals(save?.props.disabled, false);
-    await act(() => renderer!.root.findByType(StorageCleanupStep).props.onVerificationRetry());
-    assertEquals(
-      saveButton()?.props.disabled,
-      false,
-      "rechecking optional storage does not block connection save",
-    );
+    assertEquals(updates.length, 1);
+    assertEquals(updates[0].pathMappings, existingMappings);
   } finally {
     if (renderer) await act(() => renderer!.unmount());
     queryClient.clear();
     api.arr.verifyStorage = originalVerify;
+    api.arr.updateInstance = originalUpdate;
     api.arr.rootFolders = originalRoots;
     api.qbittorrent.storagePaths = originalStorage;
     globals.IS_REACT_ACT_ENVIRONMENT = oldEnvironment;

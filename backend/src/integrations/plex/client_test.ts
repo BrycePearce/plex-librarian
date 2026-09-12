@@ -1,6 +1,113 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import { extractExternalIds, mapActiveSessions, PlexClient } from './client.ts';
 
+function deletionInventoryEntries(start: number, count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ratingKey: String(start + index),
+    grandparentRatingKey: 'show',
+    parentRatingKey: 'season',
+    Media: [{ Part: [{ file: `/tv/Show/${start + index}.mkv` }] }],
+  }));
+}
+
+Deno.test('deletion inventory rejects missing, invalid and partial first-page coverage', async () => {
+  for (
+    const container of [
+      {},
+      { totalSize: -1 },
+      { totalSize: 1.5 },
+      { totalSize: '0' },
+      { totalSize: 2 },
+      { totalSize: 2, Metadata: deletionInventoryEntries(0, 1) },
+      { totalSize: 0, Metadata: deletionInventoryEntries(0, 1) },
+      { totalSize: 1, Metadata: {} },
+    ]
+  ) {
+    const mockFetch = (() =>
+      Promise.resolve(Response.json({ MediaContainer: container }))) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'token', undefined, mockFetch);
+    await assertRejects(
+      () => client.libraryFileEntries('7', true).next(),
+      Error,
+      'deletion inventory',
+    );
+  }
+});
+
+Deno.test('deletion inventory rejects missing or short later pages and changed totals', async () => {
+  for (
+    const later of [
+      { totalSize: 301 },
+      { totalSize: 301, Metadata: [] },
+      { Metadata: deletionInventoryEntries(300, 1) },
+      { totalSize: 300, Metadata: deletionInventoryEntries(300, 1) },
+      { totalSize: 302, Metadata: deletionInventoryEntries(300, 1) },
+    ]
+  ) {
+    const mockFetch = ((_input, init) => {
+      const start = Number(new Headers(init?.headers).get('X-Plex-Container-Start'));
+      return Promise.resolve(Response.json({
+        MediaContainer: start === 0
+          ? { totalSize: 301, Metadata: deletionInventoryEntries(0, 300) }
+          : later,
+      }));
+    }) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'token', undefined, mockFetch);
+    const pages = client.libraryFileEntries('7', true);
+    assertEquals((await pages.next()).value?.length, 300);
+    await assertRejects(() => pages.next(), Error, 'deletion inventory');
+  }
+});
+
+Deno.test('deletion inventory streams complete pages with bounded concurrency and final retained entries', async () => {
+  const total = 6001;
+  let active = 0, peak = 0, count = 0;
+  const requests: number[] = [];
+  const mockFetch = (async (input, init) => {
+    assertEquals(new URL(String(input)).searchParams.get('type'), '4');
+    const headers = new Headers(init?.headers);
+    assertEquals(headers.get('X-Plex-Container-Size'), '300');
+    const start = Number(headers.get('X-Plex-Container-Start'));
+    requests.push(start);
+    peak = Math.max(peak, ++active);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    active--;
+    return Response.json({
+      MediaContainer: {
+        totalSize: total,
+        Metadata: deletionInventoryEntries(start, Math.min(300, total - start)),
+      },
+    });
+  }) as typeof fetch;
+  const client = new PlexClient('http://fixture.invalid', 'token', undefined, mockFetch);
+  const pages = client.libraryFileEntries('7', true);
+  const first = await pages.next();
+  assertEquals(requests, [0]);
+  count += first.value!.length;
+  let last;
+  for await (const page of pages) {
+    count += page.length;
+    last = page.at(-1);
+  }
+  assertEquals(count, total);
+  assertEquals(last, {
+    ratingKey: '6000',
+    showRatingKey: 'show',
+    seasonRatingKey: 'season',
+    path: '/tv/Show/6000.mkv',
+  });
+  const concurrency = Math.max(1, parseInt(Deno.env.get('FETCH_CONCURRENCY') ?? '', 10) || 8);
+  assertEquals(peak <= concurrency, true);
+  assertEquals(requests.length, 21);
+});
+
+Deno.test('deletion inventory accepts an explicitly empty library', async () => {
+  const mockFetch =
+    (() => Promise.resolve(Response.json({ MediaContainer: { totalSize: 0 } }))) as typeof fetch;
+  const client = new PlexClient('http://fixture.invalid', 'token', undefined, mockFetch);
+  assertEquals(await client.libraryFileEntries('7', false).next(), { value: [], done: false });
+});
+
 Deno.test('libraryLocations reads roots from the section listing, not the navigation endpoint', async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];

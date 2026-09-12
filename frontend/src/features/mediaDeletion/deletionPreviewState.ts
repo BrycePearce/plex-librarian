@@ -8,7 +8,8 @@ export function arrDestinationState(
   preview: DownloadCleanupPreviewResponse | undefined,
 ) {
   return {
-    visible: preview?.coordinatedConfigured === true,
+    visible: preview?.coordinatedConfigured === true &&
+      preview.items.some((item) => item.arrStatus === "resolved" || !!item.arrTargets?.length),
     problems: preview?.items.filter((item) => item.arrStatus !== "resolved") ??
       [],
   };
@@ -40,7 +41,8 @@ export function downloadCleanupDestinationVisible(
   preview: DownloadCleanupPreviewResponse | undefined,
   _allowOrphanOnly = false,
 ): boolean {
-  return preview?.downloadClientsConfigured === true;
+  return preview?.downloadClientsConfigured === true &&
+    preview.items.some((item) => item.downloadJobs.length > 0 || !!item.qbittorrentPathAccessJob);
 }
 
 export function eligibleDownloadCleanupItems(
