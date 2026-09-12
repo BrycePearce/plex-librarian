@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from '@std/assert';
+import { assertEquals, assertNotEquals, assertStringIncludes } from '@std/assert';
 import { resolve } from '@std/path';
 import type { ArrRootFoldersResponse } from '@plex-librarian/shared/types.ts';
 
@@ -32,6 +32,87 @@ withTransaction((client) => {
 const { createApp } = await import('../../app.ts');
 const app = createApp();
 const originalFetch = globalThis.fetch;
+
+Deno.test('qBittorrent credential editing preserves saved mapping evidence and changes configuration identity', async () => {
+  const { getQbittorrentTargets } = await import('../qbittorrent/connections.ts');
+  withTransaction((client) => {
+    client.exec(`
+      INSERT INTO qbittorrent_instances
+        (id, server_id, name, url, username, password, created_at, updated_at)
+        VALUES (13, 1, 'Saved QB', 'http://qbit-edit:8080', 'old-user', 'old-password', 1, 1);
+      INSERT INTO qbittorrent_path_mappings
+        (server_id, instance_key, qbittorrent_path, local_path, case_sensitive, revision,
+         validation_qbittorrent_path, validation_local_path, validation_size,
+         validated_at, created_at, updated_at)
+        VALUES (1, 'db:13', '/downloads', '/saved/downloads', 1, 7,
+                '/downloads/sample.mkv', '/saved/downloads/sample.mkv', 123, 2, 1, 2);
+    `);
+  });
+  const readMappings = () =>
+    withTransaction((client) =>
+      client.prepare("SELECT * FROM qbittorrent_path_mappings WHERE instance_key = 'db:13'")
+        .values()
+    );
+  const mappingsBefore = readMappings();
+  const targetBefore = (await getQbittorrentTargets(1)).find((target) => target.instanceId === 13)!;
+  let logins = 0;
+  try {
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'http://qbit-edit:8080/api/v2/auth/login') {
+        assertEquals(init?.method, 'POST');
+        assertEquals(String(init?.body), 'username=new-user&password=new-password');
+        logins++;
+        return Promise.resolve(new Response('Ok.', { headers: { 'set-cookie': 'SID=test' } }));
+      }
+      if (!new Headers(init?.headers).has('Cookie')) {
+        assertEquals(url, 'http://qbit-edit:8080/api/v2/app/version');
+        return Promise.resolve(new Response('Forbidden', { status: 403 }));
+      }
+      if (url === 'http://qbit-edit:8080/api/v2/app/version') {
+        return Promise.resolve(new Response('v5.1.2'));
+      }
+      if (url === 'http://qbit-edit:8080/api/v2/torrents/info?limit=1') {
+        return Promise.resolve(Response.json([]));
+      }
+      assertEquals(url, 'http://qbit-edit:8080/api/v2/app/webapiVersion');
+      return Promise.resolve(new Response('2.11.4'));
+    }) as typeof fetch;
+    const response = await app.request('/api/integrations/qbittorrent/instances/13', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Edited QB',
+        url: 'http://qbit-edit:8080',
+        username: 'new-user',
+        password: 'new-password',
+      }),
+    });
+    assertEquals(response.status, 200, await response.clone().text());
+    assertEquals(logins, 1);
+    assertEquals(readMappings(), mappingsBefore);
+    const targetAfter = (await getQbittorrentTargets(1)).find((target) =>
+      target.instanceId === 13
+    )!;
+    assertEquals(targetAfter.instanceKey, targetBefore.instanceKey);
+    assertEquals(targetAfter.pathMappings, targetBefore.pathMappings);
+    assertEquals(targetAfter.pathMappings?.[0].revision, 7);
+    assertNotEquals(targetAfter.configurationIdentity, targetBefore.configurationIdentity);
+    withTransaction((client) => {
+      assertEquals(
+        client.prepare('SELECT name, username, password FROM qbittorrent_instances WHERE id = 13')
+          .value(),
+        ['Edited QB', 'new-user', 'new-password'],
+      );
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    withTransaction((client) => {
+      client.exec("DELETE FROM qbittorrent_path_mappings WHERE instance_key = 'db:13'");
+      client.exec('DELETE FROM qbittorrent_instances WHERE id = 13');
+    });
+  }
+});
 
 Deno.test('storage verification validates instance ownership and allows an unavailable sample', async () => {
   const request = (body: unknown) =>

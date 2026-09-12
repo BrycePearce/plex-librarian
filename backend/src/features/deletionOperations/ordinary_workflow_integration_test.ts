@@ -317,6 +317,16 @@ Deno.test('host discovery fixture publishes from zero roots, preserves semantic 
       roots.find((r) => r.serviceKey === 'plex:movies'),
     );
     const status = discovery.hostDiscoveryStatus(1);
+    assertEquals(status.stale, false);
+    const checkedAt = withTransaction((c) =>
+      c.prepare('SELECT checked_at FROM host_discovery WHERE server_id = 1').value<[number]>()![0]
+    );
+    withTransaction((c) => c.exec('UPDATE host_discovery SET checked_at = 0 WHERE server_id = 1'));
+    assertEquals(discovery.hostDiscoveryStatus(1).stale, true);
+    assert(discovery.hostDiscoveryStatus(1).services.every((s) => s.state === 'needs_attention'));
+    withTransaction((c) =>
+      c.prepare('UPDATE host_discovery SET checked_at = ? WHERE server_id = 1').run(checkedAt)
+    );
     assert(
       status.services.every((s) => s.connected && s.state === 'ready'),
       JSON.stringify({

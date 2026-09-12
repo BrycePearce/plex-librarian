@@ -2,10 +2,56 @@
 import { assert, assertEquals } from "@std/assert";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TestRenderer, { act } from "react-test-renderer";
-import { discoveryRefreshInterval, ServiceStorageSetup } from "./ServiceStorageSetup.tsx";
+import {
+  discoveryRefreshInterval,
+  discoveryServiceSummary,
+  ServiceStorageSetup,
+} from "./ServiceStorageSetup.tsx";
 import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections.tsx";
 import { api } from "../../lib/api.ts";
 import type { ServiceStorageSettings } from "../../../../shared/serviceStorage.ts";
+
+Deno.test("mapping indicators fail closed for stale, missing and disconnected evidence", () => {
+  const endpoint = {
+    key: "arr:1",
+    name: "Sonarr",
+    configurationIdentity: "id",
+    libraryKeys: [],
+    roots: [],
+  };
+  const status = {
+    enabled: true,
+    checking: false,
+    services: [{ serviceKey: "arr:1", name: "Sonarr", connected: true, state: "ready" as const }],
+  };
+  assertEquals(discoveryServiceSummary(endpoint, status), {
+    connected: true,
+    label: "Mapped",
+    lit: true,
+  });
+  assertEquals(discoveryServiceSummary(endpoint, { ...status, stale: true }).label, "Stale");
+  assertEquals(discoveryServiceSummary(endpoint, { ...status, stale: true }).lit, false);
+  assertEquals(
+    discoveryServiceSummary(endpoint, { ...status, stale: true, checking: true }).label,
+    "Discovering",
+  );
+  assertEquals(
+    discoveryServiceSummary(endpoint, { ...status, reason: "Helper missing" }).label,
+    "Unavailable",
+  );
+  assertEquals(discoveryServiceSummary(endpoint, { ...status, services: [] }).lit, false);
+  assertEquals(
+    discoveryServiceSummary(endpoint, {
+      ...status,
+      services: [{ ...status.services[0], connected: false }],
+    }).lit,
+    false,
+  );
+  assertEquals(
+    discoveryServiceSummary(endpoint, { ...status, enabled: false }).label,
+    "Not enabled",
+  );
+});
 
 Deno.test("discovery status keeps refreshing through ready, failure and recovery until disabled", () => {
   const status: NonNullable<ServiceStorageSettings["discovery"]> = {
@@ -83,6 +129,26 @@ Deno.test("automatic setup has no manual editor even in details and never labels
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     assert(JSON.stringify(renderer!.toJSON()).includes("Connected"));
+    await act(async () => {
+      client.setQueryData(["service-storage"], {
+        ...data,
+        discovery: {
+          enabled: true,
+          checking: false,
+          stale: true,
+          services: [{
+            serviceKey: "plex:tv",
+            name: "Empty TV library",
+            connected: true,
+            state: "needs_attention",
+          }],
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert(JSON.stringify(renderer!.toJSON()).includes("Stale"));
+    assert(JSON.stringify(renderer!.toJSON()).includes("Connection previously checked"));
+    assert(!JSON.stringify(renderer!.toJSON()).includes("Connected"));
     data.discovery = {
       enabled: true,
       checking: false,
@@ -165,7 +231,7 @@ for (const fails of [false, true]) {
       const text = () => JSON.stringify(renderer!.toJSON());
       assert(text().includes("Enable host discovery"));
       assert(text().includes("Not enabled"));
-      assert(!text().includes("Needs attention"));
+      assert(!text().includes("Unavailable"));
       assert(!text().includes("report field"));
       assert(!text().includes("One confirmation"));
       assertEquals(renderer!.root.findAllByType("input").length, 0);
@@ -187,8 +253,8 @@ for (const fails of [false, true]) {
         assert(text().includes("Check the helper installation and shared directory."));
       } else {
         assert(text().includes("Connected"));
-        assert(text().includes("Ready"));
-        assert(text().includes("Needs attention"));
+        assert(text().includes("Mapped"));
+        assert(text().includes("Unavailable"));
         assert(!text().includes("Setup ready"));
         assert(!text().includes("Ambiguous container ownership"));
         await act(() =>
@@ -285,16 +351,16 @@ Deno.test("successful explicit QB test refreshes mounted discovery status withou
       );
     });
     await flush();
-    assert(JSON.stringify(renderer!.toJSON()).includes("Needs attention"));
+    assert(JSON.stringify(renderer!.toJSON()).includes("Unavailable"));
     await act(() =>
       renderer!.root.findAllByType("button").find((b) => b.children.includes("Test"))!.props
         .onClick()
     );
     await flush();
     assert(reads >= 2);
-    assert(JSON.stringify(renderer!.toJSON()).includes("Ready"));
-    assert(!JSON.stringify(renderer!.toJSON()).includes("Needs attention"));
-    assert(JSON.stringify(renderer!.toJSON()).includes("Discovery refreshes automatically"));
+    assert(JSON.stringify(renderer!.toJSON()).includes("Mapped"));
+    assert(!JSON.stringify(renderer!.toJSON()).includes("Unavailable"));
+    assert(JSON.stringify(renderer!.toJSON()).includes("Mappings refresh automatically"));
     assert(!JSON.stringify(renderer!.toJSON()).includes("Retry discovery"));
     await act(() =>
       renderer!.root.findByType("details").props.onToggle({ currentTarget: { open: true } })

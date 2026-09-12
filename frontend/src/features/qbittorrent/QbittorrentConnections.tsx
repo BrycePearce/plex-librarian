@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { CircleHelp, Download, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { QbittorrentInstance } from "../../lib/api.ts";
@@ -34,39 +34,6 @@ export function QbittorrentConnections({
       ]);
     },
   });
-  const [mapping, setMapping] = useState({
-    instanceKey: "",
-    qbittorrentPath: "",
-    localPath: "",
-    validationQbittorrentPath: "",
-    validationLocalPath: "",
-    validationSize: "",
-    caseSensitive: true,
-  });
-  const saveMapping = useMutation({
-    mutationFn: () =>
-      api.qbittorrent.createPathMapping({
-        ...mapping,
-        validationSize: Number(mapping.validationSize),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.qbittorrentIntegrations.all });
-      setMapping((current) => ({
-        ...current,
-        qbittorrentPath: "",
-        localPath: "",
-        validationQbittorrentPath: "",
-        validationLocalPath: "",
-        validationSize: "",
-      }));
-    },
-  });
-  const removeMapping = useMutation({
-    mutationFn: api.qbittorrent.deletePathMapping,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.qbittorrentIntegrations.all }),
-  });
-
   useEffect(() => {
     if (!test.isSuccess) return;
     const timeout = globalThis.setTimeout(() => test.reset(), 2_000);
@@ -194,94 +161,40 @@ export function QbittorrentConnections({
           </button>
         </div>
       ))}
-      {data && data.targets.length > 0 && (
-        <details className="mt-4 rounded-xl border border-base-300 bg-base-200/25 p-4">
-          <summary className="cursor-pointer text-sm font-semibold">
-            Advanced: optional path mappings
-          </summary>
-          <p className="mt-1 text-xs text-base-content/55">
-            Map qBittorrent container paths to this container using one exact existing file. This
-            enables verified cleanup without Sonarr history; connection credentials remain
-            unchanged.
+      {data && (data.targets.length > 0 || data.pathMappings.length > 0) && (
+        <div className="mt-4 text-xs text-base-content/55">
+          <p>
+            Host discovery checks storage relationships automatically. If a layout is unresolved,
+            review Host discovery and the affected deletion preview. A successful connection test
+            does not confirm that a selected deletion is eligible.
           </p>
-          <p className="mt-2 text-xs text-base-content/55">
-            Current deletion uses these mappings only when needed to protect live torrents. Missing
-            access or unresolved ownership blocks affected media deletion.
-          </p>
-          {data.pathMappings.map((item) => (
-            <div key={item.id} className="mt-2 flex items-center gap-2 text-xs">
-              <code>{item.qbittorrentPath}</code>
-              <span>→</span>
-              <code>{item.localPath}</code>
-              <span className="badge badge-xs badge-outline">rev {item.revision}</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs ml-auto text-error"
-                onClick={() =>
-                  removeMapping.mutate(item.id)}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <select
-              className="select select-bordered select-sm sm:col-span-2"
-              value={mapping.instanceKey}
-              onChange={(event) => setMapping({ ...mapping, instanceKey: event.target.value })}
-            >
-              <option value="">Choose qBittorrent target</option>
-              {data.targets.map((target) => (
-                <option key={target.instanceKey} value={target.instanceKey}>{target.name}</option>
+          {data.pathMappings.length > 0 && (
+            <details className="mt-3 rounded-xl border border-base-300 bg-base-200/25 p-4">
+              <summary className="cursor-pointer text-sm font-semibold">
+                Saved path mappings
+              </summary>
+              <p className="mt-2">
+                These existing overrides remain in use where applicable and are preserved when
+                editing connection credentials.
+              </p>
+              {data.pathMappings.map((item) => (
+                <div key={item.id} className="mt-2 flex flex-wrap items-center gap-2">
+                  <span>
+                    {data.targets.find((target) =>
+                      target.instanceKey === item.instanceKey
+                    )?.name ??
+                      item.instanceKey}
+                  </span>
+                  <code className="break-all">{item.qbittorrentPath}</code>
+                  <span>→</span>
+                  <code className="break-all">{item.localPath}</code>
+                  <span className="badge badge-xs badge-outline">rev {item.revision}</span>
+                  <span>{item.caseSensitive ? "Case-sensitive" : "Case-insensitive"}</span>
+                </div>
               ))}
-            </select>
-            {([
-              ["qbittorrentPath", "qBittorrent root, e.g. /downloads"],
-              ["localPath", "Local root, e.g. /downloads"],
-              ["validationQbittorrentPath", "Exact qBittorrent validation file"],
-              ["validationLocalPath", "Exact local validation file"],
-            ] as const).map(([key, placeholder]) => (
-              <input
-                key={key}
-                className="input input-bordered input-sm"
-                placeholder={placeholder}
-                value={mapping[key]}
-                onChange={(event) => setMapping({ ...mapping, [key]: event.target.value })}
-              />
-            ))}
-            <input
-              className="input input-bordered input-sm"
-              inputMode="numeric"
-              placeholder="Exact validation size in bytes"
-              value={mapping.validationSize}
-              onChange={(event) => setMapping({ ...mapping, validationSize: event.target.value })}
-            />
-            <label className="label cursor-pointer justify-start gap-2 text-xs">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm"
-                checked={mapping.caseSensitive}
-                onChange={(event) =>
-                  setMapping({ ...mapping, caseSensitive: event.target.checked })}
-              />
-              qBittorrent paths are case-sensitive
-            </label>
-          </div>
-          {saveMapping.isError && (
-            <p className="mt-2 text-xs text-error">{saveMapping.error.message}</p>
+            </details>
           )}
-          <button
-            type="button"
-            className="btn btn-primary btn-sm mt-3"
-            disabled={saveMapping.isPending || !mapping.instanceKey || !mapping.qbittorrentPath ||
-              !mapping.localPath || !mapping.validationQbittorrentPath ||
-              !mapping.validationLocalPath || Number(mapping.validationSize) <= 0}
-            onClick={() => saveMapping.mutate()}
-          >
-            {saveMapping.isPending && <span className="loading loading-spinner loading-xs" />}
-            Add validated mapping
-          </button>
-        </details>
+        </div>
       )}
       <div className="min-h-5">
         {test.isError && <p className="mt-1 text-xs text-error">{test.error.message}</p>}

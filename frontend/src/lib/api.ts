@@ -779,10 +779,6 @@ export const api = {
         method: "POST",
         body: JSON.stringify(mapping),
       }),
-    deletePathMapping: (id: number) =>
-      apiFetch<{ ok: true }>(`/integrations/qbittorrent/path-mappings/${id}`, {
-        method: "DELETE",
-      }),
   },
   seerr: {
     get: () => apiFetch<SeerrIntegrationSettings>("/integrations/seerr"),

@@ -403,6 +403,7 @@ export function hostDiscoveryStatus(serverId: number): HostDiscoveryStatus {
     return {
       enabled: !!row,
       checking: running.has(serverId),
+      stale: !!row && stale,
       reason: row?.reason ?? undefined,
       services: services.map((s) =>
         stale

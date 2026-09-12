@@ -68,6 +68,7 @@ export interface ServiceStorageSettings {
 export interface HostDiscoveryStatus {
   enabled: boolean;
   checking: boolean;
+  stale?: boolean;
   reason?: string;
   services: Array<
     {

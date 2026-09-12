@@ -1,14 +1,34 @@
 import { useState } from "react";
+import { Clapperboard, Download, Play, Server } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api.ts";
 import {
   type HostDiscoveryStatus,
   type ServicePathRoot,
+  type ServiceStorageEndpoint,
 } from "../../../../shared/serviceStorage.ts";
 
 export function discoveryRefreshInterval(status?: HostDiscoveryStatus): number | false {
   if (!status?.enabled) return false;
   return status.checking ? 2000 : 30_000;
+}
+
+export function discoveryServiceSummary(
+  endpoint: ServiceStorageEndpoint,
+  status?: HostDiscoveryStatus,
+) {
+  const service = status?.services.find((item) => item.serviceKey === endpoint.key);
+  const connected = service?.connected ?? !!endpoint.connectionTestedAt;
+  const label = !status?.enabled
+    ? "Not enabled"
+    : status.checking
+    ? "Discovering"
+    : status.stale
+    ? "Stale"
+    : status.reason || service?.state !== "ready"
+    ? "Unavailable"
+    : "Mapped";
+  return { connected, label, lit: connected && label === "Mapped" };
 }
 
 export function ServiceStorageSetup() {
@@ -46,7 +66,7 @@ export function ServiceStorageSetup() {
   }
   const status = query.data.discovery;
   const endpoints = query.data.endpoints.filter((endpoint) => endpoint.supportedMedia !== false);
-  const needsAttention = !!status?.reason ||
+  const needsAttention = !!status?.reason || !!status?.stale ||
     endpoints.some((endpoint) =>
       status?.services.find((service) => service.serviceKey === endpoint.key)?.state !== "ready"
     );
@@ -62,30 +82,53 @@ export function ServiceStorageSetup() {
     </button>
   );
   return (
-    <section className="space-y-3" aria-label="Host discovery">
+    <section className="space-y-3 border-t border-base-content/10 pt-5" aria-label="Host discovery">
       <h3 className="font-semibold">Host discovery</h3>
-      <p className="text-sm">
-        Run Plex and your connected services on the same Unraid or Linux Docker host. Install the
-        helper, then enable discovery once. Different container paths are supported. Sonarr/Radarr
-        and qBittorrent remain optional and unchecked when deleting.
+      <p className="text-xs leading-relaxed text-base-content/55">
+        Automatic storage mapping for one Unraid or Linux Docker host. Different container paths are
+        supported. Sonarr/Radarr and qBittorrent remain optional and unchecked when deleting.
       </p>
-      {endpoints.map((endpoint) => {
-        const service = status?.services.find((s) => s.serviceKey === endpoint.key);
-        return (
-          <p key={endpoint.key}>
-            <strong>{endpoint.name}</strong> ·{" "}
-            {(service?.connected ?? !!endpoint.connectionTestedAt)
-              ? "Connected"
-              : "Connection not tested"} · Discovery: {!status?.enabled
-              ? "Not enabled"
-              : status.checking
-              ? "Checking"
-              : service?.state === "ready"
-              ? "Ready"
-              : "Needs attention"}
-          </p>
-        );
-      })}
+      <ul className="grid gap-2 sm:grid-cols-2" aria-label="Service mapping status">
+        {endpoints.map((endpoint) => {
+          const summary = discoveryServiceSummary(endpoint, status);
+          const Icon = endpoint.key.startsWith("qb:")
+            ? Download
+            : endpoint.key.startsWith("plex:")
+            ? Play
+            : endpoint.key.startsWith("arr:")
+            ? Clapperboard
+            : Server;
+          return (
+            <li
+              key={endpoint.key}
+              className="flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/35 p-3"
+            >
+              <span
+                className={`grid size-9 shrink-0 place-items-center rounded-lg ${
+                  summary.lit ? "bg-primary/10 text-primary" : "bg-base-300/40 text-base-content/35"
+                }`}
+              >
+                <Icon className="size-4" aria-hidden="true" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium break-words">{endpoint.name}</p>
+                <p className="text-xs text-base-content/50">
+                  {summary.connected
+                    ? status?.stale ? "Connection previously checked" : "Connected"
+                    : "Connection not tested"}
+                </p>
+              </div>
+              <span
+                className={`badge badge-sm shrink-0 ${
+                  summary.lit ? "badge-primary badge-outline" : "badge-ghost"
+                }`}
+              >
+                {summary.label}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
       {status?.checking && <p role="status">Checking host and connected services…</p>}
       {!status?.enabled && (
         <p className="text-sm">
@@ -114,11 +157,16 @@ export function ServiceStorageSetup() {
         <p role="status" className="text-sm">
           {needsAttention
             ? "Some services need attention. Retry discovery, or open Discovery details."
-            : "Discovery refreshes automatically. Each service’s status is shown above."}
+            : "Mappings refresh automatically."}
         </p>
       )}
-      <details open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
-        <summary>Discovery details</summary>
+      <details
+        className="rounded-xl border border-base-300 bg-base-200/25 p-3"
+        open={detailsOpen}
+        onToggle={(event) =>
+          setDetailsOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer text-sm font-medium">Discovery details</summary>
         {detailsOpen && (
           <>
             {!showAction && discoveryButton}
@@ -149,7 +197,9 @@ export function ServiceStorageSetup() {
               </button>
             )}
             {query.data.endpoints.map((endpoint) => {
-              const service = status?.services.find((s) => s.serviceKey === endpoint.key);
+              const service = status?.services.find((s) =>
+                s.serviceKey === endpoint.key
+              );
               const saved = query.data.relationships.filter((r) => r.serviceKey === endpoint.key);
               return (
                 <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">
