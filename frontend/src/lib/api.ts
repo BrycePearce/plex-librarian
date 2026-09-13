@@ -258,18 +258,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  serviceStorage: {
-    discovery: (action: "enable" | "retry" | "disable") =>
-      apiFetch<import("../../../shared/serviceStorage.ts").HostDiscoveryStatus>(
-        `/settings/service-storage/discovery/${action}`,
-        { method: "POST" },
+  serviceDeletions: {
+    preview: (choices: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionChoices) =>
+      apiFetch<import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionPreview>(
+        "/service-deletions/preview",
+        { method: "POST", body: JSON.stringify(choices) },
       ),
-    get: (discover = false) =>
-      apiFetch<import("../../../shared/serviceStorage.ts").ServiceStorageSettings>(
-        `/settings/service-storage?discover=${discover}`,
+    create: (request: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionRequest) =>
+      apiFetch<import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionCreated>(
+        "/service-deletions",
+        { method: "POST", body: JSON.stringify(request) },
       ),
-    remove: (id: number) =>
-      apiFetch<{ ok: true }>(`/settings/service-storage/${id}`, { method: "DELETE" }),
   },
   auth: {
     status: () => apiFetch<AuthStatus>("/auth/status"),

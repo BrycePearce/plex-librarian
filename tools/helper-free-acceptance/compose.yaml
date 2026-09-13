@@ -1,0 +1,64 @@
+# Bootstrap scaffold, not a completed native acceptance test.
+name: librarian-helper-free-acceptance
+services:
+  initialize:
+    image: alpine:3.22
+    network_mode: none
+    restart: "no"
+    volumes:
+      - ./.runtime:/seed:ro
+      - ./initialize.sh:/initialize.sh:ro
+      - sonarr-config:/sonarr
+      - radarr-config:/radarr
+      - qb-config:/qb
+      - fixture-media:/media
+    entrypoint: ["/bin/sh", "/initialize.sh"]
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment: { PUID: "1000", PGID: "1000", TZ: UTC }
+    ports: ["127.0.0.1:18989:8989"]
+    volumes: ["sonarr-config:/config", "fixture-media:/arr-vault"]
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment: { PUID: "1000", PGID: "1000", TZ: UTC }
+    ports: ["127.0.0.1:17878:7878"]
+    volumes: ["radarr-config:/config", "fixture-media:/movie-vault"]
+  qb:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment: { PUID: "1000", PGID: "1000", TZ: UTC, WEBUI_PORT: "8080" }
+    ports: ["127.0.0.1:18080:8080"]
+    volumes: ["qb-config:/config", "fixture-media:/downloads-root"]
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    environment: { PUID: "1000", PGID: "1000", TZ: UTC, VERSION: docker }
+    ports: ["127.0.0.1:32499:32400"]
+    volumes: ["plex-config:/config", "fixture-media:/plex-library"]
+  librarian:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports: ["127.0.0.1:18288:8080"]
+    volumes: ["librarian-db:/data"]
+    # No media mount, discovery transport, host namespaces or Docker socket.
+networks:
+  default:
+    internal: true
+volumes:
+  sonarr-config:
+  radarr-config:
+  qb-config:
+  plex-config:
+  librarian-db:
+  fixture-media:

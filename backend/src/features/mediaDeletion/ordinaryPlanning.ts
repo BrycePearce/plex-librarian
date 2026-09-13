@@ -10,11 +10,7 @@ import {
   storageContains,
   storagePath,
 } from '../../../../shared/serviceStorage.ts';
-import {
-  assertRootConfigurations,
-  evidenceFingerprint,
-  loadServiceRoots,
-} from './serviceStorage.ts';
+import { assertRootConfigurations, evidenceFingerprint } from './serviceStorage.ts';
 import { appendRemotePath } from './ownership.ts';
 import { activeWholeItemRatingKeys } from './activePlayback.ts';
 import { withTransaction } from '../../db/index.ts';
@@ -103,43 +99,21 @@ interface OrdinaryPlanningInput {
 class MissingDownloadRoot extends Error {
   constructor(readonly serviceKey: string, readonly path: string) {
     super(
-      `Current qBittorrent storage needs discovery refresh for ${serviceKey}. Review Media connections if it remains unavailable.`,
+      `Legacy qBittorrent storage evidence is unavailable for ${serviceKey}. Review this request using service-owned deletion.`,
     );
   }
 }
 
-export async function buildOrdinaryDeletionPlan(
+export function buildOrdinaryDeletionPlan(
   input: OrdinaryPlanningInput,
 ): Promise<OrdinaryDeletionPlan> {
-  try {
-    return await prepareOrdinaryDeletionPlan(input);
-  } catch (error) {
-    if (!(error instanceof MissingDownloadRoot)) throw error;
-    const { refreshMissingDownloadRoot } = await import('../settings/hostDiscovery.ts');
-    await refreshMissingDownloadRoot(input.serverId, error.serviceKey);
-    const roots = await loadServiceRoots(input.serverId);
-    if (
-      !roots.some((root) =>
-        root.serviceKey === error.serviceKey &&
-        storageContains(root.serviceRoot, error.path, root.caseSensitive)
-      )
-    ) throw error;
-    // Rebuild all comparisons and the fingerprint; never patch an accepted plan or
-    // reuse path comparisons made before discovery published a different mapping.
-    return await prepareOrdinaryDeletionPlan({
-      ...input,
-      roots,
-    });
-  }
+  return prepareOrdinaryDeletionPlan(input);
 }
-
 async function prepareOrdinaryDeletionPlan(
   input: OrdinaryPlanningInput,
 ): Promise<OrdinaryDeletionPlan> {
   const { selection, arrSelected, qbSelected } = input;
-  if (qbSelected && input.downloadTargets.length === 0) {
-    throw new Error('qBittorrent is not configured for the selected scope');
-  }
+  // No configured optional QB target does not block applicable service deletions.
   const live = await input.plex.metadataIdentity(selection.ratingKey);
   if (
     !live || live.type !== selection.type || live.title !== selection.title ||

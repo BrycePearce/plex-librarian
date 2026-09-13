@@ -1,4 +1,5 @@
 import { activeLibraryOperation } from '../../services/libraryOperations.ts';
+import { serviceOwnedDecisionExplanation } from '../mediaDeletion/serviceOwnedPlanning.ts';
 import { CURRENT_LOCATION_POLICY_VERSION } from '../../../../shared/deletionPolicy.ts';
 import {
   currentLocationSnapshot,
@@ -721,6 +722,16 @@ export async function enqueueDeletionOperations(
       throw new DeletionConflictError('no deletion targets were found', 404);
     }
     for (const target of input.targets) {
+      if (
+        (target.snapshot as unknown as DurableTargetSnapshot).serviceOwnedPlan?.policyVersion !==
+          4 ||
+        target.snapshot.upgradeHold !== undefined
+      ) {
+        throw new DeletionConflictError(
+          'Legacy deletion requests have retired; obtain a fresh service-owned preview',
+          409,
+        );
+      }
       const storage = (target.snapshot as unknown as DurableTargetSnapshot).versionStorageEvidence;
       if (storage) {
         await assertVersionStorageEvidenceUnchanged(input.serverId, input.libraryKey, storage);
@@ -1032,8 +1043,9 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
     const inPlexReconciliation = phaseRow?.[0] === 'plex_reconciliation';
     const acceptedSnapshot = phaseRow ? JSON.parse(phaseRow[3]) : null;
     if (
-      acceptedSnapshot?.ordinaryPlan &&
-      (acceptedSnapshot.ordinaryAttempts || phaseRow![0] !== 'validating' || phaseRow![1] > 0)
+      (acceptedSnapshot?.ordinaryPlan || acceptedSnapshot?.serviceOwnedPlan) &&
+      (acceptedSnapshot.ordinaryAttempts || acceptedSnapshot.serviceOwnedAttempts ||
+        phaseRow![0] !== 'validating' || phaseRow![1] > 0)
     ) {
       client.prepare(
         "UPDATE deletion_targets SET status='needs_attention',next_retry_at=NULL,error=?,updated_at=? WHERE id=? AND status='running'",
@@ -1378,7 +1390,48 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
         targetResult.upgradeHoldCancellable = snapshot.upgradeHold === UPGRADE_HOLD &&
           targetResult.status === 'needs_attention' &&
           upgradeTargetCanCancel(client, Number(target[0]));
-        if (snapshot.ordinaryPlan !== undefined) {
+        if (snapshot.serviceOwnedPlan && typeof snapshot.serviceOwnedPlan === 'object') {
+          const plan = snapshot
+            .serviceOwnedPlan as import('../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
+          const attempts = (snapshot.serviceOwnedAttempts ?? {}) as Record<
+            string,
+            import('./workflow/serviceOwnedWorkflow.ts').ServiceOwnedAttempt
+          >;
+          targetResult.serviceActionDecisions = plan.retention.decisions.map((decision) => {
+            const action = plan.actions.find((entry) => entry.id === decision.actionId);
+            const attempt = attempts[decision.actionId];
+            const recordComplete = !action?.recordCleanup || action.catalogOnly ||
+              plan.actions.some((entry) =>
+                entry.serviceKey === action.serviceKey && entry.recordId === action.recordId &&
+                attempts[entry.id]?.recordCleanup?.observedAt
+              );
+            const monitoringComplete = action?.service !== 'sonarr' || action.catalogOnly ||
+              action.recordCleanup || (action.episodes ?? []).every((episode) =>
+                attempt?.monitoring?.[String(episode.id)]?.observedAt
+              );
+            const monitoringUncertain = Object.values(attempt?.monitoring ?? {}).some((entry) =>
+              !entry.response && !entry.noRequest
+            );
+            return {
+              ...decision,
+              reason: serviceOwnedDecisionExplanation(action, decision),
+              outcome: decision.state === 'kept'
+                ? 'kept'
+                : decision.state === 'not_applicable'
+                ? 'not_applicable'
+                : monitoringUncertain || attempt?.recordCleanup && !attempt.recordCleanup.response
+                ? 'uncertain'
+                : attempt?.outcome && recordComplete && monitoringComplete
+                ? 'succeeded'
+                : attempt?.response
+                ? 'accepted'
+                : attempt
+                ? 'uncertain'
+                : undefined,
+            };
+          });
+        }
+        if (snapshot.ordinaryPlan !== undefined || snapshot.serviceOwnedPlan !== undefined) {
           targetResult.serviceOwnedDeletion = true;
           targetResult.ordinaryCancellable =
             ['queued', 'waiting_retry', 'needs_attention'].includes(String(targetResult.status)) &&
@@ -1460,6 +1513,7 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
          AND phase = 'validating'
          AND attempt_count = 0
          AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.ordinaryAttempts') IS NULL
+         AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.serviceOwnedAttempts') IS NULL
          AND NOT (
            (
              COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].radarrPathPlan.mode'), 'existing_path') <> 'existing_path'
@@ -1480,7 +1534,8 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
     const held = client.prepare(
       `SELECT id FROM deletion_targets WHERE operation_id = ? AND status IN ('needs_attention','waiting_retry','queued')
        AND json_valid(snapshot) AND (json_extract(snapshot, '$.upgradeHold') = ?
-         OR json_extract(snapshot, '$.ordinaryPlan.policyVersion') = ${CURRENT_LOCATION_POLICY_VERSION})`,
+         OR json_extract(snapshot, '$.ordinaryPlan.policyVersion') = 2
+         OR json_extract(snapshot, '$.serviceOwnedPlan.policyVersion') = 4)`,
     ).values<[number]>(id, UPGRADE_HOLD).filter(([targetId]) =>
       upgradeTargetCanCancel(client, targetId)
     );
@@ -1544,7 +1599,7 @@ export function retryDeletionOperation(
       ? "status = 'completed_with_warning' AND phase <> 'finalizing'"
       : "status = 'needs_attention'";
     const eligiblePredicate =
-      `operation_id = ? AND ${targetStatusSql} AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState') IS NULL`;
+      `operation_id = ? AND ${targetStatusSql} AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.resolutionState') IS NULL`;
     const eligibleParams = [id];
     const matching = client
       .prepare(`SELECT COUNT(*) FROM deletion_targets WHERE ${eligiblePredicate}`)
@@ -1592,6 +1647,7 @@ export function recheckPlexReconciliationAfterSync(
          AND (? IS NULL OR o.library_key = ?)
          AND t.phase = 'plex_reconciliation'
          AND json_extract(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
+         AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.upgradeHold') IS NULL
          AND t.status IN ('needs_attention','completed_with_warning')
          AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL
          AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL
@@ -1630,7 +1686,7 @@ export function recheckPlexReconciliationAfterSync(
              updated_at = ?
          WHERE operation_id = ?
            AND phase = 'plex_reconciliation'
-           AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
+           AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') IS NULL
            AND status IN ('needs_attention','completed_with_warning')
            AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL
            AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationSyncBarrier') IS NULL
@@ -1675,7 +1731,7 @@ export function dismissDeletionOperation(id: string, serverId: number): boolean 
     const targets = client.prepare(
       `SELECT id, target_kind FROM deletion_targets
        WHERE operation_id = ?
-         AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
+         AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') IS NULL
          AND (
            status = 'needs_attention'
            OR (status = 'completed_with_warning' AND phase <> 'finalizing')

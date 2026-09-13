@@ -1,0 +1,15 @@
+# Optional fresh-test provisioning egress and Docker Desktop host-port access.
+# Use alongside compose.yaml from the first start; never use production configs.
+services:
+  sonarr:
+    networks: [default, provisioning]
+  radarr:
+    networks: [default, provisioning]
+  qb:
+    networks: [default, provisioning]
+  plex:
+    networks: [default, provisioning]
+  librarian:
+    networks: [default, provisioning]
+networks:
+  provisioning: {}

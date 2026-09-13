@@ -251,7 +251,7 @@ Deno.test("automatic connection setup preserves saved paths without a local acce
     assertEquals(rendered.includes("Plex Librarian library root"), false);
     assertEquals(rendered.includes("Plex Librarian download root"), false);
     assertEquals(
-      JSON.stringify(renderer!.toJSON()).includes("Host discovery identifies paths"),
+      JSON.stringify(renderer!.toJSON()).includes("Deletion reviews check the selected media"),
       true,
     );
     const saveButton = renderer!.root.findAllByType("button").find((button) =>

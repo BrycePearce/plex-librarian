@@ -228,6 +228,7 @@ Deno.test('direct restart recovery holds missing policies and only requeues expl
           ratingKey: String(id),
           libraryKey: 'movies',
           currentLocationPolicyVersion: policy,
+          ...(policy ? { serviceOwnedPlan: { policyVersion: 4 } } : {}),
         }),
       );
     }
@@ -348,6 +349,105 @@ Deno.test('known older policy preserves cancelled/completed work and attempted r
       client.prepare('SELECT COUNT(*) FROM media_version_reservations WHERE target_id >= 100')
         .value(),
       [4],
+    );
+  });
+});
+
+Deno.test('retirement mode holds current-location legacy versions and ordinary policies without replay or dismissal', () => {
+  const variants = [
+    { kind: 'whole_item', ordinaryPlan: { policyVersion: 2 } },
+    { kind: 'whole_item', ordinaryPlan: { policyVersion: 3 } },
+    { kind: 'movie_version' },
+    { kind: 'episode_version' },
+  ];
+  withTransaction((client) => {
+    for (const [index, variant] of variants.entries()) {
+      const id = 200 + index;
+      const operation = `retirement-${index}`;
+      const { kind, ...plan } = variant;
+      client.prepare(
+        "INSERT INTO deletion_operations (id,client_request_id,request_hash,server_id,library_key,kind,status,target_count,created_at,updated_at) VALUES (?,?,?,1,'movies',?,'running',1,1,1)",
+      ).run(operation, operation, operation, kind);
+      client.prepare(
+        "INSERT INTO deletion_targets (id,operation_id,ordinal,target_kind,target_key,title,snapshot,status,phase,plex_attempt_count,created_at,updated_at) VALUES (?,?,0,?,?,'Legacy','{}','running',?,?,1,1)",
+      ).run(
+        id,
+        operation,
+        kind,
+        operation,
+        index === 0 ? 'validating' : 'plex_reconciliation',
+        index === 0 ? 0 : 1,
+      );
+      client.prepare('UPDATE deletion_targets SET snapshot=? WHERE id=?').run(
+        JSON.stringify({
+          currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
+          ratingKey: operation,
+          libraryKey: 'movies',
+          ...plan,
+          ...(index === 0 ? {} : { plexAttemptedAt: 123 }),
+        }),
+        id,
+      );
+      client.prepare(
+        "INSERT INTO media_version_reservations (server_id,media_kind,media_id,rating_key,operation_id,target_id,created_at) VALUES (1,'movie',?,?,?,?,1)",
+      ).run(id, operation, operation, id);
+    }
+    holdLegacyDeletionTargets(client, 300, false);
+    assertEquals(
+      client.prepare('SELECT status FROM deletion_targets WHERE id>=200 ORDER BY id').values(),
+      variants.map(() => ['needs_attention']),
+    );
+  });
+  for (const index of variants.keys()) {
+    assertEquals(retryDeletionOperation(`retirement-${index}`, 1), false);
+    assertEquals(dismissDeletionOperation(`retirement-${index}`, 1), false);
+  }
+  assertEquals(recheckPlexReconciliationAfterSync(1, 'movies'), 0);
+  withTransaction((client) => {
+    recoverInterruptedDeletionWork(client, 301);
+    assertEquals(
+      client.prepare('SELECT status FROM deletion_targets WHERE id>=200 ORDER BY id').values(),
+      variants.map(() => ['needs_attention']),
+    );
+    for (const id of [201, 202, 203]) {
+      const [raw, attempts] = client.prepare(
+        'SELECT snapshot,plex_attempt_count FROM deletion_targets WHERE id=?',
+      ).value<[string, number]>(id)!;
+      assertEquals(JSON.parse(raw).plexAttemptedAt, 123);
+      assertEquals(attempts, 1);
+    }
+  });
+  assertEquals(cancelDeletionOperation('retirement-0', 1), true);
+  for (const index of [1, 2, 3]) {
+    assertEquals(cancelDeletionOperation(`retirement-${index}`, 1), false);
+  }
+  withTransaction((client) =>
+    assertEquals(
+      client.prepare('SELECT COUNT(*) FROM media_version_reservations WHERE target_id>=200')
+        .value(),
+      [3],
+    )
+  );
+});
+
+Deno.test('retirement mode leaves current service-owned work eligible', () => {
+  withTransaction((client) => {
+    client.prepare(
+      "INSERT INTO deletion_operations (id,client_request_id,request_hash,server_id,library_key,kind,status,target_count,created_at,updated_at) VALUES ('current-retirement','current-retirement','current-retirement',1,'movies','movie_version','queued',1,1,1)",
+    ).run();
+    const snapshot = JSON.stringify({
+      currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
+      ratingKey: 'current-retirement',
+      libraryKey: 'movies',
+      serviceOwnedPlan: { policyVersion: 4 },
+    });
+    client.prepare(
+      "INSERT INTO deletion_targets (id,operation_id,ordinal,target_kind,target_key,title,snapshot,status,phase,created_at,updated_at) VALUES (400,'current-retirement',0,'movie_version','current-retirement','Current',?,'queued','validating',1,1)",
+    ).run(snapshot);
+    holdLegacyDeletionTargets(client, 400, false);
+    assertEquals(
+      client.prepare('SELECT status,snapshot FROM deletion_targets WHERE id=400').value(),
+      ['queued', snapshot],
     );
   });
 });

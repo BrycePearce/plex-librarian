@@ -383,7 +383,7 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
     assertEquals(f.deleted(), 0);
   });
   await t.step(
-    'worker holds already persisted history-only version proofs before any service action',
+    'retirement holds persisted history-only version proofs before any service action',
     async () => {
       const f = await fixture();
       const snapshot = {
@@ -405,7 +405,7 @@ Deno.test('history-backed version cleanup proves retained entries before accepti
             snapshot: JSON.stringify(snapshot),
           } as WorkTarget),
         Error,
-        'Current selected and retained file evidence is missing',
+        'Automatic deletion replay is disabled',
       );
       assertEquals(f.deleted(), 0);
     },

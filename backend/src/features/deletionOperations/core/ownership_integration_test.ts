@@ -607,32 +607,31 @@ Deno.test('Arr recovery links require a live matching managed item', async () =>
   }
 });
 
-Deno.test('dismiss releases recovery ownership but preserves an audit warning', async () => {
+Deno.test('retired legacy recovery cannot dismiss its ownership or audit evidence', async () => {
   const response = await app.request('/api/deletion-operations/op-owned-movie/dismiss', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ acknowledge: true }),
   });
-  assertEquals(response.status, 200);
-  const operation = await response.json();
-  assertEquals(operation.status, 'completed_with_warning');
-  assertEquals(operation.targets[0].status, 'completed_with_warning');
-  assertEquals(operation.targets[0].phase, 'finalizing');
-  assertEquals(operation.targets[0].warning, 'Dismissed after manual intervention');
+  assertEquals(response.status, 409);
+  const operation = await (await app.request('/api/deletion-operations/op-owned-movie')).json();
+  assertEquals(operation.status, 'needs_attention');
+  assertEquals(operation.targets[0].status, 'needs_attention');
+  assertEquals(operation.targets[0].upgradeHold, true);
   assertEquals(
     withTransaction((client) =>
       client.prepare(
         "SELECT COUNT(*) FROM media_version_reservations WHERE operation_id = 'op-owned-movie'",
       ).value<[number]>()![0]
     ),
-    0,
+    1,
   );
   const attention = await (await app.request(
     '/api/deletion-operations?attention=true&limit=20&offset=0',
   )).json();
   assertEquals(
     attention.operations.some((entry: { id: string }) => entry.id === 'op-owned-movie'),
-    false,
+    true,
   );
 });
 

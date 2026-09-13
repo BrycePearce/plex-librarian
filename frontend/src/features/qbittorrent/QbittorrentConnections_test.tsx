@@ -6,7 +6,7 @@ import { queryKeys } from "../../lib/queryKeys.ts";
 import { QbittorrentConnections } from "./QbittorrentConnections.tsx";
 
 for (const saved of [false, true]) {
-  Deno.test(`qB connections ${saved ? "retain read-only overrides and edit access" : "allow connection without path entry"}`, async () => {
+  Deno.test(`qB connections ${saved ? "preserve saved mappings without exposing retired setup" : "allow connection without path entry"}`, async () => {
     const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const prior = globals.IS_REACT_ACT_ENVIRONMENT;
     globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -62,9 +62,13 @@ for (const saved of [false, true]) {
       assertEquals(configured, [saved ? instance : undefined]);
       if (saved) {
         const text = JSON.stringify(renderer!.toJSON());
-        assertStringIncludes(text, "Saved path mappings");
-        assertStringIncludes(text, "/local-downloads");
-        assertStringIncludes(text, "Host discovery");
+        assertEquals(text.includes("Saved path mappings"), false);
+        assertEquals(text.includes("/local-downloads"), false);
+        assertEquals(text.includes("Host discovery"), false);
+        assertStringIncludes(
+          text,
+          "Deletion reviews check current torrent associations automatically",
+        );
         assertEquals(client.getQueryData(queryKeys.qbittorrentIntegrations.all), data);
       }
     } finally {

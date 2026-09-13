@@ -5,7 +5,6 @@ import {
   type RetainedPlexScopeInput,
 } from './ordinaryScope.ts';
 import type { PlexClient } from '../../integrations/plex/client.ts';
-import { automaticStorage } from '../settings/automaticStorage.ts';
 
 function fixture() {
   const scans: string[] = [];
@@ -58,30 +57,23 @@ Deno.test('retained inspection streams only libraries whose confirmed current ro
   assertEquals(scans, ['tv']);
 });
 
-Deno.test('group-generated Plex relationships preserve library pruning and still detect retained files', async () => {
+Deno.test('historical Plex relationships preserve library pruning and still detect retained files', async () => {
   const { input, scans } = fixture();
-  const endpoints = [
-    { key: 'plex:tv', name: 'TV', roots: ['/data/TV', '/data/TV/Nested'] },
-    { key: 'plex:movies', name: 'Movies', roots: ['/data/Movies'] },
-    { key: 'arr:1', name: 'Sonarr', roots: ['/data/TV'] },
-  ].map((endpoint) => ({
-    ...endpoint,
-    configurationIdentity: endpoint.key,
-    connectionTestedAt: 1,
-    libraryKeys: [],
-  }));
-  const proposal = automaticStorage(endpoints, []).proposal!;
-  input.roots = proposal.relationships.map((root, index) => ({
-    ...root,
+  input.roots = [
+    ['plex:tv', '/data/TV'],
+    ['plex:movies', '/data/Movies'],
+    ['arr:1', '/data/TV'],
+  ].map(([serviceKey, root], index) => ({
     id: index + 1,
     serverId: 1,
+    serviceKey,
+    serviceRoot: root,
+    storageRoot: root,
+    configurationIdentity: serviceKey,
+    caseSensitive: true,
+    hasAliases: false,
     revision: 1,
   }));
-  assertEquals(
-    input.roots.filter((root) => root.serviceKey === 'plex:tv').map((root) => root.serviceRoot),
-    ['/data/TV'],
-  );
-  assertEquals(automaticStorage(endpoints, input.roots).status, 'ready');
   input.scopes = [{ path: '/data/TV/Selected', directory: true }];
   input.plex.libraryLocations = (key) =>
     Promise.resolve({

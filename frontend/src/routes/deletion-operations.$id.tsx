@@ -1,3 +1,4 @@
+import { ServiceActionDecisions } from "../features/mediaDeletion/ServiceActionDecisions.tsx";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
@@ -432,10 +433,18 @@ function DeletionOperationPage() {
                   <p className="text-sm text-error mt-1">{target.error}</p>
                 )}
                 {target.warning && <p className="text-sm text-warning mt-1">{target.warning}</p>}
+                {target.serviceActionDecisions && (
+                  <ServiceActionDecisions actions={target.serviceActionDecisions} />
+                )}
                 <ServiceDeletionOutcomes outcomes={target.serviceOutcomes} />
                 <p className="text-xs text-base-content/45 mt-2">
-                  {phaseLabel(target.phase)} ·{" "}
-                  {target.removalConfirmedAt ? "Media removed" : "Removal not confirmed"}
+                  {phaseLabel(target.phase)} · {target.serviceActionDecisions?.some((action) =>
+                      action.service === "plex" && action.state === "kept"
+                    )
+                    ? "Plex media intentionally retained"
+                    : target.removalConfirmedAt
+                    ? "Media removed"
+                    : "Removal not confirmed"}
                   {target.nextRetryAt
                     ? ` · next attempt ${new Date(target.nextRetryAt * 1000).toLocaleString()}`
                     : ""}

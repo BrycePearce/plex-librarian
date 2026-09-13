@@ -8,24 +8,19 @@ import auth from './features/auth/route.ts';
 import arr from './features/arr/route.ts';
 import duplicates from './features/duplicates/route.ts';
 import deletionOperations from './features/deletionOperations/route.ts';
-import { durableDeletionAdapter } from './features/deletionOperations/middleware.ts';
+import serviceOwnedDeletion from './features/deletionOperations/serviceOwnedRoute.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
-import seasonRemoval from './features/libraries/seasonRemovalRoute.ts';
 import mediaRemovals from './features/mediaRemovals/route.ts';
-import downloadCleanupPreview from './features/mediaDeletion/previewRoute.ts';
 import proxy from './features/proxy/route.ts';
 import qbittorrent from './features/qbittorrent/route.ts';
 import seerr from './features/seerr/route.ts';
 import integrationCompatibility from './features/integrationCompatibility/route.ts';
 import settings from './features/settings/route.ts';
-import serviceStorage from './features/settings/serviceStorageRoute.ts';
 import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
 import webhook from './features/webhook/route.ts';
 import episodeGaps from './features/episodeGaps/route.ts';
-import { withTransaction } from './db/index.ts';
-import { triggerHostDiscovery } from './features/settings/hostDiscovery.ts';
 
 export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   const app = new Hono();
@@ -44,24 +39,28 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
     }),
   );
   app.use('*', bodyLimit({ maxSize: 1 * 1024 * 1024 }));
-  app.use('/api/*', durableDeletionAdapter);
+  // Old browser tabs and external callers must obtain a fresh service-owned
+  // preview; never reinterpret their accepted legacy deletion request.
   app.use('/api/*', async (c, next) => {
-    await next();
-    // Run only after successful handlers commit their connection/mapping changes.
-    // Discovery cannot turn a valid save into a failed connection response.
-    if (
-      c.res.ok && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method) &&
-      /^\/api\/(integrations\/(arr|qbittorrent)\/(instances|libraries)(\/|$)|auth\/plex\/server$)/
-        .test(c.req.path)
-    ) {
-      const id = withTransaction((client) =>
-        client.prepare('SELECT active_server_id FROM settings WHERE id=1').value<[number | null]>()
-          ?.[0]
-      );
-      if (id != null) triggerHostDiscovery(id);
+    const path = c.req.path;
+    const retired = path.startsWith('/api/settings/service-storage') ||
+      c.req.method === 'DELETE' && (
+          /^\/api\/libraries\/[^/]+\/items$/.test(path) ||
+          /^\/api\/duplicates\/(movies|episodes)\/[^/]+\/media(?:\/[^/]+)?$/.test(path)
+        ) ||
+      c.req.method === 'POST' && (
+          /^\/api\/libraries\/[^/]+\/items\/download-cleanup-preview$/.test(path) ||
+          /^\/api\/libraries\/[^/]+\/seasons\/[^/]+\/deletion(?:-preview)?$/.test(path) ||
+          /^\/api\/duplicates\/(movies|episodes)\/[^/]+\/media\/deletion-preview$/.test(path) ||
+          /^\/api\/duplicates\/seasons\/[^/]+\/(cleanup|deletion-preview)$/.test(path)
+        );
+    if (retired) {
+      return c.json({
+        error: 'This legacy flow has retired. Refresh Librarian and review deletion again.',
+      }, 410);
     }
+    await next();
   });
-
   app.onError((err, c) => {
     console.error(err);
     return c.json({ error: 'internal server error' }, 500);
@@ -73,9 +72,8 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/integrations/arr', arr);
   app.route('/api/duplicates', duplicates);
   app.route('/api/deletion-operations', deletionOperations);
+  app.route('/api/service-deletions', serviceOwnedDeletion);
   app.route('/api/events', events);
-  app.route('/api/libraries', downloadCleanupPreview);
-  app.route('/api/libraries', seasonRemoval);
   app.route('/api/libraries', libraries);
   app.route('/api/media-removals', mediaRemovals);
   app.route('/api/proxy', proxy);
@@ -83,7 +81,6 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/integrations/seerr', seerr);
   app.route('/api/integrations/compatibility', integrationCompatibility);
   app.route('/api/settings', settings);
-  app.route('/api/settings/service-storage', serviceStorage);
   app.route('/api/sync', sync);
   app.route('/api/users', users);
   app.route('/api/webhook', webhook);

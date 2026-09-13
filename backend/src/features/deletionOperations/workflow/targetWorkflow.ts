@@ -1582,7 +1582,11 @@ async function ensureVersionDeleted(
 }
 
 export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<void> {
-  if (!currentLocationSnapshot(target.snapshot)) throw new Error(UPGRADE_RECOVERY_MESSAGE);
+  if (
+    !currentLocationSnapshot(target.snapshot) ||
+    JSON.parse(target.snapshot).serviceOwnedPlan?.policyVersion !== 4 ||
+    JSON.parse(target.snapshot).upgradeHold !== undefined
+  ) throw new Error(UPGRADE_RECOVERY_MESSAGE);
   const release = tryAcquireLibraryOperation(
     target.serverId,
     JSON.parse(target.snapshot).libraryKey,
@@ -1591,6 +1595,11 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   if (!release) throw new DeletionConvergenceError('the library is currently being modified');
   try {
     const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
+    if (snapshot.serviceOwnedPlan) {
+      const { ensureServiceOwnedDeletion } = await import('./serviceOwnedWorkflow.ts');
+      await ensureServiceOwnedDeletion(target, snapshot);
+      return;
+    }
     if (target.targetKind === 'whole_item' && !snapshot.ordinaryPlan) {
       throw new Error(UPGRADE_RECOVERY_MESSAGE);
     }

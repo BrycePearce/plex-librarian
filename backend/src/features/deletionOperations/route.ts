@@ -9,19 +9,6 @@ import {
   retryDeletionOperation,
   wakeDeletionWorker,
 } from './service.ts';
-import { finishRelocation, RelocationConflictError } from './relocation/relocation.ts';
-import { resolveActiveServer } from '../../integrations/plex/index.ts';
-import { triggerLibrarySync } from '../sync/manager.ts';
-import {
-  ManagementHoldConflictError,
-  resolveRadarrManagementHold,
-} from './relocation/resolution.ts';
-import {
-  acceptSonarrRemovedAndUnmonitored,
-  retrySonarrSeasonReassignment,
-  SonarrSeasonRecoveryConflictError,
-} from './recovery/sonarrSeason.ts';
-
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
 
@@ -128,127 +115,21 @@ router.post('/:id/dismiss', async (c) => {
   return c.json(getDeletionOperation(c.req.param('id'), serverId));
 });
 
-router.post('/:id/resolve', async (c) => {
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
-  try {
-    const resolution = await resolveRadarrManagementHold(c.req.param('id'), serverId);
-    if (resolution === 'resumed') wakeDeletionWorker();
-    return c.json({ resolution, operation: getDeletionOperation(c.req.param('id'), serverId) });
-  } catch (error) {
-    if (error instanceof ManagementHoldConflictError) {
-      return c.json({ error: error.message }, error.status);
-    }
-    throw error;
-  }
-});
-
-router.post('/:id/targets/:targetId/accept-removed-unmonitored', async (c) => {
-  const serverId = c.get('activeServerId');
-  const body = await c.req.json().catch(() => ({})) as { acknowledge?: unknown };
-  if (body.acknowledge !== true) return c.json({ error: 'acknowledge must be true' }, 400);
-  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
-  try {
-    await acceptSonarrRemovedAndUnmonitored(
-      c.req.param('id'),
-      Number(c.req.param('targetId')),
-      serverId,
-    );
-    wakeDeletionWorker();
-    return c.json(getDeletionOperation(c.req.param('id'), serverId));
-  } catch (error) {
-    if (error instanceof SonarrSeasonRecoveryConflictError) {
-      return c.json({ error: error.message }, error.status);
-    }
-    throw error;
-  }
-});
-
-router.post('/:id/targets/:targetId/retry-sonarr-reassignment', async (c) => {
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
-  try {
-    await retrySonarrSeasonReassignment(
-      c.req.param('id'),
-      Number(c.req.param('targetId')),
-      serverId,
-    );
-    wakeDeletionWorker();
-    return c.json(getDeletionOperation(c.req.param('id'), serverId));
-  } catch (error) {
-    if (error instanceof SonarrSeasonRecoveryConflictError) {
-      return c.json({ error: error.message }, error.status);
-    }
-    throw error;
-  }
-});
-
-router.post('/:id/targets/:targetId/finish-relocation', async (c) => {
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-  if (typeof body.guidanceId !== 'string') {
-    return c.json({ error: 'guidanceId is required' }, 400);
-  }
-  try {
-    const result = finishRelocation(
-      c.req.param('id'),
-      Number(c.req.param('targetId')),
-      serverId,
-      body.guidanceId,
-      body.destinationPlaybackConfirmed === true,
-    );
-    let sync: { syncId: number } | { conflict: number } | { deferred: true } | { completed: true };
-    if (result.barrier.finishedAt !== undefined) {
-      sync = { completed: true };
-    } else if (result.syncDeferred) {
-      sync = { deferred: true };
-    } else {
-      try {
-        const active = await resolveActiveServer();
-        sync = active.serverId === serverId
-          ? triggerLibrarySync(active, result.libraryKey)
-          : { deferred: true };
-      } catch {
-        // Supersede is already durably committed. Server resolution and sync startup
-        // are best-effort orchestration; keep the incomplete barrier actionable.
-        sync = { deferred: true };
-      }
-    }
-    return c.json({ operation: getDeletionOperation(c.req.param('id'), serverId), sync });
-  } catch (error) {
-    if (error instanceof RelocationConflictError) {
-      return c.json({ error: error.message }, error.status as 400 | 404 | 409);
-    }
-    throw error;
-  }
-});
-
-router.post('/:id/targets/:targetId/relocation-sync', async (c) => {
-  const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json({ error: 'operation not found' }, 404);
-  const operation = getDeletionOperation(c.req.param('id'), serverId) as
-    | { libraryKey?: unknown; targets?: Array<Record<string, unknown>> }
-    | null;
-  const targetId = Number(c.req.param('targetId'));
-  const target = operation?.targets?.find((entry) => entry.id === targetId);
-  const barrier = target?.relocationSyncBarrier as { finishedAt?: number } | undefined;
-  if (
-    !Number.isSafeInteger(targetId) || targetId <= 0 || !operation ||
-    typeof operation.libraryKey !== 'string' || !barrier
-  ) {
-    return c.json({ error: 'incomplete relocation barrier not found' }, 404);
-  }
-  if (target?.relocationSyncBarrierState === 'completed') {
-    return c.json({ operation, sync: { completed: true } });
-  }
-  if (target?.relocationSyncBarrierState !== 'incomplete') {
-    return c.json({ error: 'incomplete relocation barrier not found' }, 404);
-  }
-  const active = await resolveActiveServer();
-  if (active.serverId !== serverId) return c.json({ error: 'the active server changed' }, 409);
-  const sync = triggerLibrarySync(active, operation.libraryKey);
-  return c.json({ operation, sync });
-});
+// Legacy adoption and relocation consent cannot be replayed after retirement.
+for (
+  const path of [
+    '/:id/resolve',
+    '/:id/targets/:targetId/accept-removed-unmonitored',
+    '/:id/targets/:targetId/retry-sonarr-reassignment',
+    '/:id/targets/:targetId/finish-relocation',
+    '/:id/targets/:targetId/relocation-sync',
+  ]
+) {
+  router.post(path, (c) =>
+    c.json({
+      error:
+        'Legacy recovery has retired. Preserve this operation and review recorded outcomes in the affected services; automatic replay is disabled.',
+    }, 410));
+}
 
 export default router;

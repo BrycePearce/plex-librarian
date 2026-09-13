@@ -121,6 +121,33 @@ export function finalizeTarget(
   client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(target.id);
 }
 
+/** Intentional retention completes the decision, without recording any Plex removal. */
+export function finalizeRetainedPlexTarget(
+  client: SqliteClient,
+  target: DeletionWorkTarget,
+  warning = 'Plex media intentionally retained to protect a kept download entry',
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  const changed = client.prepare(
+    "UPDATE deletion_targets SET status = 'completed_with_warning', phase = 'finalizing', next_retry_at = NULL, error = NULL, warning = ?, storage_outcome = 'unknown', verified_hardlink_data_size = 0, storage_outcome_reasons = ?, updated_at = ? WHERE id = ? AND status = 'running' AND removal_confirmed_at IS NULL",
+  ).run(
+    warning,
+    JSON.stringify(['Intentional retention; no Plex media removal or physical space claim']),
+    now,
+    target.id,
+  );
+  if (changed !== 1) throw new DeletionConvergenceError('retained deletion target state changed');
+  client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(target.id);
+  client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(target.id);
+}
+
+/** Preserve completed effects while leaving unaccepted held actions for a fresh preview. */
+export function markHeldServiceTarget(client: SqliteClient, target: DeletionWorkTarget): void {
+  client.prepare(
+    "UPDATE deletion_targets SET status='needs_attention', error='Some service actions remain held; review a fresh preview before authorizing them', next_retry_at=NULL, updated_at=? WHERE id=?",
+  ).run(Math.floor(Date.now() / 1000), target.id);
+}
+
 function permanentPlexFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const status = error instanceof PlexDeleteError ? error.status : null;

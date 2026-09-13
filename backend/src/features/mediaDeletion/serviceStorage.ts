@@ -1,13 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../../db/index.ts';
-import {
-  arrInstances,
-  arrLibraryMappings,
-  libraries,
-  servers,
-  servicePathRoots,
-} from '../../db/schema.ts';
+import { arrInstances, arrLibraryMappings, libraries, servers } from '../../db/schema.ts';
 import { resolveActiveServer } from '../../integrations/plex/index.ts';
 import { ArrClient } from '../../integrations/arr/client.ts';
 import { getDownloadClientTargets } from './targets.ts';
@@ -29,16 +23,13 @@ export function evidenceFingerprint(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
 
-export async function loadServiceRoots(serverId: number): Promise<ServicePathRoot[]> {
-  const { refreshHostDiscovery, currentDiscoveryRoots } = await import(
-    '../settings/hostDiscovery.ts'
+/** Historical planners cannot regain deletion authority from retired host evidence. */
+export function loadServiceRoots(_serverId: number): Promise<ServicePathRoot[]> {
+  return Promise.reject(
+    new Error(
+      'Host discovery has been retired. Cancel this legacy request and review it again using service-owned deletion.',
+    ),
   );
-  await refreshHostDiscovery(serverId);
-  const roots = await db.select().from(servicePathRoots).where(
-    eq(servicePathRoots.serverId, serverId),
-  )
-    .orderBy(servicePathRoots.id);
-  return currentDiscoveryRoots(serverId, roots);
 }
 
 function connectionAddress(value: string | undefined): Partial<ServiceStorageEndpoint> {

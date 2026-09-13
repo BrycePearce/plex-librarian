@@ -487,8 +487,8 @@ export function ArrConnectionWizard({
                 setAddImportExclusion={(addImportExclusion) => updateDraft({ addImportExclusion })}
               />
               <p className="text-sm text-base-content/60">
-                Host discovery identifies paths after you save. Enable it in Media connections once
-                the host helper is installed.
+                Deletion reviews check the selected media through your connected services
+                automatically. No helper or path setup is needed.
               </p>
             </>
           )}

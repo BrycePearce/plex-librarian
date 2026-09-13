@@ -31,6 +31,12 @@ export interface ArrTorrentAssociation {
   importedPath: string | null;
   historyId: number | null;
   date: string | null;
+  /** Sonarr import history ownership; absent when unavailable or malformed. */
+  episodeId?: number;
+  /** Imported Sonarr file ID from history data, not the episode's current file. */
+  episodeFileId?: number;
+  /** Imported Radarr file ID from its history data, never the current catalog file. */
+  movieFileId?: number;
 }
 
 export interface ArrExtraFile {
@@ -341,6 +347,7 @@ export class ArrClient {
     path: string,
     init?: RequestInit,
     onResponse?: (status: number) => void,
+    responseShape?: 'resource',
   ): Promise<T> {
     let response: Response;
     try {
@@ -400,7 +407,7 @@ export class ArrClient {
       if (
         Array.isArray(result) || body.error || body.errors || body.errorMessage ||
         ['failed', 'error', 'aborted'].includes(String(body.status).toLowerCase()) ||
-        Object.keys(body).length > 0 && !(response.status === 202 &&
+        responseShape !== 'resource' && Object.keys(body).length > 0 && !(response.status === 202 &&
             Number.isSafeInteger(body.id) && Number(body.id) > 0 &&
             ['queued', 'started', 'pending', 'completed'].includes(
               String(body.status).toLowerCase(),
@@ -606,24 +613,50 @@ export class ArrClient {
     return true;
   }
 
+  /** Sonarr's public v3 API does not expose its associated-extra repositories.
+   * EpisodeFile deletion also removes those entries. Never turn this missing
+   * capability into an empty atomic deletion scope. */
+  sonarrExtraFiles(seriesId: number): Promise<never> {
+    if (this.type !== 'sonarr' || !Number.isSafeInteger(seriesId) || seriesId <= 0) {
+      return Promise.reject(new ArrApiError('A positive Sonarr series ID is required'));
+    }
+    return Promise.reject(
+      new ArrApiError(
+        'Sonarr does not expose a complete associated extra-file inventory; deletion scope is unavailable',
+      ),
+    );
+  }
+
   async extraFiles(mediaId: number): Promise<ArrExtraFile[]> {
     if (this.type !== 'radarr') return [];
-    const records = await this.request<
+    if (!Number.isSafeInteger(mediaId) || mediaId <= 0) {
+      throw new ArrApiError('A positive Radarr movie ID is required');
+    }
+    const records = await this.boundedRequest<
       Array<{
         relativePath?: string;
         type?: number | string;
         movieFileId?: number | null;
       }>
-    >(`/extrafile?movieId=${mediaId}`);
-    if (!Array.isArray(records)) {
+    >(`/extrafile?movieId=${mediaId}`, RADARR_CATALOG_MAX_BYTES, 'extra-file inventory');
+    if (!Array.isArray(records) || records.length > RADARR_CATALOG_MAX_RECORDS) {
       throw new ArrApiError('Radarr returned an invalid extra-file response');
     }
     return records.flatMap((record) => {
       if (record === null || typeof record !== 'object' || Array.isArray(record)) {
         throw new ArrApiError('Radarr returned an invalid extra-file record');
       }
-      const relativePath = record.relativePath?.trim();
-      if (!relativePath) {
+      const relativePath = typeof record.relativePath === 'string'
+        ? record.relativePath.trim()
+        : '';
+      if (
+        !relativePath || relativePath !== record.relativePath ||
+        [...relativePath].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
+        /^[\\/]|^[a-z]:/i.test(relativePath) ||
+        relativePath.replaceAll('\\', '/').split('/').some((part) =>
+          !part || part === '.' || part === '..'
+        )
+      ) {
         throw new ArrApiError('Radarr returned an invalid extra-file record');
       }
       const movieFileId = record.movieFileId;
@@ -1486,6 +1519,7 @@ export class ArrClient {
 
   async sonarrEpisodeMonitorTarget(
     identity: SonarrEpisodeMonitorIdentity,
+    requireFileAbsent = false,
   ): Promise<ArrMonitorTarget> {
     if (this.type !== 'sonarr') {
       throw new ArrApiError('Episode monitoring reads require Sonarr');
@@ -1508,6 +1542,7 @@ export class ArrClient {
       seasonNumber?: number;
       episodeNumber?: number;
       monitored?: boolean;
+      episodeFileId?: number;
     }>(`/episode/${identity.episodeId}`);
     if (
       !record ||
@@ -1520,6 +1555,9 @@ export class ArrClient {
       typeof record.monitored !== 'boolean'
     ) {
       throw new ArrApiError('Sonarr returned a conflicting or malformed targeted episode');
+    }
+    if (requireFileAbsent && record.episodeFileId !== 0) {
+      throw new ArrApiError('Sonarr episode has a current or unverified file; monitoring is held');
     }
     return { id: identity.episodeId, monitored: record.monitored };
   }
@@ -1575,22 +1613,32 @@ export class ArrClient {
   async setSonarrEpisodeMonitored(
     identity: SonarrEpisodeMonitorIdentity,
     monitored: boolean,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+    requireFileAbsent = false,
   ): Promise<boolean> {
-    const before = await this.sonarrEpisodeMonitorTarget(identity);
+    const before = await this.sonarrEpisodeMonitorTarget(identity, requireFileAbsent);
     if (before.monitored === monitored) return false;
     let writeError: unknown;
     try {
-      await this.request<void>(`/episode/${identity.episodeId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ id: identity.episodeId, monitored }),
-        headers: { 'Content-Type': 'application/json' },
-      });
+      await this.request<void>(
+        `/episode/${identity.episodeId}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ id: identity.episodeId, monitored }),
+          headers: { 'Content-Type': 'application/json' },
+        },
+        (httpStatus) =>
+          onResponse?.({ status: httpStatus === 202 ? 'accepted' : 'succeeded', httpStatus }),
+        'resource',
+      );
     } catch (error) {
       writeError = error;
     }
     let after: ArrMonitorTarget;
     try {
-      after = await this.sonarrEpisodeMonitorTarget(identity);
+      after = await this.sonarrEpisodeMonitorTarget(identity, requireFileAbsent);
     } catch (error) {
       throw new ArrApiError(
         `Sonarr episode monitoring read-back was inconclusive: ${
@@ -1994,6 +2042,7 @@ export class ArrClient {
     }
     const records = payload as Array<{
       id?: number;
+      episodeId?: unknown;
       date?: string;
       eventType?: string;
       downloadId?: string;
@@ -2001,11 +2050,21 @@ export class ArrClient {
         droppedPath?: string;
         sourcePath?: string;
         importedPath?: string;
+        fileId?: unknown;
+        FileId?: unknown;
       };
     }>;
     const associations = new Map<string, ArrTorrentAssociation>();
     for (const record of records) {
+      if (
+        !record || typeof record !== 'object' || Array.isArray(record) ||
+        record.eventType !== undefined && typeof record.eventType !== 'string'
+      ) throw new ArrApiError('Arr returned malformed download history evidence');
       if (record.eventType?.toLowerCase() !== 'downloadfolderimported') continue;
+      if (
+        record.data !== undefined &&
+        (!record.data || typeof record.data !== 'object' || Array.isArray(record.data))
+      ) throw new ArrApiError('Arr returned malformed download history ownership');
       const hash = record.downloadId?.trim().toLowerCase();
       // BitTorrent v1 hashes are 40 hex characters; v2 hashes are 64. Anything else
       // may be a Usenet download ID and must never be sent to qBittorrent.
@@ -2018,13 +2077,48 @@ export class ArrClient {
       // proves the primary hardlink while the root bounds recursive sidecar checks.
       const payloadPath = droppedPath && historySourcePath ? historySourcePath : null;
       const importedPath = record.data?.importedPath?.trim() || null;
-      associations.set(`${hash}:${sourcePath ?? ''}:${payloadPath ?? ''}:${importedPath ?? ''}`, {
+      const episodeId = this.type === 'sonarr' &&
+          typeof record.episodeId === 'number' && Number.isSafeInteger(record.episodeId) &&
+          record.episodeId > 0
+        ? record.episodeId
+        : undefined;
+      // Both Arr HistoryService implementations store FileId as a decimal string
+      // from the imported file ID in the history data dictionary.
+      // Accept the serialized camel-case key and the original dictionary key, but
+      // never select one of conflicting values or coerce malformed IDs.
+      const fileIds = [record.data?.fileId, record.data?.FileId]
+        .filter((value) => value !== undefined);
+      const importedFileId = fileIds.length > 0 &&
+          fileIds.every((value) =>
+            typeof value === 'string' && /^[1-9]\d*$/.test(value) &&
+            Number.isSafeInteger(Number(value)) && value === fileIds[0]
+          )
+        ? Number(fileIds[0])
+        : undefined;
+      if (this.type === 'radarr' && fileIds.length > 0 && importedFileId === undefined) {
+        throw new ArrApiError('Radarr returned malformed or conflicting imported file ownership');
+      }
+      const episodeFileId = this.type === 'sonarr' ? importedFileId : undefined;
+      const movieFileId = this.type === 'radarr' ? importedFileId : undefined;
+      const key = JSON.stringify([
+        hash,
+        sourcePath,
+        payloadPath,
+        importedPath,
+        episodeId,
+        episodeFileId,
+        movieFileId,
+      ]);
+      associations.set(key, {
         hash,
         sourcePath,
         payloadPath,
         importedPath,
         historyId: Number.isInteger(record.id) ? record.id! : null,
         date: record.date?.trim() || null,
+        ...(episodeId === undefined ? {} : { episodeId }),
+        ...(episodeFileId === undefined ? {} : { episodeFileId }),
+        ...(movieFileId === undefined ? {} : { movieFileId }),
       });
     }
     return [...associations.values()];
@@ -2082,6 +2176,27 @@ export class ArrClient {
       },
     );
     onResponse?.({ status: httpStatus === 202 ? 'accepted' : 'succeeded', httpStatus });
+  }
+
+  /** Remove only the service catalog entry after separately authorized file actions. */
+  async deleteManagedRecord(
+    id: number,
+    addImportExclusion: boolean,
+    onResponse?: (
+      result: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new ArrApiError('A positive managed record ID is required');
+    }
+    const resource = this.type === 'radarr' ? 'movie' : 'series';
+    const exclusionParam = this.type === 'radarr' ? 'addImportExclusion' : 'addImportListExclusion';
+    await this.request<void>(
+      `/${resource}/${id}?deleteFiles=false&${exclusionParam}=${addImportExclusion}`,
+      { method: 'DELETE' },
+      (httpStatus) =>
+        onResponse?.({ status: httpStatus === 202 ? 'accepted' : 'succeeded', httpStatus }),
+    );
   }
 
   /** Bounded service inventory for directory effects, never a filesystem traversal. */

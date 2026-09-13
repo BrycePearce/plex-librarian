@@ -13,7 +13,7 @@ env:
   DOCKERHUB_IMAGE: docker.io/edon231/plex-librarian
 
 jobs:
-  # Validate this exact push/tag before either image receives registry credentials.
+  # Validate this exact push/tag before app images receive registry credentials.
   # The separate PR/main CI workflow is not a dependency of a release-tag run.
   validate:
     strategy:
@@ -41,68 +41,13 @@ jobs:
       - name: Verify
         run: deno task verify
 
-      - name: Build discovery helper for transport validation
-        run: docker build -f deploy/discovery/Dockerfile -t librarian-discovery-release-check .
+      - name: Build app image
+        run: docker build -t librarian-release-check .
 
       - name: Confirm native image architecture
         env:
           EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
-        run: test "$(docker image inspect librarian-discovery-release-check --format '{{.Architecture}}')" = "$EXPECTED_ARCHITECTURE"
-
-      - name: Test actual helper entrypoint permissions
-        run: |
-          set -euo pipefail
-          container=librarian-discovery-entrypoint-check
-          volume="${container}-transport"
-          docker volume create "$volume"
-          trap 'docker logs "$container"; docker rm -f "$container"; docker volume rm "$volume"' EXIT
-          docker run --detach --name "$container" --network none --read-only \
-            --cap-drop=ALL --security-opt=no-new-privileges:true \
-            --mount "type=volume,source=$volume,target=/discovery" --tmpfs /tmp:rw,size=64m \
-            librarian-discovery-release-check
-          # Exercise both creation and reuse of the private key under the real
-          # restricted entrypoint. No collection or Docker socket is needed.
-          for phase in first-boot restart; do
-            if [[ "$phase" == restart ]]; then docker restart "$container"; fi
-            docker exec "$container" deno eval '
-            import { request } from "node:http";
-            const responds = () => new Promise((resolve) => {
-              const req = request({socketPath:"/discovery/discovery.sock", path:"/snapshot"}, (res) => {
-                res.resume();
-                res.on("end", () => resolve(res.statusCode === 401));
-              });
-              req.on("error", () => resolve(false));
-              req.setTimeout(500, () => { req.destroy(); resolve(false); });
-              req.end();
-            });
-            for (let attempt = 0; attempt < 50; attempt++) {
-              try {
-                const key = await Deno.lstat("/discovery/key");
-                const socket = await Deno.lstat("/discovery/discovery.sock");
-                if (key.isFile && socket.isSocket &&
-                    (key.mode & 0o777) === 0o600 && (socket.mode & 0o777) === 0o600 &&
-                    await responds()) {
-                  Deno.exit(0);
-                }
-              } catch { /* Entry point may still be starting. */ }
-              await new Promise((resolve) => setTimeout(resolve, 100));
-            }
-            throw new Error("Restricted helper entrypoint did not create private transport");
-            '
-            key_hash=$(docker exec "$container" sha256sum /discovery/key)
-            if [[ "$phase" == first-boot ]]; then
-              original_key_hash="$key_hash"
-            else
-              test "$key_hash" = "$original_key_hash"
-            fi
-          done
-
-      - name: Test packaged Unix socket transport
-        run: >-
-          docker run --rm --network none --read-only --tmpfs /tmp:rw,size=64m
-          --mount "type=bind,source=${{ github.workspace }},target=/workspace,readonly"
-          --workdir /workspace --entrypoint deno librarian-discovery-release-check
-          test --no-config --allow-all backend/src/features/settings/discoveryTransport_test.ts
+        run: test "$(docker image inspect librarian-release-check --format '{{.Architecture}}')" = "$EXPECTED_ARCHITECTURE"
 
   build:
     if: github.event_name != 'workflow_dispatch'
@@ -119,16 +64,6 @@ jobs:
           - image: app
             suffix: ""
             dockerfile: Dockerfile
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
-          - image: discovery
-            suffix: "-discovery"
-            dockerfile: deploy/discovery/Dockerfile
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - image: discovery
-            suffix: "-discovery"
-            dockerfile: deploy/discovery/Dockerfile
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -190,8 +125,6 @@ jobs:
         include:
           - image: app
             suffix: ""
-          - image: discovery
-            suffix: "-discovery"
     runs-on: ubuntu-latest
     needs: build
     env:

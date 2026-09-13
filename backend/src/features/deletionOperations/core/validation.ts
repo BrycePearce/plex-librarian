@@ -18,6 +18,7 @@ import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.t
 import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
 import { ordinaryPlanFingerprint } from '../../mediaDeletion/ordinaryPlanning.ts';
+import { serviceOwnedPlanFingerprint } from '../../mediaDeletion/serviceOwnedPlanning.ts';
 import {
   assertVersionStorageEvidenceUnchanged,
   type VersionStorageEvidence,
@@ -50,7 +51,14 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  serviceOwnedPlan?: import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
+  serviceOwnedAttempts?: Record<
+    string,
+    import('../workflow/serviceOwnedWorkflow.ts').ServiceOwnedAttempt
+  >;
   versionStorageEvidence?: VersionStorageEvidence;
+  /** Observed service postconditions, separate from HTTP acceptance. No byte claim. */
+  ordinaryJobOutcomes?: Record<string, { status: 'job_absent'; observedAt: number }>;
   ordinaryPlan?: import('../../mediaDeletion/ordinaryPlanning.ts').OrdinaryDeletionPlan;
   ordinaryReconciliations?: Record<
     string,
@@ -184,7 +192,32 @@ export async function assertWholeSeasonPlexMembership(
     throw new DeletionValidationError('durable whole-season evidence is missing');
   }
   const current = await client.seasonEpisodeMembership(snapshot.ratingKey);
-  if (!seasonEpisodeEvidenceOnlyDisappeared(accepted.plexEpisodes, current)) {
+  let expected = accepted.plexEpisodes;
+  if (snapshot.serviceOwnedPlan?.policyVersion === 4) {
+    // Policy 4 checks source absence again before mutation. Here, let that
+    // workflow reach its fresh validation when Plex has already dropped an
+    // episode whose entire exact file scope has recorded native deletion effects.
+    const sources = snapshot.serviceOwnedPlan.actions.filter((action) => {
+      const attempt = snapshot.serviceOwnedAttempts?.[action.id];
+      return !action.catalogOnly && action.service !== 'plex' &&
+        attempt?.response && attempt.outcome &&
+        snapshot.serviceOwnedPlan!.retention.decisions.some((decision) =>
+          decision.actionId === action.id && decision.state === 'delete_candidate'
+        );
+    });
+    expected = expected.filter((episode) => {
+      if (current.some((entry) => entry.ratingKey === episode.ratingKey)) return true;
+      const files = episode.media.flatMap((media) => media.paths);
+      return !files.length ||
+        !files.every((file) =>
+          Number.isSafeInteger(file.byteSize) && file.byteSize! > 0 &&
+          sources.some((source) =>
+            source.files.some((entry) => entry.path === file.path && entry.size === file.byteSize)
+          )
+        );
+    });
+  }
+  if (!seasonEpisodeEvidenceOnlyDisappeared(expected, current)) {
     mismatch('Plex season episode or media evidence');
   }
 }
@@ -198,6 +231,22 @@ function equalNullable(expected: unknown, actual: unknown, label: string): void 
 }
 
 export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): void {
+  if (snapshot.serviceOwnedPlan) {
+    const plan = snapshot.serviceOwnedPlan;
+    const { fingerprint, ...evidence } = plan;
+    if (
+      plan.policyVersion !== 4 || plan.selection.ratingKey !== snapshot.ratingKey ||
+      fingerprint !== serviceOwnedPlanFingerprint(evidence) ||
+      plan.selection.mediaId !== snapshot.mediaId || plan.libraryKey !== snapshot.libraryKey ||
+      plan.arrSelected !== (snapshot.mode === 'coordinated') ||
+      plan.qbSelected !== (snapshot.cleanupDownloads === true) || snapshot.ordinaryPlan ||
+      snapshot.wholeItemDownloadCleanup || snapshot.seasonDownloadCleanup ||
+      snapshot.sonarrHistoricalPaths?.length
+    ) {
+      throw new DeletionValidationError('Accepted service-owned decisions are malformed or held');
+    }
+    return;
+  }
   if (snapshot.ordinaryPlan) {
     const plan = snapshot.ordinaryPlan;
     const { fingerprint, ...evidence } = plan;

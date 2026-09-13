@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, CheckCircle2, Gauge, HardDrive, ShieldCheck } from 
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { HistorySyncWarning } from "../../components/HistorySyncWarning.tsx";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
-import { DeleteConfirmDialog } from "../../features/mediaDeletion/DeleteConfirmDialog.tsx";
+import { ServiceOwnedDeletionDialog } from "../../features/mediaDeletion/ServiceOwnedDeletionDialog.tsx";
 import { api } from "../../lib/api.ts";
 import type {
   StaleQuickCleanupCandidate,
@@ -14,7 +14,7 @@ import type {
 } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
-import { useDeleteItems } from "../../lib/useDeleteItems.ts";
+import { useDeletionOperationTracker } from "../../features/deletionOperations/DeletionOperationCoordinator.tsx";
 import { QuickCleanupCandidateRow } from "./QuickCleanupCandidateRow.tsx";
 import { formatQuickCleanupLibraryShare } from "./quickCleanupPresentation.ts";
 import { selectedQuickCleanupKeys, updateQuickCleanupExclusions } from "./quickCleanupSelection.ts";
@@ -88,13 +88,7 @@ export function QuickCleanupPanel({
     staleTime: 30_000,
     retry: 1,
   });
-  const deleteMutation = useDeleteItems([
-    queryKeys.staleQuickCleanup.library(libraryKey),
-    queryKeys.stale.library(libraryKey),
-    queryKeys.libraries.all,
-    queryKeys.events.all,
-    queryKeys.mediaRemovals.all,
-  ]);
+  const { trackDeletionOperation } = useDeletionOperationTracker();
 
   useEffect(() => {
     if (!analysis.data || analysis.isPlaceholderData) return;
@@ -118,11 +112,6 @@ export function QuickCleanupPanel({
     }, 400);
     return () => clearTimeout(timer);
   }, [customThreshold, customYearsValid, parsedCustomYears, thresholdDays]);
-
-  useEffect(() => {
-    onReviewPendingChange(deleteMutation.isPending);
-    return () => onReviewPendingChange(false);
-  }, [deleteMutation.isPending, onReviewPendingChange]);
 
   const selectedItems = useMemo(
     () => analysis.data?.candidates.filter((candidate) => selected.has(candidate.ratingKey)) ?? [],
@@ -297,48 +286,35 @@ export function QuickCleanupPanel({
 
   if (reviewOpen) {
     return (
-      <DeleteConfirmDialog
+      <ServiceOwnedDeletionDialog
         dialogRef={dialogRef}
         embedded
         libraryKey={libraryKey}
-        items={selectedItems}
-        pending={deleteMutation.isPending}
-        error={deleteMutation.error}
-        onConfirm={({
-          coordinatedRatingKeys,
-          cleanupDownloadRatingKeys,
-          cleanupPreviewFingerprints,
-        }) =>
-          deleteMutation.mutate(
-            {
-              libraryKey,
-              ratingKeys: selectedItems.map((item) => item.ratingKey),
-              coordinatedRatingKeys,
-              cleanupDownloadRatingKeys,
-              cleanupPreviewFingerprints,
-              quickCleanupThresholdDays: thresholdDays,
-            },
-            {
-              onSuccess: () => {
-                onReviewOpenChange(false);
-                const scope = `${libraryKey}:${thresholdDays}`;
-                const submittedKeys = selectedItems.map((item) => item.ratingKey);
-                const excluded = updateQuickCleanupExclusions(
-                  exclusionsByScope.current.get(scope) ?? new Set(),
-                  submittedKeys,
-                  true,
-                );
-                exclusionsByScope.current.set(scope, excluded);
-                setSelected(
-                  selectedQuickCleanupKeys(
-                    analysis.data?.candidates.map((item) => item.ratingKey) ?? [],
-                    excluded,
-                  ),
-                );
-                onClose();
-              },
-            },
-          )}
+        targets={selectedItems.map((item) => ({ ratingKey: item.ratingKey }))}
+        quickCleanupThresholdDays={thresholdDays}
+        onPendingChange={onReviewPendingChange}
+        onCreated={(operationId) => {
+          trackDeletionOperation(operationId, [
+            queryKeys.staleQuickCleanup.library(libraryKey),
+            queryKeys.stale.library(libraryKey),
+            queryKeys.libraries.all,
+            queryKeys.events.all,
+            queryKeys.mediaRemovals.all,
+          ]);
+          onReviewOpenChange(false);
+          const scope = `${libraryKey}:${thresholdDays}`;
+          const excluded = updateQuickCleanupExclusions(
+            exclusionsByScope.current.get(scope) ?? new Set(),
+            selectedItems.map((item) => item.ratingKey),
+            true,
+          );
+          exclusionsByScope.current.set(scope, excluded);
+          setSelected(selectedQuickCleanupKeys(
+            analysis.data?.candidates.map((item) => item.ratingKey) ?? [],
+            excluded,
+          ));
+          onClose();
+        }}
         onCancel={() => onReviewOpenChange(false)}
       />
     );

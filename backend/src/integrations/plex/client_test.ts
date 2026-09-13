@@ -1,6 +1,75 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import { extractExternalIds, mapActiveSessions, PlexClient } from './client.ts';
 
+Deno.test('deleteMedia records actual successful and accepted service responses', async () => {
+  for (
+    const fixture of [
+      { status: 202, body: '', expected: 'accepted' },
+      { status: 200, body: '', expected: 'succeeded' },
+      { status: 204, body: null, expected: 'succeeded' },
+      { status: 200, body: '<MediaContainer size="0"/>', expected: 'succeeded' },
+      {
+        status: 200,
+        body: '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>',
+        expected: 'succeeded',
+      },
+    ]
+  ) {
+    const requests: Array<{ url: string; method: string | undefined }> = [];
+    const responses: unknown[] = [];
+    const mockFetch = ((input, init) => {
+      requests.push({ url: String(input), method: init?.method });
+      return Promise.resolve(new Response(fixture.body, { status: fixture.status }));
+    }) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'fixture-token', undefined, mockFetch);
+    await client.deleteMedia('123', 456, (response) => responses.push(response));
+    assertEquals(requests, [{
+      url: 'http://fixture.invalid/library/metadata/123/media/456',
+      method: 'DELETE',
+    }]);
+    assertEquals(responses, [{ status: fixture.expected, httpStatus: fixture.status }]);
+  }
+});
+
+Deno.test('deleteMedia never records success for invalid bodies or rejected responses', async () => {
+  for (
+    const fixture of [
+      { status: 200, body: '{"success":true}' },
+      { status: 200, body: '<html>Login required</html>' },
+      { status: 200, body: '<MediaContainer error="permission denied"/>' },
+      { status: 202, body: '<MediaContainer status="failed"/>' },
+      { status: 200, body: '<MediaContainer><Error/></MediaContainer>' },
+      { status: 403, body: 'Forbidden' },
+    ]
+  ) {
+    const responses: unknown[] = [];
+    let requests = 0;
+    const mockFetch = (() => {
+      requests++;
+      return Promise.resolve(new Response(fixture.body, { status: fixture.status }));
+    }) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'fixture-token', undefined, mockFetch);
+    await assertRejects(() =>
+      client.deleteMedia('123', 456, (response) => responses.push(response))
+    );
+    assertEquals(responses, []);
+    assertEquals(requests, 1);
+  }
+});
+
+Deno.test('deleteMedia lost response produces no callback and no automatic replay', async () => {
+  let requests = 0;
+  const responses: unknown[] = [];
+  const mockFetch = (() => {
+    requests++;
+    return Promise.reject(new TypeError('disposable lost response'));
+  }) as typeof fetch;
+  const client = new PlexClient('http://fixture.invalid', 'fixture-token', undefined, mockFetch);
+  await assertRejects(() => client.deleteMedia('123', 456, (response) => responses.push(response)));
+  assertEquals(responses, []);
+  assertEquals(requests, 1);
+});
+
 function deletionInventoryEntries(start: number, count: number) {
   return Array.from({ length: count }, (_, index) => ({
     ratingKey: String(start + index),

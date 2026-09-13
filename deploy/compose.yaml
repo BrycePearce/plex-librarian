@@ -1,0 +1,11 @@
+# Preserve this project name and database volume when upgrading an existing stack.
+name: plex-librarian
+services:
+  librarian:
+    image: ghcr.io/brycepearce/plex-librarian:latest
+    restart: unless-stopped
+    init: true
+    ports: ["8288:8080"]
+    volumes: ["database:/data"]
+volumes:
+  database:

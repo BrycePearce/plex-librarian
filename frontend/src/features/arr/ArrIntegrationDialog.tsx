@@ -12,7 +12,6 @@ import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectio
 import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
 import { SeerrConnectionWizard } from "../seerr/SeerrConnectionWizard.tsx";
 import { IntegrationCompatibilityIndicator } from "../integrationCompatibility/IntegrationCompatibilityIndicator.tsx";
-import { ServiceStorageSetup } from "./ServiceStorageSetup.tsx";
 
 // Rendered only while /settings/sonarr-radarr is active (see that route and the
 // <Outlet/> in settings.tsx) — mounting/unmounting doubles as opening/closing, so
@@ -78,7 +77,6 @@ export function ArrIntegrationDialog() {
   const remove = useMutation({
     mutationFn: api.arr.deleteInstance,
     onSuccess: async () => {
-      qc.removeQueries({ queryKey: ["service-storage"] });
       await qc.invalidateQueries({ queryKey: queryKeys.arrIntegrations.all });
       await qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all });
       setPendingRemoval(null);
@@ -90,14 +88,12 @@ export function ArrIntegrationDialog() {
     onSuccess: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
-        qc.invalidateQueries({ queryKey: ["service-storage"] }),
       ]);
     },
   });
   const removeQbittorrent = useMutation({
     mutationFn: api.qbittorrent.deleteInstance,
     onSuccess: async () => {
-      qc.removeQueries({ queryKey: ["service-storage"] });
       await qc.invalidateQueries({
         queryKey: queryKeys.qbittorrentIntegrations.all,
       });
@@ -313,7 +309,6 @@ export function ArrIntegrationDialog() {
                 setView("remove-qbittorrent");
               }}
             />
-            <ServiceStorageSetup />
             <SeerrConnections
               onConfigure={openSeerrWizard}
               onRemove={(instance) => {
@@ -337,7 +332,6 @@ export function ArrIntegrationDialog() {
           editingInstanceId={editingInstanceId}
           onCancel={() => setView("manager")}
           onSaved={() => {
-            qc.removeQueries({ queryKey: ["service-storage"] });
             void qc.invalidateQueries({
               queryKey: queryKeys.arrIntegrations.all,
             });
@@ -354,7 +348,6 @@ export function ArrIntegrationDialog() {
           arrInstances={data.instances}
           onCancel={() => setView("manager")}
           onSaved={() => {
-            qc.removeQueries({ queryKey: ["service-storage"] });
             void qc.invalidateQueries({
               queryKey: queryKeys.qbittorrentIntegrations.all,
             });

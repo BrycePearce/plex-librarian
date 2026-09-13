@@ -30,7 +30,6 @@ export function QbittorrentConnections({
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.integrationCompatibility.all }),
-        queryClient.invalidateQueries({ queryKey: ["service-storage"] }),
       ]);
     },
   });
@@ -161,41 +160,10 @@ export function QbittorrentConnections({
           </button>
         </div>
       ))}
-      {data && (data.targets.length > 0 || data.pathMappings.length > 0) && (
-        <div className="mt-4 text-xs text-base-content/55">
-          <p>
-            Host discovery checks storage relationships automatically. If a layout is unresolved,
-            review Host discovery and the affected deletion preview. A successful connection test
-            does not confirm that a selected deletion is eligible.
-          </p>
-          {data.pathMappings.length > 0 && (
-            <details className="mt-3 rounded-xl border border-base-300 bg-base-200/25 p-4">
-              <summary className="cursor-pointer text-sm font-semibold">
-                Saved path mappings
-              </summary>
-              <p className="mt-2">
-                These existing overrides remain in use where applicable and are preserved when
-                editing connection credentials.
-              </p>
-              {data.pathMappings.map((item) => (
-                <div key={item.id} className="mt-2 flex flex-wrap items-center gap-2">
-                  <span>
-                    {data.targets.find((target) =>
-                      target.instanceKey === item.instanceKey
-                    )?.name ??
-                      item.instanceKey}
-                  </span>
-                  <code className="break-all">{item.qbittorrentPath}</code>
-                  <span>→</span>
-                  <code className="break-all">{item.localPath}</code>
-                  <span className="badge badge-xs badge-outline">rev {item.revision}</span>
-                  <span>{item.caseSensitive ? "Case-sensitive" : "Case-insensitive"}</span>
-                </div>
-              ))}
-            </details>
-          )}
-        </div>
-      )}
+      <p className="mt-4 text-xs text-base-content/55">
+        Deletion reviews check current torrent associations automatically. A connection test does
+        not authorize deletion.
+      </p>
       <div className="min-h-5">
         {test.isError && <p className="mt-1 text-xs text-error">{test.error.message}</p>}
       </div>

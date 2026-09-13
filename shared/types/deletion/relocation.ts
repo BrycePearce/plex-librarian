@@ -1,4 +1,5 @@
 interface DeletionOperationTargetBase {
+  serviceActionDecisions?: import('../../serviceOwnedDeletion.ts').ServiceActionDecision[];
   /** Ordinary service-owned workflow, including queued targets without attempts. */
   serviceOwnedDeletion?: boolean;
   serviceOutcomes?: Array<

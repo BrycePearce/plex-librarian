@@ -1091,7 +1091,13 @@ export class PlexClient {
   // versions or the item itself — distinct from deleteItem, which removes the whole
   // item and everything under it. Same auth/error/retry behavior as deleteItem; see
   // its comment above for the reasoning.
-  async deleteMedia(ratingKey: string, mediaId: number): Promise<void> {
+  async deleteMedia(
+    ratingKey: string,
+    mediaId: number,
+    onResponse?: (
+      response: import('../../../../shared/serviceStorage.ts').ServiceDeletionResponse,
+    ) => void,
+  ): Promise<void> {
     const url = `${this.url}/library/metadata/${ratingKey}/media/${mediaId}`;
     const headers = buildPlexHeaders(this.clientId, this.token);
     const res = await this.fetchImpl(url, {
@@ -1107,6 +1113,17 @@ export class PlexClient {
         res.status,
         `Plex ${res.status} deleting media ${mediaId} of ${ratingKey}${text ? `: ${text}` : ''}`,
       );
+    }
+    if (onResponse) {
+      const body = (await res.text()).trim();
+      if (
+        body &&
+        (!/^(?:<\?xml[^>]*>\s*)?<MediaContainer\b[^>]*\/?>\s*(?:<\/MediaContainer>)?$/.test(body) ||
+          /\b(?:error|status)\s*=/i.test(body))
+      ) {
+        throw new PlexDeleteError(res.status, 'Plex returned an ambiguous media deletion response');
+      }
+      onResponse({ status: res.status === 202 ? 'accepted' : 'succeeded', httpStatus: res.status });
     }
   }
 

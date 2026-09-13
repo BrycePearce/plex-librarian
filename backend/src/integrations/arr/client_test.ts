@@ -5,7 +5,114 @@ import {
   ArrApiError,
   ArrClient,
   normalizeArrUrl,
+  RADARR_CATALOG_MAX_BYTES,
+  RADARR_CATALOG_MAX_RECORDS,
 } from './client.ts';
+
+Deno.test('Radarr extra scope rejects unsafe paths and incomplete bounded reads', async () => {
+  for (
+    const relativePath of [
+      '../outside.srt',
+      '/absolute.srt',
+      'C:\\outside.srt',
+      'a//b.srt',
+      ' a.srt',
+      4,
+    ]
+  ) {
+    const client = new ArrClient(
+      'radarr',
+      'http://fixture.invalid',
+      'fixture-key',
+      (() => Promise.resolve(Response.json([{ relativePath, movieFileId: 42 }]))) as typeof fetch,
+    );
+    await assertRejects(() => client.extraFiles(1), ArrApiError, 'extra-file record');
+  }
+  const tooMany = new ArrClient(
+    'radarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    (() =>
+      Promise.resolve(
+        Response.json(
+          Array.from(
+            { length: RADARR_CATALOG_MAX_RECORDS + 1 },
+            () => ({ relativePath: 'file.srt', movieFileId: 42 }),
+          ),
+        ),
+      )) as typeof fetch,
+  );
+  await assertRejects(() => tooMany.extraFiles(1), ArrApiError, 'extra-file response');
+  const tooLarge = new ArrClient(
+    'radarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    (() =>
+      Promise.resolve(
+        new Response(' '.repeat(RADARR_CATALOG_MAX_BYTES + 1)),
+      )) as typeof fetch,
+  );
+  await assertRejects(() => tooLarge.extraFiles(1), ArrApiError);
+  const failed = new ArrClient(
+    'radarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    (() => Promise.resolve(new Response(null, { status: 503 }))) as typeof fetch,
+  );
+  await assertRejects(() => failed.extraFiles(1), ArrApiError);
+});
+
+Deno.test('Sonarr extra inventory is explicitly unsupported, never an empty deletion scope', async () => {
+  let requests = 0;
+  const client = new ArrClient(
+    'sonarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    (() => {
+      requests++;
+      return Promise.resolve(Response.json([]));
+    }) as typeof fetch,
+  );
+  await assertRejects(
+    () => client.sonarrExtraFiles(42),
+    ArrApiError,
+    'complete associated extra-file inventory',
+  );
+  await assertRejects(() => client.sonarrExtraFiles(0), ArrApiError, 'positive Sonarr series ID');
+  assertEquals(requests, 0);
+});
+
+Deno.test('catalog-only Arr deletion never requests directory file removal', async () => {
+  for (const type of ['sonarr', 'radarr'] as const) {
+    const requests: Array<{ url: string; method: string | undefined }> = [];
+    const client = new ArrClient(
+      type,
+      'http://fixture.invalid',
+      'fixture-key',
+      ((input, init) => {
+        requests.push({ url: String(input), method: init?.method });
+        return Promise.resolve(new Response(null, { status: 202 }));
+      }) as typeof fetch,
+    );
+    const outcomes: unknown[] = [];
+    await client.deleteManagedRecord(42, false, (outcome) => outcomes.push(outcome));
+    assertEquals(requests, [{
+      url: `http://fixture.invalid/api/v3/${
+        type === 'radarr' ? 'movie' : 'series'
+      }/42?deleteFiles=false&${
+        type === 'radarr' ? 'addImportExclusion' : 'addImportListExclusion'
+      }=false`,
+      method: 'DELETE',
+    }]);
+    assertEquals(outcomes, [{ status: 'accepted', httpStatus: 202 }]);
+    await assertRejects(
+      () => client.deleteManagedRecord(-1, false),
+      ArrApiError,
+      'positive managed record ID',
+    );
+    assertEquals(requests.length, 1);
+  }
+});
 
 Deno.test('remote mapping suggestions preserve their download-client host and omit unscoped records', async () => {
   const client = new ArrClient(
@@ -753,6 +860,46 @@ Deno.test(
   },
 );
 
+Deno.test('ArrClient requires explicit empty file ownership for post-deletion monitoring', async () => {
+  for (const episodeFileId of [undefined, null, '0', 999, 0]) {
+    let writes = 0, monitored = true;
+    const client = new ArrClient(
+      'sonarr',
+      'http://sonarr.invalid',
+      'test',
+      ((_input, init) => {
+        if (init?.method === 'PUT') {
+          writes++;
+          monitored = false;
+        }
+        return Promise.resolve(Response.json({
+          id: 71,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 2,
+          monitored,
+          episodeFileId,
+        }));
+      }) as typeof fetch,
+    );
+    const update = () =>
+      client.setSonarrEpisodeMonitored(
+        {
+          episodeId: 71,
+          seriesId: 7,
+          seasonNumber: 1,
+          episodeNumber: 2,
+        },
+        false,
+        undefined,
+        true,
+      );
+    if (episodeFileId === 0) assertEquals(await update(), true);
+    else await assertRejects(update, Error, 'monitoring is held');
+    assertEquals(writes, episodeFileId === 0 ? 1 : 0);
+  }
+});
+
 Deno.test('ArrClient updates only an exact Sonarr episode and verifies monitoring', async () => {
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
   let monitored = true;
@@ -786,7 +933,12 @@ Deno.test('ArrClient updates only an exact Sonarr episode and verifies monitorin
     id: 71,
     monitored: true,
   });
-  assertEquals(await client.setSonarrEpisodeMonitored(identity, false), true);
+  const responses: unknown[] = [];
+  assertEquals(
+    await client.setSonarrEpisodeMonitored(identity, false, (response) => responses.push(response)),
+    true,
+  );
+  assertEquals(responses, [{ status: 'succeeded', httpStatus: 200 }]);
   assertEquals(requests, [
     {
       url: 'http://sonarr:8989/api/v3/episode/71',
@@ -1135,6 +1287,59 @@ Deno.test('Sonarr lookup exposes bounded season summaries with managed files', a
   });
 });
 
+Deno.test('Radarr imported file provenance comes only from bounded historical FileId evidence', async () => {
+  const urls: string[] = [];
+  const records = [{ fileId: '41' }, { FileId: '42' }, { fileId: '43', FileId: '43' }, {}];
+  const client = new ArrClient(
+    'radarr',
+    'http://fixture.invalid',
+    'fixture-key',
+    ((input) => {
+      urls.push(String(input));
+      return Promise.resolve(Response.json(records.map((data, index) => ({
+        id: index + 1,
+        eventType: 'downloadFolderImported',
+        downloadId: 'a'.repeat(40),
+        data,
+      }))));
+    }) as typeof fetch,
+  );
+  assertEquals((await client.torrentAssociations(7)).map((record) => record.movieFileId), [
+    41,
+    42,
+    43,
+    undefined,
+  ]);
+  assertEquals(urls, ['http://fixture.invalid/api/v3/history/movie?movieId=7&includeMovie=false']);
+  for (
+    const data of [
+      { fileId: '0' },
+      { fileId: 42 },
+      { fileId: ' 42' },
+      { fileId: '4.2' },
+      { fileId: '9007199254740992' },
+      { fileId: '41', FileId: '42' },
+      [],
+      null,
+    ]
+  ) {
+    const malformed = new ArrClient(
+      'radarr',
+      'http://fixture.invalid',
+      'fixture-key',
+      (() =>
+        Promise.resolve(
+          Response.json([{
+            eventType: 'downloadFolderImported',
+            downloadId: 'a'.repeat(40),
+            data,
+          }]),
+        )) as typeof fetch,
+    );
+    await assertRejects(() => malformed.torrentAssociations(7), ArrApiError, 'ownership');
+  }
+});
+
 Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', async () => {
   const mockFetch = (() =>
     Promise.resolve(
@@ -1165,6 +1370,88 @@ Deno.test('torrentAssociations keeps only imported BitTorrent download IDs', asy
       date: '2026-01-01T00:00:00Z',
     },
   ]);
+});
+
+Deno.test('Sonarr torrent associations preserve multi-episode import owners and file conflicts', async () => {
+  const records = [
+    { id: 1, episodeId: 11, data: { fileId: '30' } },
+    { id: 2, episodeId: 12, data: { FileId: '30' } },
+    { id: 3, episodeId: 12, data: { fileId: '31', FileId: '31' } },
+  ].map((record) => ({
+    ...record,
+    eventType: 'downloadFolderImported',
+    downloadId: 'a'.repeat(40),
+    data: {
+      ...record.data,
+      droppedPath: '/downloads/pack/double.mkv',
+      importedPath: '/tv/Show/double.mkv',
+    },
+  }));
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() => Promise.resolve(Response.json(records))) as typeof fetch,
+  );
+  const associations = await client.torrentAssociations(42);
+  assertEquals(
+    associations.map(({ historyId, episodeId, episodeFileId }) => ({
+      historyId,
+      episodeId,
+      episodeFileId,
+    })),
+    [
+      { historyId: 1, episodeId: 11, episodeFileId: 30 },
+      { historyId: 2, episodeId: 12, episodeFileId: 30 },
+      { historyId: 3, episodeId: 12, episodeFileId: 31 },
+    ],
+  );
+});
+
+Deno.test('Sonarr torrent associations never assert malformed or missing import provenance', async () => {
+  const malformed = [undefined, null, 0, -1, 1.5, true, {}, [], '12', Number.MAX_SAFE_INTEGER + 1];
+  const malformedFileIds = [
+    undefined,
+    null,
+    0,
+    12,
+    true,
+    {},
+    [],
+    '',
+    '0',
+    '-1',
+    '1.5',
+    '1e2',
+    ' 12',
+    '12 ',
+    '012',
+    '12junk',
+    '9007199254740992',
+  ];
+  const records = [
+    ...malformed.map((episodeId) => ({ episodeId, data: {} })),
+    ...malformedFileIds.map((fileId) => ({ data: { fileId } })),
+    { data: { fileId: '12', FileId: '13' } },
+    { data: { fileId: '12', FileId: null } },
+  ].map((record, index) => ({
+    ...record,
+    eventType: 'downloadFolderImported',
+    downloadId: 'a'.repeat(40),
+    data: { ...record.data, droppedPath: `/downloads/file-${index}.mkv` },
+  }));
+  const client = new ArrClient(
+    'sonarr',
+    'http://sonarr:8989',
+    'secret',
+    (() => Promise.resolve(Response.json(records))) as typeof fetch,
+  );
+  const associations = await client.torrentAssociations(42);
+  assertEquals(associations.length, records.length);
+  for (const association of associations) {
+    assertEquals(Object.hasOwn(association, 'episodeId'), false);
+    assertEquals(Object.hasOwn(association, 'episodeFileId'), false);
+  }
 });
 
 Deno.test('download history detects a hash associated with another Arr title', async () => {

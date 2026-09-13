@@ -2,6 +2,9 @@ import { CURRENT_LOCATION_POLICY_VERSION } from '../../../../../shared/deletionP
 import type { SqliteClient } from '../../../db/index.ts';
 import { refreshDeletionOperation } from './state.ts';
 
+// Legacy routes and host discovery have retired. This is not a deployment option.
+export const LEGACY_DELETION_EXECUTION_SUPPORTED = false;
+
 export const UPGRADE_HOLD = 'current_location_policy_update';
 export const UPGRADE_PREVIEW_MESSAGE =
   'Deletion paused after update. No external attempt was found. Cancel this held work, then preview again after update.';
@@ -105,14 +108,22 @@ export function upgradeTargetCanCancel(client: SqliteClient, targetId: number): 
 }
 
 /** Call inside the caller's transaction before recovery, claiming, or user actions. */
-export function holdLegacyDeletionTargets(client: SqliteClient, now: number): void {
+export function holdLegacyDeletionTargets(
+  client: SqliteClient,
+  now: number,
+  legacyExecutionSupported = LEGACY_DELETION_EXECUTION_SUPPORTED,
+): void {
   const rows = client.prepare(
     `SELECT id, operation_id, snapshot, status, phase, error FROM deletion_targets
      WHERE status NOT IN ('completed', 'cancelled')
        AND NOT (status = 'completed_with_warning' AND phase = 'finalizing')
        AND CASE WHEN json_valid(snapshot) THEN
          COALESCE(json_extract(snapshot, '$.currentLocationPolicyVersion'), -1) <> ${CURRENT_LOCATION_POLICY_VERSION}
-         OR (target_kind = 'whole_item' AND COALESCE(json_extract(snapshot, '$.ordinaryPlan.policyVersion'), -1) <> ${CURRENT_LOCATION_POLICY_VERSION})
+         OR (${
+      legacyExecutionSupported ? 0 : 1
+    } = 1 AND COALESCE(json_extract(snapshot, '$.serviceOwnedPlan.policyVersion'), -1) <> 4)
+         OR (target_kind = 'whole_item' AND COALESCE(json_extract(snapshot, '$.ordinaryPlan.policyVersion'), -1) <> ${CURRENT_LOCATION_POLICY_VERSION}
+             AND COALESCE(json_extract(snapshot, '$.serviceOwnedPlan.policyVersion'), -1) <> 4)
          ELSE 1 END`,
   ).values<[number, string, string, string, string, string | null]>();
   const operations = new Set<string>();

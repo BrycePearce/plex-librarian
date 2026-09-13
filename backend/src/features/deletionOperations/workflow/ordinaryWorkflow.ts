@@ -44,6 +44,7 @@ export async function ensureOrdinaryDeletion(
   ) throw new Error('Invalid accepted service scope');
   const attempts = snapshot.ordinaryAttempts ?? {};
   const reconciliations = snapshot.ordinaryReconciliations ?? {};
+  const jobOutcomes = snapshot.ordinaryJobOutcomes ?? {};
   const plexKey = `plex:${snapshot.ratingKey}`;
   let phase = 'downloads';
   const retainedCheck = retainedPlexBatchCheck(() => phase);
@@ -96,6 +97,12 @@ export async function ensureOrdinaryDeletion(
           roots.filter((root) => keys.has(root.serviceKey)).sort((a, b) => a.id - b.id),
         ) !== evidenceFingerprint(plan.roots)
     ) throw new Error('Accepted service configuration or storage relationships changed');
+    // Re-observe accepted jobs on resume and before each later mutation. A lost
+    // response is held above even if the job subsequently disappears.
+    for (const selected of plan.jobs) {
+      const key = `qb:${selected.instanceKey}:${selected.job.id}`;
+      if (attempts[key]?.response) await reconcileJob(selected);
+    }
     await assertCurrentOrdinaryProtection(
       plan,
       plex,
@@ -142,6 +149,7 @@ export async function ensureOrdinaryDeletion(
   function save() {
     snapshot.ordinaryAttempts = attempts;
     snapshot.ordinaryReconciliations = reconciliations;
+    snapshot.ordinaryJobOutcomes = jobOutcomes;
     const next = JSON.stringify(snapshot);
     const changed = withTransaction((client) =>
       client.prepare(
@@ -191,6 +199,24 @@ export async function ensureOrdinaryDeletion(
       throw error;
     }
   }
+  async function reconcileJob(selected: typeof plan.jobs[number]) {
+    const key = `qb:${selected.instanceKey}:${selected.job.id}`;
+    const destination = downloadTargets.find((entry) => entry.instanceKey === selected.instanceKey);
+    if (!destination) throw new Error('The accepted qBittorrent destination changed');
+    // A successful, fresh API read is required. Errors and a still-visible job
+    // cannot authorize downstream deletions or another destructive request.
+    let current;
+    try {
+      current = await destination.client.findJob(selected.job.id);
+    } catch {
+      throw new Error('qBittorrent accepted deletion but its current outcome could not be read');
+    }
+    if (current) {
+      throw new Error('qBittorrent accepted deletion but the selected job is still present');
+    }
+    jobOutcomes[key] = { status: 'job_absent', observedAt: Date.now() };
+    save();
+  }
   for (const selected of plan.jobs) {
     const key = `qb:${selected.instanceKey}:${selected.job.id}`;
     if (attempts[key]?.response) continue;
@@ -208,6 +234,7 @@ export async function ensureOrdinaryDeletion(
       (record) =>
         destination.client.deleteJob(selected.job.id, { deleteData: true, onResponse: record }),
     );
+    await reconcileJob(selected);
   }
   for (const selected of plan.arr) {
     const destination = arrTargets.find((entry) => entry.instanceId === selected.instanceId);
@@ -335,7 +362,7 @@ export async function ensureOrdinaryDeletion(
     for (const selected of plan.jobs) {
       const key = `qb:${selected.instanceKey}:${selected.job.id}`;
       if (
-        attempts[key]?.response &&
+        attempts[key]?.response && jobOutcomes[key]?.status === 'job_absent' &&
         selected.job.manifestFiles.some((part) =>
           map(selected.serviceKey, appendRemotePath(selected.job.savePath, part.path)!) === path &&
           part.size === file.size

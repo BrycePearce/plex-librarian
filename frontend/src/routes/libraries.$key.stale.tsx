@@ -3,13 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowLeft, Database, Gauge, HardDrive, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { api, ApiError, isNotFoundError } from "../lib/api.ts";
+import { api, isNotFoundError } from "../lib/api.ts";
 import type { SortKey, StaleItem, StaleParams } from "../lib/api.ts";
 import { formatKilobytes } from "../lib/format.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
 import { useLibrarySync } from "../lib/useLibrarySync.tsx";
 import { useNotSyncedYet } from "../lib/useNotSyncedYet.ts";
-import { useDeleteItems } from "../lib/useDeleteItems.ts";
+
 import { requireAuth } from "../lib/requireAuth.ts";
 import { StaleTableSkeleton } from "../components/Skeletons.tsx";
 import { NotSyncedYetCard } from "../components/NotSyncedYetCard.tsx";
@@ -29,9 +29,9 @@ import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 import { StaleItemsTable } from "./-stale/StaleItemsTable.tsx";
 import { SelectionActionBar } from "./-stale/SelectionActionBar.tsx";
-import { type SeasonRemovalChoice, SeasonRemovalDialog } from "./-stale/SeasonRemovalDialog.tsx";
+
 import { LibraryQuickCleanupAction } from "./-stale/LibraryQuickCleanupAction.tsx";
-import { DeleteConfirmDialog } from "../features/mediaDeletion/DeleteConfirmDialog.tsx";
+import { ServiceOwnedDeletionDialog } from "../features/mediaDeletion/ServiceOwnedDeletionDialog.tsx";
 import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import {
   CollectionToolbar,
@@ -299,43 +299,20 @@ function StalePage() {
   const [confirmSeason, setConfirmSeason] = useState<StaleItem | null>(null);
   const { trackDeletionOperation } = useDeletionOperationTracker();
 
-  const deleteMutation = useDeleteItems([
-    queryKeys.stale.library(key),
-    queryKeys.events.all,
-    queryKeys.mediaRemovals.all,
-  ]);
-  const seasonDeleteMutation = useMutation({
-    mutationFn: ({ item, choice }: { item: StaleItem; choice: SeasonRemovalChoice }) =>
-      api.libraries.deleteSeason(key, item.ratingKey, choice),
-    onError: (error, { item, choice }) => {
-      if (
-        !(error instanceof ApiError) || !error.preview ||
-        !("coordinatedConfigured" in error.preview)
-      ) return;
-      qc.setQueryData(
-        [
-          "stale-season-removal-preview",
-          key,
-          item.ratingKey,
-          choice.coordinated,
-          choice.cleanupDownloads,
-        ],
-        error.preview,
-      );
-    },
-    onSuccess: (created) => {
-      trackDeletionOperation(created.operationId, [
-        queryKeys.stale.library(key),
-        queryKeys.events.all,
-        queryKeys.mediaRemovals.all,
-        queryKeys.libraries.all,
-      ]);
-      selection.clear();
-      seasonDialogRef.current?.close();
-      setConfirmSeason(null);
-    },
-  });
-
+  function deletionCreated(operationId: string) {
+    trackDeletionOperation(operationId, [
+      queryKeys.stale.library(key),
+      queryKeys.events.all,
+      queryKeys.mediaRemovals.all,
+      queryKeys.libraries.all,
+    ]);
+    selection.clear();
+    closeConfirm();
+  }
+  useEffect(() => {
+    if (confirmSeason) seasonDialogRef.current?.showModal();
+    else if (confirmItems.length) dialogRef.current?.showModal();
+  }, [confirmSeason, confirmItems]);
   const goToOffset = useScrollToOffset(
     params.offset ?? 0,
     (offset) => setParams((p) => ({ ...p, offset })),
@@ -358,12 +335,10 @@ function StalePage() {
     if (seasonScope) {
       if (items.length !== 1) return;
       setConfirmSeason(items[0]!);
-      seasonDeleteMutation.reset();
-      seasonDialogRef.current?.showModal();
+
       return;
     }
     setConfirmItems(items);
-    dialogRef.current?.showModal();
   }
 
   function closeConfirm() {
@@ -674,44 +649,24 @@ function StalePage() {
           </>
         )}
 
-      <DeleteConfirmDialog
-        dialogRef={dialogRef}
-        libraryKey={key}
-        items={confirmItems}
-        pending={deleteMutation.isPending}
-        error={deleteMutation.error}
-        onConfirm={({
-          coordinatedRatingKeys,
-          cleanupDownloadRatingKeys,
-          cleanupPreviewFingerprints,
-        }) =>
-          deleteMutation.mutate(
-            {
-              libraryKey: key,
-              ratingKeys: confirmItems.map((i) => i.ratingKey),
-              coordinatedRatingKeys,
-              cleanupDownloadRatingKeys,
-              cleanupPreviewFingerprints,
-            },
-            {
-              onSuccess: () => {
-                selection.clear();
-                dialogRef.current?.close();
-              },
-            },
-          )}
-        onCancel={closeConfirm}
-      />
-      <SeasonRemovalDialog
-        dialogRef={seasonDialogRef}
-        libraryKey={key}
-        item={confirmSeason}
-        pending={seasonDeleteMutation.isPending}
-        error={seasonDeleteMutation.error}
-        onConfirm={(choice) =>
-          confirmSeason && seasonDeleteMutation.mutate({ item: confirmSeason, choice })}
-        onCancel={closeConfirm}
-      />
+      {confirmItems.length > 0 && (
+        <ServiceOwnedDeletionDialog
+          dialogRef={dialogRef}
+          libraryKey={key}
+          targets={confirmItems.map((item) => ({ ratingKey: item.ratingKey }))}
+          onCreated={deletionCreated}
+          onCancel={closeConfirm}
+        />
+      )}
+      {confirmSeason && (
+        <ServiceOwnedDeletionDialog
+          dialogRef={seasonDialogRef}
+          libraryKey={key}
+          targets={[{ ratingKey: confirmSeason.ratingKey }]}
+          onCreated={deletionCreated}
+          onCancel={closeConfirm}
+        />
+      )}
     </div>
   );
 }

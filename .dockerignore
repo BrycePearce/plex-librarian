@@ -22,3 +22,4 @@ frontend/.vite/
 .DS_Store
 Thumbs.db
 .tanstack/
+tools/helper-free-acceptance/.runtime/

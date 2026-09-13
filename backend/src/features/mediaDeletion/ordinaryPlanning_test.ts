@@ -373,6 +373,27 @@ Deno.test('complete empty QB needs no roots for Plex with either QB choice', asy
   assertEquals(preview.sonarrCleanupStatus, 'error');
 });
 
+Deno.test('unconfigured QB is inapplicable and does not block applicable Plex or Arr cleanup', async () => {
+  for (const arrSelected of [false, true]) {
+    for (const qbSelected of [false, true]) {
+      const { input } = fixture();
+      const plan = await buildOrdinaryDeletionPlan({
+        ...input,
+        downloadTargets: [],
+        connections: input.connections.filter((entry) => !entry.key.startsWith('qb:')),
+        roots: arrSelected ? input.roots.filter((root) => !root.serviceKey.startsWith('qb:')) : [],
+        arrSelected,
+        qbSelected,
+      });
+      assertEquals(plan.jobs, []);
+      assertEquals(plan.qbInventory, []);
+      assertEquals(plan.arr.length, arrSelected ? 1 : 0);
+      assertEquals(plan.plexFiles.length, 3);
+      assertEquals(Boolean(plan.noJobReason), qbSelected);
+    }
+  }
+});
+
 Deno.test('empty QB never bypasses failed inventory, a newly appearing job, or selected Arr mapping', async () => {
   for (const failure of ['unavailable', 'appeared', 'arr'] as const) {
     const { input, state } = fixture();

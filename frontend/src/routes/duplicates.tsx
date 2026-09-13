@@ -1,21 +1,21 @@
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { BadgeCheck, Copy, HardDrive, Layers3, Sparkles } from "lucide-react";
-import { v4 as uuidv4 } from "uuid";
+
 import { api } from "../lib/api.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../lib/api.ts";
 import { queryKeys } from "../lib/queryKeys.ts";
-import { useDeleteItems } from "../lib/useDeleteItems.ts";
+
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { Pagination } from "../components/Pagination.tsx";
 import { DuplicateGroupRow } from "./-duplicates/DuplicateGroupRow.tsx";
 import { DuplicateSeasonRows } from "./-duplicates/DuplicateSeasonRows.tsx";
-import { VersionPickerDialog } from "./-duplicates/VersionPickerDialog.tsx";
+import { ServiceVersionPickerDialog } from "../features/mediaDeletion/ServiceVersionPickerDialog.tsx";
 import "../components/dataSurfaces.css";
-import { SeasonDuplicateDialog } from "./-duplicates/SeasonDuplicateDialog.tsx";
+
 import { QuickCleanupAction } from "../features/quickCleanup/QuickCleanupAction.tsx";
-import { versionDeletionExecutionTarget } from "./-duplicates/versionDeletionState.ts";
+
 import { DuplicatesTableSkeleton } from "../components/Skeletons.tsx";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { requireAuth } from "../lib/requireAuth.ts";
@@ -119,166 +119,30 @@ function DuplicatesPage() {
   const [reviewSeason, setReviewSeason] = useState<DuplicateSeasonGroup | null>(null);
   const versionDialogRef = useRef<HTMLDialogElement>(null);
   const seasonDialogRef = useRef<HTMLDialogElement>(null);
-  const seasonCleanupRequestId = useRef(uuidv4());
+  const [reviewPending, setReviewPending] = useState(false);
 
   useEffect(() => {
-    if (!isSyncing) return;
+    if (!isSyncing || reviewPending) return;
     versionDialogRef.current?.close();
     seasonDialogRef.current?.close();
     setReviewItem(null);
     setReviewSeason(null);
-  }, [isSyncing]);
+  }, [isSyncing, reviewPending]);
 
-  // Both delete paths invalidate the same four query roots — the whole-item path
-  // uses the shared hook (same endpoint the stale page's bulk delete calls), the
-  // per-version path hits a different endpoint entirely so it invalidates directly.
-  const deleteWholeItemMutation = useDeleteItems([
-    queryKeys.duplicates.all,
-    queryKeys.stale.all,
-    queryKeys.libraries.all,
-    queryKeys.events.all,
-    queryKeys.mediaRemovals.all,
-  ]);
-
-  // Sequential, not concurrent — same "destructive and must stay attributable"
-  // reasoning as the bulk stale-item delete flow.
-  const deleteVersionsMutation = useMutation({
-    mutationFn: async ({
-      group,
-      mediaIds,
-      cleanupMediaIds,
-      deleteFromArr,
-      planFingerprint,
-      allowRadarrRetainedPathManagement,
-      allowRadarrMovieRemoval,
-    }: {
-      group: DuplicateGroup;
-      mediaIds: number[];
-      cleanupMediaIds: number[];
-      deleteFromArr: boolean;
-      planFingerprint?: string;
-      allowRadarrRetainedPathManagement?: boolean;
-      allowRadarrMovieRemoval?: boolean;
-    }) => {
-      if (group.mediaType === "movie") {
-        return await api.duplicates.deleteMovieMediaVersions(
-          group.ratingKey,
-          mediaIds,
-          cleanupMediaIds,
-          {
-            radarrMode: deleteFromArr ? "coordinate" : "none",
-            ...(planFingerprint ? { planFingerprint } : {}),
-            ...(allowRadarrRetainedPathManagement
-              ? { allowRadarrRetainedPathManagement: true }
-              : {}),
-            ...(allowRadarrMovieRemoval ? { allowRadarrMovieRemoval: true } : {}),
-          },
-        );
-      }
-      return await api.duplicates.deleteEpisodeMediaVersions(group.episodeRatingKey, mediaIds, {
-        cleanupMediaIds,
-        ...(planFingerprint ? { planFingerprint } : {}),
-      });
-    },
-    onSuccess: (res) => {
-      trackDeletionOperation(res.operationId, [
-        queryKeys.duplicates.all,
-        queryKeys.stale.all,
-        queryKeys.libraries.all,
-        queryKeys.events.all,
-        queryKeys.mediaRemovals.all,
-        queryKeys.versionDeletionPreview.all,
-      ]);
-      setReviewItem(null);
-      versionDialogRef.current?.close();
-    },
-  });
-
-  const deleteSeasonMutation = useMutation({
-    mutationFn: (request: {
-      selections: Array<{ ratingKey: string; deleteMediaIds: number[] }>;
-      previewFingerprint: string;
-      sonarrMode: "none" | "adopt_retained" | "remove_and_unmonitor";
-      cleanupDownloads: boolean;
-    }) =>
-      api.duplicates.seasonCleanup(
-        reviewSeason!.seasonRatingKey,
-        seasonCleanupRequestId.current,
-        request.selections.map((selection) => ({
-          episodeRatingKey: selection.ratingKey,
-          mediaIds: selection.deleteMediaIds,
-        })),
-        {
-          previewFingerprint: request.previewFingerprint,
-          sonarrMode: request.sonarrMode,
-          cleanupDownloads: request.cleanupDownloads,
-        },
-      ),
-    onSuccess: (result) => {
-      const invalidations = [
-        queryKeys.duplicates.all,
-        queryKeys.stale.all,
-        queryKeys.libraries.all,
-        queryKeys.events.all,
-        queryKeys.mediaRemovals.all,
-        queryKeys.versionDeletionPreview.all,
-      ];
-      trackDeletionOperation(result.operationId, invalidations);
-      seasonDialogRef.current?.close();
-      setReviewSeason(null);
-    },
-  });
-
-  function handleConfirm(
-    group: DuplicateGroup,
-    plan: {
-      mediaIds: number[];
-      deleteWholeItem: boolean;
-      deleteFromArr: boolean;
-      cleanupDownloads: boolean;
-      cleanupMediaIds: number[];
-      cleanupPreviewFingerprint?: string;
-      planFingerprint?: string;
-      allowRadarrRetainedPathManagement?: boolean;
-      allowRadarrMovieRemoval?: boolean;
-    },
-  ) {
-    if (isSyncing) return;
-    if (
-      group.mediaType === "movie" &&
-      versionDeletionExecutionTarget(group.mediaType, plan.deleteWholeItem) === "whole-item"
-    ) {
-      deleteWholeItemMutation.mutate(
-        {
-          libraryKey: group.libraryKey,
-          ratingKeys: [group.ratingKey],
-          coordinatedRatingKeys: plan.deleteFromArr ? [group.ratingKey] : [],
-          cleanupDownloadRatingKeys: plan.cleanupDownloads ? [group.ratingKey] : [],
-          cleanupPreviewFingerprints: plan.cleanupDownloads && plan.cleanupPreviewFingerprint
-            ? { [group.ratingKey]: plan.cleanupPreviewFingerprint }
-            : {},
-          unmonitorRatingKeys: [],
-        },
-        {
-          onSuccess: () => {
-            setReviewItem(null);
-            versionDialogRef.current?.close();
-          },
-        },
-      );
-      return;
-    }
-    deleteVersionsMutation.mutate({
-      group,
-      mediaIds: plan.mediaIds,
-      cleanupMediaIds: plan.cleanupMediaIds,
-      deleteFromArr: plan.deleteFromArr,
-      planFingerprint: plan.planFingerprint,
-      allowRadarrRetainedPathManagement: plan.allowRadarrRetainedPathManagement,
-      allowRadarrMovieRemoval: plan.allowRadarrMovieRemoval,
-    });
+  function deletionCreated(operationId: string) {
+    trackDeletionOperation(operationId, [
+      queryKeys.duplicates.all,
+      queryKeys.stale.all,
+      queryKeys.libraries.all,
+      queryKeys.events.all,
+      queryKeys.mediaRemovals.all,
+      queryKeys.versionDeletionPreview.all,
+    ]);
+    versionDialogRef.current?.close();
+    seasonDialogRef.current?.close();
+    setReviewItem(null);
+    setReviewSeason(null);
   }
-
   function openReview(item: DuplicateGroup) {
     if (isSyncing) return;
     seasonDialogRef.current?.close();
@@ -288,8 +152,7 @@ function DuplicatesPage() {
 
   function openSeasonReview(season: DuplicateSeasonGroup) {
     if (isSyncing) return;
-    seasonCleanupRequestId.current = uuidv4();
-    deleteSeasonMutation.reset();
+
     setReviewSeason(season);
   }
 
@@ -472,22 +335,31 @@ function DuplicatesPage() {
           </>
         )}
 
-      <VersionPickerDialog
-        dialogRef={versionDialogRef}
-        item={reviewItem}
-        pending={deleteVersionsMutation.isPending || deleteWholeItemMutation.isPending}
-        error={deleteVersionsMutation.error ?? deleteWholeItemMutation.error}
-        onConfirm={(plan) => reviewItem && handleConfirm(reviewItem, plan)}
-        onCancel={closeReview}
-      />
-      <SeasonDuplicateDialog
-        dialogRef={seasonDialogRef}
-        season={reviewSeason}
-        pending={deleteSeasonMutation.isPending}
-        error={deleteSeasonMutation.error}
-        onConfirm={(selections) => deleteSeasonMutation.mutate(selections)}
-        onClose={() => setReviewSeason(null)}
-      />
+      {reviewItem && (
+        <ServiceVersionPickerDialog
+          key={reviewItem.mediaType === "movie"
+            ? reviewItem.ratingKey
+            : reviewItem.episodeRatingKey}
+          dialogRef={versionDialogRef}
+          groups={[reviewItem]}
+          onCreated={deletionCreated}
+          onPendingChange={setReviewPending}
+          onCancel={closeReview}
+        />
+      )}
+      {reviewSeason && (
+        <ServiceVersionPickerDialog
+          key={reviewSeason.seasonRatingKey}
+          dialogRef={seasonDialogRef}
+          groups={reviewSeason.episodes}
+          onCreated={deletionCreated}
+          onPendingChange={setReviewPending}
+          onCancel={() => {
+            seasonDialogRef.current?.close();
+            setReviewSeason(null);
+          }}
+        />
+      )}
     </div>
   );
 }
