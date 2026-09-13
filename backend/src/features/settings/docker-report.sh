@@ -25,11 +25,10 @@ if [ "$#" -gt 0 ]; then
   [ "$#" -eq 2 ] && [ "$1" = --helper-pid ] || { echo 'Invalid collector invocation.' >&2; exit 1; }
   case "$2" in *[!0-9]*|'') echo 'Invalid helper PID.' >&2; exit 1;; esac
   [ "$2" -gt 1 ] || { echo 'The helper must use the host PID namespace.' >&2; exit 1; }
-  matched=0
-  for id in $ids; do
-    context=$(docker inspect --format '{{.State.Pid}} {{.HostConfig.PidMode}} {{.HostConfig.NetworkMode}}' "$id")
-    [ "$context" != "$2 host host" ] || matched=$((matched + 1))
-  done
+  # One filtered CLI invocation, preserving one independent record per container.
+  # Assignment must succeed before counting: partial inspect output is not proof.
+  contexts=$(docker inspect --format '{{.State.Pid}} {{.HostConfig.PidMode}} {{.HostConfig.NetworkMode}}' $ids)
+  matched=$(printf '%s\n' "$contexts" | awk -v expected="$2 host host" '$0 == expected {n++} END {print n+0}')
   [ "$matched" -eq 1 ] || { echo 'Helper host PID/network ownership could not be established.' >&2; exit 1; }
 fi
 addresses=$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9a-fA-F:.]+$/ && $i != "127.0.0.1" && $i != "::1") {if(n++) printf ","; printf "\"%s\"",$i}}' || true)
@@ -52,7 +51,18 @@ for id in $ids; do
     pids=$(docker top "$id" -eo pid 2>/dev/null | awk 'NR>1 && $1 ~ /^[0-9]+$/ {printf "%s,",$1}' || true)
     if [ -n "$pids" ]; then
       listeners=$(ss -ltnpH 2>/dev/null | awk -v pids=",$pids" '
-        { line=$0; owned=0; while(match(line,/pid=[0-9]+/)) {pid=substr(line,RSTART+4,RLENGTH-4); if(index(pids,"," pid ",")) owned=1; line=substr(line,RSTART+RLENGTH)}
+        { start=index($0,"users:("); line=substr($0,start+7); sub(/[[:space:]]+$/,"",line); owned=0; valid=start>0
+          # Parse complete ss process tuples, never PID-looking text in a name.
+          # Unknown or malformed quoting fails closed for the whole listener.
+          while(valid && line!=")") {
+            if(!match(line,/^\("([^"\\]|\\.)*",pid=[0-9]+,fd=[0-9]+\)/)) {valid=0; break}
+            tuple=substr(line,1,RLENGTH); line=substr(line,RLENGTH+1)
+            sub(/^\("([^"\\]|\\.)*",pid=/,"",tuple); sub(/,fd=.*$/,"",tuple)
+            if(index(pids,"," tuple ",")) owned=1
+            if(substr(line,1,1)==",") {line=substr(line,2); if(line==")") valid=0}
+            else if(line!=")") valid=0
+          }
+          owned=owned && valid
           if(owned) {address=$4; sub(/:[0-9]+$/,"",address); port=$4; sub(/^.*:/,"",port); if((address=="*" || address=="0.0.0.0" || address=="[::]" || address=="::") && port ~ /^[0-9]+$/ && port>0 && port<=65535) seen[port]=1}}
         END {for(port in seen) {if(n++) printf ","; printf "%d",port}}' || true)
     fi

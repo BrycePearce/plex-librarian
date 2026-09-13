@@ -1,6 +1,8 @@
 name: Build and push Docker image
 
 on:
+  # Manual runs validate only; they never publish images.
+  workflow_dispatch:
   push:
     branches: [main]
     tags:
@@ -11,7 +13,100 @@ env:
   DOCKERHUB_IMAGE: docker.io/edon231/plex-librarian
 
 jobs:
+  # Validate this exact push/tag before either image receives registry credentials.
+  # The separate PR/main CI workflow is not a dependency of a release-tag run.
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            architecture: amd64
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: v2.9.5
+
+      - name: Verify
+        run: deno task verify
+
+      - name: Build discovery helper for transport validation
+        run: docker build -f deploy/discovery/Dockerfile -t librarian-discovery-release-check .
+
+      - name: Confirm native image architecture
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+        run: test "$(docker image inspect librarian-discovery-release-check --format '{{.Architecture}}')" = "$EXPECTED_ARCHITECTURE"
+
+      - name: Test actual helper entrypoint permissions
+        run: |
+          set -euo pipefail
+          container=librarian-discovery-entrypoint-check
+          volume="${container}-transport"
+          docker volume create "$volume"
+          trap 'docker logs "$container"; docker rm -f "$container"; docker volume rm "$volume"' EXIT
+          docker run --detach --name "$container" --network none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges:true \
+            --mount "type=volume,source=$volume,target=/discovery" --tmpfs /tmp:rw,size=64m \
+            librarian-discovery-release-check
+          # Exercise both creation and reuse of the private key under the real
+          # restricted entrypoint. No collection or Docker socket is needed.
+          for phase in first-boot restart; do
+            if [[ "$phase" == restart ]]; then docker restart "$container"; fi
+            docker exec "$container" deno eval '
+            import { request } from "node:http";
+            const responds = () => new Promise((resolve) => {
+              const req = request({socketPath:"/discovery/discovery.sock", path:"/snapshot"}, (res) => {
+                res.resume();
+                res.on("end", () => resolve(res.statusCode === 401));
+              });
+              req.on("error", () => resolve(false));
+              req.setTimeout(500, () => { req.destroy(); resolve(false); });
+              req.end();
+            });
+            for (let attempt = 0; attempt < 50; attempt++) {
+              try {
+                const key = await Deno.lstat("/discovery/key");
+                const socket = await Deno.lstat("/discovery/discovery.sock");
+                if (key.isFile && socket.isSocket &&
+                    (key.mode & 0o777) === 0o600 && (socket.mode & 0o777) === 0o600 &&
+                    await responds()) {
+                  Deno.exit(0);
+                }
+              } catch { /* Entry point may still be starting. */ }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            throw new Error("Restricted helper entrypoint did not create private transport");
+            '
+            key_hash=$(docker exec "$container" sha256sum /discovery/key)
+            if [[ "$phase" == first-boot ]]; then
+              original_key_hash="$key_hash"
+            else
+              test "$key_hash" = "$original_key_hash"
+            fi
+          done
+
+      - name: Test packaged Unix socket transport
+        run: >-
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,size=64m
+          --mount "type=bind,source=${{ github.workspace }},target=/workspace,readonly"
+          --workdir /workspace --entrypoint deno librarian-discovery-release-check
+          test --no-config --allow-all backend/src/features/settings/discoveryTransport_test.ts
+
   build:
+    if: github.event_name != 'workflow_dispatch'
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -45,17 +140,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Set platform tag
         run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
@@ -64,7 +161,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -80,7 +177,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: digests-${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
           path: /tmp/digests/*
@@ -103,32 +200,34 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.image }}-*
           merge-multiple: true
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
-      - name: Create manifest list and push
+      - name: Publish commit index and prepare release tags
         working-directory: /tmp/digests
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -178,12 +277,64 @@ jobs:
             dockerhub_tags+=(-t "${DOCKERHUB_IMAGE}:edge")
           fi
 
-          docker buildx imagetools create "${ghcr_tags[@]}" "${sources[@]}"
+          printf '%s\0' "${ghcr_tags[@]}" > "$RUNNER_TEMP/ghcr-tags"
+          printf '%s\0' "${dockerhub_tags[@]}" > "$RUNNER_TEMP/dockerhub-tags"
+          docker buildx imagetools create -t "${GHCR_IMAGE}:${COMMIT_SHA}" "${sources[@]}"
           docker buildx imagetools create \
-            "${dockerhub_tags[@]}" \
+            -t "${DOCKERHUB_IMAGE}:${COMMIT_SHA}" \
             "${GHCR_IMAGE}:${COMMIT_SHA}"
 
       - name: Inspect images
         run: |
           docker buildx imagetools inspect ${{ env.GHCR_IMAGE }}:${{ github.sha }}
           docker buildx imagetools inspect ${{ env.DOCKERHUB_IMAGE }}:${{ github.sha }}
+
+      - name: Resolve and compare published index digests
+        id: release-digest
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          digest=$(docker buildx imagetools inspect "${GHCR_IMAGE}:${COMMIT_SHA}" --format '{{.Manifest.Digest}}')
+          mirror=$(docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${COMMIT_SHA}" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$digest" = "$mirror"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Sign GHCR image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.release-digest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Sign Docker Hub image provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.DOCKERHUB_IMAGE }}
+          subject-digest: ${{ steps.release-digest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify signed image provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_DIGEST: ${{ steps.release-digest.outputs.digest }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          for image in "$GHCR_IMAGE" "$DOCKERHUB_IMAGE"; do
+            gh attestation verify "oci://${image}@${RELEASE_DIGEST}" \
+              --bundle-from-oci --repo "$SOURCE_REPOSITORY" \
+              --signer-workflow "$SOURCE_REPOSITORY/.github/workflows/docker.yml" \
+              --source-digest "$COMMIT_SHA"
+          done
+
+      - name: Promote verified release tags
+        env:
+          RELEASE_DIGEST: ${{ steps.release-digest.outputs.digest }}
+        run: |
+          mapfile -d '' -t ghcr_tags < "$RUNNER_TEMP/ghcr-tags"
+          mapfile -d '' -t dockerhub_tags < "$RUNNER_TEMP/dockerhub-tags"
+          docker buildx imagetools create "${ghcr_tags[@]}" "${GHCR_IMAGE}@${RELEASE_DIGEST}"
+          docker buildx imagetools create "${dockerhub_tags[@]}" "${DOCKERHUB_IMAGE}@${RELEASE_DIGEST}"

@@ -7,6 +7,8 @@ import {
   DISCOVERY_MAX_BYTES,
   discoverySignature,
   equalSecret,
+  readDiscoveryKey,
+  validateDiscoveryDirectory,
 } from './discoveryTransport.ts';
 
 /** Fixed collector command, no request-supplied command, path, filter or Docker API. */
@@ -27,6 +29,7 @@ export function collectHostReport(): Promise<string> {
       env: {
         PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
         DOCKER_HOST: 'unix:///var/run/docker.sock',
+        DOCKER_CONFIG: '/helper/docker-config',
       },
     }, (error, stdout) => {
       if (error) {
@@ -44,11 +47,14 @@ export function collectHostReport(): Promise<string> {
 
 export async function startDiscoveryHelper(directory: string, collect = collectHostReport) {
   await Deno.mkdir(directory, { recursive: true, mode: 0o700 });
+  await validateDiscoveryDirectory(directory);
   let key: string;
   try {
-    key = (await Deno.readTextFile(`${directory}/key`)).trim();
+    key = await readDiscoveryKey(directory);
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if (
+      !(error instanceof Deno.errors.NotFound) && (error as { code?: string }).code !== 'ENOENT'
+    ) throw error;
     key = randomBytes(32).toString('hex');
     await Deno.writeTextFile(`${directory}/key`, key, { createNew: true, mode: 0o600 });
   }
@@ -64,8 +70,18 @@ export async function startDiscoveryHelper(directory: string, collect = collectH
   let pending: Promise<string> | undefined;
   let clients = 0;
   const server = createServer(async (req, res) => {
+    // A snapshot has no body and no persistent connection. Bound even clients
+    // that hold a connection without reaching the authenticated handler.
+    res.setHeader('connection', 'close');
     if (req.method !== 'GET' || req.url !== '/snapshot') {
       res.writeHead(404).end();
+      return;
+    }
+    if (
+      req.headers['transfer-encoding'] !== undefined ||
+      (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')
+    ) {
+      res.writeHead(400).end();
       return;
     }
     const auth = req.headers.authorization ?? '';
@@ -81,6 +97,7 @@ export async function startDiscoveryHelper(directory: string, collect = collectH
       res.writeHead(429).end();
       return;
     }
+    req.socket.setTimeout(30_000);
     clients++;
     try {
       pending ??= collect().then((raw) => JSON.stringify(parseDockerReport(raw))).finally(() => {
@@ -102,6 +119,8 @@ export async function startDiscoveryHelper(directory: string, collect = collectH
     }
   });
   server.maxConnections = 8;
+  server.maxRequestsPerSocket = 1;
+  server.setTimeout(5_000, (socket) => socket.destroy());
   server.requestTimeout = 30_000;
   server.headersTimeout = 5_000;
   await new Promise<void>((resolve, reject) => {

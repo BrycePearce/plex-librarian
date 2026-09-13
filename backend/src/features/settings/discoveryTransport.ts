@@ -1,5 +1,7 @@
 import { request } from 'node:http';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { parseDockerReport } from './dockerStorage.ts';
 
 export const DISCOVERY_DIRECTORY = '/discovery';
@@ -14,10 +16,43 @@ export function equalSecret(a: string, b: string): boolean {
   return left.byteLength === right.byteLength && timingSafeEqual(left, right);
 }
 
+/** The transport directory is a private trust boundary, not a general shared volume. */
+export async function validateDiscoveryDirectory(directory: string) {
+  const stat = await Deno.lstat(directory);
+  if (
+    !stat.isDirectory || stat.isSymlink ||
+    (Deno.build.os === 'linux' &&
+      (stat.uid !== Deno.uid() || ((stat.mode ?? 0) & 0o022) !== 0))
+  ) throw new Error('Discovery directory must be owned by this user and not writable by others');
+}
+
+export async function readDiscoveryKey(directory: string): Promise<string> {
+  await validateDiscoveryDirectory(directory);
+  // O_NONBLOCK also prevents an unexpected FIFO from hanging before fstat.
+  const file = await open(
+    `${directory}/key`,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = await file.stat();
+    if (
+      !stat.isFile() || stat.size > 128 ||
+      (Deno.build.os === 'linux' && (stat.uid !== Deno.uid() || (stat.mode & 0o077) !== 0))
+    ) throw new Error('Discovery key must be a private regular file');
+    const bytes = new Uint8Array(129);
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+    if (bytesRead > 128) throw new Error('Invalid discovery pairing key');
+    const key = new TextDecoder().decode(bytes.subarray(0, bytesRead)).trim();
+    if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid discovery pairing key');
+    return key;
+  } finally {
+    await file.close();
+  }
+}
+
 /** Local Unix socket only: neither credentials nor evidence traverse LAN HTTP. */
 export async function readHostSnapshot(directory = DISCOVERY_DIRECTORY) {
-  const key = (await Deno.readTextFile(`${directory}/key`)).trim();
-  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid discovery pairing key');
+  const key = await readDiscoveryKey(directory);
   const nonce = randomBytes(32).toString('hex');
   const body = await new Promise<string>((resolve, reject) => {
     const req = request({

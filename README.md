@@ -43,7 +43,7 @@ terabytes of storage in as few clicks as possible, using sensible defaults.
 | 🔎  | **Episode & Season Gaps**        | Find internal episode or season-number gaps bounded by content already present in Plex, with irregular metadata called out separately.                                                                  |
 | 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing, including a historical risk trend for each user.                                                              |
 | 🔗  | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported.                                                                                   |
-| 🌱  | **Hardlink & torrent cleanup**   | Delete verified qBittorrent files and the library hardlink created by an Arr import in one guided workflow. Plex Librarian can also clean up orphaned download-side hardlinks after the torrent is gone. |
+| 🌱 | **Current-location deletion** | Remove selected Plex/Arr media and optionally verified current qBittorrent jobs and payloads. Unselected media and shared downloads stay protected. |
 
 ## Installation
 
@@ -54,10 +54,16 @@ or search for **Plex Librarian** from the **Apps** tab. Keep the defaults, selec
 **Apply**, then open the web UI from the Docker page and choose **Sign in with
 Plex**. Plex Librarian discovers your server and starts its first sync.
 
-Normal operation does not require access to your media shares. Plex, Sonarr, or
-Radarr performs managed deletion using its own mounts and permissions. Only the
-optional orphan-download cleanup needs the additional read-only library and
-read/write download mounts described below.
+Ordinary deletion needs only the app-data volume. Plex, Sonarr/Radarr and qBittorrent
+use their own mounts and permissions. In **Media connections**, enable the optional
+host discovery helper to check container mappings and refresh reusable storage relationships.
+Optional local-access setup is not part of the single-host MVP.
+
+Connect qBittorrent using its Web UI address and credentials; no manual path entry
+is required in connection settings. Existing path overrides remain visible as
+read-only diagnostics and survive credential edits. For unresolved storage layouts,
+review **Host discovery** and the affected deletion preview. Connection health alone
+does not establish deletion eligibility.
 
 ### Docker Compose
 
@@ -72,9 +78,6 @@ services:
       - "8288:8080"
     volumes:
       - plex-librarian-data:/data
-      # Optional: required only for verified orphan-hardlink cleanup.
-      # - /path/to/library:/media:ro
-      # - /path/to/downloads:/downloads:rw
     restart: unless-stopped
 
 volumes:
@@ -99,6 +102,33 @@ changes.
 
 ## Sonarr, Radarr, Seerr, and qBittorrent
 
+### Automatic setup on one Docker host
+
+For the MVP, run Plex and connected services on one native Linux Docker/Unraid
+host. Install the optional host helper once using the
+[installation guide](deploy/discovery/README.md), then choose **Enable host
+discovery** in Media connections. Existing installs should follow the
+[upgrade guide](deploy/discovery/UPGRADING.md). Reconnecting a service or updating
+Librarian alone does not install the helper.
+
+Before pairing, review the administrator-access warning, check the initially
+unchecked acknowledgement, then choose **Confirm enable discovery**. Cancel makes
+no pairing request. This acknowledgement does not grant Docker access: installing
+the helper already does. Disabling discovery does not stop the helper; stop it and
+disable its autostart in Docker/Unraid to withdraw that access.
+
+Discovery derives mappings from container configuration, including different
+container paths. New connections require no manually entered mappings. Unsupported
+or ambiguous layouts stay unavailable. Automatic setup does not require manual
+mapping or local-access editors. **Discovery details** provides diagnostics, retry,
+a mapping backup, and explicitly confirmed removal of old saved mappings.
+Existing mappings are preserved until explicitly removed.
+
+Connection status, discovery readiness, and selection-specific deletion eligibility
+are separate. Both optional deletion destinations start unchecked. Check a fresh
+preview after configuration changes; only confirmation enqueues deletion, and the
+worker revalidates the accepted scope. Setup-only checks should end with Cancel.
+
 ### Connect Sonarr and Radarr
 
 Plex Librarian can coordinate whole-title deletion with Radarr for movies and
@@ -112,8 +142,9 @@ nested movie paths. If a library is not mapped, coordinated deletion is
 refused; **Delete from Plex only** must be selected explicitly.
 
 Open **Settings → Media connections**, add an instance with its URL and API key
-(found in Sonarr/Radarr under **Settings → General → Security**), then map each
-library under **Library mappings**.
+(found in Sonarr/Radarr under **Settings → General → Security**), then review
+**Host discovery** for automatic storage mapping. Use **Discovery details** to
+inspect saved relationships or remove an old mapping after downloading a backup.
 
 Use a URL reachable from inside the Plex Librarian container, such as
 `http://192.168.1.20:8989` or `http://sonarr:8989` on a shared Docker network.
@@ -135,68 +166,49 @@ season. A file shared with another season, ambiguous multi-instance ownership,
 or changed path mapping blocks the operation. **Plex only** is an explicit
 fallback and may allow Sonarr to download a monitored season again.
 
-Optional qBittorrent cleanup uses the same fail-closed ownership checks as
-duplicate-season cleanup. It is offered only when every selected payload path
+Optional qBittorrent cleanup requires verified ownership. It is offered only when every selected payload path
 and the complete download job manifest can be attributed to this season.
 
-### Optional qBittorrent cleanup
+### Current-location deletion and optional qBittorrent
 
-Add qBittorrent under **Settings → Media connections** to inspect live torrents
-associated with Sonarr/Radarr import history or verified direct path mappings.
-The deletion preview shows the
-bounded payload tree plus the job's tracker host, ratio, upload total, and
-cumulative seeding time. When explicitly selected, Plex Librarian removes the
-verified job and asks qBittorrent to delete its downloaded payload before Arr
-deletes the remaining library hardlink.
+For whole-item and stale-season deletion, Sonarr/Radarr and qBittorrent are
+optional destinations and start unchecked. Connecting a service does not select
+it for deletion. Review the selected media and destinations before confirming;
+confirmation enqueues a durable operation whose worker checks the scope again.
 
-Plex Librarian does not locate or independently delete a saved `.torrent` file.
-If an association cannot be verified, that item remains Arr-only. In a bulk
-selection, qBittorrent cleanup applies only to rows with a verified job, and the
-preview identifies the Plex, Sonarr, Radarr, and qBittorrent actions for every
-item.
+The services delete through their own APIs and mounts. Librarian does not need
+media mounts for ordinary deletion. Separate current Plex and manager copies
+receive requests only when their services are selected. A torrent containing
+retained episodes or unrelated files is blocked. Failed or incomplete download
+inventories remain unknown, even when qBittorrent cleanup is unchecked.
 
-#### Orphan hardlink cleanup
+Discovery refreshes after successful connection changes and while checking
+readiness. Missing, stale, ambiguous or unsupported evidence blocks dependent
+work. Existing manual mappings are preserved; use the
+[upgrade guide](deploy/discovery/UPGRADING.md) before replacing them. A configuration
+change can invalidate a preview or hold an accepted operation for attention.
 
-Retained Radarr import history can point to an old download path after its
-torrent has disappeared. Plex Librarian shows these paths as unmanaged
-leftovers by default. To inspect the common hardlink case, edit the Radarr
-connection, expand **Orphan download cleanup**, and configure:
+**TV duplicates:** Plex-only episode-version and season cleanup can use automatic
+storage evidence while protecting retained versions and current QB ownership.
+Automatic Sonarr adoption and selected duplicate-QB cleanup are not covered by
+this path. Existing coordination can require additional evidence and remain
+unavailable. The existing Sonarr season flow prefers adoption; it is not a general
+remove-and-unmonitor choice. A version retained in Plex may remain unmanaged by
+Sonarr. Discovery Ready does not guarantee every duplicate action is supported.
 
-- The library root reported by Radarr and its read-only Plex Librarian mount.
-- The download root reported by Radarr and its read/write Plex Librarian mount.
+Successful service steps are preserved during recovery. Lost or ambiguous
+responses retain attempt evidence and reservations; follow the operation's
+recovery guidance rather than submitting replacement requests. Logical media
+size is distinct from actual disk space recovered, which is not measured.
+Historical download paths and orphan filesystem cleanup are outside this flow.
 
-For example, Radarr paths under `/data/media` and `/data/torrents` could map to
-Plex Librarian mounts `/media` and `/downloads`. Radarr roots may also be Windows
-drive or UNC paths such as `D:\Media`; the Plex Librarian mount is always the
-absolute Linux path visible inside its container.
+Use the qBittorrent Web UI URL reachable from Librarian. Blank credentials are
+appropriate only when authentication bypass explicitly trusts that host or
+subnet. Private tracker passkeys are never returned to the browser.
 
-Plex Librarian removes an orphaned source file only when the source and current
-Radarr-managed destination are regular files on the same filesystem with the
-same inode. It rechecks that identity immediately before unlinking, rejects
-symbolic links and paths outside the configured download root, and prunes only
-empty directories. Radarr-tracked media, subtitle, and metadata sidecars inside
-the same historical payload are eligible under that exact rule. Untracked
-sidecars, samples, metadata, and mixed directory contents are retained and
-explained in the preview.
-
-Inspection stops after a shared 5,000-entry budget per preview or 12 directory
-levels and reports the unverified remainder; directories are never recursively
-deleted. Multi-file torrents are removed with their payload only when every
-manifest file is attributable to the selected Arr title. Mixed or partially
-attributed packs remain untouched.
-
-The two mounts must refer to the same underlying filesystems Radarr sees. Their
-container paths can differ because the web UI stores the translation, but the
-local library and download roots must be separate, non-overlapping paths.
-Configure Radarr's **Import Extra Files** setting for sidecars such as `sub`,
-`idx`, and `srt` so Radarr can track them with the managed movie folder.
-
-Use the qBittorrent Web UI URL as seen from the Plex Librarian container. Enter
-its username and password, or leave both blank only when qBittorrent's
-authentication bypass explicitly trusts the Plex Librarian host or subnet.
-Desktop qBittorrent users must first enable **Web User Interface (Remote
-control)**. Private tracker passkeys are never returned to the browser; only the
-tracker hostname is displayed.
+See [helper installation, access requirements and supported scope](deploy/discovery/README.md).
+Automatic discovery supports a bounded set of native Linux Docker layouts;
+unsupported or ambiguous layouts remain unavailable.
 
 ## Configuration
 
@@ -271,6 +283,14 @@ this directory and treat the backup as sensitive.
 Plex Librarian is designed for a trusted self-hosted network. If remote access
 is required, place it behind a reverse proxy that provides authentication and
 TLS.
+
+Plex sign-in connects a Plex server; it does not authenticate callers of Librarian's
+API. The optional discovery helper separately receives host-administrator-equivalent
+Docker access. Its private snapshot interface reduces exposure to Librarian, but a
+compromised helper image can control the host. Installing or updating it is a
+privileged trust decision. Review the [access and release requirements](deploy/discovery/README.md)
+before installation. Disabling discovery in the UI does not stop the helper or
+revoke its Docker socket access.
 
 ## Support and contributing
 

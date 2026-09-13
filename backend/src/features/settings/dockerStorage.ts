@@ -124,6 +124,9 @@ export function parseDockerReport(text: string, now = Date.now()): Report {
       string(m.Type);
       string(m.Source);
       string(m.Destination);
+      // Linux backslashes are literal filename characters, not separators.
+      // Cross-platform storagePath normalization must not collapse distinct mounts.
+      if (m.Source.includes('\\') || m.Destination.includes('\\')) throw bad();
       storagePath(m.Destination);
       if (m.Name !== undefined) string(m.Name);
       if (m.Driver !== undefined) string(m.Driver);

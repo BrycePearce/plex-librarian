@@ -89,6 +89,22 @@ Deno.test('same-host discovery distinguishes separate bind sources despite ident
   );
 });
 
+Deno.test('native Docker mount paths cannot alias slash paths through literal Linux backslashes', () => {
+  for (const field of ['Source', 'Destination'] as const) {
+    const { report, endpoints } = fixture();
+    report.containers[0].Mounts[0][field] = field === 'Source'
+      ? String.raw`/mnt/user/media\TV`
+      : String.raw`/media\TV`;
+    // These two spellings identify distinct native Linux directories. The
+    // cross-platform path normalizer would otherwise collapse them together.
+    report.containers[1].Mounts[0][field] = report.containers[0].Mounts[0][field].replaceAll(
+      '\\',
+      '/',
+    );
+    assertThrows(() => dockerStorage(JSON.stringify(report), endpoints, [], now));
+  }
+});
+
 Deno.test('fresh topology refresh reuses stable mappings but detects changed mounts and container replacement', () => {
   const { report, endpoints } = fixture();
   const first = dockerStorage(JSON.stringify(report), endpoints, [], now);

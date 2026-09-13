@@ -241,6 +241,37 @@ for (const fails of [false, true]) {
         )!.props.onClick()
       );
       await flush();
+      assertEquals(calls, []);
+      const confirmButton = () =>
+        renderer!.root.findAllByType("button").find((button) =>
+          button.children.includes("Confirm enable discovery")
+        )!;
+      assert(text().includes("administrator access"));
+      assert(text().includes("does not stop the helper"));
+      assertEquals(renderer!.root.findByType("input").props.checked, false);
+      assertEquals(confirmButton().props.disabled, true);
+      await act(() => confirmButton().props.onClick());
+      assertEquals(calls, []);
+      await act(() =>
+        renderer!.root.findByType("input").props.onChange({ target: { checked: true } })
+      );
+      await act(() =>
+        renderer!.root.findAllByType("button").find((button) => button.children.includes("Cancel"))!
+          .props.onClick()
+      );
+      assertEquals(calls, []);
+      await act(() =>
+        renderer!.root.findAllByType("button").find((button) =>
+          button.children.includes("Enable host discovery")
+        )!.props.onClick()
+      );
+      assertEquals(renderer!.root.findByType("input").props.checked, false);
+      await act(() =>
+        renderer!.root.findByType("input").props.onChange({ target: { checked: true } })
+      );
+      assertEquals(confirmButton().props.disabled, false);
+      await act(() => confirmButton().props.onClick());
+      await flush();
       assertEquals(calls, ["enable"]);
       if (fails) {
         assert(text().includes("Discovery could not be enabled"));
@@ -251,6 +282,19 @@ for (const fails of [false, true]) {
           renderer!.root.findByType("details").props.onToggle({ currentTarget: { open: true } })
         );
         assert(text().includes("Check the helper installation and shared directory."));
+        await act(() =>
+          renderer!.root.findAllByType("button").find((button) =>
+            button.children.includes("Enable host discovery")
+          )!.props.onClick()
+        );
+        assertEquals(renderer!.root.findByType("input").props.checked, false);
+        assertEquals(confirmButton().props.disabled, true);
+        assertEquals(calls, ["enable"]);
+        await act(() =>
+          renderer!.root.findAllByType("button").find((button) =>
+            button.children.includes("Cancel")
+          )!.props.onClick()
+        );
       } else {
         assert(text().includes("Connected"));
         assert(text().includes("Mapped"));
@@ -261,6 +305,13 @@ for (const fails of [false, true]) {
           renderer!.root.findByType("details").props.onToggle({ currentTarget: { open: true } })
         );
         assert(text().includes("Ambiguous container ownership"));
+        await act(() =>
+          renderer!.root.findAllByType("button").find((button) =>
+            button.children.includes("Retry discovery")
+          )!.props.onClick()
+        );
+        await flush();
+        assertEquals(calls, ["enable", "retry"]);
       }
       assertEquals(renderer!.root.findAllByType("input").length, 0);
       assert(text().includes("unchecked when deleting"));

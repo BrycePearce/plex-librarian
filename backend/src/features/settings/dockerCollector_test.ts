@@ -37,9 +37,11 @@ case "$*" in
   'info --format {{.OSType}}') echo linux;;
   'info --format {{.OperatingSystem}} {{.Name}}') echo "\${FIXTURE_DAEMON:-Unraid server}";;
   'info --format {{json .ID}}') echo '\"fixture-daemon\"';;
-  'ps -q --no-trunc') echo abcd;;
+  'ps -q --no-trunc') printf '%s\\n' "\${FIXTURE_IDS:-abcd}";;
   'top abcd -eo pid') printf 'PID\\n42\\n';;
-  'inspect --format {{.State.Pid}} {{.HostConfig.PidMode}} {{.HostConfig.NetworkMode}} abcd') echo '42 host host';;
+  'inspect --format {{.State.Pid}} {{.HostConfig.PidMode}} {{.HostConfig.NetworkMode}} '*)
+    printf '%s\\n' "\${FIXTURE_CONTEXTS:-42 host host}"
+    exit "\${FIXTURE_INSPECT_EXIT:-0}";;
   'inspect --format {{.HostConfig.NetworkMode}} abcd') echo host;;
   *'{{range .Mounts}}'*) : ;;
   'inspect --format '* ) printf '%s\\n' '${json}';;
@@ -54,7 +56,23 @@ esac
     );
     await Deno.writeTextFile(
       join(dir, 'ss'),
-      '#!/bin/sh\nprintf \'LISTEN 0 100 0.0.0.0:32400 *:* users:(("Plex",pid=42,fd=1))\\nLISTEN 0 100 127.0.0.1:9999 *:* users:(("Plex",pid=42,fd=2))\\nLISTEN 0 100 0.0.0.0:8080 *:* users:(("other",pid=55,fd=1))\\n\'\n',
+      '#!/bin/sh\ncat "$LISTENERS"\n',
+    );
+    const listeners = join(dir, 'listeners');
+    await Deno.writeTextFile(
+      listeners,
+      [
+        'LISTEN 0 100 0.0.0.0:32400 *:* users:(("Plex",pid=42,fd=1))',
+        'LISTEN 0 100 127.0.0.1:9999 *:* users:(("Plex",pid=42,fd=2))',
+        'LISTEN 0 100 0.0.0.0:8080 *:* users:(("other",pid=55,fd=1))',
+        'LISTEN 0 100 0.0.0.0:8081 *:* users:(("pid=42",pid=55,fd=1))',
+        'LISTEN 0 100 0.0.0.0:8082 *:* users:(("fake",pid=420,fd=1))',
+        // A misleading name with an escaped quote still cannot supply ownership.
+        String.raw`LISTEN 0 100 0.0.0.0:8083 *:* users:(("fake\",pid=42",pid=55,fd=1))`,
+        // Unknown quoting must reject the whole row, even after a valid owner.
+        'LISTEN 0 100 0.0.0.0:8084 *:* users:(("Plex",pid=42,fd=1),("bad"quote",pid=55,fd=1))',
+        'LISTEN 0 100 [::]:32401 *:* users:(("other",pid=55,fd=1),("Plex",pid=42,fd=2))',
+      ].join('\n') + '\n',
     );
     if (Deno.build.os !== 'windows') {
       for (const name of ['docker', 'hostname', 'ss', 'uname']) {
@@ -79,7 +97,7 @@ esac
               : ''
           }exec sh "${unix(script)}" ${helperPid === undefined ? '' : `--helper-pid ${helperPid}`}`,
         ],
-        env: { CALLS: unix(calls), ...fixtureEnv },
+        env: { CALLS: unix(calls), LISTENERS: unix(listeners), ...fixtureEnv },
         stdout: 'piped',
         stderr: 'piped',
       }).output();
@@ -88,9 +106,37 @@ esac
     assertEquals((await run(false, false, {}, 42)).code, 0);
     assertEquals((await run(false, false, {}, 1)).code, 1);
     assertEquals((await run(false, false, {}, 99)).code, 1);
+    await Deno.writeTextFile(calls, '');
+    const batch = await run(false, false, {
+      FIXTURE_IDS: 'abcd bcde',
+      FIXTURE_CONTEXTS: '42 host host\n55  bridge',
+    }, 42);
+    assertEquals(batch.code, 0, new TextDecoder().decode(batch.stderr));
+    const contextCalls = (await Deno.readTextFile(calls)).split('\n')
+      .filter((line) => line.includes('{{.State.Pid}}'));
+    assertEquals(contextCalls, [
+      'inspect --format {{.State.Pid}} {{.HostConfig.PidMode}} {{.HostConfig.NetworkMode}} abcd bcde',
+    ]);
+    // Neither duplicate owners nor partial successful output from a failed batch
+    // can establish the helper's PID and network ownership.
+    assertEquals(
+      (await run(false, false, {
+        FIXTURE_IDS: 'abcd bcde',
+        FIXTURE_CONTEXTS: '42 host host\n42 host host',
+      }, 42)).code,
+      1,
+    );
+    assertEquals(
+      (await run(false, false, {
+        FIXTURE_CONTEXTS: '42 host host',
+        FIXTURE_INSPECT_EXIT: '1',
+      }, 42)).code,
+      1,
+    );
+    assertEquals((await run(false, false, { FIXTURE_CONTEXTS: '42 host bridge' }, 42)).code, 1);
     const reportText = new TextDecoder().decode(output.stdout);
     const report = JSON.parse(reportText);
-    assertEquals(report.containers[0].listeningPorts, [32400]);
+    assertEquals(report.containers[0].listeningPorts.sort(), [32400, 32401]);
     const proposal = dockerStorage(reportText, [{
       key: 'plex:2',
       name: 'Plex TV',

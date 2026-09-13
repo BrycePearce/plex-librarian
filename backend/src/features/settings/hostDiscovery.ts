@@ -265,7 +265,8 @@ async function refresh(serverId: number) {
         );
         if (manual) {
           status.state = 'needs_attention';
-          status.reason = 'Manual relationships preserved. Review this service in Advanced.';
+          status.reason =
+            'Manual relationships preserved. Review this service in Discovery details.';
           continue;
         }
         const identity = result.preview.services.find((s) => s.serviceKey === status.serviceKey)

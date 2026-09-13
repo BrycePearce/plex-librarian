@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Clapperboard, Download, Play, Server } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api.ts";
@@ -42,10 +42,26 @@ export function ServiceStorageSetup() {
   });
   const [removing, setRemoving] = useState<ServicePathRoot>();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [confirmEnable, setConfirmEnable] = useState(false);
+  const [trustAcknowledged, setTrustAcknowledged] = useState(false);
+  const [restoreEnableFocus, setRestoreEnableFocus] = useState(false);
+  const enableButtonRef = useRef<HTMLButtonElement>(null);
+  const trustPanelId = useId();
+  const closeEnable = () => {
+    setConfirmEnable(false);
+    setTrustAcknowledged(false);
+    setRestoreEnableFocus(true);
+  };
   const discovery = useMutation({
     mutationFn: (action: "enable" | "retry" | "disable") => api.serviceStorage.discovery(action),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["service-storage"] }),
   });
+  useEffect(() => {
+    if (restoreEnableFocus && !discovery.isPending) {
+      enableButtonRef.current?.focus();
+      setRestoreEnableFocus(false);
+    }
+  }, [restoreEnableFocus, discovery.isPending]);
   const remove = useMutation({
     mutationFn: (root: ServicePathRoot) => api.serviceStorage.remove(root.id),
     onSuccess: async () => {
@@ -74,9 +90,18 @@ export function ServiceStorageSetup() {
   const discoveryButton = (
     <button
       type="button"
+      ref={enableButtonRef}
       className="btn btn-sm"
       disabled={discovery.isPending || status?.checking}
-      onClick={() => discovery.mutate(status?.enabled ? "retry" : "enable")}
+      aria-expanded={!status?.enabled ? confirmEnable : undefined}
+      aria-controls={!status?.enabled && confirmEnable ? trustPanelId : undefined}
+      onClick={() => {
+        if (status?.enabled) discovery.mutate("retry");
+        else {
+          setTrustAcknowledged(false);
+          setConfirmEnable(true);
+        }
+      }}
     >
       {status?.enabled ? "Retry discovery" : "Enable host discovery"}
     </button>
@@ -146,6 +171,58 @@ export function ServiceStorageSetup() {
         </p>
       )}
       {showAction && discoveryButton}
+      {!status?.enabled && confirmEnable && (
+        <div
+          id={trustPanelId}
+          role="group"
+          aria-label="Host helper access"
+          className="rounded-lg border border-warning p-4 space-y-3"
+        >
+          <p className="font-semibold">The helper has administrator access to your Docker host</p>
+          <p className="text-sm">
+            The helper normally reads container configuration to map storage. Its Docker socket
+            access can also control the host and its files if the helper or an update is
+            compromised. Install and update it only from a source you trust.
+          </p>
+          <p className="text-sm">
+            Enabling discovery pairs Librarian with the installed helper; it does not install or
+            grant Docker access. Disabling discovery here does not stop the helper or remove its
+            Docker access. To revoke that access, stop the helper in Docker/Unraid and disable its
+            autostart.
+          </p>
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={trustAcknowledged}
+              disabled={discovery.isPending}
+              onChange={(event) => setTrustAcknowledged(event.target.checked)}
+            />
+            <span>I understand the helper's administrator access and trust this installation.</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={discovery.isPending}
+              onClick={closeEnable}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={!trustAcknowledged || discovery.isPending || status?.checking}
+              onClick={() => {
+                if (!trustAcknowledged || discovery.isPending || status?.checking) return;
+                discovery.mutate("enable", { onSettled: closeEnable });
+              }}
+            >
+              {discovery.isPending ? "Enabling discovery…" : "Confirm enable discovery"}
+            </button>
+          </div>
+        </div>
+      )}
       {discovery.error && (
         <p role="alert">
           {status?.enabled
@@ -176,6 +253,12 @@ export function ServiceStorageSetup() {
               Discovery supports services on one Unraid or Linux Docker host. Unsupported or
               ambiguous layouts stay unavailable. Existing saved mappings are preserved.
             </p>
+            <p className="text-sm my-2">
+              The helper has administrator-level Docker access. Disabling discovery only removes
+              Librarian's pairing; stop the helper and disable its autostart in Docker/Unraid to
+              revoke that access. Plex sign-in does not protect Librarian's APIs: restrict app
+              access to trusted administrators.
+            </p>
             {!!query.data.relationships.length && (
               <a
                 className="btn btn-sm"
@@ -197,9 +280,7 @@ export function ServiceStorageSetup() {
               </button>
             )}
             {query.data.endpoints.map((endpoint) => {
-              const service = status?.services.find((s) =>
-                s.serviceKey === endpoint.key
-              );
+              const service = status?.services.find((s) => s.serviceKey === endpoint.key);
               const saved = query.data.relationships.filter((r) => r.serviceKey === endpoint.key);
               return (
                 <div key={endpoint.key} className="rounded-lg border border-base-300 p-3 space-y-2">

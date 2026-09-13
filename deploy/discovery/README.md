@@ -1,8 +1,7 @@
-# Optional host discovery — implementation validation
+# Optional host discovery
 
 The supported target is one **native Linux Docker host**, including Unraid.
-The complete acceptance matrix and one-step Unraid distribution remain unfinished;
-no helper image has been published.
+Install the helper separately from Librarian. Ambiguous or unsupported layouts remain unavailable.
 Docker Desktop can run transport fixtures but cannot certify declared native Linux storage. The
 helper refuses Desktop/WSL.
 
@@ -24,14 +23,40 @@ directory, Docker socket, media trees, or the helper directory with other apps. 
 local filesystem supporting Unix sockets and permissions. Back up the key securely if maintaining
 pairing through a helper reinstall. The key never appears in browser URLs or API responses.
 
+The transport directory must be a real directory owned by the container user (currently UID 0),
+without group/other write permission. The key must be a regular, non-symlink file owned by that
+user, with no group/other permissions (normally 0600). Unsafe existing paths now fail closed;
+do not fix them by making the volume broadly writable. Keep the host parent directory private too.
+The read-only Librarian mount still lets the Librarian process read the key and request snapshots.
+HMAC authenticates this shared trust relationship; it does not attest to an uncompromised helper
+or app. The snapshot includes filtered topology for running containers beyond connected services.
+
+Treat installing or updating this helper as granting host-administrator access to its publisher
+and dependencies. A compromised helper can issue other Docker commands despite its fixed normal
+collector, dropped capabilities and read-only root filesystem. Deno subprocess permissions do not
+confine the collector's Docker access. See [Docker's daemon attack surface](https://docs.docker.com/engine/security/)
+and [Deno subprocess permissions](https://docs.deno.com/runtime/fundamentals/security/).
+Keep the entire Librarian API restricted to trusted administrators; Plex sign-in configures a server
+and is not application access control. Do not expose the app directly to an untrusted network.
+
 **Enable host discovery** pins the key hash and daemon identity to the active Plex server. Each
 request uses authentication plus a fresh random challenge; responses are HMAC-bound to that
 challenge. Local socket permissions protect transit. Only allowlisted container identity, mount
 overrides, networks, ports, listener ports, daemon identity and collection time cross the socket.
 Environment, labels, commands, process details, volume options and service credentials are excluded.
+
+Before pairing, read the administrator-access warning, check its initially unchecked
+acknowledgement, then choose **Confirm enable discovery**. Cancel makes no pairing request.
+Pairing requests configuration snapshots; installing the helper already grants its Docker access.
+The acknowledgement is not application authentication or a restriction on the Docker API.
+
 Responses are limited to 2 MB, collection to 25 seconds, requests to 30 seconds, and four
 authenticated concurrent requests share one collection. Evidence older than 60 seconds or more than
 five seconds in the future is rejected.
+
+Snapshot requests accept no body and close their connection after one response. Idle sockets have
+a five-second inactivity limit; authenticated collection gets a 30-second socket budget. These
+bounds limit individual requests, not sustained collection by someone with the pairing key.
 
 Configured hostnames, including Plex OAuth `plex.direct` addresses, are resolved automatically when
 they are not literal Docker network addresses. Each dependent refresh repeats the DNS lookup
@@ -40,16 +65,33 @@ the configured port must identify the same container. Changed or unavailable DNS
 mapping authority; hostname text is never decoded into an assumed IP address.
 
 No pairing authorizes deletion. Both destinations remain unchecked. A changed key or daemon requires
-**Advanced → Disable host discovery**, then explicit re-enablement. Old automatic mappings remain
+**Discovery details → Disable host discovery**, then explicit re-enablement. Old automatic mappings remain
 unavailable until freshly identified; they are never silently promoted to manual mappings. Manual
-overrides require explicit editing or removal in Advanced.
+relationships can be backed up and explicitly removed in **Discovery details**; manual mapping
+editors are not available in the single-host MVP. Existing qBittorrent path overrides remain
+read-only under **Saved path mappings** and are preserved when editing connection credentials.
 
-## Release installation (prepared, not published)
+## Release installation and verification
 
-The release workflow now prepares application and helper images for AMD64 and ARM64, with
-separate digest artifacts and matching version tags. These changes have not been pushed or run in
-GitHub Actions. The image references below are release targets, not a claim that the helper can
-already be downloaded. Do not advertise installation until the images and Unraid listing are available.
+Before installing or updating, verify that the chosen app and helper images belong to a reviewed
+release. The release workflow requires native AMD64 and ARM64 repository checks, restricted helper
+startup/restart and packaged transport tests before publishing. It then signs each registry's image
+index with GitHub provenance and verifies the workflow and source commit before promoting release
+tags. These are release requirements, not evidence that every available image passed them. Earlier
+images may predate this workflow. This security update's native ARM64 and publication/signing run
+remain unverified; do not advertise it as a completed release until those checks succeed.
+
+Templates use mutable `latest` images and the upgrade download uses `main`. For immutable installs,
+select a reviewed image digest and matching template revision. The helper base image and CI actions
+are pinned; operating-system packages still resolve at build time. Signing identifies the endorsed
+image and source; it does not reduce the helper's administrator authority or replace dependency review.
+
+Maintainers: manual **Run workflow** validates only. A push to `main` publishes commit-addressed
+images and promotes `edge`; stable version tags can promote `latest`. A failed signing run can leave
+commit-addressed images available, but does not promote those release tags. Manual validation cannot
+verify registry publishing or signing. Confirm the successful publishing run and attestation for the
+exact release digest before installation instructions are advertised. Image and Community Applications
+listing availability must be verified separately.
 
 For a **new** Linux Docker installation, `compose.release.yaml` contains the whole Librarian stack,
 including the helper and private transport volume. After publication, the installation command is:
@@ -59,6 +101,7 @@ docker compose -f compose.release.yaml up -d
 ```
 
 Open Librarian on port 8288, sign in with Plex, connect services, then choose **Enable host discovery**.
+Review and acknowledge the access warning before confirming.
 The Compose file does not start, reconfigure or mount media from Plex/Arr/QB. Enter reachable
 same-host service addresses in Librarian. Do not combine this fresh-stack file with an existing
 Librarian installation: that would create a separate database. Use the development override below
@@ -129,7 +172,7 @@ Before any remote action, obtain an SSH destination, an **absolute disposable fi
 and explicit authorization to install/run the helper and delete only generated test media. The
 recorded demo authorization is limited to that isolated setup; it does not authorize production
 installation or a different destination. Preserve its evidence and verify current access/scope before
-resuming. Use the following procedure on disposable fixtures.
+resuming. Record which cases passed and which remain unverified for the exact release build.
 
 1. Inspect the destination and prove the fixture path is isolated from production. Start fresh
    service containers and Librarian with a new database and zero saved relationships. Mount only
@@ -137,8 +180,8 @@ resuming. Use the following procedure on disposable fixtures.
 2. Start the packaged helper in its real host namespaces, enable it once, and connect Plex,
    Sonarr/Radarr and QB through normal UI/API saves. Verify mappings appear without manually
    inserting roots or supplying a collector response.
-3. Exercise Plex-only, Sonarr-only, QB-only, and combined show and season choices through preview,
-   enqueue and the existing worker. Observe files only as independent test evidence. Include
+3. Exercise whole-show and season deletion with each supported optional destination selection through
+   preview, enqueue and the existing worker. Observe files only as independent test evidence. Include
    separate copies with real Arr import history, shared entries, three season jobs, mixed-season
    packs, retained overlaps and empty/failed download inventories.
 4. Change mounts, container identity and manifests between preview/enqueue/execution and after the
@@ -150,3 +193,8 @@ resuming. Use the following procedure on disposable fixtures.
 
 The complete matrix and distribution gate must pass before retiring the retained diagnostic report
 routes/tests or claiming this feature ready for release.
+
+Ordinary show/season deletion and Plex-only TV duplicate deletion have separate planning contracts.
+Validate them separately. Automatic selected duplicate-qBittorrent cleanup and Sonarr adoption are
+not supported by the Plex-only duplicate path. Existing Sonarr season coordination may prefer
+adoption; an equivalent individual-episode removal choice is not generally available.
