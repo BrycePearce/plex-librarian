@@ -325,6 +325,13 @@ Deno.test('service-owned batch deletes two movie versions and preserves the thir
     });
     const preview = await previewResponse.json();
     assertEquals(previewResponse.status, 200, JSON.stringify(preview));
+    assertEquals(
+      preview.targets.map((target: { fileName: string }) => target.fileName),
+      [11, 12].map((id) =>
+        live.get('service-batch')!.Media!.find((media) => media.id === id)!.Part![0].file!
+          .split('/').at(-1)
+      ),
+    );
     const accepted = await rawApp.request('/api/service-deletions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

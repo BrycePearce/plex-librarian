@@ -11,10 +11,179 @@ async function flushAct(run: () => void) {
 import { api, ApiError } from "../../lib/api.ts";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
 import { DeletionModalShell } from "./DeletionDialog.tsx";
+import { ServiceDeletionPreviewList } from "./ServiceDeletionPreviewList.tsx";
 import type {
+  ServiceActionDecision,
   ServiceDeletionChoices,
+  ServiceDeletionPreview,
   ServiceDeletionRequest,
 } from "../../../../shared/serviceOwnedDeletion.ts";
+
+Deno.test("version review distinguishes same-quality files and retains deduplicated safety warnings", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await flushAct(() => {
+      renderer = TestRenderer.create(
+        <ServiceDeletionPreviewList
+          preview={{
+            fingerprint: "current",
+            arrConfigured: true,
+            qbConfigured: true,
+            canConfirm: true,
+            targets: ["release-one.mkv", "release-two.mkv"].map((fileName, index) => ({
+              ratingKey: "episode",
+              mediaId: index + 1,
+              title: "Pilot",
+              showTitle: "Example Show",
+              seasonIndex: 1,
+              episodeIndex: 2,
+              videoResolution: "1080",
+              fileName,
+              decisions: [1, 2].map((id) => ({
+                actionId: String(id),
+                targetId: "episode",
+                service: "plex" as const,
+                requested: true,
+                state: "kept" as const,
+                presence: "current" as const,
+                reason: "A retained download uses this path",
+                evidenceRevision: "current",
+              })),
+            })),
+          }}
+        />,
+      );
+    });
+    const rows = renderer!.root.findAllByType("li");
+    assertEquals(rows.length, 2);
+    for (const [index, row] of rows.entries()) {
+      const title = row.findAllByType("span").find((span) => span.props.title)?.props.title;
+      assertEquals(title, `Example Show · S01E02 · Pilot · release-${index ? "two" : "one"}.mkv`);
+    }
+    const warnings = renderer!.root.findAllByType("p").filter((p) =>
+      p.children.join("").includes("This media will remain in Plex")
+    );
+    assertEquals(warnings.length, 2);
+  } finally {
+    await flushAct(() => renderer?.unmount());
+    globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
+
+Deno.test("review lists a show once and only offers detected destinations, keeping unknown reads visible", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const oldPreview = api.serviceDeletions.preview;
+  const action = (
+    service: ServiceActionDecision["service"],
+    presence: ServiceActionDecision["presence"],
+    id: string,
+  ): ServiceActionDecision => ({
+    actionId: id,
+    targetId: id,
+    service,
+    presence,
+    requested: service === "plex",
+    state: presence === "unknown" ? "held" : presence === "absent" ? "not_applicable" : "kept",
+    reason: presence === "unknown" ? "Current inventory could not be read" : "Not selected",
+    evidenceRevision: "current",
+  });
+  let result: ServiceDeletionPreview = {
+    fingerprint: "current",
+    arrConfigured: true,
+    qbConfigured: true,
+    canConfirm: true,
+    targets: [{
+      ratingKey: "show",
+      title: "Legend of the Seeker",
+      fileSize: 1024,
+      decisions: [
+        ...Array.from(
+          { length: 60 },
+          (_, index) => action("sonarr", "current", `episode-${index}`),
+        ),
+        action("qb", "absent", "qb"),
+      ],
+    }],
+  };
+  api.serviceDeletions.preview = () => Promise.resolve(result);
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const render = (key: string) => (
+    <ServiceOwnedDeletionDialog
+      dialogRef={{ current: null }}
+      libraryKey="tv"
+      targets={[{ ratingKey: key }]}
+      embedded
+      onCreated={() => {}}
+      onCancel={() => {}}
+    />
+  );
+  const text = () => JSON.stringify(renderer!.toJSON());
+  try {
+    await flushAct(() => {
+      renderer = TestRenderer.create(render("one"));
+    });
+    assertEquals(renderer!.root.findAllByType("input").length, 1);
+    assertEquals(renderer!.root.findAllByType("li").length, 1);
+    assertEquals(text().includes("Not selected"), false);
+    assertEquals(text().includes("Delete from "), true);
+    assertEquals(text().includes("Sonarr"), true);
+    result = {
+      ...result,
+      targets: [{
+        ratingKey: "show",
+        title: "No match",
+        decisions: [action("sonarr", "absent", "arr"), action("qb", "absent", "qb")],
+      }],
+    };
+    await flushAct(() => {
+      renderer!.update(render("two"));
+    });
+    assertEquals(renderer!.root.findAllByType("input").length, 0);
+    result = {
+      ...result,
+      canConfirm: false,
+      targets: [{
+        ratingKey: "show",
+        title: "Unreadable",
+        decisions: [action("sonarr", "unknown", "arr"), action("qb", "unknown", "qb")],
+      }],
+    };
+    await flushAct(() => {
+      renderer!.update(render("three"));
+    });
+    assertEquals(renderer!.root.findAllByType("input").length, 0);
+    assertEquals(text().includes("Current inventory could not be read"), true);
+    assertEquals(
+      renderer!.root.findAllByType("button").find((button) =>
+        button.children.join("") === "Confirm deletion"
+      )!.props.disabled,
+      true,
+    );
+    result = {
+      ...result,
+      targets: [{
+        ratingKey: "movie",
+        title: "Movie",
+        decisions: [action("radarr", "current", "arr"), action("qb", "current", "qb")],
+      }],
+    };
+    await flushAct(() => {
+      renderer!.update(render("four"));
+    });
+    assertEquals(renderer!.root.findAllByType("input").length, 2);
+    assertEquals(text().includes("Radarr"), true);
+    assertEquals(text().includes("Sonarr"), false);
+  } finally {
+    await flushAct(() => renderer?.unmount());
+    api.serviceDeletions.preview = oldPreview;
+    globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
 
 Deno.test("service dialog resets optional consent on refresh and selection and retries immutable requests", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -32,7 +201,20 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
       arrConfigured: true,
       qbConfigured: true,
       canConfirm: true,
-      targets: [],
+      targets: [{
+        ratingKey: "one",
+        title: "Example",
+        decisions: ["sonarr", "qb"].map((service) => ({
+          actionId: service,
+          targetId: service,
+          service: service as "sonarr" | "qb",
+          presence: "current" as const,
+          requested: false,
+          state: "kept" as const,
+          reason: "Not selected",
+          evidenceRevision: "current",
+        })),
+      }],
     });
   };
   api.serviceDeletions.create = (request) => {
@@ -87,7 +269,7 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
     });
     assertEquals(inputs().map((entry) => entry.props.checked), [false, false]);
     await flushAct(() => {
-      button("Confirm decisions").props.onClick();
+      button("Confirm deletion").props.onClick();
     });
     assertEquals(inputs().every((entry) => entry.props.disabled), true);
     assertEquals(button("Cancel").props.disabled, true);
@@ -143,7 +325,20 @@ Deno.test("failed preview discards confirmation and a definite rejection require
       arrConfigured: true,
       qbConfigured: true,
       canConfirm: true,
-      targets: [],
+      targets: [{
+        ratingKey: "one",
+        title: "Example",
+        decisions: ["sonarr", "qb"].map((service) => ({
+          actionId: service,
+          targetId: service,
+          service: service as "sonarr" | "qb",
+          presence: "current" as const,
+          requested: false,
+          state: "kept" as const,
+          reason: "Not selected",
+          evidenceRevision: "current",
+        })),
+      }],
     });
   api.serviceDeletions.create = () => Promise.reject(new ApiError(409, "Evidence changed"));
   let renderer: TestRenderer.ReactTestRenderer | undefined;
@@ -163,15 +358,15 @@ Deno.test("failed preview discards confirmation and a definite rejection require
     const button = (label: string) =>
       renderer!.root.findAllByType("button").find((entry) => entry.children.join("") === label)!;
     await flushAct(() => {
-      button("Confirm decisions").props.onClick();
+      button("Confirm deletion").props.onClick();
     });
-    assertEquals(button("Confirm decisions").props.disabled, true);
+    assertEquals(button("Confirm deletion").props.disabled, true);
     assertEquals(button("Refresh").props.disabled, false);
     failRead = true;
     await flushAct(() => {
       button("Refresh").props.onClick();
     });
-    assertEquals(button("Confirm decisions").props.disabled, true);
+    assertEquals(button("Confirm deletion").props.disabled, true);
     assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), [
       false,
       false,
@@ -180,7 +375,7 @@ Deno.test("failed preview discards confirmation and a definite rejection require
     await flushAct(() => {
       button("Refresh").props.onClick();
     });
-    assertEquals(button("Confirm decisions").props.disabled, false);
+    assertEquals(button("Confirm deletion").props.disabled, false);
   } finally {
     await flushAct(() => {
       renderer?.unmount();

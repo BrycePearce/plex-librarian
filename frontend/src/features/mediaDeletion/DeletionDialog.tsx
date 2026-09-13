@@ -42,6 +42,7 @@ export function DeletionModalShell({
   children,
   onClose,
   modalBoxClassName = "max-w-2xl",
+  hideIntro = false,
 }: {
   dialogRef: RefObject<HTMLDialogElement | null>;
   pending: boolean;
@@ -51,15 +52,18 @@ export function DeletionModalShell({
   children: ReactNode;
   onClose: () => void;
   modalBoxClassName?: string;
+  hideIntro?: boolean;
 }) {
   const content = (
     <>
-      <div className="deletion-dialog-intro">
-        <h3 className="flex items-center gap-2 text-lg font-bold">
-          <AlertTriangle className="size-5 text-error" /> {title}
-        </h3>
-        <div className="py-2 text-sm text-base-content/70">{summary}</div>
-      </div>
+      {!hideIntro && (
+        <div className="deletion-dialog-intro">
+          <h3 className="flex items-center gap-2 text-lg font-bold">
+            <AlertTriangle className="size-5 text-error" /> {title}
+          </h3>
+          <div className="py-2 text-sm text-base-content/70">{summary}</div>
+        </div>
+      )}
       {children}
     </>
   );

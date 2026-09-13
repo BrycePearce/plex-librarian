@@ -55,7 +55,9 @@ export function ServiceVersionPickerDialog(
       dialogRef={dialogRef}
       pending={pending}
       title="Review duplicate versions"
-      summary="Choose the versions to remove, then review current service actions. Keep at least one version of every episode."
+      summary={review
+        ? "Remove the selected media from Plex. Files needed by a service you keep will be retained."
+        : "Choose the versions to remove, then review their deletion. Keep at least one version of every episode."}
       onClose={onCancel}
     >
       {review
@@ -63,6 +65,7 @@ export function ServiceVersionPickerDialog(
           <ServiceOwnedDeletionDialog
             dialogRef={dialogRef}
             embedded
+            hideIntro
             libraryKey={groups[0].libraryKey}
             targets={targets}
             onPendingChange={setPending}

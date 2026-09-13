@@ -22,6 +22,8 @@ export interface ServiceActionDecision {
   state: 'delete_candidate' | 'kept' | 'held' | 'not_applicable';
   reason: string;
   evidenceRevision: string;
+  /** Live target presence; configuration alone does not imply an applicable destination. */
+  presence?: 'current' | 'absent' | 'unknown';
   outcome?: 'succeeded' | 'accepted' | 'failed' | 'uncertain' | 'kept' | 'not_applicable';
 }
 
@@ -34,6 +36,12 @@ export interface ServiceDeletionPreview {
     ratingKey: string;
     mediaId?: number;
     title: string;
+    showTitle?: string;
+    seasonIndex?: number | null;
+    episodeIndex?: number | null;
+    fileSize?: number | null;
+    videoResolution?: string | null;
+    fileName?: string;
     decisions: ServiceActionDecision[];
   }>;
 }

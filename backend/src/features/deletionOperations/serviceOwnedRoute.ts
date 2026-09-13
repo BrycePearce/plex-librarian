@@ -299,8 +299,18 @@ async function prepare(
     previews.push({
       ...requested,
       title: live.title,
+      ...(show ? { showTitle: show.title } : {}),
+      seasonIndex: live.seasonIndex,
+      episodeIndex: live.type === 'episode' ? live.index : undefined,
+      fileSize: local[1],
+      videoResolution: live.media.find((media) => media.mediaId === requested.mediaId)
+        ?.videoResolution,
+      fileName: requested.mediaId === undefined
+        ? undefined
+        : plan.plexFiles[0]?.path.split(/[\\/]/).at(-1),
       decisions: plan.retention.decisions.map((d) => ({
         ...d,
+        presence: plan.actions.find((a) => a.id === d.actionId)?.presence,
         reason: serviceOwnedDecisionExplanation(plan.actions.find((a) => a.id === d.actionId), d),
       })),
     });
