@@ -38,7 +38,8 @@ function buildTree(files: TreeFile[]): TreeNode[] {
     if (segments.length === 0) continue;
     let level = roots;
     segments.forEach((name, index) => {
-      const key = name.toLocaleLowerCase();
+      // Service paths can be case-sensitive (including the Linux deployment).
+      const key = name;
       let node = level.get(key);
       if (!node) {
         node = { name, size: null, children: new Map() };

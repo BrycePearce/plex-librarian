@@ -352,6 +352,7 @@ function DuplicatesPage() {
           key={reviewSeason.seasonRatingKey}
           dialogRef={seasonDialogRef}
           groups={reviewSeason.episodes}
+          season={reviewSeason}
           onCreated={deletionCreated}
           onPendingChange={setReviewPending}
           onCancel={() => {

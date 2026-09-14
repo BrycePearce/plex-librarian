@@ -27,6 +27,10 @@ import {
   repeatedDeletionOperation,
 } from './service.ts';
 import { type DurableTargetSnapshot, validateLiveDeletionIdentity } from './core/validation.ts';
+import {
+  SERVICE_PREVIEW_TOTAL_FILE_LIMIT,
+  serviceOwnedDisplayFiles,
+} from './serviceOwnedDisplay.ts';
 
 export function parseServiceDeletionChoices(value: unknown): ServiceDeletionChoices {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -115,6 +119,7 @@ async function prepare(
   const targets: NewDeletionTarget[] = [];
   const previews: ServiceDeletionPreview['targets'] = [];
   const plans = [];
+  let remainingDisplayFiles = SERVICE_PREVIEW_TOTAL_FILE_LIMIT;
   for (const requested of choices.targets) {
     const live = await plex.metadataIdentity(requested.ratingKey);
     if (
@@ -296,8 +301,12 @@ async function prepare(
         },
       }),
     });
+    const displayFiles = serviceOwnedDisplayFiles(plan.actions, remainingDisplayFiles);
+    remainingDisplayFiles -= displayFiles.files.length;
     previews.push({
       ...requested,
+      ...displayFiles,
+      linkedExtrasIncluded: plan.actions.some((action) => action.associatedExtras !== undefined),
       title: live.title,
       ...(show ? { showTitle: show.title } : {}),
       seasonIndex: live.seasonIndex,

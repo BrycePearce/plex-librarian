@@ -42,8 +42,22 @@ export interface ServiceDeletionPreview {
     fileSize?: number | null;
     videoResolution?: string | null;
     fileName?: string;
+    /** Display-only service paths from the already collected action scope. */
+    files?: ServiceDeletionPreviewFile[];
+    /** Number of observed action files, including any omitted by display limits. */
+    fileCount?: number;
+    filesTruncated?: boolean;
+    /** Sonarr's file-ID action can also remove linked extras not enumerated here. */
+    linkedExtrasIncluded?: boolean;
     decisions: ServiceActionDecision[];
   }>;
+}
+
+export interface ServiceDeletionPreviewFile {
+  path: string;
+  size: number | null;
+  service: ServiceActionDecision['service'];
+  actionId: string;
 }
 
 export interface ServiceDeletionRequest extends ServiceDeletionChoices {

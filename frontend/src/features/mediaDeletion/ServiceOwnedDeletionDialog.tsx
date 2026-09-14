@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ServiceDeletionPreview,
@@ -7,11 +7,19 @@ import type {
   ServiceDeletionSelection,
 } from "../../../../shared/serviceOwnedDeletion.ts";
 import { api, ApiError, deletionOperationIdFromError } from "../../lib/api.ts";
-import { DeletionModalShell } from "./DeletionDialog.tsx";
+import {
+  DeletionDialogFooter,
+  DeletionModalShell,
+  DeletionPreviewStatus,
+  useDeletionDialogCancelFocus,
+} from "./DeletionDialog.tsx";
+import { formatKilobytes } from "../../lib/format.ts";
+import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import {
   deletionServiceNames,
   detectedDestinations,
   ServiceDeletionPreviewList,
+  ServiceDeletionWarnings,
 } from "./ServiceDeletionPreviewList.tsx";
 
 export interface ServiceOwnedDeletionDialogProps {
@@ -24,6 +32,9 @@ export interface ServiceOwnedDeletionDialogProps {
   hideIntro?: boolean;
   title?: string;
   quickCleanupThresholdDays?: number;
+  renderPreview?: (preview: ServiceDeletionPreview | undefined) => ReactNode;
+  confirmLabel?: ReactNode;
+  selectionDisabled?: boolean;
   onPendingChange?: (pending: boolean) => void;
 }
 
@@ -45,10 +56,14 @@ function SelectionDialog({
   onCancel,
   embedded,
   hideIntro,
-  title = "Review deletion",
+  title,
   quickCleanupThresholdDays,
   onPendingChange,
+  renderPreview,
+  confirmLabel,
+  selectionDisabled = false,
 }: ServiceOwnedDeletionDialogProps) {
+  const cancelButtonRef = useDeletionDialogCancelFocus(dialogRef, libraryKey);
   const [arrSelected, setArrSelected] = useState(false);
   const [qbSelected, setQbSelected] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -69,6 +84,12 @@ function SelectionDialog({
   const [selection] = useState(() => targets.map((target) => ({ ...target })));
   useEffect(() => {
     let active = true;
+    if (selection.length === 0) {
+      setLoading(false);
+      setPreview(undefined);
+      setDisplayPreview(undefined);
+      return;
+    }
     setLoading(true);
     setPreview(undefined);
     setError(undefined);
@@ -117,7 +138,9 @@ function SelectionDialog({
   }
 
   async function submit() {
-    if (pending || (!request.current && (loading || !preview?.canConfirm))) return;
+    if (pending || (!request.current && (selectionDisabled || loading || !preview?.canConfirm))) {
+      return;
+    }
     request.current ??= {
       libraryKey,
       targets: selection,
@@ -176,77 +199,82 @@ function SelectionDialog({
       pending={submissionLocked}
       embedded={embedded}
       hideIntro={hideIntro}
-      title={title}
-      summary="Remove the selected media from Plex. Choose any connected services to clean up as well. Files needed by a service you keep will be retained."
+      title={title ?? `Delete ${selection.length} item${selection.length === 1 ? "" : "s"}?`}
+      summary={
+        <>
+          <span className="font-semibold text-base-content">
+            {formatKilobytes(
+              displayPreview?.targets.reduce(
+                (total, target) => total + (target.fileSize ?? 0),
+                0,
+              ) ?? 0,
+            )} logical media selected
+          </span>
+          {"\u00a0"}
+          Librarian requests deletion through the selected services. Actual disk space recovered may
+          differ. This cannot be undone.
+        </>
+      }
       onClose={cancel}
     >
-      {displayPreview && <ServiceDeletionPreviewList preview={displayPreview} />}
-      <div className="my-3 flex flex-wrap gap-4">
-        {arrNames && (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="checkbox checkbox-sm"
-              checked={arrSelected}
-              disabled={loading || pending || !!request.current || !preview?.arrConfigured}
-              onChange={(event) => changeDestination("arr", event.target.checked)}
-            />
-            Delete from {arrNames}
-          </label>
-        )}
-        {destinations.includes("qb") && (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="checkbox checkbox-sm"
-              checked={qbSelected}
-              disabled={loading || pending || !!request.current || !preview?.qbConfigured}
-              onChange={(event) => changeDestination("qb", event.target.checked)}
-            />
-            Delete qBittorrent jobs and data
-          </label>
-        )}
-      </div>
-      {destinations.length > 0 && displayPreview && displayPreview.targets.length > 1 &&
-        (
-          <p className="text-xs text-base-content/60">
-            Optional services apply only to matching items in this selection.
-          </p>
-        )}
-      {loading && <p role="status">Reading current service targets…</p>}
-      {error && <p role="alert" className="my-3 text-sm text-error">{error}</p>}
-      {displayPreview?.targets.some((target) => target.fileSize != null) &&
-        (
-          <p className="mt-2 text-xs text-base-content/50">
-            Sizes describe selected media, not measured disk space reclaimed.
-          </p>
-        )}
-      <div className="modal-action">
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={submissionLocked}
-          onClick={cancel}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={loading || pending || !!request.current}
-          onClick={refresh}
-        >
-          Refresh
-        </button>
-        <button
-          type="button"
-          className="btn btn-error"
-          disabled={pending || (!request.current && (loading || !preview?.canConfirm))}
-          onClick={() => void submit()}
-        >
-          {pending ? "Submitting…" : request.current ? "Retry same request" : "Confirm deletion"}
-        </button>
-      </div>
+      {renderPreview ? renderPreview(displayPreview) : displayPreview && (
+        <ServiceDeletionPreviewList
+          preview={displayPreview}
+          collapsible={!embedded}
+          showWarnings={false}
+        />
+      )}
+      {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
+      <DestinationOptions
+        keepDownloads={destinations.includes("qb") && !qbSelected}
+        options={[
+          ...(arrNames
+            ? [{
+              id: "arr" as const,
+              service: destinations.includes("sonarr") ? "sonarr" as const : "radarr" as const,
+              label: "Delete from " + arrNames,
+              info:
+                "Delete current matched media through the selected service. Files needed by a service you keep are retained.",
+              checked: arrSelected,
+              disabled: loading || submissionLocked || !preview?.arrConfigured,
+              warning: false,
+              onChange: (checked: boolean) => changeDestination("arr", checked),
+            }]
+            : []),
+          ...(destinations.includes("qb")
+            ? [{
+              id: "cleanup" as const,
+              service: "qbittorrent" as const,
+              label: "Delete from qBittorrent",
+              info:
+                "Delete matching torrents and their files. Unselected media and shared downloads are protected.",
+              checked: qbSelected,
+              disabled: loading || submissionLocked || !preview?.qbConfigured,
+              warning: false,
+              onChange: (checked: boolean) => changeDestination("qb", checked),
+            }]
+            : []),
+        ]}
+      />
+      <DeletionPreviewStatus
+        error={error ?? null}
+        onRetry={request.current ? undefined : refresh}
+        retrying={loading}
+      />
+      <DeletionDialogFooter
+        cancelButtonRef={cancelButtonRef}
+        pending={submissionLocked}
+        preparing={loading}
+        confirmDisabled={pending ||
+          (!request.current && (selectionDisabled || loading || !preview?.canConfirm))}
+        confirmLabel={pending
+          ? "Submitting…"
+          : request.current
+          ? "Retry same request"
+          : confirmLabel ?? "Confirm deletion"}
+        onCancel={cancel}
+        onConfirm={() => void submit()}
+      />
     </DeletionModalShell>
   );
 }

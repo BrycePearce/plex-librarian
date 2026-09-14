@@ -1,3 +1,32 @@
+Deno.test('service-owned preview exposes only selected version files and public display fields', async () => {
+  reset();
+  addMovie('display-version', [11, 12]);
+  reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
+  const response = await rawApp.request('/api/service-deletions/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      libraryKey: 'movies',
+      targets: [{ ratingKey: 'display-version', mediaId: 11 }],
+      arrSelected: false,
+      qbSelected: false,
+    }),
+  });
+  assertEquals(response.status, 200);
+  const preview = await response.json();
+  const target = preview.targets[0];
+  assertEquals(target.files, [{
+    path: '/movies/display-version-11.mkv',
+    size: 50_000,
+    service: 'plex',
+    actionId: target.decisions.find((d: { service: string }) => d.service === 'plex').actionId,
+  }]);
+  assertEquals(target.fileCount, 1);
+  assertEquals(target.filesTruncated, false);
+  assertEquals(target.linkedExtrasIncluded, false);
+  assertEquals(wholeDeleteOrder.length, 0);
+});
+
 Deno.test('service-owned retry preserves an accepted operation across server-resolution failure', async () => {
   reset();
   addMovie('service-retry-resolution', [11]);

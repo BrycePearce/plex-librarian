@@ -10,7 +10,7 @@ async function flushAct(run: () => void) {
 }
 import { api, ApiError } from "../../lib/api.ts";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
-import { DeletionModalShell } from "./DeletionDialog.tsx";
+import { DeletionDialogFooter, DeletionModalShell } from "./DeletionDialog.tsx";
 import { ServiceDeletionPreviewList } from "./ServiceDeletionPreviewList.tsx";
 import type {
   ServiceActionDecision,
@@ -159,9 +159,7 @@ Deno.test("review lists a show once and only offers detected destinations, keepi
     assertEquals(renderer!.root.findAllByType("input").length, 0);
     assertEquals(text().includes("Current inventory could not be read"), true);
     assertEquals(
-      renderer!.root.findAllByType("button").find((button) =>
-        button.children.join("") === "Confirm deletion"
-      )!.props.disabled,
+      renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled,
       true,
     );
     result = {
@@ -251,16 +249,22 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
     });
     const inputs = () => renderer!.root.findAllByType("input");
     const button = (label: string) =>
-      renderer!.root.findAllByType("button").find((entry) => entry.children.join("") === label)!;
+      renderer!.root.findAllByType("button").find((entry) =>
+        entry.findAllByType("span").some((span) => span.children.includes(label)) ||
+        entry.children.includes(label)
+      )!;
     assertEquals(inputs().map((entry) => entry.props.checked), [false, false]);
     await flushAct(() => {
       inputs()[0].props.onChange({ target: { checked: true } });
     });
     assertEquals(previews.at(-1)!.arrSelected, true);
+    assertEquals(
+      renderer!.root.findAllByType("button").some((entry) => entry.children.includes("Refresh")),
+      false,
+    );
     await flushAct(() => {
-      button("Refresh").props.onClick();
+      inputs()[0].props.onChange({ target: { checked: false } });
     });
-    assertEquals(inputs().map((entry) => entry.props.checked), [false, false]);
     await flushAct(() => {
       inputs()[1].props.onChange({ target: { checked: true } });
     });
@@ -287,7 +291,10 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
     assertEquals(requests.length, 2);
     assertEquals(requests[0], requests[1]);
     assertEquals(button("Cancel").props.disabled, true);
-    assertEquals(button("Refresh").props.disabled, true);
+    assertEquals(
+      renderer!.root.findAllByType("button").some((entry) => entry.children.includes("Retry")),
+      false,
+    );
     assertEquals(created, []);
     await flushAct(() => {
       button("Retry same request").props.onClick();
@@ -356,15 +363,18 @@ Deno.test("failed preview discards confirmation and a definite rejection require
       );
     });
     const button = (label: string) =>
-      renderer!.root.findAllByType("button").find((entry) => entry.children.join("") === label)!;
+      renderer!.root.findAllByType("button").find((entry) =>
+        entry.findAllByType("span").some((span) => span.children.includes(label)) ||
+        entry.children.includes(label)
+      )!;
     await flushAct(() => {
       button("Confirm deletion").props.onClick();
     });
     assertEquals(button("Confirm deletion").props.disabled, true);
-    assertEquals(button("Refresh").props.disabled, false);
+    assertEquals(button("Retry").props.disabled, false);
     failRead = true;
     await flushAct(() => {
-      button("Refresh").props.onClick();
+      button("Retry").props.onClick();
     });
     assertEquals(button("Confirm deletion").props.disabled, true);
     assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), [
@@ -373,7 +383,7 @@ Deno.test("failed preview discards confirmation and a definite rejection require
     ]);
     failRead = false;
     await flushAct(() => {
-      button("Refresh").props.onClick();
+      button("Retry").props.onClick();
     });
     assertEquals(button("Confirm deletion").props.disabled, false);
   } finally {
@@ -382,6 +392,90 @@ Deno.test("failed preview discards confirmation and a definite rejection require
     });
     api.serviceDeletions.preview = oldPreview;
     api.serviceDeletions.create = oldCreate;
+    globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
+  }
+});
+Deno.test("restored advanced preview shows real paths with retained decisions and truncation", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousAct = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  try {
+    await flushAct(() => {
+      renderer = TestRenderer.create(
+        <ServiceDeletionPreviewList
+          preview={{
+            fingerprint: "current",
+            arrConfigured: true,
+            qbConfigured: false,
+            canConfirm: true,
+            targets: [{
+              ratingKey: "show",
+              title: "Example Show",
+              fileCount: 1001,
+              filesTruncated: true,
+              linkedExtrasIncluded: true,
+              decisions: [
+                {
+                  actionId: "plex",
+                  targetId: "show",
+                  service: "plex",
+                  requested: true,
+                  state: "kept",
+                  presence: "current",
+                  reason: "A kept torrent uses this file",
+                  evidenceRevision: "current",
+                },
+                {
+                  actionId: "arr",
+                  targetId: "show",
+                  service: "sonarr",
+                  requested: false,
+                  state: "kept",
+                  presence: "current",
+                  reason: "Not selected",
+                  evidenceRevision: "current",
+                },
+              ],
+              files: [
+                {
+                  actionId: "plex",
+                  service: "plex",
+                  path: "/media/tv/Example/Season 1/Episode.mkv",
+                  size: 2048,
+                },
+                {
+                  actionId: "arr",
+                  service: "sonarr",
+                  path: "/arr/Example/Episode.mkv",
+                  size: 2048,
+                },
+              ],
+            }],
+          }}
+        />,
+      );
+    });
+    assertEquals(renderer!.root.findAllByType("li").length, 1);
+    await flushAct(() => {
+      renderer!.root.findAllByType("button").find((button) => button.children.includes("advanced"))!
+        .props.onClick();
+    });
+    const output = JSON.stringify(renderer!.toJSON());
+    assertEquals(output.includes("/media/tv/Example/Season 1"), true);
+    assertEquals(output.includes("Episode.mkv"), true);
+    assertEquals(output.includes("These files will be kept"), true);
+    assertEquals(output.includes("1001"), true);
+    assertEquals(output.includes("/arr/Example"), false);
+    assertEquals(output.includes("Sonarr also handles"), false);
+    assertEquals(
+      renderer!.root.findAllByType("button").some((button) =>
+        button.props["aria-label"] === "Copy path /media/tv/Example/Season 1"
+      ),
+      true,
+    );
+  } finally {
+    await flushAct(() => renderer?.unmount());
     globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
   }
 });

@@ -377,7 +377,7 @@ export function groupSeasonLanePaths(
   })).sort((left, right) => left.directory.localeCompare(right.directory));
 }
 
-function LanePathsPopover({
+export function LanePathsPopover({
   profile,
   episodeIndexByRatingKey,
 }: {
