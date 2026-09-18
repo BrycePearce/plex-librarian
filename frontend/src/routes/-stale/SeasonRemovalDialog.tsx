@@ -364,7 +364,6 @@ export function SeasonRemovalDialog({
         destinations={item
           ? (
             <DestinationOptions
-              keepDownloads={(value?.downloadJobs.length ?? 0) > 0 && !cleanupDownloads}
               options={[
                 ...(sonarrActionAvailable || coordinated
                   ? [{

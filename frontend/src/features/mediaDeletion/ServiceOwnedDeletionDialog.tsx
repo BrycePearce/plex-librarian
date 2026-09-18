@@ -208,11 +208,10 @@ function SelectionDialog({
                 (total, target) => total + (target.fileSize ?? 0),
                 0,
               ) ?? 0,
-            )} logical media selected
+            )} selected
           </span>
           {"\u00a0"}
-          Librarian requests deletion through the selected services. Actual disk space recovered may
-          differ. This cannot be undone.
+          This cannot be undone.
         </>
       }
       onClose={cancel}
@@ -226,7 +225,6 @@ function SelectionDialog({
       )}
       {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
       <DestinationOptions
-        keepDownloads={destinations.includes("qb") && !qbSelected}
         options={[
           ...(arrNames
             ? [{

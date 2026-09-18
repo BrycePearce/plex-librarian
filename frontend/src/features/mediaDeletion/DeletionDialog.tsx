@@ -124,7 +124,10 @@ export function DeletionPreviewDisclosure({
   children: ReactNode;
 }) {
   return (
-    <details className="group deletion-preview relative mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40">
+    <details
+      open
+      className="group deletion-preview relative mt-3 overflow-hidden rounded-lg border border-base-300 bg-base-100/40"
+    >
       <summary
         className={`flex h-8 cursor-pointer list-none items-center gap-1.5 px-2.5 text-xs text-base-content/50 ${
           controls ? "group-open:pr-40" : ""

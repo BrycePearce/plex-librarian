@@ -59,10 +59,8 @@ function DestinationOption({
 
 export function DestinationOptions({
   options,
-  keepDownloads = false,
 }: {
   options: DeletionDestinationOption[];
-  keepDownloads?: boolean;
 }) {
   if (options.length === 0) return null;
 
@@ -80,11 +78,6 @@ export function DestinationOptions({
           onChange={option.onChange}
         />
       ))}
-      {keepDownloads && (
-        <p className="w-full text-right text-xs text-base-content/50">
-          qBittorrent files will be kept.
-        </p>
-      )}
     </div>
   );
 }
