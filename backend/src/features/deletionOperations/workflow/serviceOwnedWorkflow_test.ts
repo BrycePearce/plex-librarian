@@ -1,5 +1,9 @@
 import { assertEquals, assertThrows } from '@std/assert';
 import type { DeletionWorkTarget } from '../core/types.ts';
+import {
+  ServiceOwnedVerificationPending,
+  serviceOwnedVerificationProgress,
+} from '../core/types.ts';
 import { assertRejects } from '@std/assert';
 import { planServiceOwnedRetention } from '../../mediaDeletion/serviceOwnedRetention.ts';
 import type { ServiceOwnedAction } from '../../mediaDeletion/serviceOwnedRetention.ts';
@@ -24,6 +28,50 @@ const {
 );
 type Attempt = import('./serviceOwnedWorkflow.ts').ServiceOwnedAttempt;
 type Plan = import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
+
+Deno.test('verification progress advances only for new durable checkpoints', () => {
+  const attempts: Record<string, Attempt> = {};
+  for (let n = 0; n < 8; n++) {
+    const prior = serviceOwnedVerificationProgress(attempts);
+    attempts[String(n)] = { startedAt: 1, response: { status: 'succeeded', httpStatus: 204 } };
+    assertEquals(serviceOwnedVerificationProgress(attempts), prior + 1);
+    attempts[String(n)].outcome = { status: 'target_absent', observedAt: 2 };
+    assertEquals(serviceOwnedVerificationProgress(attempts), prior + 2);
+    attempts[String(n)].outcome!.observedAt = 100;
+    assertEquals(serviceOwnedVerificationProgress(attempts), prior + 2);
+  }
+});
+
+Deno.test('persisted confirmed absence that reappears is a hold, never a convergence wait', async () => {
+  const plan = actionFixture();
+  const id = plan.actions[0].id;
+  const error = await assertRejects(
+    () =>
+      executeServiceOwnedActions(plan, {
+        [id]: {
+          startedAt: 1,
+          response: { status: 'succeeded', httpStatus: 204 },
+          outcome: { status: 'target_absent', observedAt: 2 },
+        },
+      }, {
+        save() {
+          throw new Error('Unexpected save');
+        },
+        revalidate() {
+          throw new Error('Unexpected validation');
+        },
+        present() {
+          return Promise.resolve(true);
+        },
+        mutate() {
+          throw new Error('Unexpected replay');
+        },
+      }),
+    Error,
+    'reappeared',
+  );
+  assertEquals(error instanceof ServiceOwnedVerificationPending, false);
+});
 
 Deno.test('unavailable continuation reads settle without replaying service mutations', async () => {
   let reads = 0;

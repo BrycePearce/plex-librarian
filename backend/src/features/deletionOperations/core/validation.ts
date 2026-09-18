@@ -51,6 +51,8 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  serviceOwnedVerificationRetries?: number;
+  serviceOwnedVerificationProgress?: number;
   serviceOwnedPlan?: import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
   serviceOwnedAttempts?: Record<
     string,

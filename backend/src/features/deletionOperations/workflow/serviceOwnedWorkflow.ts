@@ -14,6 +14,9 @@ import {
 } from '../../mediaDeletion/serviceOwnedPlanning.ts';
 import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
 import type { DeletionWorkTarget } from '../core/types.ts';
+import { ServiceOwnedVerificationPending } from '../core/types.ts';
+import { isRetryableDeletionFailure } from '../core/policy.ts';
+
 import { advancePhase } from '../core/deletionState.ts';
 import {
   assertRetainedVersionPostcondition,
@@ -26,6 +29,27 @@ import type {
   ServiceOwnedAction,
   ServiceOwnedRetentionPlan,
 } from '../../mediaDeletion/serviceOwnedRetention.ts';
+
+/** Wrap only reads: request failures must retain their uncertain-outcome hold. */
+async function verificationRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    const status = (error as { status?: number })?.status ?? null;
+    if (
+      isRetryableDeletionFailure(
+        status,
+        error instanceof Error ? error.message : '',
+        error instanceof TypeError,
+      ) ||
+      error instanceof Error &&
+        error.message === 'Sonarr episode snapshot references a missing EpisodeFile'
+    ) {
+      throw new ServiceOwnedVerificationPending('Waiting for service inventory verification');
+    }
+    throw error;
+  }
+}
 
 export interface ServiceOwnedAttempt {
   startedAt: number;
@@ -85,9 +109,12 @@ export async function ensureServiceOwnedEpisodeMonitoring(
     if (previous && !previous.response && !previous.noRequest) {
       throw new Error('Episode monitoring response is uncertain; replay is held');
     }
-    const monitored = await runtime.monitored(episode);
+    const monitored = await verificationRead(() => runtime.monitored(episode));
     if (previous) {
-      if (monitored) throw new Error('Episode monitoring has not converged');
+      if (monitored) {
+        if (previous.observedAt) throw new Error('Episode monitoring changed after verification');
+        throw new ServiceOwnedVerificationPending('Waiting for episode monitoring verification');
+      }
       previous.observedAt = Date.now();
       runtime.save();
       continue;
@@ -101,16 +128,28 @@ export async function ensureServiceOwnedEpisodeMonitoring(
     await runtime.revalidate();
     monitoring[key] = { startedAt: Date.now() };
     runtime.save();
-    const requested = await runtime.unmonitor(episode, (response) => {
-      monitoring[key].response = response;
-      runtime.save();
-    });
+    let requested: boolean;
+    try {
+      requested = await runtime.unmonitor(episode, (response) => {
+        monitoring[key].response = response;
+        runtime.save();
+      });
+    } catch (error) {
+      // The client may fail its read-back after recording an accepted update.
+      // Resume by reading monitoring state, never by sending the update again.
+      if (monitoring[key].response) {
+        throw new ServiceOwnedVerificationPending('Waiting for episode monitoring verification');
+      }
+      throw error;
+    }
     if (!requested) monitoring[key].noRequest = true;
     runtime.save();
     if (!monitoring[key].response && !monitoring[key].noRequest) {
       throw new Error('Episode monitoring response was not recorded; replay is held');
     }
-    if (await runtime.monitored(episode)) throw new Error('Episode monitoring has not converged');
+    if (await verificationRead(() => runtime.monitored(episode))) {
+      throw new ServiceOwnedVerificationPending('Waiting for episode monitoring verification');
+    }
     monitoring[key].observedAt = Date.now();
     runtime.save();
   }
@@ -181,8 +220,11 @@ export async function executeServiceOwnedActions(
   }
   const completed = new Set<string>();
   async function observe(action: ServiceOwnedAction) {
-    if (await runtime.present(action)) {
-      throw new Error('Service accepted deletion but its target is still present');
+    if (await verificationRead(() => runtime.present(action))) {
+      if (attempts[action.id].outcome) throw new Error('A completed service target reappeared');
+      throw new ServiceOwnedVerificationPending(
+        'Service accepted deletion; waiting for inventory verification',
+      );
     }
     attempts[action.id].outcome = { status: 'target_absent', observedAt: Date.now() };
     runtime.save();
@@ -284,7 +326,9 @@ export async function ensureServiceOwnedDeletion(
   ) {
     throw new Error('Earlier work lacks service-owned request evidence; automatic replay is held');
   }
-  const { client: plex } = await validateDeletionTarget(target.serverId, target);
+  const { client: plex } = await verificationRead(() =>
+    validateDeletionTarget(target.serverId, target)
+  );
   let [arrTargets, downloadTargets] = await Promise.all([
     getArrDeleteTargets(target.serverId, plan.libraryKey),
     getDownloadClientTargets(target.serverId),
@@ -449,21 +493,30 @@ export async function ensureServiceOwnedDeletion(
     }
     const client = arrFor(action);
     const externalId = action.service === 'radarr' ? plan.selection.tmdbId : plan.selection.tvdbId;
-    const record = await client.lookup(externalId!);
+    const record = await verificationRead(() => client.lookup(externalId!));
     if (attempt.recordCleanup?.response) {
-      if (record) throw new Error('Managed catalog removal is not yet observed');
+      if (record) {
+        if (record.id !== action.recordId || attempt.recordCleanup.observedAt) {
+          throw new Error('Managed catalog identity changed');
+        }
+        throw new ServiceOwnedVerificationPending(
+          'Waiting for managed catalog removal verification',
+        );
+      }
     } else {
       if (!record || record.id !== action.recordId) {
         throw new Error('Managed catalog identity changed');
       }
-      if (await present(action)) {
+      if (await verificationRead(() => present(action))) {
         throw new Error('A managed file reappeared before catalog cleanup');
       }
-      await revalidate(completed);
+      await verificationRead(() => revalidate(completed));
       if (action.service === 'sonarr') {
         // The generic collector can lose Arr scope after Plex disappears. Check the
         // entire native record, not only the former leading file ID, before removal.
-        await assertServiceOwnedCatalogEmpty(() => client.sonarrSeriesSnapshot(action.recordId!));
+        await assertServiceOwnedCatalogEmpty(() =>
+          verificationRead(() => client.sonarrSeriesSnapshot(action.recordId!))
+        );
       }
       attempt.recordCleanup = { startedAt: Date.now() };
       save();
@@ -475,8 +528,10 @@ export async function ensureServiceOwnedDeletion(
           save();
         },
       );
-      if (await client.lookup(externalId!)) {
-        throw new Error('Managed catalog removal is not yet observed');
+      if (await verificationRead(() => client.lookup(externalId!))) {
+        throw new ServiceOwnedVerificationPending(
+          'Waiting for managed catalog removal verification',
+        );
       }
     }
     attempt.recordCleanup!.observedAt = Date.now();
@@ -484,19 +539,19 @@ export async function ensureServiceOwnedDeletion(
   }
   await executeServiceOwnedActions(plan, attempts, {
     save,
-    present,
-    revalidate,
+    present: (action) => verificationRead(() => present(action)),
+    revalidate: (completed) => verificationRead(() => revalidate(completed)),
     async reconcileAbsent(base, completed) {
       const action = actionFor(base);
       const sources = serviceOwnedAbsenceSources(action, plan.actions, attempts, completed);
-      if (!sources || await present(action)) return;
+      if (!sources || await verificationRead(() => present(action))) return;
       return sources;
     },
     async afterObserved(base, completed) {
       const action = actionFor(base);
       await ensureServiceOwnedEpisodeMonitoring(action, attempts[action.id], {
         save,
-        revalidate: () => revalidate(completed),
+        revalidate: () => verificationRead(() => revalidate(completed)),
         async monitored(episode) {
           return (await arrFor(action).sonarrEpisodeMonitorTarget({
             seriesId: action.recordId!,
@@ -544,7 +599,7 @@ export async function ensureServiceOwnedDeletion(
     throw new Error('No accepted Plex outcome');
   }
   if (plexDecision.state === 'delete_candidate' && target.targetKind !== 'whole_item') {
-    const live = await plex.metadataIdentity(snapshot.ratingKey);
+    const live = await verificationRead(() => plex.metadataIdentity(snapshot.ratingKey));
     if (!live) throw new Error('The retained Plex item disappeared');
     assertRetainedVersionPostcondition(target, snapshot, live);
   }
@@ -609,9 +664,15 @@ export async function assertServiceOwnedContinuation(
   completed: ReadonlySet<string>,
   attempts: Readonly<Record<string, ServiceOwnedAttempt>> = {},
 ) {
+  if (
+    await serviceOwnedFingerprint(accepted.connections) !==
+      await serviceOwnedFingerprint(current.connections)
+  ) {
+    throw new Error('Service configuration changed after confirmation');
+  }
   const unavailable = current.actions.find((action) => action.presence === 'unknown');
   if (unavailable) {
-    throw new Error(
+    throw new ServiceOwnedVerificationPending(
       `${unavailable.service} inventory could not be verified after confirmation: ${
         unavailable.unavailableReason ?? 'Current service evidence is unavailable'
       }`,
@@ -619,12 +680,6 @@ export async function assertServiceOwnedContinuation(
   }
   if (!completed.size && accepted.fingerprint !== current.fingerprint) {
     throw new Error('Accepted service evidence changed before execution');
-  }
-  if (
-    await serviceOwnedFingerprint(accepted.connections) !==
-      await serviceOwnedFingerprint(current.connections)
-  ) {
-    throw new Error('Service configuration changed after confirmation');
   }
   for (const action of current.actions) {
     if (

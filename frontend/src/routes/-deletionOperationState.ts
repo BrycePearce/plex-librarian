@@ -29,10 +29,17 @@ export function deletionOperationTitle(status: string, phase?: string): string {
 }
 
 export function deletionTargetProgress(
-  target: { status: string; phase?: string; serviceOutcomes?: { status: string }[] },
+  target: {
+    status: string;
+    phase?: string;
+    serviceOwnedDeletion?: boolean;
+    serviceOutcomes?: { status: string }[];
+  },
 ): string {
   if (target.status === "queued") return "Queued";
-  if (target.status === "waiting_retry") return "Waiting to retry";
+  if (target.status === "waiting_retry") {
+    return target.serviceOwnedDeletion ? "Waiting for service verification" : "Waiting to retry";
+  }
   if (target.phase === "validating") {
     return target.serviceOutcomes?.length
       ? "Processing service deletion"

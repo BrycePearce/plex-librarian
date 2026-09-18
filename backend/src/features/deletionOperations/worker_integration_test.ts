@@ -467,7 +467,19 @@ Deno.test('service-owned batch deletes versions across episodes of the same show
 Deno.test('service-owned season and show finish explained partial and empty Plex refreshes', async () => {
   for (
     const { ratingKey, drift } of ['season-1', 'show-1'].flatMap((ratingKey) =>
-      ['none', 'empty', 'empty-lost', 'missing', 'addition', 'rename', 'source-reappeared'].map((
+      [
+        'none',
+        'empty',
+        'empty-lost',
+        'missing',
+        'addition',
+        'rename',
+        'source-reappeared',
+        'inventory-wait',
+        'inventory-persistent',
+        'inventory-new-file',
+        'inventory-ref-lag',
+      ].map((
         drift,
       ) => ({
         ratingKey,
@@ -495,9 +507,28 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
     const secondMedia = structuredClone(live.get(second.ratingKey)!.Media);
     const fixtureFetch = globalThis.fetch;
     const deleted: number[] = [];
+    let inventoryUnavailable = false;
     globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
+      if (
+        inventoryUnavailable && drift !== 'inventory-ref-lag' && url.hostname === 'sonarr' &&
+        (!init?.method || init.method === 'GET') && url.pathname === '/api/v3/episodefile'
+      ) {
+        return new Response('Inventory unavailable', { status: 503 });
+      }
       const response = await fixtureFetch(input, init);
+      if (
+        inventoryUnavailable && drift === 'inventory-ref-lag' && url.hostname === 'sonarr' &&
+        url.pathname === '/api/v3/episode' && !url.searchParams.has('episodeFileId')
+      ) {
+        const episodes = await response.json();
+        return Response.json(
+          episodes.map((episode: { id: number; episodeFileId: number }) => ({
+            ...episode,
+            episodeFileId: episode.id === 9 ? sonarrManagedFileId : episode.episodeFileId,
+          })),
+        );
+      }
       if (
         drift === 'empty-lost' && init?.method === 'DELETE' &&
         url.pathname === `/library/metadata/${ratingKey}`
@@ -538,6 +569,7 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
           }
           if (drift === 'source-reappeared') sonarrManagedFilePresent = true;
         } else {
+          if (drift.startsWith('inventory-')) inventoryUnavailable = true;
           // The second Plex scan has not happened yet; native Plex deletion
           // remains necessary for the final current catalog entry.
           if (drift.startsWith('empty')) live.delete(second.ratingKey);
@@ -580,12 +612,60 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
       assertEquals(response.status, 202, await response.clone().text());
       const { operationId } = await response.json();
       await settle();
+      if (drift.startsWith('inventory-')) {
+        assertEquals(getDeletionOperation(operationId, 1)!.status, 'waiting_retry');
+        if (drift === 'inventory-persistent') {
+          for (let retry = 0; retry < 5; retry++) {
+            withTransaction((client) =>
+              client.prepare('UPDATE deletion_targets SET next_retry_at=0 WHERE operation_id=?')
+                .run(operationId)
+            );
+            await settle();
+          }
+          assertEquals(getDeletionOperation(operationId, 1)!.status, 'needs_attention');
+          assertEquals(deleted, [sonarrManagedFileId, second.managedFileId]);
+          const readSnapshot = () =>
+            JSON.parse(
+              withTransaction((client) =>
+                client.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=?')
+                  .value<[string]>(operationId)![0]
+              ),
+            );
+          const exhausted = readSnapshot();
+          assertEquals(exhausted.serviceOwnedVerificationRetries, 6);
+          assertEquals(retryDeletionOperation(operationId, 1), true);
+          assertEquals(readSnapshot(), { ...exhausted, serviceOwnedVerificationRetries: 0 });
+          // A further transient failure gets a fresh automatic budget, without replay.
+          await settle();
+          assertEquals(getDeletionOperation(operationId, 1)!.status, 'waiting_retry');
+          assertEquals(readSnapshot().serviceOwnedVerificationRetries, 1);
+          assertEquals(deleted, [sonarrManagedFileId, second.managedFileId]);
+        }
+        inventoryUnavailable = false;
+        if (drift === 'inventory-new-file') addAdditionalSonarrEpisode(3, 41, 42);
+        live.delete(ratingKey);
+        live.delete('episode-1');
+        live.delete(second.ratingKey);
+        withTransaction((client) => {
+          recoverInterruptedDeletionWork(client, Math.floor(Date.now() / 1000));
+          client.prepare('UPDATE deletion_targets SET next_retry_at=0 WHERE operation_id=?').run(
+            operationId,
+          );
+        });
+        await settle();
+      }
       const operation = getDeletionOperation(operationId, 1)!;
-      const succeeds = drift === 'none' || drift === 'empty';
-      const filesDeleted = succeeds || drift === 'empty-lost';
+      const succeeds = drift === 'none' || drift === 'empty' || drift === 'inventory-wait' ||
+        drift === 'inventory-persistent' ||
+        drift === 'inventory-ref-lag' || drift === 'inventory-new-file' && ratingKey === 'season-1';
+      const filesDeleted = succeeds || drift === 'empty-lost' || drift === 'inventory-new-file';
       assertEquals(
         operation.status,
-        succeeds ? 'completed' : 'needs_attention',
+        succeeds
+          ? 'completed'
+          : drift === 'source-reappeared'
+          ? 'waiting_retry'
+          : 'needs_attention',
         `${drift}: ${JSON.stringify(operation)}`,
       );
       assertEquals(
@@ -865,7 +945,7 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
     assertEquals(accepted.status, 202, await accepted.clone().text());
     const { operationId } = await accepted.json();
     await settle();
-    assertEquals(getDeletionOperation(operationId, 1)!.status, 'needs_attention');
+    assertEquals(getDeletionOperation(operationId, 1)!.status, 'waiting_retry');
     assertEquals(qbitDeleteCount, 1);
     assertEquals(arrManagedFilePresent, true);
     qbitJobsOverride = [];

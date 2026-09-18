@@ -8,7 +8,7 @@ export function serviceActionLabel(action: ServiceActionDecision): string {
   if (action.state === "not_applicable" || action.outcome === "not_applicable") {
     return "Not applicable";
   }
-  if (action.outcome === "accepted") return "Awaiting confirmation";
+  if (action.outcome === "accepted") return "Awaiting service verification";
   if (action.outcome === "uncertain") return "Outcome uncertain";
   if (action.outcome === "failed") return "Failed";
   if (action.outcome === "succeeded") return "Service removal confirmed";

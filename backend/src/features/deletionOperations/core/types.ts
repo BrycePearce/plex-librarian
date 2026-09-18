@@ -20,6 +20,28 @@ export type DeletionPhase =
 
 export class DeletionConvergenceError extends Error {}
 
+/** Read-only verification can resume; never grants permission to replay a request. */
+export class ServiceOwnedVerificationPending extends Error {}
+
+/** Count checkpoint transitions, not read timestamps, so repeated reads cannot extend the budget. */
+export function serviceOwnedVerificationProgress(
+  attempts: Record<string, {
+    response?: unknown;
+    outcome?: unknown;
+    monitoring?: Record<string, { response?: unknown; noRequest?: boolean; observedAt?: number }>;
+    recordCleanup?: { response?: unknown; observedAt?: number };
+  }>,
+): number {
+  return Object.values(attempts).reduce((sum, attempt) =>
+    sum + Number(!!attempt.response) +
+    Number(!!attempt.outcome) + Number(!!attempt.recordCleanup?.response) +
+    Number(!!attempt.recordCleanup?.observedAt) + Object.values(attempt.monitoring ?? {}).reduce(
+      (count, entry) =>
+        count + Number(!!entry.response || !!entry.noRequest) + Number(!!entry.observedAt),
+      0,
+    ), 0);
+}
+
 export class PlexReconciliationError extends Error {
   constructor(
     message: string,

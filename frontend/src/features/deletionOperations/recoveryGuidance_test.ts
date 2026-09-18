@@ -1,6 +1,16 @@
 import { assertEquals } from "@std/assert";
 import { deletionRecoveryGuidance, deletionRecoverySummary } from "./recoveryGuidance.ts";
 
+Deno.test("service-owned inventory failures never recommend legacy mappings", () => {
+  const guidance = deletionRecoveryGuidance({
+    serviceOwnedDeletion: true,
+    phase: "validating",
+    error: "Current Arr identity, ownership or stable inventory is unavailable",
+  });
+  assertEquals(guidance.title, "Review service inventories");
+  assertEquals(guidance.steps.some((step) => step.includes("mapping")), false);
+});
+
 Deno.test("retained Radarr folder failures recommend making the kept file visible", () => {
   const guidance = deletionRecoveryGuidance({
     error:

@@ -26,7 +26,7 @@ Deno.test("episode actions group by service and outcome without hiding pending w
   assertStringIncludes(html, "Sonarr · 2 actions");
   assertStringIncludes(html, "Sonarr · 27 actions");
   assertEquals((html.match(/Sonarr removes this file/g) ?? []).length, 2);
-  assertStringIncludes(html, "Awaiting confirmation");
+  assertStringIncludes(html, "Awaiting service verification");
   assertStringIncludes(html, "Requested deletion");
   assertStringIncludes(html, "arr:3:file:28");
 });
@@ -43,7 +43,7 @@ Deno.test("retained Plex is visible without claiming removal or reclaimed space"
 Deno.test("API acceptance and uncertainty never render as completed service removal", () => {
   assertEquals(
     serviceActionLabel({ ...action, state: "delete_candidate", outcome: "accepted" }),
-    "Awaiting confirmation",
+    "Awaiting service verification",
   );
   assertEquals(
     serviceActionLabel({ ...action, state: "delete_candidate", outcome: "uncertain" }),

@@ -4,6 +4,7 @@ export interface DeletionRecoveryGuidance {
 }
 
 interface RecoveryTargetState {
+  serviceOwnedDeletion?: boolean;
   error: string | null;
   phase: string;
   resolutionState?: string;
@@ -19,6 +20,15 @@ export function deletionRecoveryGuidance(
   target: RecoveryTargetState,
 ): DeletionRecoveryGuidance {
   const error = target.error?.toLowerCase() ?? "";
+  if (target.serviceOwnedDeletion) {
+    return {
+      title: "Review service inventories",
+      steps: [
+        "Check the service results and error shown for this target. Confirm the expected files and records in Plex and Sonarr/Radarr.",
+        "After resolving the reported issue, choose Retry to verify recorded progress. Accepted or uncertain destructive requests are not sent again.",
+      ],
+    };
+  }
 
   if (target.resolutionState === "management_hold") {
     return {

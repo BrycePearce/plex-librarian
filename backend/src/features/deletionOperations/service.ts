@@ -20,6 +20,8 @@ import {
   DeletionConvergenceError,
   type DeletionWorkTarget,
   PlexReconciliationError,
+  ServiceOwnedVerificationPending,
+  serviceOwnedVerificationProgress,
 } from './core/types.ts';
 import {
   DeletionValidationError,
@@ -1042,6 +1044,32 @@ function failTarget(target: DeletionWorkTarget, error: unknown): void {
       .value<[DeletionWorkTarget['phase'], number, number | null, string]>(target.id);
     const inPlexReconciliation = phaseRow?.[0] === 'plex_reconciliation';
     const acceptedSnapshot = phaseRow ? JSON.parse(phaseRow[3]) : null;
+    if (acceptedSnapshot?.serviceOwnedPlan && error instanceof ServiceOwnedVerificationPending) {
+      const delays = [15, 60, 300, 900, 1800];
+      const progress = serviceOwnedVerificationProgress(
+        acceptedSnapshot.serviceOwnedAttempts ?? {},
+      );
+      const retries = (progress === acceptedSnapshot.serviceOwnedVerificationProgress
+        ? acceptedSnapshot.serviceOwnedVerificationRetries ?? 0
+        : 0) + 1;
+      acceptedSnapshot.serviceOwnedVerificationRetries = retries;
+      acceptedSnapshot.serviceOwnedVerificationProgress = progress;
+      const next = retries <= delays.length ? now + delays[retries - 1] : null;
+      client.prepare(
+        "UPDATE deletion_targets SET status=?,next_retry_at=?,error=?,snapshot=?,updated_at=? WHERE id=? AND status='running'",
+      ).run(
+        next === null ? 'needs_attention' : 'waiting_retry',
+        next,
+        next === null
+          ? 'Service verification did not settle within the automatic retry limit; review service inventories before retrying'
+          : message,
+        JSON.stringify(acceptedSnapshot),
+        now,
+        target.id,
+      );
+      refreshDeletionOperation(client, target.operationId);
+      return;
+    }
     if (
       (acceptedSnapshot?.ordinaryPlan || acceptedSnapshot?.serviceOwnedPlan) &&
       (acceptedSnapshot.ordinaryAttempts || acceptedSnapshot.serviceOwnedAttempts ||
@@ -1610,6 +1638,11 @@ export function retryDeletionOperation(
         `UPDATE deletion_targets
        SET status = 'queued',
            attempt_count = CASE WHEN status = 'needs_attention' THEN 0 ELSE attempt_count END,
+           snapshot = CASE
+             WHEN json_extract(snapshot, '$.serviceOwnedPlan.policyVersion') = 4
+             THEN json_set(snapshot, '$.serviceOwnedVerificationRetries', 0)
+             ELSE snapshot
+           END,
            plex_attempt_count = CASE
              WHEN phase = 'plex_reconciliation'
               AND COALESCE(json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.arrReassignments[0].instanceType'), '') <> 'radarr'

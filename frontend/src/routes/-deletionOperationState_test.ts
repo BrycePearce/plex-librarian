@@ -1,5 +1,12 @@
 import { canCancelDeletionTarget } from "./-deletionOperationState.ts";
 import { assertEquals } from "@std/assert";
+
+Deno.test("service-owned waiting identifies verification without implying request replay", () => {
+  assertEquals(
+    deletionTargetProgress({ status: "waiting_retry", serviceOwnedDeletion: true }),
+    "Waiting for service verification",
+  );
+});
 import {
   deletionAttemptSummary,
   deletionAttentionSummary,
