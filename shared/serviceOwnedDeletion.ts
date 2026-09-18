@@ -24,6 +24,8 @@ export interface ServiceActionDecision {
   evidenceRevision: string;
   /** Live target presence; configuration alone does not imply an applicable destination. */
   presence?: 'current' | 'absent' | 'unknown';
+  /** QB has verified import lineage to this media, not merely a potential path overlap. */
+  matchedToSelection?: boolean;
   outcome?: 'succeeded' | 'accepted' | 'failed' | 'uncertain' | 'kept' | 'not_applicable';
 }
 

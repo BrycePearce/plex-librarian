@@ -320,6 +320,7 @@ async function prepare(
       decisions: plan.retention.decisions.map((d) => ({
         ...d,
         presence: plan.actions.find((a) => a.id === d.actionId)?.presence,
+        matchedToSelection: plan.actions.find((a) => a.id === d.actionId)?.matchedToSelection,
         reason: serviceOwnedDecisionExplanation(plan.actions.find((a) => a.id === d.actionId), d),
       })),
     });

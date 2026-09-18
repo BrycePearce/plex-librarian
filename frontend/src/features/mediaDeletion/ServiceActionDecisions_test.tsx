@@ -13,6 +13,24 @@ const action: ServiceActionDecision = {
   evidenceRevision: "revision",
 };
 
+Deno.test("episode actions group by service and outcome without hiding pending work", () => {
+  const actions = Array.from({ length: 29 }, (_, i) => ({
+    ...action,
+    actionId: `arr:3:file:${i}`,
+    service: "sonarr" as const,
+    state: "delete_candidate" as const,
+    reason: "Sonarr removes this file.",
+    outcome: i < 2 ? "accepted" as const : undefined,
+  }));
+  const html = renderToStaticMarkup(<ServiceActionDecisions actions={actions} />);
+  assertStringIncludes(html, "Sonarr · 2 actions");
+  assertStringIncludes(html, "Sonarr · 27 actions");
+  assertEquals((html.match(/Sonarr removes this file/g) ?? []).length, 2);
+  assertStringIncludes(html, "Awaiting confirmation");
+  assertStringIncludes(html, "Requested deletion");
+  assertStringIncludes(html, "arr:3:file:28");
+});
+
 Deno.test("retained Plex is visible without claiming removal or reclaimed space", () => {
   const html = renderToStaticMarkup(<ServiceActionDecisions actions={[action]} />);
   assertStringIncludes(html, "This media will remain in Plex.");

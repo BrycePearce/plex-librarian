@@ -389,20 +389,22 @@ export async function ensureServiceOwnedDeletion(
         );
       }
     }
-    const current = await buildServiceOwnedPlan({
-      completedSiblingRetainedEntries,
-      relatedPlexItems: () => relatedServiceOwnedPlexItems(target.serverId, plan.selection),
-      serverId: target.serverId,
-      libraryKey: plan.libraryKey,
-      selection: plan.selection,
-      arrSelected: plan.arrSelected,
-      qbSelected: plan.qbSelected,
-      knownJobIds: plan.actions.flatMap((action) => action.hash ? [action.hash] : []),
-      plex,
-      arrTargets,
-      downloadTargets,
-      connections: await serviceEndpoints(target.serverId),
-    });
+    const current = await collectStableServiceOwnedScope(async () =>
+      buildServiceOwnedPlan({
+        completedSiblingRetainedEntries,
+        relatedPlexItems: () => relatedServiceOwnedPlexItems(target.serverId, plan.selection),
+        serverId: target.serverId,
+        libraryKey: plan.libraryKey,
+        selection: plan.selection,
+        arrSelected: plan.arrSelected,
+        qbSelected: plan.qbSelected,
+        knownJobIds: plan.actions.flatMap((action) => action.hash ? [action.hash] : []),
+        plex,
+        arrTargets,
+        downloadTargets,
+        connections: await serviceEndpoints(target.serverId),
+      })
+    );
     if (
       plan.retention.decisions.every((d) =>
         d.state === 'delete_candidate' && completed.has(d.actionId) || d.state === 'not_applicable'
@@ -580,6 +582,26 @@ export async function ensureServiceOwnedDeletion(
   });
 }
 
+/** Briefly retry unavailable read evidence while native service inventories settle. */
+export async function collectStableServiceOwnedScope<
+  T extends {
+    actions: readonly { presence: string }[];
+  },
+>(
+  collect: () => Promise<T>,
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  // Native deletions can trigger scans while the collector compares two reads.
+  // Retry only unavailable evidence, never accepted mutations or actual scope drift.
+  for (let attempt = 0;; attempt++) {
+    const current = await collect();
+    if (!current.actions.some((action) => action.presence === 'unknown') || attempt === 2) {
+      return current;
+    }
+    await pause(attempt === 0 ? 500 : 1500);
+  }
+}
+
 /** Prior recorded effects may disappear; every pending action remains exactly accepted. */
 export async function assertServiceOwnedContinuation(
   accepted: ServiceOwnedPlan,
@@ -587,6 +609,14 @@ export async function assertServiceOwnedContinuation(
   completed: ReadonlySet<string>,
   attempts: Readonly<Record<string, ServiceOwnedAttempt>> = {},
 ) {
+  const unavailable = current.actions.find((action) => action.presence === 'unknown');
+  if (unavailable) {
+    throw new Error(
+      `${unavailable.service} inventory could not be verified after confirmation: ${
+        unavailable.unavailableReason ?? 'Current service evidence is unavailable'
+      }`,
+    );
+  }
   if (!completed.size && accepted.fingerprint !== current.fingerprint) {
     throw new Error('Accepted service evidence changed before execution');
   }

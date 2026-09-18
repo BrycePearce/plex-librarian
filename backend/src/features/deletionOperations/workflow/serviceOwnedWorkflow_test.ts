@@ -14,6 +14,7 @@ const { finalizeRetainedPlexTarget, markHeldServiceTarget } = await import(
 const {
   executeServiceOwnedActions,
   assertServiceOwnedContinuation,
+  collectStableServiceOwnedScope,
   ensureServiceOwnedEpisodeMonitoring,
   ensureServiceOwnedDeletion,
   serviceOwnedAbsenceSources,
@@ -23,6 +24,42 @@ const {
 );
 type Attempt = import('./serviceOwnedWorkflow.ts').ServiceOwnedAttempt;
 type Plan = import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
+
+Deno.test('unavailable continuation reads settle without replaying service mutations', async () => {
+  let reads = 0;
+  const delays: number[] = [];
+  const result = await collectStableServiceOwnedScope(
+    () => Promise.resolve({ actions: [{ presence: ++reads < 3 ? 'unknown' : 'current' }] }),
+    (ms) => {
+      delays.push(ms);
+      return Promise.resolve();
+    },
+  );
+  assertEquals(reads, 3);
+  assertEquals(delays, [500, 1500]);
+  assertEquals(result.actions[0].presence, 'current');
+  reads = 0;
+  const failed = await collectStableServiceOwnedScope(
+    () => {
+      reads++;
+      return Promise.resolve({ actions: [{ presence: 'unknown' }] });
+    },
+    () => Promise.resolve(),
+  );
+  assertEquals(reads, 3);
+  assertEquals(failed.actions[0].presence, 'unknown');
+  reads = 0;
+  await collectStableServiceOwnedScope(
+    () => {
+      reads++;
+      return Promise.resolve({ actions: [{ presence: 'current', id: 'new-scope' }] });
+    },
+    () => {
+      throw new Error('Real scope changes must not be retried');
+    },
+  );
+  assertEquals(reads, 1);
+});
 type PlannedAction =
   import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlannedAction;
 
@@ -430,6 +467,25 @@ Deno.test('partial Plex effects require exact recorded native coverage without a
     },
   };
   await assertServiceOwnedContinuation(accepted, current, completed, attempts);
+  const unavailableScope = structuredClone(current);
+  unavailableScope.actions.push({
+    ...sonarr,
+    id: 'arr:1:selection:1',
+    presence: 'unknown',
+    unavailableReason: 'Stable inventory is unavailable',
+  });
+  await assertRejects(
+    () => assertServiceOwnedContinuation(accepted, unavailableScope, completed, attempts),
+    Error,
+    'inventory could not be verified',
+  );
+  const addedScope = structuredClone(current);
+  addedScope.actions.push({ ...sonarr, id: 'arr:1:file:new', presence: 'current' });
+  await assertRejects(
+    () => assertServiceOwnedContinuation(accepted, addedScope, completed, attempts),
+    Error,
+    'New service scope appeared after confirmation',
+  );
   for (
     const change of [
       'response',

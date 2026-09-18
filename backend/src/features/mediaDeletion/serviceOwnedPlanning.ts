@@ -15,6 +15,8 @@ import {
 } from './serviceOwnedRetention.ts';
 
 export interface ServiceOwnedPlannedAction extends ServiceOwnedAction {
+  /** Verified import connection, distinct from a QB job read only for overlap protection. */
+  matchedToSelection?: boolean;
   serviceKey: string;
   instanceId?: number;
   instanceKey?: string;
@@ -165,7 +167,11 @@ function jobEvidence(job: DownloadJob) {
 }
 /** Stable destructive identity, excluding volatile playback/seeding counters and client objects. */
 export function serviceOwnedActionEvidence(action: ServiceOwnedPlannedAction) {
-  return { ...action, ...(action.job ? { job: jobEvidence(action.job) } : {}) };
+  const evidence = { ...action, ...(action.job ? { job: jobEvidence(action.job) } : {}) };
+  // Display applicability can change after Arr removes import records. Existing
+  // provenance and effect checks own execution safety across those transitions.
+  delete evidence.matchedToSelection;
+  return evidence;
 }
 export function serviceOwnedDecisionExplanation(
   action: ServiceOwnedPlannedAction | undefined,
@@ -836,6 +842,7 @@ export async function buildServiceOwnedPlan(
           episodeIds: h.episodeIds,
           import: i,
         })));
+        current.matchedToSelection = sources.length > 0;
         if (sources.length) {
           const allOwned = job.manifestFiles.every((f) =>
             sources.some(({ h, i }) =>

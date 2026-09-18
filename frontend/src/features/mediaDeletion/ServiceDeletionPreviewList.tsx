@@ -16,7 +16,10 @@ export const deletionServiceNames = {
 export function detectedDestinations(preview: ServiceDeletionPreview | undefined) {
   return (["sonarr", "radarr", "qb"] as const).filter((service) =>
     preview?.targets.some((target) =>
-      target.decisions.some((action) => action.service === service && action.presence === "current")
+      target.decisions.some((action) =>
+        action.service === service && action.presence === "current" &&
+        (service !== "qb" || action.matchedToSelection === true)
+      )
     )
   );
 }

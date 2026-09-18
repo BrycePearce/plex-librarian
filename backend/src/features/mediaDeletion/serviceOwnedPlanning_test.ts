@@ -183,6 +183,21 @@ Deno.test('selected complete current provenance-associated QB job is a candidate
   const p = await buildServiceOwnedPlan(f.input);
   equal(decisions(p).qb, 'delete_candidate');
   equal(p.actions.find((a) => a.service === 'qb')?.hash, 'hash');
+  equal(p.actions.find((a) => a.service === 'qb')?.matchedToSelection, true);
+});
+Deno.test('overlap-only QB jobs remain protected without becoming matched destinations', async () => {
+  const f = fixture();
+  f.input.downloadTargets = [f.download];
+  f.input.qbSelected = true;
+  f.job.id = 'unassociated';
+  f.job.savePath = '/plex';
+  f.job.contentPath = '/plex/Movie.mkv';
+  f.setJobs([f.job]);
+  const p = await buildServiceOwnedPlan(f.input);
+  equal(p.actions.find((a) => a.service === 'qb')?.presence, 'current');
+  equal(p.actions.find((a) => a.service === 'qb')?.matchedToSelection, false);
+  equal(decisions(p).qb, 'kept');
+  equal(decisions(p).plex, 'kept');
 });
 Deno.test('complete mixed torrent is retained while separate Plex remains eligible', async () => {
   for (const selected of [false, true]) {

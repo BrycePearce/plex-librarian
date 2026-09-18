@@ -87,6 +87,7 @@ Deno.test("review lists a show once and only offers detected destinations, keepi
     targetId: id,
     service,
     presence,
+    matchedToSelection: service === "qb" && presence === "current",
     requested: service === "plex",
     state: presence === "unknown" ? "held" : presence === "absent" ? "not_applicable" : "kept",
     reason: presence === "unknown" ? "Current inventory could not be read" : "Not selected",
@@ -176,6 +177,18 @@ Deno.test("review lists a show once and only offers detected destinations, keepi
     assertEquals(renderer!.root.findAllByType("input").length, 2);
     assertEquals(text().includes("Radarr"), true);
     assertEquals(text().includes("Sonarr"), false);
+    result = {
+      ...result,
+      targets: [{
+        ratingKey: "movie",
+        title: "Overlap only",
+        decisions: [{ ...action("qb", "current", "qb"), matchedToSelection: false }],
+      }],
+    };
+    await flushAct(() => {
+      renderer!.update(render("overlap-only"));
+    });
+    assertEquals(renderer!.root.findAllByType("input").length, 0);
   } finally {
     await flushAct(() => renderer?.unmount());
     api.serviceDeletions.preview = oldPreview;
@@ -207,6 +220,7 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
           targetId: service,
           service: service as "sonarr" | "qb",
           presence: "current" as const,
+          matchedToSelection: true,
           requested: false,
           state: "kept" as const,
           reason: "Not selected",
@@ -340,6 +354,7 @@ Deno.test("failed preview discards confirmation and a definite rejection require
           targetId: service,
           service: service as "sonarr" | "qb",
           presence: "current" as const,
+          matchedToSelection: true,
           requested: false,
           state: "kept" as const,
           reason: "Not selected",
