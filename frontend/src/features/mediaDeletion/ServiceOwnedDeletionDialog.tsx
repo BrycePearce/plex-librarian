@@ -32,7 +32,12 @@ export interface ServiceOwnedDeletionDialogProps {
   hideIntro?: boolean;
   title?: string;
   quickCleanupThresholdDays?: number;
-  renderPreview?: (preview: ServiceDeletionPreview | undefined) => ReactNode;
+  renderPreview?: (
+    preview: ServiceDeletionPreview | undefined,
+    state: { loading: boolean; error: string | undefined },
+  ) => ReactNode;
+  previewDelayMs?: number;
+  focusCancel?: boolean;
   confirmLabel?: ReactNode;
   selectionDisabled?: boolean;
   onPendingChange?: (pending: boolean) => void;
@@ -61,9 +66,11 @@ function SelectionDialog({
   onPendingChange,
   renderPreview,
   confirmLabel,
+  previewDelayMs = 0,
+  focusCancel = true,
   selectionDisabled = false,
 }: ServiceOwnedDeletionDialogProps) {
-  const cancelButtonRef = useDeletionDialogCancelFocus(dialogRef, libraryKey);
+  const cancelButtonRef = useDeletionDialogCancelFocus(dialogRef, libraryKey, focusCancel);
   const [arrSelected, setArrSelected] = useState(false);
   const [qbSelected, setQbSelected] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -93,31 +100,44 @@ function SelectionDialog({
     setLoading(true);
     setPreview(undefined);
     setError(undefined);
-    api.serviceDeletions.preview({
-      libraryKey,
-      targets: selection,
-      arrSelected,
-      qbSelected,
-      quickCleanupThresholdDays,
-    })
-      .then((result) => {
-        if (active) {
-          setPreview(result);
-          setDisplayPreview(result);
-        }
+    const loadPreview = () => {
+      api.serviceDeletions.preview({
+        libraryKey,
+        targets: selection,
+        arrSelected,
+        qbSelected,
+        quickCleanupThresholdDays,
       })
-      .catch(() => {
-        if (active) {
-          setError("The current service inventory could not be read. Refresh to try again.");
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+        .then((result) => {
+          if (active) {
+            setPreview(result);
+            setDisplayPreview(result);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setError("The current service inventory could not be read. Refresh to try again.");
+          }
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    };
+    const timer = previewDelayMs > 0 ? setTimeout(loadPreview, previewDelayMs) : undefined;
+    if (timer === undefined) loadPreview();
     return () => {
       active = false;
+      clearTimeout(timer);
     };
-  }, [libraryKey, selection, arrSelected, qbSelected, revision, quickCleanupThresholdDays]);
+  }, [
+    libraryKey,
+    selection,
+    arrSelected,
+    qbSelected,
+    revision,
+    quickCleanupThresholdDays,
+    previewDelayMs,
+  ]);
 
   function changeDestination(service: "arr" | "qb", checked: boolean) {
     if (pending || request.current) return;
@@ -216,13 +236,15 @@ function SelectionDialog({
       }
       onClose={cancel}
     >
-      {renderPreview ? renderPreview(displayPreview) : displayPreview && (
-        <ServiceDeletionPreviewList
-          preview={displayPreview}
-          collapsible={!embedded}
-          showWarnings={false}
-        />
-      )}
+      {renderPreview
+        ? renderPreview(displayPreview, { loading, error })
+        : displayPreview && (
+          <ServiceDeletionPreviewList
+            preview={displayPreview}
+            collapsible={!embedded}
+            showWarnings={false}
+          />
+        )}
       {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
       <DestinationOptions
         options={[

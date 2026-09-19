@@ -90,7 +90,7 @@ Deno.test("service version selection retains exact media IDs and only promotes f
   assertEquals([...initialServiceVersionSelection([sized], false)], ["movie:1"]);
 });
 
-Deno.test("duplicate selection defers service checks until review and preserves choices when editing", async () => {
+Deno.test("duplicate inline preview debounces selection and preserves picker state", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const oldAct = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -137,28 +137,20 @@ Deno.test("duplicate selection defers service checks until review and preserves 
     assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
     await act(() => inputs[1].props.onChange());
     assertEquals(requests.length, 0);
-    const button = (label: string) =>
-      renderer!.root.findAllByType("button").find((b) =>
-        b.children.some((child) => typeof child === "string" && child.includes(label))
-      );
     await act(async () => {
-      button("Review deletion")!.props.onClick();
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 350));
     });
     assertEquals(requests, [[{ ratingKey: "movie" }]]);
     assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 1);
     assertEquals(renderer!.root.findAllByType(DeletionDialogFooter).length, 1);
-    await act(() => button("Edit selection")!.props.onClick());
-    assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), [
-      true,
-      true,
-    ]);
-    assertEquals(requests.length, 1);
+    assertEquals(renderer!.root.findAllByType("input")[0], inputs[0]);
+    await act(() => renderer!.root.findAllByType("input")[1].props.onChange());
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
     await act(async () => {
-      button("Review deletion")!.props.onClick();
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 350));
     });
-    assertEquals(requests.length, 2);
+    assertEquals(requests[1], [{ ratingKey: "movie", mediaId: 1 }]);
+    assertEquals(renderer!.root.findAllByType("input")[0], inputs[0]);
   } finally {
     await act(async () => {
       renderer?.unmount();

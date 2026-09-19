@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, ChevronDown, Layers3 } from "lucide-react";
+import { ChevronDown, Layers3, LoaderCircle } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../../lib/api.ts";
 import type { ServiceDeletionSelection } from "../../../../shared/serviceOwnedDeletion.ts";
@@ -75,7 +75,6 @@ export function ServiceVersionPickerDialog(
   const [mode, setMode] = useState<"profiles" | "episodes">(
     season && groups.length > 1 ? "profiles" : "episodes",
   );
-  const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     onPendingChange?.(pending);
@@ -187,7 +186,7 @@ export function ServiceVersionPickerDialog(
         ? (
           <div className="version-picker-toolbar">
             <div
-              className="version-picker-modes"
+              className="join rounded-md border border-base-300 bg-base-200/50 p-0.5"
               role="group"
               aria-label="Deletion selection view"
             >
@@ -199,7 +198,11 @@ export function ServiceVersionPickerDialog(
                   key={candidate}
                   disabled={pending || (candidate === "profiles" && groups.length < 2)}
                   aria-pressed={mode === candidate}
-                  className={`btn btn-sm ${mode === candidate ? "btn-primary" : "btn-ghost"}`}
+                  className={`join-item btn btn-xs h-6 min-h-0 border-0 px-2.5 ${
+                    mode === candidate
+                      ? "bg-base-100 text-base-content shadow-sm"
+                      : "bg-transparent text-base-content/45 shadow-none"
+                  }`}
                   onClick={() => {
                     if (candidate === mode) return;
                     setMode(candidate);
@@ -397,78 +400,62 @@ export function ServiceVersionPickerDialog(
       onClose={onCancel}
       modalBoxClassName="max-w-5xl version-picker-modal"
     >
-      <ol className="version-picker-steps" aria-label="Deletion progress">
-        <li aria-current={!reviewing ? "step" : undefined}>1 · Choose versions</li>
-        <li aria-current={reviewing ? "step" : undefined}>2 · Review deletion</li>
-      </ol>
-      {!reviewing
-        ? (
-          <>
-            <div className="version-picker-scroll">
-              <p className="version-picker-guidance">
-                Select the copies to remove.{first.mediaType === "episode" &&
-                  " Keep at least one version of every episode."}
-              </p>
-              {picker}
-            </div>
-            <footer className="version-picker-footer">
-              <div className="version-picker-total" aria-live="polite">
-                <strong>{count} {count === 1 ? "version" : "versions"} selected</strong>
-                <span>{formatKilobytes(size)} logical media · service checks run next</span>
-              </div>
-              <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={!valid || targets.length === 0}
-                onClick={() => setReviewing(true)}
-              >
-                Review deletion <ArrowRight className="size-4" />
-              </button>
-            </footer>
-          </>
-        )
-        : (
-          <>
-            <div className="version-picker-review-heading">
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                disabled={pending}
-                onClick={() => setReviewing(false)}
-              >
-                <ArrowLeft className="size-4" />Edit selection
-              </button>
-              <span>{count} versions · {formatKilobytes(size)} logical media</span>
-            </div>
-            <div className="version-picker-review">
-              <ServiceOwnedDeletionDialog
-                dialogRef={dialogRef}
-                embedded
-                hideIntro
-                libraryKey={first.libraryKey}
-                targets={targets}
-                onPendingChange={setPending}
-                onCreated={onCreated}
-                onCancel={onCancel}
-                selectionDisabled={!valid || targets.length === 0}
-                renderPreview={(preview) =>
-                  preview
-                    ? <ServiceDeletionPreviewList preview={preview} showWarnings={false} />
-                    : (
-                      <div className="version-picker-checking" role="status">
-                        <strong>Preparing deletion review</strong>
-                        <p>
-                          Checking current files, service ownership, and retained copies. Nothing
-                          has been deleted.
-                        </p>
-                      </div>
+      <div className="version-picker-scroll">
+        <p className="version-picker-guidance">
+          Select the copies to remove.{first.mediaType === "episode" &&
+            " Keep at least one version of every episode."}
+        </p>
+        {picker}
+        <div className="version-picker-review">
+          <ServiceOwnedDeletionDialog
+            dialogRef={dialogRef}
+            embedded
+            hideIntro
+            libraryKey={first.libraryKey}
+            targets={targets}
+            onPendingChange={setPending}
+            onCreated={onCreated}
+            onCancel={onCancel}
+            selectionDisabled={!valid || targets.length === 0}
+            previewDelayMs={300}
+            focusCancel={false}
+            renderPreview={(preview, state) =>
+              preview
+                ? <ServiceDeletionPreviewList preview={preview} showWarnings={false} />
+                : (
+                  <section
+                    className="version-picker-checking"
+                    aria-live="polite"
+                    aria-busy={state.loading && targets.length > 0}
+                  >
+                    {targets.length > 0 && state.loading && (
+                      <LoaderCircle className="size-5 animate-spin text-primary" />
                     )}
-                confirmLabel={<>Delete {count} {count === 1 ? "version" : "versions"}</>}
-              />
-            </div>
-          </>
-        )}
+                    <strong>
+                      {targets.length === 0
+                        ? "Deletion preview"
+                        : state.error
+                        ? "Preview unavailable"
+                        : "Checking selected versions"}
+                    </strong>
+                    <p>
+                      {targets.length === 0
+                        ? "Select versions above to preview their removal."
+                        : state.error
+                        ? "Retry the checks below to review current files and services."
+                        : "Checking current files, service ownership, and retained copies."}
+                    </p>
+                  </section>
+                )}
+            confirmLabel={
+              <>
+                Delete {count} {count === 1 ? "version" : "versions"} ({formatKilobytes(size)}{" "}
+                logical media)
+              </>
+            }
+          />
+        </div>
+      </div>
     </DeletionModalShell>
   );
 }

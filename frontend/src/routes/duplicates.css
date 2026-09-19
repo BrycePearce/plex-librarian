@@ -1325,34 +1325,20 @@
   max-height: calc(100dvh - 2rem);
   overflow: hidden;
 }
-.version-picker-steps {
-  display: flex;
-  flex-shrink: 0;
-  gap: 1.5rem;
-  padding: 1rem 0;
-  margin: 0;
-  list-style: none;
-  border-bottom: 1px solid var(--color-base-300);
-  font-size: .8rem;
-  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
-}
-.version-picker-steps [aria-current="step"] {
-  color: var(--color-primary);
-  font-weight: 700;
-}
-.version-picker-scroll, .version-picker-review {
+.version-picker-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
+.version-picker-review { margin-top: 1.25rem; border-top: 1px solid var(--color-base-300); }
 .version-picker-guidance {
   margin: 1rem 0;
   font-size: .85rem;
   color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
 }
-.version-picker-toolbar { margin-bottom: 1rem; }
+.version-picker-toolbar { display: flex; justify-content: flex-end; margin-bottom: 1rem; }
 .version-picker-modes { display: flex; gap: .5rem; }
 .version-picker-modal .season-profile-panel { min-height: 0; }
 .version-picker-modal .season-batch-list { max-height: none; overflow: visible; }
@@ -1376,37 +1362,28 @@
 .version-picker-episode-summary:hover { background: var(--color-base-200); }
 .version-picker-episode-details { padding: 0 1rem 1rem; }
 .version-picker-modal .deletion-basic-list { max-height: none; overflow: visible; }
-.version-picker-footer {
-  display: flex;
-  align-items: center;
-  gap: .6rem;
-  flex-shrink: 0;
-  border-top: 1px solid var(--color-base-300);
-  padding-top: 1rem;
-  margin-top: 1rem;
-}
-.version-picker-total { display: grid; gap: .2rem; flex: 1; }
-.version-picker-total span, .version-picker-review-heading > span {
-  font-size: .75rem;
-  color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-}
-.version-picker-review-heading { display: flex; align-items: center; justify-content: space-between; padding: .75rem 0; }
-.version-picker-review .quick-cleanup-review { height: auto; min-height: 100%; }
-@media (max-width: 640px) {
-  .version-picker-modal { padding: 1rem; }
-  .version-picker-footer { flex-wrap: wrap; }
-  .version-picker-total { flex-basis: 100%; }
-  .version-picker-review-heading { flex-wrap: wrap; gap: .5rem; }
-}
-
+.version-picker-review .quick-cleanup-review { height: auto; overflow: visible; }
 .version-picker-review .modal-action {
   position: sticky;
   bottom: 0;
   z-index: 2;
-  margin-top: auto;
   background: var(--color-base-100);
   padding: 1rem 0 .5rem;
 }
-.version-picker-checking { flex: 1; padding: 2rem 1rem; text-align: center; }
-.version-picker-checking p { margin-top: .5rem; font-size: .85rem; opacity: .65; }
-.version-picker-review .quick-cleanup-review { overflow: visible; }
+.version-picker-checking {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  min-height: 10rem;
+  margin: 1rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--color-base-300);
+  border-radius: .75rem;
+  background: color-mix(in oklab, var(--color-base-200) 40%, transparent);
+  text-align: center;
+}
+.version-picker-checking p { font-size: .85rem; opacity: .65; }
+@media (max-width: 640px) { .version-picker-modal { padding: 1rem; } }
+@media (prefers-reduced-motion: reduce) { .version-picker-checking .animate-spin { animation: none; } }

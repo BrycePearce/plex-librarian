@@ -23,13 +23,14 @@ export function useDelayedFlag(active: boolean, delayMs: number): boolean {
 export function useDeletionDialogCancelFocus(
   dialogRef: RefObject<HTMLDialogElement | null>,
   focusKey: unknown,
+  enabled = true,
 ) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
-    if (dialogRef.current?.open) {
+    if (enabled && dialogRef.current?.open) {
       cancelButtonRef.current?.focus({ preventScroll: true });
     }
-  }, [dialogRef, focusKey]);
+  }, [dialogRef, focusKey, enabled]);
   return cancelButtonRef;
 }
 
