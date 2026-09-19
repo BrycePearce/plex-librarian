@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { deletionActivity } from './activity.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import {
   cancelDeletionOperation,
@@ -54,6 +55,19 @@ router.get('/', (c) => {
     offset,
   });
   return c.json({ status: rawStatus ?? null, attention, limit, offset, ...result });
+});
+
+router.get('/activity', (c) => {
+  const rawLimit = Number(c.req.query('limit') ?? 20);
+  const rawOffset = Number(c.req.query('offset') ?? 0);
+  const limit = Number.isSafeInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
+  const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+  const serverId = c.get('activeServerId');
+  return c.json(
+    serverId === null
+      ? { operations: [], limit, offset, hasMore: false }
+      : deletionActivity(serverId, limit, offset),
+  );
 });
 
 router.get('/:id', (c) => {

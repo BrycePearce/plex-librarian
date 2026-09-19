@@ -8,6 +8,7 @@ import type {
   ArrStorageVerificationResponse,
   AuthStatus,
   CancelPendingInvitationResponse,
+  DeletionActivityResponse,
   DeletionOperation,
   DeletionOperationArrLinksResponse,
   DeletionOperationCreated,
@@ -585,6 +586,10 @@ export const api = {
       ),
   },
   deletionOperations: {
+    activity: (params: { limit: number; offset: number }) =>
+      apiFetch<DeletionActivityResponse>(
+        `/deletion-operations/activity?limit=${params.limit}&offset=${params.offset}`,
+      ),
     list: (
       params: {
         status?:
@@ -853,10 +858,11 @@ export const api = {
     latestSuccess: () => apiFetch<{ finishedAt: number | null }>("/sync/latest-success"),
   },
   events: {
-    list: (params: { limit?: number; before?: number } = {}) => {
+    list: (params: { limit?: number; before?: number; excludeDurableDeletions?: boolean } = {}) => {
       const q = new URLSearchParams();
       if (params.limit !== undefined) q.set("limit", String(params.limit));
       if (params.before !== undefined) q.set("before", String(params.before));
+      if (params.excludeDurableDeletions) q.set("excludeDurableDeletions", "true");
       return apiFetch<ActivityEventsResponse>(`/events?${q}`);
     },
   },

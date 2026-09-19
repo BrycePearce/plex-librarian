@@ -27,6 +27,10 @@ export interface ServiceActionDecision {
   /** QB has verified import lineage to this media, not merely a potential path overlap. */
   matchedToSelection?: boolean;
   outcome?: 'succeeded' | 'accepted' | 'failed' | 'uncertain' | 'kept' | 'not_applicable';
+  /** Durable request acknowledgement; does not imply observed removal. */
+  requestAccepted?: boolean;
+  /** Service target absence observed; catalog/monitoring follow-up may still be pending. */
+  removalConfirmed?: boolean;
 }
 
 export interface ServiceDeletionPreview {

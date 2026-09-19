@@ -26,7 +26,7 @@ Deno.test("episode actions group by service and outcome without hiding pending w
   assertStringIncludes(html, "Sonarr · 2 actions");
   assertStringIncludes(html, "Sonarr · 27 actions");
   assertEquals((html.match(/Sonarr removes this file/g) ?? []).length, 2);
-  assertStringIncludes(html, "Awaiting service verification");
+  assertStringIncludes(html, "Request accepted; verifying removal");
   assertStringIncludes(html, "Requested deletion");
   assertStringIncludes(html, "arr:3:file:28");
 });
@@ -43,7 +43,7 @@ Deno.test("retained Plex is visible without claiming removal or reclaimed space"
 Deno.test("API acceptance and uncertainty never render as completed service removal", () => {
   assertEquals(
     serviceActionLabel({ ...action, state: "delete_candidate", outcome: "accepted" }),
-    "Awaiting service verification",
+    "Request accepted; verifying removal",
   );
   assertEquals(
     serviceActionLabel({ ...action, state: "delete_candidate", outcome: "uncertain" }),
@@ -51,4 +51,32 @@ Deno.test("API acceptance and uncertainty never render as completed service remo
   );
   assertEquals(serviceActionLabel({ ...action, state: "held" }), "Held");
   assertEquals(serviceActionLabel({ ...action, state: "not_applicable" }), "Not applicable");
+});
+
+Deno.test("compact progress separates accepted requests, observed removals and pending work", () => {
+  const pending = {
+    ...action,
+    state: "delete_candidate" as const,
+    requestAccepted: false,
+    removalConfirmed: false,
+  };
+  const html = renderToStaticMarkup(
+    <ServiceActionDecisions
+      actions={[
+        { ...pending, actionId: "1", requestAccepted: true, outcome: "accepted" },
+        {
+          ...pending,
+          actionId: "2",
+          requestAccepted: true,
+          removalConfirmed: true,
+          outcome: "accepted",
+        },
+        { ...pending, actionId: "3" },
+        { ...pending, actionId: "4", removalConfirmed: true, outcome: "succeeded" },
+      ]}
+    />,
+  );
+  assertStringIncludes(html, "2 requests accepted · 2 service removals confirmed · 1 pending");
+  assertStringIncludes(html, "Removal confirmed; follow-up pending");
+  assertStringIncludes(html, "Request accepted; verifying removal");
 });

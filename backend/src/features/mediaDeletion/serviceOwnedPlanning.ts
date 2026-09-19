@@ -81,6 +81,13 @@ export interface ServiceOwnedPlanningInput {
   knownJobIds?: readonly string[];
   /** Confirmed same-operation removals remain conservative retained evidence for siblings. */
   completedSiblingRetainedEntries?: readonly { serviceKey: string; path: string }[];
+  /** Execution-only: refresh this native file's owners; other owners still come from
+   * two fresh complete snapshots. Unchanged unrelated Plex parts use accepted
+   * coordinates only as matching hints, never to authorize their mutation. */
+  focus?: {
+    action: ServiceOwnedPlannedAction;
+    acceptedPlexParts: NonNullable<ServiceOwnedPlannedAction['plexParts']>;
+  };
 }
 
 // Operation evidence is bounded separately from library sync. Never silently truncate a deletion.
@@ -384,6 +391,18 @@ export async function buildServiceOwnedPlan(
         ) {
           let season = identity.seasonIndex ?? undefined, episode = identity.index ?? undefined;
           if (selection.type === 'show') {
+            const accepted = input.focus?.acceptedPlexParts.find((part) =>
+              part.ratingKey === file.ratingKey && part.mediaId === file.mediaId &&
+              part.path === file.path && part.size === file.size
+            );
+            const focused = !accepted ||
+              input.focus!.action.episodes?.some((entry) =>
+                entry.seasonNumber === accepted.season && entry.episodeNumber === accepted.episode
+              );
+            if (accepted && !focused) {
+              selectedParts.push({ ...file, season: accepted.season, episode: accepted.episode });
+              continue;
+            }
             const child = await read(() => input.plex.metadataIdentity(file.ratingKey));
             if (
               !child || child.type !== 'episode' ||
@@ -507,6 +526,11 @@ export async function buildServiceOwnedPlan(
           if (file.episodeIds.some((id) => !ids.has(id))) retain(serviceKey, file.path);
         }
         for (const file of files) {
+          if (
+            input.focus &&
+            (input.focus.action.instanceId !== target.instanceId ||
+              input.focus.action.fileId !== file.id)
+          ) continue;
           const owners = await read(() =>
             target.client.sonarrEpisodeFileOwnerIds(file.id, record.id)
           );

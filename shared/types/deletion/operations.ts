@@ -14,6 +14,24 @@ export interface DeletionOperationCreated {
   status: DeletionOperationStatus;
 }
 
+/** Bounded Activity projection; never includes execution snapshots or per-file evidence. */
+export interface DeletionActivityItem {
+  id: string;
+  status: DeletionOperationStatus;
+  targetCount: number;
+  titles: string[];
+  createdAt: number;
+  updatedAt: number;
+  waitingForServiceVerification: boolean;
+}
+
+export interface DeletionActivityResponse {
+  operations: DeletionActivityItem[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
 export interface DeletionOperationListItem {
   id: string;
   libraryKey: string;

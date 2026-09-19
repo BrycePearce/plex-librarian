@@ -159,7 +159,7 @@ export interface ServiceOwnedExecutionRuntime {
   /** Must persist synchronously before returning, including before every request. */
   save(): void;
   /** Rebuild ownership/configuration/scope and playback protection before mutation. */
-  revalidate(completed: ReadonlySet<string>): Promise<void>;
+  revalidate(completed: ReadonlySet<string>, pending?: ServiceOwnedAction): Promise<void>;
   /** Errors must propagate; only an error-free service read can report absence. */
   present(action: ServiceOwnedAction): Promise<boolean>;
   mutate(
@@ -238,7 +238,8 @@ export async function executeServiceOwnedActions(
     if (attempts[action.id]?.response || attempts[action.id]?.reconciliation) await observe(action);
   }
   async function reconcileCoveredAbsences() {
-    if (!runtime.reconcileAbsent) return;
+    const observed: ServiceOwnedAction[] = [];
+    if (!runtime.reconcileAbsent) return observed;
     for (const decision of candidates) {
       if (attempts[decision.actionId]) continue;
       const action = plan.actions.find((a) => a.id === decision.actionId)!;
@@ -250,7 +251,9 @@ export async function executeServiceOwnedActions(
       attempts[action.id] = { startedAt: Date.now(), reconciliation: { sourceActionIds } };
       runtime.save();
       await observe(action);
+      observed.push(action);
     }
+    return observed;
   }
   await reconcileCoveredAbsences();
   for (const action of plan.actions) {
@@ -263,10 +266,7 @@ export async function executeServiceOwnedActions(
       throw new Error('Accepted action identity is inconsistent');
     }
     if (completed.has(action.id)) continue;
-    for (const previous of plan.actions) {
-      if (completed.has(previous.id)) await observe(previous);
-    }
-    await runtime.revalidate(completed);
+    await runtime.revalidate(completed, action);
     if (!await runtime.present(action)) {
       throw new Error('Service target disappeared without its own recorded deletion response');
     }
@@ -290,10 +290,9 @@ export async function executeServiceOwnedActions(
       throw new Error('Service deletion outcome is uncertain; destructive replay is held');
     }
     await observe(action);
-    await reconcileCoveredAbsences();
-    for (const previous of plan.actions) {
-      if (completed.has(previous.id)) await runtime.afterObserved?.(previous, completed);
-    }
+    const reconciled = await reconcileCoveredAbsences();
+    await runtime.afterObserved?.(action, completed);
+    for (const other of reconciled) await runtime.afterObserved?.(other, completed);
   }
 }
 
@@ -383,7 +382,7 @@ export async function ensureServiceOwnedDeletion(
     if (file && file.id !== action.fileId) throw new Error('Managed file identity changed');
     return file !== null;
   }
-  async function revalidate(completed: ReadonlySet<string>) {
+  async function revalidate(completed: ReadonlySet<string>, pending?: ServiceOwnedAction) {
     await validateDeletionTarget(target.serverId, target);
     [arrTargets, downloadTargets] = await Promise.all([
       getArrDeleteTargets(target.serverId, plan.libraryKey),
@@ -435,6 +434,16 @@ export async function ensureServiceOwnedDeletion(
     }
     const current = await collectStableServiceOwnedScope(async () =>
       buildServiceOwnedPlan({
+        // Only a Sonarr file boundary can use focused individual reads. Plex/QB,
+        // resume, catalog cleanup and service transitions keep full collection.
+        ...(pending?.service === 'sonarr' && !actionFor(pending).catalogOnly
+          ? {
+            focus: {
+              action: actionFor(pending),
+              acceptedPlexParts: plan.actions.find((a) => a.service === 'plex')?.plexParts ?? [],
+            },
+          }
+          : {}),
         completedSiblingRetainedEntries,
         relatedPlexItems: () => relatedServiceOwnedPlexItems(target.serverId, plan.selection),
         serverId: target.serverId,
@@ -464,7 +473,14 @@ export async function ensureServiceOwnedDeletion(
       // Partial Plex catalog changes may be explained only by still-absent native
       // targets with recorded responses, never a stale checkpoint alone.
       for (const action of plan.actions) {
-        if (completed.has(action.id) && await present(action)) {
+        if (
+          completed.has(action.id) &&
+          (pending?.service === 'sonarr'
+            ? current.actions.some((entry) =>
+              entry.id === action.id && entry.presence === 'current'
+            )
+            : await present(action))
+        ) {
           throw new Error('A completed service target reappeared');
         }
       }
@@ -477,13 +493,15 @@ export async function ensureServiceOwnedDeletion(
       ).size
     ) throw new Error('Selected media is playing');
   }
+  const cleanedRecords = new Set<string>();
   async function cleanRecord(base: ServiceOwnedAction, completed: ReadonlySet<string>) {
-    const action = actionFor(base);
+    let action = actionFor(base);
     if (action.catalogOnly || !action.recordCleanup || !completed.has(action.id)) return;
     const recordActions = plan.actions.filter((other) =>
       other.serviceKey === action.serviceKey && other.recordId === action.recordId
     ).sort((a, b) => a.id.localeCompare(b.id));
-    if (recordActions[0]?.id !== action.id) return;
+    action = recordActions[0];
+    if (cleanedRecords.has(action.id)) return;
     if (
       recordActions.some((other) => !completed.has(other.id))
     ) return;
@@ -522,7 +540,7 @@ export async function ensureServiceOwnedDeletion(
       save();
       await client.deleteManagedRecord(
         action.recordId!,
-        action.recordCleanup.addImportExclusion,
+        action.recordCleanup!.addImportExclusion,
         (response) => {
           attempt.recordCleanup!.response = response;
           save();
@@ -536,22 +554,30 @@ export async function ensureServiceOwnedDeletion(
     }
     attempt.recordCleanup!.observedAt = Date.now();
     save();
+    cleanedRecords.add(action.id);
   }
   await executeServiceOwnedActions(plan, attempts, {
     save,
     present: (action) => verificationRead(() => present(action)),
-    revalidate: (completed) => verificationRead(() => revalidate(completed)),
+    revalidate: (completed, pending) => verificationRead(() => revalidate(completed, pending)),
     async reconcileAbsent(base, completed) {
       const action = actionFor(base);
       const sources = serviceOwnedAbsenceSources(action, plan.actions, attempts, completed);
       if (!sources || await verificationRead(() => present(action))) return;
+      // A cached completion can only explain fresh absence after its native
+      // sources are re-observed. Never synthesize success from stale effects.
+      for (const id of sources) {
+        if (await verificationRead(() => present(plan.actions.find((a) => a.id === id)!))) {
+          throw new Error('A completed service target reappeared');
+        }
+      }
       return sources;
     },
     async afterObserved(base, completed) {
       const action = actionFor(base);
       await ensureServiceOwnedEpisodeMonitoring(action, attempts[action.id], {
         save,
-        revalidate: () => verificationRead(() => revalidate(completed)),
+        revalidate: () => verificationRead(() => revalidate(completed, action)),
         async monitored(episode) {
           return (await arrFor(action).sonarrEpisodeMonitorTarget({
             seriesId: action.recordId!,
@@ -577,6 +603,14 @@ export async function ensureServiceOwnedDeletion(
     },
     async mutate(base, record) {
       const action = actionFor(base);
+      advancePhase(
+        target,
+        action.service === 'qb'
+          ? 'download_cleanup'
+          : action.service === 'plex'
+          ? 'plex_reconciliation'
+          : 'arr_coordination',
+      );
       if (action.service === 'qb') {
         const destination = downloadTargets.find((entry) =>
           entry.instanceKey === action.instanceKey

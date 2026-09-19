@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import { events } from '../../db/schema.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -27,9 +27,19 @@ router.get('/', async (c) => {
   // avoids a separate COUNT query just to decide whether to hand back a nextCursor.
   const rows = await db.select().from(events)
     .where(
-      before !== undefined
-        ? and(eq(events.serverId, serverId), lt(events.id, before))
-        : eq(events.serverId, serverId),
+      and(
+        eq(events.serverId, serverId),
+        before !== undefined ? lt(events.id, before) : undefined,
+        // Activity renders these durable operations once in its operation list. Filter
+        // before LIMIT so hidden completion events cannot create empty cursor pages.
+        c.req.query('excludeDurableDeletions') === 'true'
+          ? sql`NOT (${events.type} = 'deletion.completed' AND EXISTS (
+              SELECT 1 FROM deletion_operations o
+              WHERE o.server_id = ${events.serverId}
+              AND o.id = json_extract(CASE WHEN json_valid(${events.payload}) THEN ${events.payload} ELSE '{}' END, '$.operationId')
+            ))`
+          : undefined,
+      ),
     )
     .orderBy(desc(events.id))
     .limit(limit + 1);

@@ -1443,6 +1443,8 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
             return {
               ...decision,
               reason: serviceOwnedDecisionExplanation(action, decision),
+              requestAccepted: !!attempt?.response,
+              removalConfirmed: !!attempt?.outcome,
               outcome: decision.state === 'kept'
                 ? 'kept'
                 : decision.state === 'not_applicable'
@@ -1664,6 +1666,8 @@ export function retryDeletionOperation(
 // A successful Plex sync may have resolved stale metadata without any further user action.
 // Requeue only targets already waiting in Plex reconciliation: earlier phases can still
 // perform destructive work and must remain behind the explicit Recheck action.
+// Service-owned phases also describe requests in progress. Their exhausted or
+// uncertain holds belong to the bounded verification policy, not this legacy retry.
 export function recheckPlexReconciliationAfterSync(
   serverId: number,
   libraryKey: string | null,
@@ -1679,6 +1683,7 @@ export function recheckPlexReconciliationAfterSync(
        WHERE o.server_id = ?
          AND (? IS NULL OR o.library_key = ?)
          AND t.phase = 'plex_reconciliation'
+         AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.serviceOwnedPlan') IS NULL
          AND json_extract(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION}
          AND json_type(CASE WHEN json_valid(t.snapshot) THEN t.snapshot ELSE '{}' END, '$.upgradeHold') IS NULL
          AND t.status IN ('needs_attention','completed_with_warning')
@@ -1719,6 +1724,7 @@ export function recheckPlexReconciliationAfterSync(
              updated_at = ?
          WHERE operation_id = ?
            AND phase = 'plex_reconciliation'
+           AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.serviceOwnedPlan') IS NULL
            AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.currentLocationPolicyVersion') = ${CURRENT_LOCATION_POLICY_VERSION} AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.upgradeHold') IS NULL
            AND status IN ('needs_attention','completed_with_warning')
            AND json_type(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.relocationGuidance') IS NULL

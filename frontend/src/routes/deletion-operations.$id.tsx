@@ -438,20 +438,29 @@ function DeletionOperationPage() {
                 )}
                 <ServiceDeletionOutcomes outcomes={target.serviceOutcomes} />
                 <p className="text-xs text-base-content/45 mt-2">
-                  {phaseLabel(target.phase)} · {target.serviceActionDecisions?.some((action) =>
+                  {target.serviceOwnedDeletion && target.phase === "validating" &&
+                      target.serviceActionDecisions?.some((action) =>
+                        action.outcome && !["kept", "not_applicable"].includes(action.outcome)
+                      )
+                    ? "Service deletion"
+                    : phaseLabel(target.phase)} · {target.serviceActionDecisions?.some((action) =>
                       action.service === "plex" && action.state === "kept"
                     )
                     ? "Plex media intentionally retained"
                     : target.removalConfirmedAt
                     ? "Media removed"
+                    : target.serviceOwnedDeletion
+                    ? "Plex removal not confirmed"
                     : "Removal not confirmed"}
                   {target.nextRetryAt
                     ? ` · next attempt ${new Date(target.nextRetryAt * 1000).toLocaleString()}`
                     : ""}
                 </p>
-                <p className="text-xs text-base-content/45 mt-1">
-                  Last confirmed action: {lastConfirmedDeletionAction(target)}
-                </p>
+                {!target.serviceOwnedDeletion && (
+                  <p className="text-xs text-base-content/45 mt-1">
+                    Last confirmed action: {lastConfirmedDeletionAction(target)}
+                  </p>
+                )}
                 {target.phase === "plex_reconciliation" && target.error && (
                   <p className="text-xs text-error mt-1">Last Plex error: {target.error}</p>
                 )}

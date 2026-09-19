@@ -729,6 +729,74 @@ Deno.test('service action loop executes independent candidates while preserving 
   }
 });
 
+Deno.test('uninterrupted completions are observed once and restarted work is freshly checked without replay', async () => {
+  for (const interrupt of [false, true]) {
+    const actions = Array.from(
+      { length: 12 },
+      (_, i) => ({
+        ...actionFixture().actions[0],
+        id: String(i).padStart(2, '0'),
+        targetId: String(i).padStart(2, '0'),
+      }),
+    );
+    const plan = {
+      actions,
+      retention: planServiceOwnedRetention({
+        actions,
+        retainedEntries: [],
+        evidenceRevision: 'test',
+        qbInventory: 'unconfigured',
+      }),
+    };
+    const attempts: Record<string, Attempt> = {};
+    const deleted = new Set<string>();
+    const reads = new Map<string, number>();
+    const callbacks = new Map<string, number>();
+    let interrupted = false;
+    const runtime = {
+      save() {},
+      revalidate(_completed: ReadonlySet<string>, pending?: ServiceOwnedAction) {
+        if (interrupt && !interrupted && pending?.id === '02') {
+          interrupted = true;
+          throw new Error('interrupted');
+        }
+        return Promise.resolve();
+      },
+      present(action: ServiceOwnedAction) {
+        reads.set(action.id, (reads.get(action.id) ?? 0) + 1);
+        return Promise.resolve(!deleted.has(action.id));
+      },
+      mutate(
+        action: ServiceOwnedAction,
+        record: (r: { status: 'succeeded'; httpStatus: number }) => void,
+      ) {
+        assertEquals(deleted.has(action.id), false, 'No destructive replay');
+        deleted.add(action.id);
+        record({ status: 'succeeded', httpStatus: 204 });
+        return Promise.resolve();
+      },
+      afterObserved(action: ServiceOwnedAction) {
+        callbacks.set(action.id, (callbacks.get(action.id) ?? 0) + 1);
+        return Promise.resolve();
+      },
+    };
+    if (interrupt) {
+      await assertRejects(
+        () => executeServiceOwnedActions(plan, attempts, runtime),
+        Error,
+        'interrupted',
+      );
+    }
+    await executeServiceOwnedActions(plan, attempts, runtime);
+    assertEquals(deleted.size, 12);
+    for (const action of actions) {
+      const resumed = interrupt && action.id < '02' ? 1 : 0;
+      assertEquals(reads.get(action.id), 2 + resumed);
+      assertEquals(callbacks.get(action.id), 1 + resumed);
+    }
+  }
+});
+
 Deno.test('service action loop persists acceptance and resumes only after a fresh postcondition', async () => {
   const attempts: Record<string, Attempt> = {};
   let present = true, readsFail = false, deletes = 0, saves = 0;

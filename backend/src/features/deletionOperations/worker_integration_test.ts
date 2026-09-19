@@ -1,3 +1,100 @@
+Deno.test('service-owned multi-episode request scaling', async () => {
+  for (const count of [4, 12, 24, 148]) {
+    reset();
+    addEpisode();
+    configureSonarr();
+    live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
+    for (let i = 2; i <= count; i++) {
+      const episode = addAdditionalSonarrEpisode(i, 100 + i * 2, 101 + i * 2);
+      episode.managedMediaId = -1; // Native inventory converges before Plex's next scan.
+      live.get(episode.ratingKey)!.Media = [{
+        id: 100 + i * 2,
+        Part: [{ file: episode.managedPath, size: 40_000 }],
+      }];
+    }
+    const fixtureFetch = globalThis.fetch;
+    const counts: Record<string, number> = {};
+    let observedOperationId: string | undefined;
+    const progress: Array<{ phase: string; accepted: number; confirmed: number }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const key = `${url.hostname}:${init?.method ?? 'GET'}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+      if (
+        observedOperationId && url.hostname === 'sonarr' && init?.method === 'DELETE' &&
+        url.pathname.startsWith('/api/v3/episodefile/')
+      ) {
+        const target = (getDeletionOperation(
+          observedOperationId,
+          1,
+        )! as unknown as import('../../../../shared/types/deletion/operations.ts').DeletionOperation)
+          .targets[0];
+        progress.push({
+          phase: target.phase,
+          accepted: target.serviceActionDecisions!.filter((a) => a.requestAccepted).length,
+          confirmed: target.serviceActionDecisions!.filter((a) => a.removalConfirmed).length,
+        });
+      }
+      const response = await fixtureFetch(input, init);
+      if (
+        url.hostname === 'sonarr' && url.pathname === '/api/v3/episode' &&
+        url.searchParams.has('episodeFileId') && response.ok
+      ) {
+        const episodes = await response.json() as Array<{ episodeFileId: number }>;
+        return Response.json(
+          episodes.filter((e) => e.episodeFileId === Number(url.searchParams.get('episodeFileId'))),
+        );
+      }
+      return response;
+    };
+    try {
+      const choices = {
+        libraryKey: 'shows',
+        targets: [{ ratingKey: 'show-1' }],
+        arrSelected: true,
+        qbSelected: false,
+      };
+      const preview = await (await rawApp.request('/api/service-deletions/preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(choices),
+      })).json();
+      const response = await rawApp.request('/api/service-deletions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...choices,
+          previewFingerprint: preview.fingerprint,
+          clientRequestId: crypto.randomUUID(),
+        }),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      const { operationId } = await response.json();
+      observedOperationId = operationId;
+      for (const key of Object.keys(counts)) delete counts[key];
+      await settle();
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(operation.status, 'completed', JSON.stringify(operation));
+      console.log('service-owned request counts', count, counts);
+      assertEquals(counts['sonarr:DELETE'], count + 1);
+      assertEquals(counts['plex:DELETE'], 1);
+      // Linear HTTP budgets; leave a small fixed allowance for boundary checks.
+      assertEquals(counts['plex:GET'] <= 12 * count + 30, true);
+      assertEquals(counts['sonarr:GET'] <= 14 * count + 30, true);
+      assertEquals(
+        progress,
+        Array.from(
+          { length: count },
+          (_, i) => ({ phase: 'arr_coordination', accepted: i, confirmed: i }),
+        ),
+      );
+    } finally {
+      globalThis.fetch = fixtureFetch;
+      clearPlexClientCache();
+    }
+  }
+});
+
 Deno.test('service-owned preview exposes only selected version files and public display fields', async () => {
   reset();
   addMovie('display-version', [11, 12]);
@@ -474,6 +571,12 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
         'missing',
         'addition',
         'rename',
+        'coordinates',
+        'retained-shared-path',
+        'configuration',
+        'playback',
+        'lost-file-response',
+        'new-qb-overlap',
         'source-reappeared',
         'inventory-wait',
         'inventory-persistent',
@@ -489,7 +592,8 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
   ) {
     reset();
     addEpisode();
-    configureSonarr();
+    configureSonarr(drift === 'new-qb-overlap');
+    if (drift === 'new-qb-overlap') qbitJobsOverride = [];
     live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
     live.set('season-1', {
       ratingKey: 'season-1',
@@ -510,6 +614,17 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
     let inventoryUnavailable = false;
     globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
+      if (drift === 'playback' && activePlaybackRatingKey && url.pathname === '/status/sessions') {
+        return Response.json({
+          MediaContainer: {
+            Metadata: [{
+              ratingKey: second.ratingKey,
+              type: 'episode',
+              grandparentRatingKey: 'show-1',
+            }],
+          },
+        });
+      }
       if (
         inventoryUnavailable && drift !== 'inventory-ref-lag' && url.hostname === 'sonarr' &&
         (!init?.method || init.method === 'GET') && url.pathname === '/api/v3/episodefile'
@@ -566,6 +681,29 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
           }
           if (drift === 'rename') {
             live.get(second.ratingKey)!.Media![0].Part![0].file = '/tv/Show/Season 01/new-name.mkv';
+          }
+          if (drift === 'coordinates') live.get(second.ratingKey)!.index = 99;
+          if (drift === 'retained-shared-path') {
+            const retained = addAdditionalSonarrEpisode(3, 41, 42);
+            live.delete(retained.ratingKey);
+            retained.managedPath = second.managedPath;
+          }
+          if (drift === 'configuration') {
+            withTransaction((client) =>
+              client.prepare('UPDATE arr_instances SET updated_at=2 WHERE id=2').run()
+            );
+          }
+          if (drift === 'playback') activePlaybackRatingKey = second.ratingKey;
+          if (drift === 'lost-file-response') throw new TypeError('Native file response lost');
+          if (drift === 'new-qb-overlap') {
+            qbitJobsOverride = [{
+              hash: torrentHash,
+              name: 'New retained owner',
+              size: 40_000,
+              contentPath: second.managedPath,
+              savePath: '/tv/Show/Season 01',
+              files: [{ name: second.managedPath.split('/').at(-1)!, size: 40_000 }],
+            }];
           }
           if (drift === 'source-reappeared') sonarrManagedFilePresent = true;
         } else {
@@ -633,6 +771,8 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
             );
           const exhausted = readSnapshot();
           assertEquals(exhausted.serviceOwnedVerificationRetries, 6);
+          assertEquals(recheckPlexReconciliationAfterSync(1, 'shows'), 0);
+          assertEquals(getDeletionOperation(operationId, 1)!.status, 'needs_attention');
           assertEquals(retryDeletionOperation(operationId, 1), true);
           assertEquals(readSnapshot(), { ...exhausted, serviceOwnedVerificationRetries: 0 });
           // A further transient failure gets a fresh automatic budget, without replay.
@@ -675,11 +815,15 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
       assertEquals(second.managedFilePresent, !filesDeleted);
       assertEquals(live.has(ratingKey), !filesDeleted);
       assertEquals(operation.removalConfirmedCount, succeeds ? 1 : 0);
-      if (drift === 'empty-lost') {
+      if (drift === 'empty-lost' || drift === 'lost-file-response') {
+        assertEquals(recheckPlexReconciliationAfterSync(1, 'shows'), 0);
+        assertEquals(getDeletionOperation(operationId, 1)!.status, 'needs_attention');
         const requests = wholeDeleteOrder.length;
+        const fileRequests = deleted.length;
         retryDeletionOperation(operationId, 1);
         await settle();
         assertEquals(wholeDeleteOrder.length, requests);
+        assertEquals(deleted.length, fileRequests);
         assertEquals(getDeletionOperation(operationId, 1)!.removalConfirmedCount, 0);
       }
     } finally {
@@ -1081,6 +1225,7 @@ const { withTransaction } = await import('../../db/index.ts');
 const {
   getDeletionOperation,
   retryDeletionOperation,
+  recheckPlexReconciliationAfterSync,
   runDeletionWorkerOnceForTest,
   setAutomaticDeletionWorkerForTest,
 } = await import('./service.ts');
