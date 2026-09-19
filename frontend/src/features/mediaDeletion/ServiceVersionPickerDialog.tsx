@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Layers3 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, Layers3 } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../../lib/api.ts";
 import type { ServiceDeletionSelection } from "../../../../shared/serviceOwnedDeletion.ts";
@@ -15,16 +15,10 @@ import {
   episodeCoverageLabel,
   LanePathsPopover,
   seasonLaneMatchBasisLabel,
-  seasonProfilesDeletionPlan,
 } from "../../routes/-duplicates/SeasonDuplicateDialog.tsx";
-import {
-  BasicDeletionList,
-  BasicDeletionRow,
-  DeletionModalShell,
-  DeletionPreview,
-} from "./DeletionDialog.tsx";
+import { BasicDeletionList, BasicDeletionRow, DeletionModalShell } from "./DeletionDialog.tsx";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
-import { ServiceDeletionFileTree } from "./ServiceDeletionPreviewList.tsx";
+import { ServiceDeletionPreviewList } from "./ServiceDeletionPreviewList.tsx";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo.tsx";
 import { formatKilobytes } from "../../lib/format.ts";
 import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion.ts";
@@ -81,8 +75,7 @@ export function ServiceVersionPickerDialog(
   const [mode, setMode] = useState<"profiles" | "episodes">(
     season && groups.length > 1 ? "profiles" : "episodes",
   );
-  const [detail, setDetail] = useState<"basic" | "advanced">("basic");
-  const [profiles, setProfiles] = useState<Set<string>>(new Set());
+  const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     onPendingChange?.(pending);
@@ -102,10 +95,12 @@ export function ServiceVersionPickerDialog(
         season!.seasonRatingKey,
         season!.episodes.map((e) => e.episodeRatingKey),
         season!.totalEpisodeCount ?? season!.duplicateGroupCount,
+        { selectionOnly: true },
       ),
-    enabled: !!season,
+    enabled: !!season && mode === "profiles",
     retry: false,
-    staleTime: Infinity,
+    staleTime: 30_000,
+    refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
   const first = groups[0];
@@ -117,12 +112,17 @@ export function ServiceVersionPickerDialog(
     retry: false,
     staleTime: Infinity,
   });
-  const displayGroups = season ? analysis.data?.episodes ?? groups : [{
-    ...first,
-    versions: first.versions.map((v) =>
-      technical.data?.versions.find((fresh) => fresh.mediaId === v.mediaId) ?? v
-    ),
-  }];
+  const displayGroups = season
+    ? [...(analysis.data?.episodes ?? groups)].sort((a, b) =>
+      (a.mediaType === "episode" ? a.episodeIndex : 0) -
+      (b.mediaType === "episode" ? b.episodeIndex : 0)
+    )
+    : [{
+      ...first,
+      versions: first.versions.map((v) =>
+        technical.data?.versions.find((fresh) => fresh.mediaId === v.mediaId) ?? v
+      ),
+    }];
   const targets = selectedServiceVersions(displayGroups, selected);
   const valid = serviceVersionSelectionValid(displayGroups, selected);
   const count = displayGroups.reduce(
@@ -163,7 +163,9 @@ export function ServiceVersionPickerDialog(
                 type="checkbox"
                 className="checkbox checkbox-sm"
                 checked={selected.has(`${key}:${version.mediaId}`)}
-                disabled={pending}
+                disabled={pending ||
+                  (group.mediaType === "episode" && !selected.has(`${key}:${version.mediaId}`) &&
+                    group.versions.filter((v) => !selected.has(`${key}:${v.mediaId}`)).length <= 1)}
                 onChange={() => toggle(`${key}:${version.mediaId}`)}
                 aria-label={`Delete ${versionLabel(version)}`}
               />
@@ -183,9 +185,9 @@ export function ServiceVersionPickerDialog(
     <>
       {season
         ? (
-          <div className="season-batch-toolbar season-batch-toolbar-actions">
+          <div className="version-picker-toolbar">
             <div
-              className="join season-batch-mode"
+              className="version-picker-modes"
               role="group"
               aria-label="Deletion selection view"
             >
@@ -197,14 +199,10 @@ export function ServiceVersionPickerDialog(
                   key={candidate}
                   disabled={pending || (candidate === "profiles" && groups.length < 2)}
                   aria-pressed={mode === candidate}
-                  className={`join-item btn btn-xs ${
-                    mode === candidate ? "bg-base-100" : "bg-transparent"
-                  }`}
+                  className={`btn btn-sm ${mode === candidate ? "btn-primary" : "btn-ghost"}`}
                   onClick={() => {
                     if (candidate === mode) return;
                     setMode(candidate);
-                    setSelected(new Set());
-                    setProfiles(new Set());
                   }}
                 >
                   {label}
@@ -252,16 +250,16 @@ export function ServiceVersionPickerDialog(
             )}
             <div className="season-profile-lanes">
               {analysis.data?.profiles.map((profile) => {
-                const active = profiles.has(profile.id);
-                const next = new Set(profiles);
-                if (active) next.delete(profile.id);
-                else next.add(profile.id);
-                const plan = seasonProfilesDeletionPlan(
-                  analysis.data.profiles,
-                  next,
-                  analysis.data.episodes,
+                const active = profile.members.every((m) =>
+                  selected.has(`${m.episodeRatingKey}:${m.mediaId}`)
                 );
-                const unsafe = !active && !plan.safe;
+                const next = new Set(selected);
+                for (const member of profile.members) {
+                  const key = `${member.episodeRatingKey}:${member.mediaId}`;
+                  if (active) next.delete(key);
+                  else next.add(key);
+                }
+                const unsafe = !active && !serviceVersionSelectionValid(displayGroups, next);
                 const coverage = episodeCoverageLabel(profile.members.flatMap((m) => {
                   const e = analysis.data.episodes.find((e) =>
                     e.episodeRatingKey === m.episodeRatingKey
@@ -282,12 +280,7 @@ export function ServiceVersionPickerDialog(
                       aria-pressed={active}
                       aria-label={`Delete ${profile.label}`}
                       onClick={() => {
-                        setProfiles(next);
-                        setSelected(
-                          new Set([...plan.deleteMediaIds].flatMap(([key, ids]) =>
-                            ids.map((id) => `${key}:${id}`)
-                          )),
-                        );
+                        setSelected(next);
                       }}
                     >
                       <span className="season-profile-radio" aria-hidden="true">
@@ -348,21 +341,29 @@ export function ServiceVersionPickerDialog(
           <div className="season-batch-list">
             {displayGroups.map((group) => (
               <details
-                className="season-batch-episode"
+                className="version-picker-episode"
                 key={group.mediaType === "episode" ? group.episodeRatingKey : group.ratingKey}
               >
-                <summary className="season-batch-episode-summary">
+                <summary className="version-picker-episode-summary">
                   <span className="season-batch-episode-copy">
                     <strong>
                       {group.mediaType === "episode"
                         ? `E${String(group.episodeIndex).padStart(2, "0")} — ${group.episodeTitle}`
                         : group.title}
                     </strong>
-                    <small>{group.versions.length} versions · choose files to delete</small>
+                    <small>
+                      {group.versions.length} versions · {group.versions.filter((v) =>
+                        selected.has(
+                          `${
+                            group.mediaType === "episode" ? group.episodeRatingKey : group.ratingKey
+                          }:${v.mediaId}`,
+                        )
+                      ).length} selected for removal
+                    </small>
                   </span>
                   <ChevronDown className="size-4" />
                 </summary>
-                <div className="season-batch-episode-details">{versionRows(group)}</div>
+                <div className="version-picker-episode-details">{versionRows(group)}</div>
               </details>
             ))}
           </div>
@@ -394,44 +395,80 @@ export function ServiceVersionPickerDialog(
             : `${first.showTitle} — S${first.seasonIndex}E${first.episodeIndex} "${first.episodeTitle}"`
         } has ${first.versions.length} versions synced from Plex. Review exactly where the selected files will be removed.`}
       onClose={onCancel}
-      modalBoxClassName={season ? "max-w-5xl season-batch-modal" : "max-w-2xl"}
+      modalBoxClassName="max-w-5xl version-picker-modal"
     >
-      <ServiceOwnedDeletionDialog
-        dialogRef={dialogRef}
-        embedded
-        hideIntro
-        libraryKey={first.libraryKey}
-        targets={targets}
-        onPendingChange={setPending}
-        onCreated={onCreated}
-        onCancel={onCancel}
-        selectionDisabled={!valid || targets.length === 0}
-        confirmLabel={
+      <ol className="version-picker-steps" aria-label="Deletion progress">
+        <li aria-current={!reviewing ? "step" : undefined}>1 · Choose versions</li>
+        <li aria-current={reviewing ? "step" : undefined}>2 · Review deletion</li>
+      </ol>
+      {!reviewing
+        ? (
           <>
-            Delete {count} {count === 1 ? "version" : "versions"} ({formatKilobytes(size)}{" "}
-            logical media)
+            <div className="version-picker-scroll">
+              <p className="version-picker-guidance">
+                Select the copies to remove.{first.mediaType === "episode" &&
+                  " Keep at least one version of every episode."}
+              </p>
+              {picker}
+            </div>
+            <footer className="version-picker-footer">
+              <div className="version-picker-total" aria-live="polite">
+                <strong>{count} {count === 1 ? "version" : "versions"} selected</strong>
+                <span>{formatKilobytes(size)} logical media · service checks run next</span>
+              </div>
+              <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!valid || targets.length === 0}
+                onClick={() => setReviewing(true)}
+              >
+                Review deletion <ArrowRight className="size-4" />
+              </button>
+            </footer>
           </>
-        }
-        renderPreview={(preview) => (
-          <DeletionPreview
-            mode={detail}
-            onModeChange={setDetail}
-            basic={picker}
-            advanced={
-              <>
-                {picker}
-                {preview
-                  ? <ServiceDeletionFileTree preview={preview} />
-                  : (
-                    <p className="text-xs opacity-60">
-                      Select versions to preview their file paths.
-                    </p>
-                  )}
-              </>
-            }
-          />
+        )
+        : (
+          <>
+            <div className="version-picker-review-heading">
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={pending}
+                onClick={() => setReviewing(false)}
+              >
+                <ArrowLeft className="size-4" />Edit selection
+              </button>
+              <span>{count} versions · {formatKilobytes(size)} logical media</span>
+            </div>
+            <div className="version-picker-review">
+              <ServiceOwnedDeletionDialog
+                dialogRef={dialogRef}
+                embedded
+                hideIntro
+                libraryKey={first.libraryKey}
+                targets={targets}
+                onPendingChange={setPending}
+                onCreated={onCreated}
+                onCancel={onCancel}
+                selectionDisabled={!valid || targets.length === 0}
+                renderPreview={(preview) =>
+                  preview
+                    ? <ServiceDeletionPreviewList preview={preview} showWarnings={false} />
+                    : (
+                      <div className="version-picker-checking" role="status">
+                        <strong>Preparing deletion review</strong>
+                        <p>
+                          Checking current files, service ownership, and retained copies. Nothing
+                          has been deleted.
+                        </p>
+                      </div>
+                    )}
+                confirmLabel={<>Delete {count} {count === 1 ? "version" : "versions"}</>}
+              />
+            </div>
+          </>
         )}
-      />
     </DeletionModalShell>
   );
 }

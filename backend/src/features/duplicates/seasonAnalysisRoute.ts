@@ -228,26 +228,29 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
     }];
   });
   const analysis = analyzeSeasonVersionProfiles(episodes, liveEvidence);
-  const destinationAlignment = await enrichDestinationAlignment(
-    serverId,
-    first.libraryKey,
-    first.showRatingKey,
-    first.seasonIndex,
-    { title: showTitle, tvdbId: show?.tvdbId ?? null },
-    analysis.profiles.map((profile) => ({
-      ...profile,
-      sonarrManagedCount: 0,
-      qbittorrentSeededCount: 0,
-    })),
-    new Map(episodes.map((episode) => [episode.episodeRatingKey, episode.episodeIndex])),
-  ).catch(() => ({
-    profiles: analysis.profiles.map((profile) => ({
-      ...profile,
-      sonarrManagedCount: 0,
-      qbittorrentSeededCount: 0,
-    })),
-    connections: { sonarr: false, qbittorrent: false },
-  }));
+  // Plex path evidence groups releases; optional service discovery happens in review.
+  const destinationAlignment = c.req.query('selectionOnly') === 'true'
+    ? { profiles: analysis.profiles, connections: { sonarr: false, qbittorrent: false } }
+    : await enrichDestinationAlignment(
+      serverId,
+      first.libraryKey,
+      first.showRatingKey,
+      first.seasonIndex,
+      { title: showTitle, tvdbId: show?.tvdbId ?? null },
+      analysis.profiles.map((profile) => ({
+        ...profile,
+        sonarrManagedCount: 0,
+        qbittorrentSeededCount: 0,
+      })),
+      new Map(episodes.map((episode) => [episode.episodeRatingKey, episode.episodeIndex])),
+    ).catch(() => ({
+      profiles: analysis.profiles.map((profile) => ({
+        ...profile,
+        sonarrManagedCount: 0,
+        qbittorrentSeededCount: 0,
+      })),
+      connections: { sonarr: false, qbittorrent: false },
+    }));
   return c.json(
     {
       season: {

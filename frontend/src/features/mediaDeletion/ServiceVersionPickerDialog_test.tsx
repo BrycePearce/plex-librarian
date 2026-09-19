@@ -1,3 +1,4 @@
+import { summarizeDuplicateComparisons } from "@shared/mediaComparison";
 import { assertEquals } from "@std/assert";
 import TestRenderer, { act } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -89,7 +90,7 @@ Deno.test("service version selection retains exact media IDs and only promotes f
   assertEquals([...initialServiceVersionSelection([sized], false)], ["movie:1"]);
 });
 
-Deno.test("duplicate review restores quality selection and detail tabs in the same service confirmation", async () => {
+Deno.test("duplicate selection defers service checks until review and preserves choices when editing", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const oldAct = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -130,21 +131,34 @@ Deno.test("duplicate review restores quality selection and detail tabs in the sa
       );
       await Promise.resolve();
     });
-    assertEquals(requests[0], [{ ratingKey: "movie", mediaId: 1 }]);
+    assertEquals(requests.length, 0);
     const inputs = renderer!.root.findAllByType("input");
     assertEquals(inputs.map((input) => input.props.checked), [true, false]);
-    assertEquals(inputs.map((input) => input.props["aria-label"]), ["Delete 720", "Delete 1080"]);
-    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 1);
-    assertEquals(renderer!.root.findAllByType(DeletionDialogFooter).length, 1);
+    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
+    await act(() => inputs[1].props.onChange());
+    assertEquals(requests.length, 0);
+    const button = (label: string) =>
+      renderer!.root.findAllByType("button").find((b) =>
+        b.children.some((child) => typeof child === "string" && child.includes(label))
+      );
     await act(async () => {
-      renderer!.root.findByType(DeletionPreview).props.onModeChange("advanced");
+      button("Review deletion")!.props.onClick();
       await Promise.resolve();
     });
-    assertEquals(renderer!.root.findByType(DeletionPreview).props.mode, "advanced");
+    assertEquals(requests, [[{ ratingKey: "movie" }]]);
+    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 1);
+    assertEquals(renderer!.root.findAllByType(DeletionDialogFooter).length, 1);
+    await act(() => button("Edit selection")!.props.onClick());
     assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), [
       true,
-      false,
+      true,
     ]);
+    assertEquals(requests.length, 1);
+    await act(async () => {
+      button("Review deletion")!.props.onClick();
+      await Promise.resolve();
+    });
+    assertEquals(requests.length, 2);
   } finally {
     await act(async () => {
       renderer?.unmount();
@@ -153,5 +167,76 @@ Deno.test("duplicate review restores quality selection and detail tabs in the sa
     client.clear();
     api.serviceDeletions.preview = oldPreview;
     globals.IS_REACT_ACT_ENVIRONMENT = oldAct;
+  }
+});
+
+Deno.test("season episode selection preserves the picker and expansion across toggles", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const original = api.serviceDeletions.preview;
+  let requests = 0;
+  api.serviceDeletions.preview = () => {
+    requests++;
+    return Promise.reject(new Error("Unexpected preview"));
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const episode = {
+    mediaType: "episode" as const,
+    episodeRatingKey: "episode",
+    libraryKey: "tv",
+    showRatingKey: "show",
+    seasonRatingKey: "season",
+    showTitle: "Example",
+    showThumb: null,
+    seasonIndex: 1,
+    episodeIndex: 1,
+    episodeTitle: "Pilot",
+    combinedFileSize: 30,
+    versions: [fixtureVersion(1, 10, "720"), fixtureVersion(2, 20, "1080")],
+  };
+  try {
+    await act(() => {
+      renderer = TestRenderer.create(
+        <QueryClientProvider client={client}>
+          <ServiceVersionPickerDialog
+            dialogRef={{ current: null }}
+            groups={[episode]}
+            season={{
+              mediaType: "season",
+              libraryKey: "tv",
+              showRatingKey: "show",
+              seasonRatingKey: "season",
+              showTitle: "Example",
+              showThumb: null,
+              seasonIndex: 1,
+              totalEpisodeCount: 1,
+              duplicateGroupCount: 1,
+              combinedFileSize: 30,
+              reclaimableFileSize: 10,
+              comparisonSummary: summarizeDuplicateComparisons([]),
+              episodes: [episode],
+            }}
+            onCreated={() => {}}
+            onCancel={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    const row = renderer!.root.findByType("details");
+    assertEquals(row.findByType("strong").children.join(""), "E01 \u2014 Pilot");
+    const inputs = renderer!.root.findAllByType("input");
+    await act(() => inputs[0].props.onChange());
+    assertEquals(renderer!.root.findByType("details"), row);
+    assertEquals(renderer!.root.findAllByType("input")[1].props.disabled, true);
+    assertEquals(requests, 0);
+    await act(() => renderer!.root.findAllByType("input")[0].props.onChange());
+    assertEquals(renderer!.root.findAllByType("input")[1].props.disabled, false);
+  } finally {
+    await act(() => renderer?.unmount());
+    client.clear();
+    api.serviceDeletions.preview = original;
+    globals.IS_REACT_ACT_ENVIRONMENT = previous;
   }
 });

@@ -482,9 +482,12 @@ export const api = {
       seasonRatingKey: string,
       episodeRatingKeys: string[],
       totalEpisodeCount: number,
+      options?: { selectionOnly: boolean },
     ) =>
       apiFetch<SeasonVersionAnalysisResponse>(
-        `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/analysis`,
+        `/duplicates/seasons/${encodeURIComponent(seasonRatingKey)}/analysis${
+          options?.selectionOnly ? "?selectionOnly=true" : ""
+        }`,
         {
           method: "POST",
           body: JSON.stringify({ episodeRatingKeys, totalEpisodeCount }),
