@@ -268,6 +268,11 @@ export async function executeServiceOwnedActions(
     if (completed.has(action.id)) continue;
     await runtime.revalidate(completed, action);
     if (!await runtime.present(action)) {
+      // The service catalog may converge during revalidation, after the earlier
+      // reconciliation pass. Require the same freshly verified source effects.
+      const reconciled = await reconcileCoveredAbsences();
+      for (const other of reconciled) await runtime.afterObserved?.(other, completed);
+      if (completed.has(action.id)) continue;
       throw new Error('Service target disappeared without its own recorded deletion response');
     }
     attempts[action.id] = { startedAt: Date.now() };

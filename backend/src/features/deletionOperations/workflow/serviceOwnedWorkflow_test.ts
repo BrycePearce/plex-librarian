@@ -893,6 +893,69 @@ Deno.test('shared-entry catalog absence reconciles separately without inventing 
   assertEquals(attempts['plex:1'].outcome?.status, 'target_absent');
 });
 
+Deno.test('catalog absence during revalidation requires confirmed source effects and never replays deletion', async () => {
+  for (const explained of [true, false]) {
+    const plan = actionFixture(true);
+    plan.actions[1].selected = true;
+    plan.retention = planServiceOwnedRetention({
+      actions: plan.actions,
+      retainedEntries: [],
+      evidenceRevision: 'test',
+      qbInventory: 'complete',
+    });
+    const attempts: Record<string, Attempt> = {};
+    const absent = new Set<string>();
+    const calls: string[] = [], followups: string[] = [];
+    const runtime = {
+      save() {},
+      revalidate(_completed: ReadonlySet<string>, pending?: ServiceOwnedAction) {
+        if (pending?.service === 'plex') absent.add(pending.id);
+        return Promise.resolve();
+      },
+      present(action: ServiceOwnedAction) {
+        return Promise.resolve(!absent.has(action.id));
+      },
+      mutate(
+        action: ServiceOwnedAction,
+        record: (r: { status: 'accepted'; httpStatus: number }) => void,
+      ) {
+        calls.push(action.id);
+        absent.add(action.id);
+        record({ status: 'accepted', httpStatus: 200 });
+        return Promise.resolve();
+      },
+      reconcileAbsent(action: ServiceOwnedAction, completed: ReadonlySet<string>) {
+        return Promise.resolve(
+          explained && action.service === 'plex' && absent.has(action.id) &&
+            completed.has('qb:hash')
+            ? ['qb:hash']
+            : undefined,
+        );
+      },
+      afterObserved(action: ServiceOwnedAction) {
+        followups.push(action.id);
+        return Promise.resolve();
+      },
+    };
+    if (explained) {
+      await executeServiceOwnedActions(plan, attempts, runtime);
+      assertEquals(followups, ['qb:hash', 'plex:1']);
+      await executeServiceOwnedActions(plan, attempts, runtime);
+      assertEquals(attempts['plex:1'].reconciliation?.sourceActionIds, ['qb:hash']);
+      assertEquals(attempts['plex:1'].outcome?.status, 'target_absent');
+    } else {
+      await assertRejects(
+        () => executeServiceOwnedActions(plan, attempts, runtime),
+        Error,
+        'Service target disappeared without its own recorded deletion response',
+      );
+      assertEquals(attempts['plex:1'], undefined);
+    }
+    assertEquals(calls, ['qb:hash']);
+    assertEquals(attempts['plex:1']?.response, undefined);
+  }
+});
+
 Deno.test('retained Plex finalization preserves catalog and removal accounting while releasing reservations', () => {
   withTransaction((client) => {
     client.exec(`
