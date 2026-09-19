@@ -269,9 +269,19 @@ Deno.test('service-owned API deletes a Plex movie without any helper roots or QB
 });
 
 Deno.test('service-owned API covers whole shows and seasons without Sonarr or storage setup', async () => {
-  for (const ratingKey of ['show-1', 'season-1']) {
+  for (
+    const [ratingKey, changedOwner] of [
+      ['show-1', false],
+      ['season-1', false],
+      ['season-1', true],
+    ] as const
+  ) {
     reset();
     addEpisode();
+    live.get('show-1')!.Guid!.push({ id: 'tmdb://7704' });
+    withTransaction((client) => {
+      client.prepare("UPDATE items SET tmdb_id=7704 WHERE rating_key='show-1'").run();
+    });
     reportedPlexLibraries = [{ key: 'shows', title: 'Shows', type: 'show' }];
     live.set('season-1', {
       ratingKey: 'season-1',
@@ -306,7 +316,19 @@ Deno.test('service-owned API covers whole shows and seasons without Sonarr or st
     });
     assertEquals(accepted.status, 202, await accepted.clone().text());
     const { operationId } = await accepted.json();
+    if (changedOwner) {
+      withTransaction((client) => {
+        client.prepare("UPDATE items SET tmdb_id=9999 WHERE rating_key='show-1'").run();
+      });
+    }
     await settle();
+    if (changedOwner) {
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(operation.status, 'needs_attention', JSON.stringify(operation));
+      assertEquals(live.has(ratingKey), true);
+      assertEquals(wholeDeleteOrder.length, 0);
+      continue;
+    }
     assertEquals(
       getDeletionOperation(operationId, 1)!.status,
       'completed',
@@ -837,6 +859,10 @@ Deno.test('service-owned populated Sonarr season deletes selected file and unmon
   for (const sharedPlex of [false, true]) {
     reset();
     addEpisode();
+    live.get('show-1')!.Guid!.push({ id: 'tmdb://7704' });
+    withTransaction((client) => {
+      client.prepare("UPDATE items SET tmdb_id=7704 WHERE rating_key='show-1'").run();
+    });
     configureSonarr(true);
     seasonPackQbit = true;
     const selectedPath = '/plex-library/Show/Season 01/old.mkv';

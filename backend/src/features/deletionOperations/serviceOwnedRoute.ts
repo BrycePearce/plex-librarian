@@ -216,7 +216,9 @@ async function prepare(
       ...requested,
       title: live.title,
       type: live.type as 'movie' | 'show' | 'season' | 'episode',
-      tmdbId: live.tmdbId,
+      // Season snapshots are validated against their owning show locally.
+      // Plex seasons generally have no TMDB GUID of their own.
+      tmdbId: live.type === 'season' ? show?.tmdbId ?? null : live.tmdbId,
       tvdbId: show?.tvdbId ?? live.tvdbId,
       ...(showKey ? { showRatingKey: showKey } : {}),
       ...(live.type === 'season' ? { seasonIndex: live.index! } : {}),

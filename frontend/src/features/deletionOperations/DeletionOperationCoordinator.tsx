@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { CheckCircle2, Clock3, TriangleAlert, X } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Clock3, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
@@ -159,21 +159,31 @@ function DeletionOperationToast({
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.98 }}
       transition={{ duration: reduceMotion ? 0 : 0.16, ease: "easeOut" }}
       className={`rounded-xl border bg-base-100 p-4 shadow-xl ${
-        needsAttention || warning ? "border-warning/50" : "border-base-300"
+        needsAttention || warning ? "border-warning/30" : "border-base-300"
       }`}
     >
       <div className="flex items-start gap-3">
-        {completed
-          ? <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-success" />
-          : needsAttention || warning
-          ? <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning" />
-          : data?.status === "cancelled"
-          ? <X className="mt-0.5 size-5 shrink-0 text-base-content/50" />
-          : query.isError
-          ? <Clock3 className="mt-0.5 size-5 shrink-0 text-warning" />
-          : <span className="loading loading-spinner loading-sm mt-0.5 shrink-0 text-primary" />}
+        <div
+          className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
+            completed
+              ? "bg-success/10 text-success"
+              : needsAttention || warning || query.isError
+              ? "bg-warning/10 text-warning"
+              : "bg-base-200 text-base-content/60"
+          }`}
+        >
+          {completed
+            ? <CheckCircle2 className="size-4" />
+            : needsAttention || warning
+            ? <TriangleAlert className="size-4" />
+            : data?.status === "cancelled"
+            ? <X className="size-4" />
+            : query.isError
+            ? <Clock3 className="size-4" />
+            : <span className="loading loading-spinner loading-xs text-primary" />}
+        </div>
         <div className="min-w-0 flex-1">
-          <p className="font-medium">
+          <p className="text-sm font-semibold leading-6">
             {completed
               ? "Deletion complete"
               : warning
@@ -190,7 +200,7 @@ function DeletionOperationToast({
                 : deletionOperationTitle(data.status, current?.phase)
               : "Checking deletion status…"}
           </p>
-          <p className="mt-0.5 truncate text-sm text-base-content/60">
+          <p className="mt-1 text-sm leading-relaxed text-base-content/60 break-words">
             {completed && data
               ? `${data.removalConfirmedCount} item${
                 data.removalConfirmedCount === 1 ? "" : "s"
@@ -205,33 +215,44 @@ function DeletionOperationToast({
               ? `${data.removalConfirmedCount} removed · ${data.failedCount} failed`
               : "Starting operation"}
           </p>
-          {(warning || needsAttention) && recheckable && (
-            <button
-              type="button"
-              className="btn btn-warning btn-xs mt-2"
-              disabled={recheck.isPending}
-              onClick={() => recheck.mutate()}
-            >
-              Recheck
-            </button>
+          {((warning || needsAttention) && recheckable || !viewingThisOperation) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {(warning || needsAttention) && recheckable && (
+                <button
+                  type="button"
+                  className="btn btn-warning btn-sm gap-1.5 shadow-none"
+                  disabled={recheck.isPending}
+                  onClick={() => recheck.mutate()}
+                >
+                  <RotateCcw
+                    className={`size-3.5 ${recheck.isPending ? "animate-spin" : ""}`}
+                    aria-hidden="true"
+                  />
+                  {recheck.isPending ? "Rechecking…" : "Recheck"}
+                </button>
+              )}
+              {!viewingThisOperation && (
+                <Link
+                  to="/deletion-operations/$id"
+                  params={{ id: operation.id }}
+                  className="btn btn-ghost btn-sm gap-1.5"
+                >
+                  {active ? "View progress" : "View details"}
+                  <ArrowUpRight className="size-3.5" aria-hidden="true" />
+                </Link>
+              )}
+            </div>
           )}
           {recheck.isError && (
-            <p className="mt-2 text-xs text-error" role="alert">{recheck.error.message}</p>
-          )}
-          {!viewingThisOperation && (
-            <Link
-              to="/deletion-operations/$id"
-              params={{ id: operation.id }}
-              className="btn btn-ghost btn-xs mt-2 -ml-2"
-            >
-              {active ? "View progress" : "View details"}
-            </Link>
+            <p className="mt-3 text-xs leading-relaxed text-error" role="alert">
+              {recheck.error.message}
+            </p>
           )}
         </div>
         {!active && (
           <button
             type="button"
-            className="btn btn-ghost btn-xs btn-square shrink-0"
+            className="btn btn-ghost btn-sm btn-square -mr-1 -mt-1 shrink-0 text-base-content/50 hover:text-base-content"
             aria-label="Dismiss deletion notification"
             onClick={() => onDismiss(operation.id)}
           >
