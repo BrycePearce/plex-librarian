@@ -646,10 +646,6 @@ router.patch('/:key', async (c) => {
   return c.json({ ...library, staleMinAgeDays: body.staleMinAgeDays });
 });
 
-// Whole-item deletion is handled entirely by the durable deletion pipeline —
-// see deletionOperations/middleware.ts (which intercepts DELETE /:key/items
-// before it reaches this router) and deletionOperations/workflow/targetWorkflow.ts (the
-// actual Arr/Plex/download-cleanup execution).
 router.get('/:key/shows/:ratingKey', async (c) => {
   const key = c.req.param('key');
   const ratingKey = c.req.param('ratingKey');

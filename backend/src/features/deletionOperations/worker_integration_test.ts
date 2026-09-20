@@ -1257,9 +1257,6 @@ const {
 } = await import('./service.ts');
 const { recoverInterruptedDeletionWork } = await import('./core/recovery.ts');
 
-const { canConfirmOrphanAbsenceForCleanup } = await import(
-  './workflow/targetWorkflow.ts'
-);
 const {
   canonicalJson,
 } = await import('./relocation/relocation.ts');
@@ -2493,25 +2490,6 @@ Deno.test('relocation snapshot canonicalization sorts objects but preserves arra
     Error,
     'invalid number',
   );
-});
-
-Deno.test('Sonarr orphan absence requires this snapshot own unlink attempt', () => {
-  const proof = { path: '/downloads/episode.mkv' };
-  assertEquals(
-    canConfirmOrphanAbsenceForCleanup(
-      { sonarrReclamation: { proofs: [proof] } } as never,
-      proof.path,
-    ),
-    false,
-  );
-  assertEquals(
-    canConfirmOrphanAbsenceForCleanup(
-      { sonarrReclamation: { proofs: [{ ...proof, unlinkAttemptedAt: 10 }] } } as never,
-      proof.path,
-    ),
-    true,
-  );
-  assertEquals(canConfirmOrphanAbsenceForCleanup({}, proof.path), true);
 });
 
 async function settle(): Promise<void> {

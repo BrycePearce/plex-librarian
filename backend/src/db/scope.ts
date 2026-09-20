@@ -57,12 +57,6 @@ export const episodeVersionsByEpisode = (serverId: number, episodeRatingKey: str
 export const episodeVersionsByLibrary = (serverId: number, libraryKey: string) =>
   and(eq(episodeMediaVersions.serverId, serverId), eq(episodeMediaVersions.libraryKey, libraryKey));
 
-export const episodeVersionsByShow = (serverId: number, showRatingKey: string) =>
-  and(
-    eq(episodeMediaVersions.serverId, serverId),
-    eq(episodeMediaVersions.showRatingKey, showRatingKey),
-  );
-
 export const usersByServer = (serverId: number) => eq(users.serverId, serverId);
 
 // Matches on users.accountId, the stable plex.tv/Home roster id. For non-owners this
@@ -73,8 +67,6 @@ export const userByAccountId = (serverId: number, accountId: number) =>
 // Matches on the PMS SystemAccount id carried by webhook payloads (Account.id) and
 // history entries (accountID). This equals users.accountId for non-owners; the owner
 // is always represented as local id 1. See users.localAccountId in schema.ts.
-export const userByLocalAccountId = (serverId: number, localAccountId: number) =>
-  and(eq(users.serverId, serverId), eq(users.localAccountId, localAccountId));
 
 // The single definition of "these grouped Media versions constitute a genuine
 // duplicate" (see Duplicate detection in CLAUDE.md) — shared by the global

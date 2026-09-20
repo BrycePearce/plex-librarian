@@ -1,17 +1,17 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { v4 as uuidv4 } from "uuid";
-import { Loader2, Sparkles, X } from "lucide-react";
+import { ServiceOwnedDeletionDialog } from "../mediaDeletion/ServiceOwnedDeletionDialog.tsx";
+import { Sparkles, X } from "lucide-react";
 import { ErrorAlert } from "../../components/ErrorAlert.tsx";
 import { useDeletionOperationTracker } from "../deletionOperations/DeletionOperationCoordinator.tsx";
 import { api } from "../../lib/api.ts";
 import type { SmartDuplicateAnalysisResponse, SmartDuplicateCandidate } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { CleanupResults } from "./CleanupResults.tsx";
-import { candidateKey, selectedSize } from "./model.ts";
+import { candidateKey, selectedSize, serviceCleanupBatches } from "./model.ts";
 import "./quickCleanup.css";
 
-type Phase = "configure" | "results";
+type Phase = "configure" | "results" | "review";
 
 export interface SmartCleanupDialogHandle {
   open: () => void;
@@ -26,7 +26,10 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [keepSelections, setKeepSelections] = useState<Map<string, number>>(new Map());
     const [expandedCandidate, setExpandedCandidate] = useState<string | null>(null);
-    const cleanupRequestId = useRef(uuidv4());
+    const [reviewBatches, setReviewBatches] = useState<ReturnType<typeof serviceCleanupBatches>>(
+      [],
+    );
+    const [reviewPending, setReviewPending] = useState(false);
 
     const analyze = useMutation({
       mutationFn: () => api.duplicates.smartAnalysis({ movies: true, tv: true }),
@@ -73,32 +76,31 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
       (total, plan) => total + plan.deleteMediaIds.length,
       0,
     );
-    const cleanup = useMutation({
-      mutationFn: () =>
-        api.duplicates.smartCleanup(
-          cleanupRequestId.current,
-          chosenPlans.map(({ candidate, deleteMediaIds }) => ({
-            mediaType: candidate.mediaType,
-            ratingKey: candidate.ratingKey,
-            deleteMediaIds,
-          })),
-          chosen.some((candidate) => candidate.confidence === "near-identical"),
-        ),
-      onSuccess: (result) => {
-        const invalidations = [
-          queryKeys.duplicates.all,
-          queryKeys.stale.all,
-          queryKeys.libraries.all,
-          queryKeys.events.all,
-          queryKeys.mediaRemovals.all,
-        ];
-        for (const operationId of result.operationIds) {
-          trackDeletionOperation(operationId, invalidations);
-        }
+    function onCreated(operationId: string) {
+      trackDeletionOperation(operationId, [
+        queryKeys.duplicates.all,
+        queryKeys.stale.all,
+        queryKeys.libraries.all,
+        queryKeys.events.all,
+        queryKeys.mediaRemovals.all,
+      ]);
+      const submitted = new Set(reviewBatches[0].targets.map((target) => target.ratingKey));
+      setSelected((current) =>
+        new Set(
+          [...current].filter((key) =>
+            !chosen.some((candidate) =>
+              candidateKey(candidate) === key && submitted.has(candidate.ratingKey)
+            )
+          ),
+        )
+      );
+      setReviewPending(false);
+      if (reviewBatches.length > 1) setReviewBatches((current) => current.slice(1));
+      else {
         dialogRef.current?.close();
         reset();
-      },
-    });
+      }
+    }
 
     function reset() {
       setPhase("configure");
@@ -107,13 +109,13 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
       setKeepSelections(new Map());
       setExpandedCandidate(null);
       analyze.reset();
-      cleanup.reset();
+      setReviewBatches([]);
+      setReviewPending(false);
     }
 
     useImperativeHandle(ref, () => ({
       open() {
         reset();
-        cleanupRequestId.current = uuidv4();
         dialogRef.current?.showModal();
         analyze.mutate();
       },
@@ -171,7 +173,7 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
     }
 
     function close() {
-      if (cleanup.isPending) return;
+      if (reviewPending) return;
       dialogRef.current?.close();
       reset();
     }
@@ -182,7 +184,7 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
         className="modal"
         onClose={reset}
         onCancel={(event) => {
-          if (cleanup.isPending) event.preventDefault();
+          if (reviewPending) event.preventDefault();
         }}
       >
         <div className="modal-box smart-cleanup-modal max-w-4xl p-0">
@@ -200,7 +202,7 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
               type="button"
               className="btn btn-ghost btn-sm btn-square ml-auto"
               aria-label="Close"
-              disabled={cleanup.isPending}
+              disabled={reviewPending}
               onClick={close}
             >
               <X className="size-4" />
@@ -208,6 +210,24 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
           </header>
 
           <div className="smart-cleanup-body">
+            {phase === "review" && reviewBatches[0] && (
+              <ServiceOwnedDeletionDialog
+                key={JSON.stringify(reviewBatches[0])}
+                embedded
+                dialogRef={dialogRef}
+                libraryKey={reviewBatches[0].libraryKey}
+                targets={reviewBatches[0].targets}
+                title={reviewBatches.length > 1
+                  ? `Review cleanup · ${reviewBatches.length} batches remaining`
+                  : "Review cleanup"}
+                onCreated={onCreated}
+                onCancel={() => {
+                  setPhase("results");
+                  setReviewBatches([]);
+                }}
+                onPendingChange={setReviewPending}
+              />
+            )}
             {phase === "configure" && analyze.isPending && (
               <div className="smart-cleanup-analyzing">
                 <div className="smart-cleanup-analyzing-orbit">
@@ -244,14 +264,6 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
                   onExpandedCandidateChange={setExpandedCandidate}
                   onKeepChange={updateKeeper}
                 />
-                {cleanup.isError && (
-                  <ErrorAlert
-                    message={cleanup.error instanceof Error
-                      ? cleanup.error.message
-                      : "Cleanup could not be queued"}
-                    onRetry={() => cleanup.mutate()}
-                  />
-                )}
               </>
             )}
           </div>
@@ -266,25 +278,21 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
               <button
                 type="button"
                 className="btn btn-error min-w-44"
-                disabled={chosen.length === 0 || cleanup.isPending}
-                onClick={() => cleanup.mutate()}
+                disabled={chosen.length === 0 || reviewPending}
+                onClick={() => {
+                  setReviewBatches(serviceCleanupBatches(chosenPlans));
+                  setPhase("review");
+                }}
               >
-                {cleanup.isPending
-                  ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Queuing cleanup…
-                    </>
-                  )
-                  : `Remove ${deleteVersionCount.toLocaleString()} ${
-                    deleteVersionCount === 1 ? "version" : "versions"
-                  }`}
+                {`Review ${deleteVersionCount.toLocaleString()} ${
+                  deleteVersionCount === 1 ? "version" : "versions"
+                }`}
               </button>
             )}
           </footer>
         </div>
         <form method="dialog" className="modal-backdrop">
-          <button type="submit" disabled={cleanup.isPending}>close</button>
+          <button type="submit" disabled={reviewPending}>close</button>
         </form>
       </dialog>
     );

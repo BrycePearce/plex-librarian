@@ -4,7 +4,7 @@ import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
 import { buildServiceOwnedPlan, type ServiceOwnedPlanningInput } from './serviceOwnedPlanning.ts';
-import { summarizeServiceOwnedRetention } from './serviceOwnedRetention.ts';
+
 import type { ServiceOwnedAttempt } from '../deletionOperations/workflow/serviceOwnedWorkflow.ts';
 
 // Only the DB imported by the execution module is initialized; this process never
@@ -271,11 +271,10 @@ async function disposableCase(shared: boolean) {
         true,
       );
     }
-    const outcomes = Object.fromEntries(
-      Object.entries(attempts).map(([id]) => [id, 'succeeded' as const]),
+    const plexRemovals = plan.actions.filter((action) =>
+      action.service === 'plex' && attempts[action.id]?.outcome?.status === 'target_absent'
     );
-    const summary = summarizeServiceOwnedRetention(plan.retention, outcomes);
-    assertEquals(summary.plexRemovalActionIds.length, shared ? 0 : 1);
+    assertEquals(plexRemovals.length, shared ? 0 : 1);
     // Resume must only observe completed simulated service records, never unlink again.
     await executeServiceOwnedActions(plan, attempts, runtime);
     assertEquals(requests.length, shared ? 0 : 2);

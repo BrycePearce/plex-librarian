@@ -474,10 +474,6 @@ export class QbittorrentClient {
     }
   }
 
-  async discoveryHashes(): Promise<string[]> {
-    return (await this.discoverySummaries()).map((summary) => summary.hash);
-  }
-
   async deleteTorrent(
     hash: string,
     onResponse?: (

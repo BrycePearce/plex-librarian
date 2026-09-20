@@ -10,7 +10,7 @@ import {
 import { type SqliteClient, withTransaction } from '../../db/index.ts';
 import { ArrApiError } from '../../integrations/arr/client.ts';
 import { getArrDeleteTargets } from '../arr/delete.ts';
-import { assertVersionStorageEvidenceUnchanged } from '../mediaDeletion/versionStorageEvidence.ts';
+
 import { activeServerMatches } from './core/coordination.ts';
 import { isRetryableDeletionFailure } from './core/policy.ts';
 import { recoverInterruptedDeletionWork } from './core/recovery.ts';
@@ -329,91 +329,6 @@ export class DeletionConflictError extends Error {
   }
 }
 
-export function findRadarrMovieReservation(
-  serverId: number,
-  identities: readonly { arrInstanceId: number; movieId: number }[],
-): string | null {
-  return withTransaction((client) => {
-    for (const identity of identities) {
-      const row = client
-        .prepare(
-          `SELECT operation_id FROM radarr_movie_reservations
-         WHERE server_id = ? AND arr_instance_id = ? AND movie_id = ?`,
-        )
-        .value<[string]>(serverId, identity.arrInstanceId, identity.movieId);
-      if (row) return row[0];
-    }
-    return null;
-  });
-}
-
-export function locallyActiveServerId(): number | null {
-  return withTransaction(
-    (client) =>
-      client
-        .prepare('SELECT active_server_id FROM settings WHERE id = 1')
-        .value<[number | null]>()?.[0] ?? null,
-  );
-}
-
-export function findWarningOverlap(
-  serverId: number,
-  requestedKind: DeletionKind,
-  ratingKeys: readonly string[],
-  mediaIds: readonly number[] = [],
-): string | null {
-  const requestedMedia = new Set(mediaIds);
-  return withTransaction((client) => {
-    const requestedRoots = new Set(ratingKeys);
-    if (ratingKeys.length > 0) {
-      const placeholders = ratingKeys.map(() => '?').join(',');
-      for (
-        const [showRatingKey] of client
-          .prepare(
-            `SELECT DISTINCT show_rating_key FROM episode_media_versions
-           WHERE server_id = ? AND episode_rating_key IN (${placeholders})`,
-          )
-          .values<[string]>(serverId, ...ratingKeys)
-      ) {
-        requestedRoots.add(showRatingKey);
-      }
-    }
-    const rows = client
-      .prepare(
-        `SELECT t.operation_id, t.target_kind, t.snapshot
-       FROM deletion_targets t
-       JOIN deletion_operations o ON o.id = t.operation_id
-       WHERE o.server_id = ? AND t.status = 'completed_with_warning'`,
-      )
-      .values<[string, DeletionKind, string]>(serverId);
-    for (const [operationId, targetKind, rawSnapshot] of rows) {
-      const snapshot = JSON.parse(rawSnapshot) as {
-        ratingKey?: string;
-        showRatingKey?: string | null;
-        mediaId?: number;
-        arrReassignments?: Array<{ retainedMediaId?: number }>;
-      };
-      const warningRoots = [snapshot.ratingKey, snapshot.showRatingKey].filter(
-        (value): value is string => typeof value === 'string',
-      );
-      if (!warningRoots.some((root) => requestedRoots.has(root))) continue;
-      if (requestedKind === 'whole_item' || targetKind === 'whole_item') return operationId;
-      if (snapshot.mediaId !== undefined && requestedMedia.has(snapshot.mediaId)) {
-        return operationId;
-      }
-      if (
-        snapshot.arrReassignments?.some(
-          (entry) =>
-            entry.retainedMediaId !== undefined && requestedMedia.has(entry.retainedMediaId),
-        )
-      ) {
-        return operationId;
-      }
-    }
-    return null;
-  });
-}
-
 const RETRY_DELAYS = [60, 300, 1800];
 const PLEX_RETRY_DELAYS = [15, 60, 300];
 let workerRunning = false;
@@ -462,40 +377,6 @@ export async function repeatedDeletionOperation(
       throw new DeletionConflictError('clientRequestId was already used with a different request');
     }
     return { operationId: row[0], status: row[2], targetCount: row[3] };
-  });
-}
-
-export async function repeatedDeletionOperationBatch(
-  serverId: number,
-  clientRequestId: string,
-  payload: Record<string, unknown>,
-): Promise<{ operationIds: string[]; targetCount: number } | null> {
-  const hash = await requestHash(payload);
-  const prefix = `${clientRequestId}:`;
-  return withTransaction((client) => {
-    const rows = client
-      .prepare(
-        `SELECT id, client_request_id, request_hash, target_count
-       FROM deletion_operations
-       WHERE server_id = ? AND substr(client_request_id, 1, ?) = ?`,
-      )
-      .values<[string, string, string, number]>(serverId, prefix.length, prefix);
-    if (rows.length === 0) return null;
-    const indexed = rows
-      .map((row) => {
-        const suffix = row[1].slice(prefix.length);
-        if (!/^\d+$/.test(suffix) || row[2] !== hash) {
-          throw new DeletionConflictError(
-            'clientRequestId was already used with a different request',
-          );
-        }
-        return { row, index: Number(suffix) };
-      })
-      .sort((left, right) => left.index - right.index);
-    return {
-      operationIds: indexed.map(({ row }) => row[0]),
-      targetCount: indexed.reduce((total, { row }) => total + row[3], 0),
-    };
   });
 }
 
@@ -734,10 +615,7 @@ export async function enqueueDeletionOperations(
           409,
         );
       }
-      const storage = (target.snapshot as unknown as DurableTargetSnapshot).versionStorageEvidence;
-      if (storage) {
-        await assertVersionStorageEvidenceUnchanged(input.serverId, input.libraryKey, storage);
-      }
+
       if (
         target.snapshot.skipArrCoordination === true || currentLocationSnapshot(target.snapshot)
       ) {

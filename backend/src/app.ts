@@ -49,6 +49,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
           /^\/api\/duplicates\/(movies|episodes)\/[^/]+\/media(?:\/[^/]+)?$/.test(path)
         ) ||
       c.req.method === 'POST' && (
+          path === '/api/duplicates/smart-cleanup' ||
           /^\/api\/libraries\/[^/]+\/items\/download-cleanup-preview$/.test(path) ||
           /^\/api\/libraries\/[^/]+\/seasons\/[^/]+\/deletion(?:-preview)?$/.test(path) ||
           /^\/api\/duplicates\/(movies|episodes)\/[^/]+\/media\/deletion-preview$/.test(path) ||

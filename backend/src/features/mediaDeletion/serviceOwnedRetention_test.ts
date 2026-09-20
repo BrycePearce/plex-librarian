@@ -4,7 +4,6 @@ import {
   type ServiceOwnedAction,
   type ServiceOwnedEntry,
   type ServiceOwnedRetentionInput,
-  summarizeServiceOwnedRetention,
 } from './serviceOwnedRetention.ts';
 
 const entry = (path: string, id = path): ServiceOwnedEntry => ({ id, path });
@@ -81,18 +80,6 @@ Deno.test('Plex defaults on and each optional destination defaults unchecked', (
   );
 });
 
-Deno.test('complete absent or unconfigured QB does not block selected Plex and Arr', () => {
-  for (const qbInventory of ['complete', 'unconfigured'] as const) {
-    const q = { ...action('q', 'qb', [], true), presence: 'absent' as const };
-    const p = plan([action('p', 'plex'), action('s', 'sonarr', ['/s'], true), q], { qbInventory });
-    equal(states(p), { p: 'delete_candidate', s: 'delete_candidate', q: 'not_applicable' });
-    equal(
-      summarizeServiceOwnedRetention(p, { p: 'succeeded', s: 'succeeded' }).status,
-      'completed',
-    );
-  }
-});
-
 Deno.test('all selected destinations with complete effects are candidates', () => {
   equal(
     states(
@@ -105,36 +92,6 @@ Deno.test('all selected destinations with complete effects are candidates', () =
     ),
     { p: 'delete_candidate', s: 'delete_candidate', r: 'delete_candidate', q: 'delete_candidate' },
   );
-});
-
-Deno.test('retained QB vetoes Plex and Sonarr and cannot produce removal accounting', () => {
-  const p = plan([
-    action('p', 'plex', ['/same']),
-    action('s', 'sonarr', ['/same'], true),
-    action('q', 'qb', ['/same']),
-  ]);
-  equal(states(p), { p: 'kept', s: 'kept', q: 'kept' });
-  equal(summarizeServiceOwnedRetention(p, { p: 'succeeded', s: 'succeeded' }), {
-    status: 'completed_with_retention',
-    succeededActionIds: [],
-    keptActionIds: ['p', 's', 'q'],
-    plexRemovalActionIds: [],
-  });
-});
-
-Deno.test('trusted distinct-entry evidence permits separate Plex while Arr stays retained', () => {
-  const p = plan([action('p', 'plex'), action('s', 'sonarr', ['/q'], true), action('q', 'qb')], {
-    relationships: [distinct('/p', '/q')],
-  });
-  equal(states(p), { p: 'delete_candidate', s: 'kept', q: 'kept' });
-  equal(summarizeServiceOwnedRetention(p, { p: 'succeeded' }).plexRemovalActionIds, ['p']);
-});
-
-Deno.test('different retained file paths do not create a hypothetical alias hold', () => {
-  const p = plan([action('p', 'plex'), action('q', 'qb')]);
-  equal(states(p), { p: 'delete_candidate', q: 'kept' });
-  equal(p.authorizesDeletion, false);
-  equal(summarizeServiceOwnedRetention(p, { p: 'succeeded' }).status, 'completed_with_retention');
 });
 
 Deno.test('trusted alias relationship vetoes differently named Plex entry', () => {
@@ -208,25 +165,6 @@ Deno.test('unknown target and incomplete selected action effects are explicit ho
   equal(states(p), { p: 'held', s: 'held' });
 });
 
-Deno.test('held atomic actions retain their known effects and veto other actions', () => {
-  const p = plan([action('p', 'plex', ['/same']), {
-    ...action('s', 'sonarr', ['/same'], true),
-    effectsComplete: false,
-  }]);
-  equal(states(p), { p: 'kept', s: 'held' });
-  equal(summarizeServiceOwnedRetention(p, {}).status, 'needs_attention');
-});
-
-Deno.test('accepted and uncertain requests cannot report successful service deletion', () => {
-  const p = plan([action('q', 'qb', ['/q'], true)]);
-  for (const outcome of ['accepted', 'uncertain', 'failed'] as const) {
-    const result = summarizeServiceOwnedRetention(p, { q: outcome });
-    equal(result.status, outcome === 'accepted' ? 'pending' : 'needs_attention');
-    equal(result.succeededActionIds, []);
-  }
-  equal(summarizeServiceOwnedRetention(p, {}).status, 'pending');
-});
-
 Deno.test('rejects stale, contradictory and dangling relationship evidence', () => {
   const actions = [action('p', 'plex'), action('q', 'qb')];
   throws(() =>
@@ -294,12 +232,6 @@ Deno.test('canonical Windows drive and UNC paths conservatively compare case ins
   }
 });
 
-Deno.test('unknown unchecked QB cannot summarize as completed retention', () => {
-  const p = plan([{ ...action('q', 'qb', []), presence: 'unknown', effectsComplete: false }]);
-  equal(states(p), { q: 'held' });
-  equal(summarizeServiceOwnedRetention(p, {}).status, 'needs_attention');
-});
-
 Deno.test('Arr catalog-only actions have no file retention dependency', () => {
   const catalog = { ...action('r', 'radarr', [], true), catalogOnly: true as const };
   equal(states(plan([catalog], { qbInventory: 'failed' })), { r: 'delete_candidate' });
@@ -355,18 +287,6 @@ Deno.test('unresolved relationship follows an explicit alias component', () => {
     }],
   });
   equal(states(p), { p: 'held', alias: 'kept' });
-});
-
-Deno.test('complete mixed-owner torrent is kept without holding separate Plex deletion', () => {
-  for (const selected of [false, true]) {
-    const q = {
-      ...action('q', 'qb', ['/downloads/selected.mkv', '/downloads/other.mkv'], selected),
-      retainedOwnership: true as const,
-    };
-    const p = plan([action('p', 'plex', ['/library/selected.mkv']), q]);
-    equal(states(p), { p: 'delete_candidate', q: 'kept' });
-    equal(summarizeServiceOwnedRetention(p, { p: 'succeeded' }).status, 'completed_with_retention');
-  }
 });
 
 Deno.test('kept complete mixed-owner action retains its whole overlapping atomic scope', () => {

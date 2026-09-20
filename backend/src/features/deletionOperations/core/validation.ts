@@ -15,17 +15,13 @@ import type {
 } from '../../mediaDeletion/arrReassignmentPlanning/types.ts';
 import type { PersistedResolvedCleanupItem } from '../../mediaDeletion/cleanup.ts';
 import type { SonarrHistoricalPathPreview } from '@plex-librarian/shared/types.ts';
-import { normalizeRemoteAbsolute } from '../../mediaDeletion/hardlinks.ts';
+
 import { isStaleQuickCleanupCandidate } from '../../libraries/quickCleanup.ts';
-import { ordinaryPlanFingerprint } from '../../mediaDeletion/ordinaryPlanning.ts';
+
 import { serviceOwnedPlanFingerprint } from '../../mediaDeletion/serviceOwnedPlanning.ts';
-import {
-  assertVersionStorageEvidenceUnchanged,
-  type VersionStorageEvidence,
-} from '../../mediaDeletion/versionStorageEvidence.ts';
+
 import type { RelocationGuidance, RelocationSyncBarrier } from '../relocation/relocationModel.ts';
 import {
-  canonicalSeasonEpisodeEvidence,
   type DurableWholeSeasonRemoval,
   seasonEpisodeEvidenceOnlyDisappeared,
 } from '../../libraries/seasonRemovalPlanner.ts';
@@ -51,6 +47,7 @@ export interface DurableRetainedVersionSnapshot {
 }
 
 export interface DurableTargetSnapshot {
+  upgradeHold?: string;
   serviceOwnedVerificationRetries?: number;
   serviceOwnedVerificationProgress?: number;
   serviceOwnedPlan?: import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
@@ -58,10 +55,10 @@ export interface DurableTargetSnapshot {
     string,
     import('../workflow/serviceOwnedWorkflow.ts').ServiceOwnedAttempt
   >;
-  versionStorageEvidence?: VersionStorageEvidence;
+  versionStorageEvidence?: unknown;
   /** Observed service postconditions, separate from HTTP acceptance. No byte claim. */
   ordinaryJobOutcomes?: Record<string, { status: 'job_absent'; observedAt: number }>;
-  ordinaryPlan?: import('../../mediaDeletion/ordinaryPlanning.ts').OrdinaryDeletionPlan;
+  ordinaryPlan?: unknown;
   ordinaryReconciliations?: Record<
     string,
     {
@@ -168,23 +165,6 @@ export interface DurableTargetSnapshot {
 
 export class DeletionValidationError extends Error {}
 
-export async function assertWholeSeasonPlexEvidence(
-  client: PlexClient,
-  snapshot: DurableTargetSnapshot,
-): Promise<void> {
-  const accepted = snapshot.wholeSeasonRemoval;
-  if (!accepted || snapshot.type !== 'season') {
-    throw new DeletionValidationError('durable whole-season evidence is missing');
-  }
-  const current = await client.seasonDeletionEpisodes(snapshot.ratingKey);
-  if (
-    canonicalSeasonEpisodeEvidence(current) !==
-      canonicalSeasonEpisodeEvidence(accepted.plexEpisodes)
-  ) {
-    mismatch('Plex season episode membership');
-  }
-}
-
 export async function assertWholeSeasonPlexMembership(
   client: PlexClient,
   snapshot: DurableTargetSnapshot,
@@ -243,417 +223,13 @@ export function validateArrMonitoringEvidence(snapshot: DurableTargetSnapshot): 
       plan.arrSelected !== (snapshot.mode === 'coordinated') ||
       plan.qbSelected !== (snapshot.cleanupDownloads === true) || snapshot.ordinaryPlan ||
       snapshot.wholeItemDownloadCleanup || snapshot.seasonDownloadCleanup ||
-      snapshot.sonarrHistoricalPaths?.length
+      snapshot.sonarrHistoricalPaths?.length || snapshot.versionStorageEvidence
     ) {
       throw new DeletionValidationError('Accepted service-owned decisions are malformed or held');
     }
     return;
   }
-  if (snapshot.ordinaryPlan) {
-    const plan = snapshot.ordinaryPlan;
-    const { fingerprint, ...evidence } = plan;
-    if (
-      plan.policyVersion !== 2 || snapshot.mediaId !== undefined ||
-      plan.selection.ratingKey !== snapshot.ratingKey || plan.libraryKey !== snapshot.libraryKey ||
-      plan.arrSelected !== (snapshot.mode === 'coordinated') ||
-      plan.qbSelected !== (snapshot.cleanupDownloads === true) || !plan.plexFiles.length ||
-      fingerprint !== ordinaryPlanFingerprint(evidence) || snapshot.wholeItemDownloadCleanup ||
-      snapshot.seasonDownloadCleanup || snapshot.sonarrHistoricalPaths?.length
-    ) throw new DeletionValidationError('Accepted service-owned deletion evidence is malformed');
-    return;
-  }
-  if (currentLocationSnapshot(snapshot)) {
-    if (snapshot.sonarrHistoricalPaths !== undefined) {
-      throw new DeletionValidationError(
-        'current-location deletion cannot contain historical paths',
-      );
-    }
-    for (
-      const cleanup of [
-        snapshot.wholeItemDownloadCleanup,
-        snapshot.seasonDownloadCleanup,
-        snapshot.radarrRemovalDownloadCleanup,
-      ]
-    ) {
-      if (cleanup && (cleanup.sonarrReclamation !== undefined || cleanup.orphanFiles.length > 0)) {
-        throw new DeletionValidationError(
-          'current-location deletion cannot contain historical cleanup',
-        );
-      }
-    }
-  }
-  const cleanupSlots: Array<{
-    cleanup: PersistedResolvedCleanupItem | undefined;
-    wholeShowAllowed: boolean;
-  }> = [
-    {
-      cleanup: snapshot.wholeItemDownloadCleanup,
-      wholeShowAllowed: snapshot.type === 'show' && snapshot.mediaId === undefined &&
-        snapshot.seasonCleanup !== true && snapshot.cleanupDownloads === true &&
-        Number.isSafeInteger(snapshot.tvdbId) && snapshot.tvdbId! > 0,
-    },
-    { cleanup: snapshot.seasonDownloadCleanup, wholeShowAllowed: false },
-    { cleanup: snapshot.radarrRemovalDownloadCleanup, wholeShowAllowed: false },
-  ];
-  for (const { cleanup, wholeShowAllowed } of cleanupSlots) {
-    const containsWholeShow = cleanup?.downloadJobs.some((job) =>
-      job.authorizationMode === 'whole_show_hash'
-    ) ?? false;
-    if (
-      containsWholeShow &&
-      cleanup!.downloadJobs.some((job) => job.authorizationMode !== 'whole_show_hash')
-    ) throw new DeletionValidationError('durable whole-show download cleanup is malformed');
-    for (const job of cleanup?.downloadJobs ?? []) {
-      const mode = job.authorizationMode ?? 'manifest_paths';
-      if (mode !== 'manifest_paths' && mode !== 'whole_show_hash') {
-        throw new DeletionValidationError('durable download authorization mode is malformed');
-      }
-      if (mode !== 'whole_show_hash') continue;
-      const associations = job.sonarrAssociations;
-      const target = job.targetIdentity;
-      if (
-        !wholeShowAllowed || job.provenance !== 'arr_history' || job.provider !== 'qbittorrent' ||
-        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(job.jobId) ||
-        !target || target.provider !== 'qbittorrent' || target.provider !== job.provider ||
-        target.instanceKey !== job.instanceKey ||
-        target.instanceName !== job.instanceName ||
-        !Number.isSafeInteger(target.instanceId) || target.instanceId! <= 0 ||
-        typeof target.configurationIdentity !== 'string' || !target.configurationIdentity ||
-        !/^[a-f0-9]{64}$/.test(job.ownershipSummaryFingerprint ?? '') ||
-        !/^[a-f0-9]{64}$/.test(job.manifestFingerprint ?? '') ||
-        !Array.isArray(associations) || associations.length === 0 ||
-        new Set(
-            associations.map((entry) => `${entry?.instanceId}:${entry?.seriesId}:${entry?.hash}`),
-          ).size !== associations.length ||
-        associations.some((entry) =>
-          !entry || !Number.isSafeInteger(entry.instanceId) || entry.instanceId <= 0 ||
-          typeof entry.instanceUrl !== 'string' || !entry.instanceUrl ||
-          !Number.isSafeInteger(entry.configurationUpdatedAt) ||
-          entry.configurationUpdatedAt <= 0 || !Number.isSafeInteger(entry.seriesId) ||
-          entry.seriesId <= 0 || entry.hash !== job.jobId ||
-          !Array.isArray(entry.sourcePaths) || entry.sourcePaths.length === 0 ||
-          new Set(entry.sourcePaths).size !== entry.sourcePaths.length ||
-          entry.sourcePaths.some((path) =>
-            typeof path !== 'string' || normalizeRemoteAbsolute(path) === null
-          )
-        )
-      ) throw new DeletionValidationError('durable whole-show download cleanup is malformed');
-    }
-  }
-  const wholeItemCleanup = snapshot.wholeItemDownloadCleanup;
-  const hasWholeItemIntent = snapshot.cleanupDownloadRatingKeys !== undefined ||
-    wholeItemCleanup !== undefined;
-  if (hasWholeItemIntent) {
-    const selected = snapshot.selectedRatingKeys;
-    const cleanupSelected = snapshot.cleanupDownloadRatingKeys;
-    if (
-      !Array.isArray(selected) || !Array.isArray(cleanupSelected) ||
-      cleanupSelected.some((key) => typeof key !== 'string' || !selected.includes(key)) ||
-      JSON.stringify(cleanupSelected) !== JSON.stringify([...new Set(cleanupSelected)].sort()) ||
-      cleanupSelected.includes(snapshot.ratingKey) !== (snapshot.cleanupDownloads === true)
-    ) {
-      throw new DeletionValidationError('durable whole-item cleanup selection is malformed');
-    }
-  } else if (
-    snapshot.cleanupDownloads === true && snapshot.seasonCleanup !== true &&
-    snapshot.mediaId === undefined
-  ) {
-    throw new DeletionValidationError('durable whole-item cleanup selection is missing');
-  }
-  if (wholeItemCleanup !== undefined) {
-    if (wholeItemCleanup.sonarrReclamation?.proofs.length && snapshot.mode !== 'coordinated') {
-      throw new DeletionValidationError(
-        'durable Sonarr hardlink cleanup requires coordinated deletion',
-      );
-    }
-    if (
-      snapshot.mediaId !== undefined || snapshot.seasonCleanup === true ||
-      (snapshot.cleanupDownloads !== true && wholeItemCleanup.sonarrReclamation === undefined) ||
-      wholeItemCleanup.status !== 'resolved' ||
-      wholeItemCleanup.ratingKey !== snapshot.ratingKey ||
-      !Array.isArray(wholeItemCleanup.downloadJobs) ||
-      !Array.isArray(wholeItemCleanup.orphanFiles) ||
-      (wholeItemCleanup.downloadJobs.length === 0 && wholeItemCleanup.orphanFiles.length === 0 &&
-        wholeItemCleanup.sonarrReclamation === undefined) ||
-      (wholeItemCleanup.sonarrReclamation === undefined &&
-        wholeItemCleanup.downloadJobs.some((job) =>
-          job.provenance !== 'direct_manifest' && job.authorizationMode !== 'whole_show_hash'
-        ))
-    ) {
-      throw new DeletionValidationError('durable whole-item download cleanup is malformed');
-    }
-  } else if (
-    snapshot.mediaId === undefined && snapshot.seasonCleanup !== true &&
-    snapshot.cleanupDownloads === true
-  ) {
-    // Arr-history cleanup is intentionally re-resolved at execution time.
-  }
-  if (
-    snapshot.skipArrCoordination === true && snapshot.seasonCleanup !== true &&
-    (snapshot.type !== 'movie' || snapshot.cleanupDownloads === true ||
-      snapshot.arrReassignmentMappings !== undefined || snapshot.arrOwnerships !== undefined ||
-      snapshot.arrReassignments !== undefined || snapshot.radarrRemovalFallback !== undefined ||
-      snapshot.radarrRemovalDownloadCleanup !== undefined ||
-      snapshot.seasonSonarrInspection !== undefined ||
-      snapshot.seasonCoordinationOutcome !== undefined)
-  ) {
-    throw new DeletionValidationError('durable Plex-only movie intent is malformed');
-  }
-  if (
-    snapshot.seasonCleanup === true && snapshot.skipArrCoordination === true &&
-    snapshot.seasonSonarrInspection === undefined
-  ) {
-    throw new DeletionValidationError('durable Sonarr inspection guard is missing');
-  }
-  if (snapshot.seasonSonarrInspection !== undefined) {
-    const inspection = snapshot.seasonSonarrInspection;
-    const mappingInstanceIds = new Set(
-      Array.isArray(inspection.mappings)
-        ? inspection.mappings.map((mapping) => mapping?.instanceId)
-        : [],
-    );
-    const inspectedInstanceIds = inspection.inspectedInstanceIds ?? [];
-    if (
-      snapshot.seasonCleanup !== true || snapshot.skipArrCoordination !== true ||
-      !inspection || typeof inspection !== 'object' ||
-      !Array.isArray(inspection.mappings) ||
-      (inspection.inspectedInstanceIds !== undefined &&
-        (!Array.isArray(inspection.inspectedInstanceIds) ||
-          inspection.inspectedInstanceIds.some((id) => !Number.isSafeInteger(id) || id <= 0))) ||
-      new Set(inspectedInstanceIds).size !== inspectedInstanceIds.length ||
-      inspectedInstanceIds.some((id) => !mappingInstanceIds.has(id)) ||
-      !Array.isArray(inspection.managedSelectedMediaIds) ||
-      inspection.managedSelectedMediaIds.some((mediaId) => !Number.isSafeInteger(mediaId)) ||
-      snapshot.arrReassignmentMappings !== undefined || snapshot.arrOwnerships !== undefined ||
-      snapshot.seasonCoordinationOutcome !== undefined ||
-      inspection.mappings.some((entry) =>
-        !entry || entry.instanceType !== 'sonarr' ||
-        !Number.isSafeInteger(entry.instanceId) || entry.instanceId <= 0 ||
-        typeof entry.instanceUrl !== 'string' || !entry.instanceUrl ||
-        !Number.isSafeInteger(entry.configurationUpdatedAt) ||
-        typeof entry.mappingIdentity !== 'string' || !entry.mappingIdentity
-      )
-    ) {
-      throw new DeletionValidationError('durable Sonarr inspection guard is malformed');
-    }
-  }
-  if (snapshot.seasonCoordinationOutcome !== undefined) {
-    if (
-      !['plex_only', 'automatic_adoption', 'removed_and_unmonitored'].includes(
-        snapshot.seasonCoordinationOutcome,
-      ) ||
-      snapshot.seasonCleanup !== true || snapshot.skipArrCoordination === true ||
-      (snapshot.seasonCoordinationOutcome !== 'plex_only' &&
-        (typeof snapshot.seasonSonarrVersion !== 'string' || !snapshot.seasonSonarrVersion)) ||
-      !Array.isArray(snapshot.arrReassignmentMappings) || !Array.isArray(snapshot.arrOwnerships)
-    ) {
-      throw new DeletionValidationError('durable season coordination evidence is malformed');
-    }
-    if (
-      snapshot.seasonCoordinationOutcome === 'automatic_adoption' &&
-      (!Number.isSafeInteger(snapshot.seasonSelectedCandidateMediaId) ||
-        !Array.isArray(snapshot.seasonSafeCandidateMediaIds) ||
-        snapshot.seasonSafeCandidateMediaIds.length === 0 ||
-        snapshot.seasonSafeCandidateMediaIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
-        !snapshot.seasonSafeCandidateMediaIds.includes(snapshot.seasonSelectedCandidateMediaId!) ||
-        !snapshot.seasonPreDeletionPreflight ||
-        typeof snapshot.seasonPreDeletionPreflight.path !== 'string' ||
-        !Number.isSafeInteger(snapshot.seasonPreDeletionPreflight.size) ||
-        snapshot.seasonPreDeletionPreflight.size <= 0 ||
-        !Number.isSafeInteger(snapshot.seasonPreDeletionPreflight.seriesId) ||
-        snapshot.seasonPreDeletionPreflight.seriesId <= 0 ||
-        snapshot.seasonPreDeletionPreflight.seasonNumber !== snapshot.seasonIndex ||
-        !Array.isArray(snapshot.seasonPreDeletionPreflight.episodeIds) ||
-        snapshot.seasonPreDeletionPreflight.episodeIds.length !== 1 ||
-        snapshot.seasonPreDeletionPreflight.episodeIds.some((id) =>
-          !Number.isSafeInteger(id) || id <= 0
-        ) || !Array.isArray(snapshot.seasonPreDeletionPreflight.rejectionReasons) ||
-        snapshot.seasonPreDeletionPreflight.rejectionReasons.length > 0)
-    ) {
-      throw new DeletionValidationError('durable Sonarr adoption allowlist is malformed');
-    }
-    const breakGlass = snapshot.seasonBreakGlass;
-    if (
-      snapshot.seasonCoordinationOutcome === 'removed_and_unmonitored' &&
-      (!breakGlass ||
-        [
-          breakGlass.instanceId,
-          breakGlass.seriesId,
-          breakGlass.episodeId,
-          breakGlass.episodeFileId,
-          breakGlass.episodeFileSize,
-        ].some((value) => !Number.isSafeInteger(value) || value <= 0) ||
-        typeof breakGlass.episodeFilePath !== 'string' || !breakGlass.episodeFilePath ||
-        typeof breakGlass.originalMonitored !== 'boolean' ||
-        [
-          breakGlass.monitoringProtectedAt,
-          breakGlass.fileRemovalAttemptedAt,
-          breakGlass.fileRemovalConfirmedAt,
-          breakGlass.recoveryAcceptedAt,
-        ].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value <= 0)))
-    ) {
-      throw new DeletionValidationError('durable Sonarr break-glass evidence is malformed');
-    }
-  }
-  if (snapshot.seasonDownloadCleanup !== undefined) {
-    if (
-      !snapshot.seasonDownloadCleanup || typeof snapshot.seasonDownloadCleanup !== 'object' ||
-      (snapshot.cleanupDownloads !== true &&
-        snapshot.seasonDownloadCleanup.sonarrReclamation === undefined) ||
-      snapshot.seasonDownloadCleanup.status !== 'resolved' ||
-      snapshot.seasonDownloadCleanup.ratingKey !== snapshot.showRatingKey
-    ) {
-      throw new DeletionValidationError('durable season download cleanup evidence is malformed');
-    }
-  } else if (snapshot.seasonCleanup === true && snapshot.cleanupDownloads === true) {
-    throw new DeletionValidationError('durable season download cleanup evidence is missing');
-  }
-  const removal = snapshot.radarrRemovalFallback;
-  if (removal !== undefined) {
-    if (
-      !removal || removal.mode !== 'remove_from_radarr' ||
-      !Number.isSafeInteger(removal.arrInstanceId) || removal.arrInstanceId <= 0 ||
-      !Number.isSafeInteger(removal.arrConfigurationUpdatedAt) ||
-      typeof removal.arrMappingIdentity !== 'string' || !removal.arrMappingIdentity ||
-      !Number.isSafeInteger(removal.movieId) || removal.movieId <= 0 ||
-      !Number.isSafeInteger(removal.tmdbId) || removal.tmdbId <= 0 ||
-      removal.tmdbId !== snapshot.tmdbId ||
-      !Number.isSafeInteger(removal.selectedMediaId) ||
-      removal.selectedMediaId !== snapshot.mediaId ||
-      !Number.isSafeInteger(removal.retainedMediaId) ||
-      removal.retainedMediaId === removal.selectedMediaId ||
-      typeof removal.movieTitle !== 'string' || !removal.movieTitle ||
-      !Number.isSafeInteger(removal.movieYear) || removal.movieYear <= 0 ||
-      typeof removal.selectedPlexPath !== 'string' || !removal.selectedPlexPath ||
-      typeof removal.managedPath !== 'string' || !removal.managedPath ||
-      typeof removal.retainedPlexPath !== 'string' || !removal.retainedPlexPath ||
-      !Number.isSafeInteger(removal.retainedFileSize) || removal.retainedFileSize <= 0 ||
-      typeof removal.originalMoviePath !== 'string' || !removal.originalMoviePath ||
-      typeof removal.originalMonitored !== 'boolean' ||
-      removal.createImportExclusion !== true || removal.deleteFiles !== false ||
-      removal.addImportExclusion !== true || removal.userAuthorizedRadarrRemoval !== true ||
-      typeof removal.planFingerprint !== 'string' || !removal.planFingerprint
-    ) throw new DeletionValidationError('durable Radarr movie-removal evidence is malformed');
-    const mapping = snapshot.arrReassignmentMappings?.find(
-      (entry) => entry.instanceId === removal.arrInstanceId,
-    );
-    if (
-      !mapping || mapping.configurationUpdatedAt !== removal.arrConfigurationUpdatedAt ||
-      mapping.mappingIdentity !== removal.arrMappingIdentity
-    ) {
-      throw new DeletionValidationError(
-        'durable Radarr movie-removal mapping identity is inconsistent',
-      );
-    }
-  }
-  if (snapshot.arrReassignments === undefined) return;
-  if (!Array.isArray(snapshot.arrReassignments)) {
-    throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
-  }
-  for (const entry of snapshot.arrReassignments) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new DeletionValidationError('durable Arr reassignment evidence is malformed');
-    }
-    if (Object.hasOwn(entry, 'originalMonitored') && typeof entry.originalMonitored !== 'boolean') {
-      throw new DeletionValidationError('durable Arr monitoring evidence is malformed');
-    }
-    const sonarrTransition = entry.sonarrTransition;
-    const selectedSonarrCandidate = sonarrTransition?.candidateAllowlist.find((candidate) =>
-      candidate.mediaId === entry.retainedMediaId
-    );
-    const preDeletionPreflight = sonarrTransition?.preDeletionPreflight;
-    const rescanAuthorizedChanges = sonarrTransition?.rescanAuthorizedChanges;
-    if (
-      sonarrTransition !== undefined &&
-      (entry.instanceType !== 'sonarr' || !Array.isArray(sonarrTransition.candidateAllowlist) ||
-        sonarrTransition.candidateAllowlist.length === 0 ||
-        sonarrTransition.candidateAllowlist.some((candidate) =>
-          !Number.isSafeInteger(candidate.mediaId) || candidate.mediaId <= 0 ||
-          typeof candidate.path !== 'string' || !candidate.path ||
-          !Number.isSafeInteger(candidate.size) || candidate.size <= 0
-        ) ||
-        [
-          sonarrTransition.payloadProtectionAt,
-          sonarrTransition.oldFileRemovalConfirmedAt,
-          sonarrTransition.manualImportAttemptedAt,
-          sonarrTransition.manualImportRejectedAt,
-          sonarrTransition.rescanAuthorizedAt,
-          sonarrTransition.rescanAttemptedAt,
-        ].some((value) => value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) ||
-        (rescanAuthorizedChanges !== undefined &&
-          (!Array.isArray(rescanAuthorizedChanges) || rescanAuthorizedChanges.length === 0 ||
-            new Set(rescanAuthorizedChanges.map((change) => change.targetId)).size !==
-              rescanAuthorizedChanges.length ||
-            new Set(rescanAuthorizedChanges.map((change) => change.episodeId)).size !==
-              rescanAuthorizedChanges.length ||
-            rescanAuthorizedChanges.some((change) =>
-              !Number.isSafeInteger(change.targetId) || change.targetId <= 0 ||
-              !Number.isSafeInteger(change.episodeId) || change.episodeId <= 0 ||
-              !Number.isSafeInteger(change.oldFileId) || change.oldFileId < 0 ||
-              (change.restoredMonitored !== undefined &&
-                typeof change.restoredMonitored !== 'boolean') ||
-              !Array.isArray(change.candidates) || change.candidates.length === 0 ||
-              change.candidates.some((candidate) =>
-                !Number.isSafeInteger(candidate.mediaId) || candidate.mediaId <= 0 ||
-                typeof candidate.path !== 'string' || !candidate.path ||
-                !Number.isSafeInteger(candidate.size) || candidate.size <= 0
-              )
-            ))) ||
-        (snapshot.seasonCoordinationOutcome === 'automatic_adoption' &&
-          (JSON.stringify(preDeletionPreflight) !==
-              JSON.stringify(snapshot.seasonPreDeletionPreflight) ||
-            !selectedSonarrCandidate || !preDeletionPreflight ||
-            preDeletionPreflight.path !== selectedSonarrCandidate.path ||
-            preDeletionPreflight.size !== selectedSonarrCandidate.size ||
-            preDeletionPreflight.seriesId !== entry.recordId ||
-            preDeletionPreflight.seasonNumber !== snapshot.seasonIndex ||
-            preDeletionPreflight.episodeIds.length !== 1 ||
-            preDeletionPreflight.episodeIds[0] !== entry.episodeId)))
-    ) {
-      throw new DeletionValidationError('durable Sonarr transition evidence is malformed');
-    }
-    const plan = entry.radarrPathPlan;
-    if (plan === undefined) continue;
-    if (
-      entry.instanceType !== 'radarr' ||
-      !['existing_path', 'adopt_safe_path', 'adopt_path_with_consent'].includes(plan.mode) ||
-      !Number.isSafeInteger(plan.arrInstanceId) ||
-      plan.arrInstanceId !== entry.instanceId ||
-      !Number.isSafeInteger(plan.movieId) ||
-      plan.movieId !== entry.recordId ||
-      !Number.isSafeInteger(plan.retainedMediaId) ||
-      typeof plan.originalMoviePath !== 'string' ||
-      !plan.originalMoviePath ||
-      typeof plan.targetMoviePath !== 'string' ||
-      !plan.targetMoviePath ||
-      typeof plan.retainedPath !== 'string' ||
-      !plan.retainedPath ||
-      typeof plan.radarrVersion !== 'string' ||
-      !plan.radarrVersion ||
-      typeof plan.radarrBehaviorFingerprint !== 'string' ||
-      !plan.radarrBehaviorFingerprint ||
-      typeof plan.originalMovieFile?.id !== 'number' ||
-      typeof plan.originalMovieFile?.path !== 'string' ||
-      typeof plan.originalMovieFile?.relativePath !== 'string' ||
-      typeof plan.originalMovieFile?.size !== 'number' ||
-      plan.originalMovieFile.size <= 0 ||
-      !plan.namespaceEvidence?.selected ||
-      !plan.namespaceEvidence?.retained ||
-      !Array.isArray(plan.namespaceEvidence?.libraryLocations) ||
-      !plan.physicalIdentityEvidence
-    ) {
-      throw new DeletionValidationError('durable Radarr path-adoption evidence is malformed');
-    }
-    if (
-      plan.mode !== 'existing_path' &&
-      (typeof plan.planFingerprint !== 'string' || !plan.planFingerprint)
-    ) {
-      throw new DeletionValidationError('durable Radarr path-adoption fingerprint is missing');
-    }
-    if (plan.mode === 'adopt_path_with_consent' && plan.userAuthorizedPathManagement !== true) {
-      throw new DeletionValidationError('durable Radarr path-management consent is missing');
-    }
-  }
+  throw new DeletionValidationError(UPGRADE_RECOVERY_MESSAGE);
 }
 
 function normalized(value: string | null): string | null {
@@ -872,21 +448,6 @@ export async function validateDeletionTarget(
   }
   const snapshot = JSON.parse(target.snapshot) as DurableTargetSnapshot;
   validateArrMonitoringEvidence(snapshot);
-  if (snapshot.versionStorageEvidence) {
-    if (
-      target.targetKind !== 'episode_version' || snapshot.cleanupDownloads ||
-      snapshot.arrReassignments?.length || snapshot.seasonBreakGlass
-    ) {
-      throw new DeletionValidationError(
-        'Automatic version storage cannot authorize service cleanup',
-      );
-    }
-    await assertVersionStorageEvidenceUnchanged(
-      serverId,
-      snapshot.libraryKey,
-      snapshot.versionStorageEvidence,
-    );
-  }
   if (snapshot.serverUrl !== active.client.serverUrl) mismatch('Plex server address');
   if ((await active.client.identity()) !== snapshot.machineIdentifier) {
     mismatch('Plex machine identity');

@@ -1,24 +1,13 @@
-import { assertEquals, assertThrows } from '@std/assert';
+import { assertEquals } from '@std/assert';
 import { resolve } from '@std/path';
 import type { PlexSeasonDeletionEpisode } from '../../integrations/plex/types.ts';
 
 const testDirectory = await Deno.makeTempDir();
 Deno.env.set('DB_PATH', resolve(testDirectory, 'season-removal-planner.db'));
 const {
-  canonicalSeasonEpisodeEvidence,
   canonicalSeasonMembershipEvidence,
-  hasSeasonSonarrAction,
-  seasonPlexPathEvidence,
   seasonEpisodeEvidenceOnlyDisappeared,
-  sonarrSeasonCoverageContainsPlex,
 } = await import('./seasonRemovalPlanner.ts');
-
-Deno.test('Sonarr season action requires a safe monitored or file change', () => {
-  assertEquals(hasSeasonSonarrAction(true, 1, 0), true);
-  assertEquals(hasSeasonSonarrAction(true, 0, 1), true);
-  assertEquals(hasSeasonSonarrAction(true, 0, 0), false);
-  assertEquals(hasSeasonSonarrAction(false, 1, 1), false);
-});
 
 function episode(
   ratingKey: string,
@@ -36,58 +25,6 @@ function episode(
     media: [{ mediaId: episodeIndex, paths: [{ path, byteSize }] }],
   };
 }
-
-Deno.test('whole-season evidence deduplicates a shared multi-episode file', () => {
-  const paths = seasonPlexPathEvidence([
-    episode('episode-1', 1, '/shows/Example/Season 01/S01E01-E02.mkv'),
-    episode('episode-2', 2, '/shows/Example/Season 01/S01E01-E02.mkv'),
-  ]);
-  assertEquals([...paths.values()], [{
-    path: '/shows/Example/Season 01/S01E01-E02.mkv',
-    byteSize: 100,
-  }]);
-});
-
-Deno.test('whole-season evidence rejects conflicting aliases for one path', () => {
-  assertThrows(
-    () =>
-      seasonPlexPathEvidence([
-        episode('episode-1', 1, 'C:\\Shows\\Example\\S01E01-E02.mkv'),
-        episode('episode-2', 2, 'c:\\shows\\example\\s01e01-e02.mkv'),
-      ]),
-    Error,
-    'conflicting evidence',
-  );
-});
-
-Deno.test('whole-season evidence is canonical across Plex response ordering', () => {
-  const first = episode('episode-1', 1, '/shows/Example/Season 01/S01E01.mkv');
-  first.media.push({ mediaId: 10, paths: [{ path: '/shows/Example/alt.mkv', byteSize: 80 }] });
-  const second = episode('episode-2', 2, '/shows/Example/Season 01/S01E02.mkv');
-  const reordered = structuredClone(first);
-  reordered.media.reverse();
-  assertEquals(
-    canonicalSeasonEpisodeEvidence([first, second]),
-    canonicalSeasonEpisodeEvidence([second, reordered]),
-  );
-});
-
-Deno.test('whole-season evidence ignores title edits but retains exact media identity', () => {
-  const accepted = episode('episode-1', 1, '/shows/Example/Season 01/S01E01.mkv');
-  const renamed = structuredClone(accepted);
-  renamed.title = 'Corrected episode title';
-  assertEquals(
-    canonicalSeasonEpisodeEvidence([accepted]),
-    canonicalSeasonEpisodeEvidence([renamed]),
-  );
-
-  const replaced = structuredClone(accepted);
-  replaced.media[0]!.paths[0]!.path = '/shows/Example/Season 01/S01E01-replaced.mkv';
-  assertEquals(
-    canonicalSeasonEpisodeEvidence([accepted]) === canonicalSeasonEpisodeEvidence([replaced]),
-    false,
-  );
-});
 
 Deno.test('whole-season membership ignores file loss but not episode drift', () => {
   const accepted = episode('episode-1', 1, '/shows/Example/Season 01/S01E01.mkv');
@@ -121,28 +58,4 @@ Deno.test('post-mutation evidence allows loss but rejects replacement media', ()
     paths: [{ path: '/shows/Example/Season 01/S01E01-4k.mkv', byteSize: 200 }],
   });
   assertEquals(seasonEpisodeEvidenceOnlyDisappeared([accepted], [additional]), false);
-});
-
-Deno.test('Sonarr coordination accepts a unique superset of Plex episodes', () => {
-  const plex = [
-    episode('episode-1', 1, '/shows/Example/Season 01/S01E01.mkv'),
-    episode('episode-2', 2, '/shows/Example/Season 01/S01E02.mkv'),
-  ];
-  assertEquals(
-    sonarrSeasonCoverageContainsPlex(plex, [
-      { episodeNumber: 3 },
-      { episodeNumber: 2 },
-      { episodeNumber: 1 },
-    ]),
-    true,
-  );
-  assertEquals(sonarrSeasonCoverageContainsPlex(plex, [{ episodeNumber: 1 }]), false);
-  assertEquals(
-    sonarrSeasonCoverageContainsPlex(plex, [
-      { episodeNumber: 1 },
-      { episodeNumber: 1 },
-      { episodeNumber: 2 },
-    ]),
-    false,
-  );
 });

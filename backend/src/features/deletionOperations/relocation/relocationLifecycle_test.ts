@@ -4,14 +4,14 @@ import {
   type RelocationLifecycleEvidence,
   type RelocationLifecycleRow,
 } from './relocation.ts';
-import {
-  createRelocationGuidance,
-  RELOCATION_SUPERSEDED_REASON,
-  relocationManualReason,
-} from './relocationModel.ts';
+import { RELOCATION_SUPERSEDED_REASON, type RelocationGuidance } from './relocationModel.ts';
 
 const mappingIdentity = '{"addImportExclusion":true,"pathMappings":[]}';
-const guidance = createRelocationGuidance({
+const guidance: RelocationGuidance = {
+  schemaVersion: 1,
+  workflow: 'retained_version_relocation',
+  guidanceId: '00000000-0000-4000-8000-000000000001',
+  observedAt: 100,
   service: 'radarr',
   mediaType: 'movie',
   reason: 'retained_parent_mismatch',
@@ -30,7 +30,7 @@ const guidance = createRelocationGuidance({
   arrRecordId: 7,
   arrManagedFileId: 8,
   mappingIdentity,
-}, 100);
+};
 
 const snapshot = {
   type: 'movie',
@@ -57,7 +57,7 @@ function row(overrides: Partial<RelocationLifecycleRow> = {}): RelocationLifecyc
     phase: 'validating',
     plexAttemptCount: 0,
     removalConfirmedAt: null,
-    error: relocationManualReason(guidance),
+    error: 'Radarr can adopt the retained version only after the guided manual relocation',
     snapshot,
     ...overrides,
   };

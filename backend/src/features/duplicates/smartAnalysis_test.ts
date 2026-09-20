@@ -1,11 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { analyzeSmartDuplicateVersions } from '@plex-librarian/shared/smartDuplicateAnalysis.ts';
 import type { MediaVersion, SmartDuplicateCandidate } from '@plex-librarian/shared/types.ts';
-import {
-  isValidSmartCleanupSelection,
-  limitSmartDuplicateCandidates,
-  SMART_CLEANUP_GROUP_LIMIT,
-} from './smartAnalysis.ts';
+import { limitSmartDuplicateCandidates, SMART_CLEANUP_GROUP_LIMIT } from './smartAnalysis.ts';
 
 function version(
   mediaId: number,
@@ -227,30 +223,6 @@ Deno.test('smart analysis protects disjoint subtitle coverage', () => {
     ]),
     null,
   );
-});
-
-Deno.test('smart cleanup accepts a different version to keep but never every version', () => {
-  const versions = [version(1), version(2), version(3)];
-  const candidate: SmartDuplicateCandidate = {
-    mediaType: 'movie',
-    libraryKey: 'movies',
-    ratingKey: '10',
-    title: 'Movie',
-    context: null,
-    confidence: 'obvious',
-    keepMediaId: 3,
-    deleteMediaIds: [1, 2],
-    reclaimableSize: 10_000,
-    reasons: [],
-    versions,
-  };
-
-  assertEquals(isValidSmartCleanupSelection(candidate, [1, 2]), true);
-  assertEquals(isValidSmartCleanupSelection(candidate, [2, 3]), true);
-  assertEquals(isValidSmartCleanupSelection(candidate, [1, 2, 3]), false);
-  assertEquals(isValidSmartCleanupSelection(candidate, [1]), false);
-  assertEquals(isValidSmartCleanupSelection(candidate, [1, 99]), false);
-  assertEquals(isValidSmartCleanupSelection(candidate, [1, 1]), false);
 });
 
 Deno.test('smart cleanup caps an automatic pass and prioritizes actionable candidates', () => {

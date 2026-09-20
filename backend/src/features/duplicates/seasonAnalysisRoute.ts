@@ -11,9 +11,7 @@ import { analyzeSeasonVersionProfiles } from '@plex-librarian/shared/seasonVersi
 import { episodeRootIsWorkflowOwned } from '../deletionOperations/core/ownership.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import { enrichSeasonEpisodeEvidence, SMART_CLEANUP_DELETE_IDS_LIMIT } from './smartAnalysis.ts';
-import { resolveActiveServer } from '../../integrations/plex/index.ts';
-import { buildAuthoritativeSeasonPlan } from './seasonDeletionPlanner.ts';
-import { parseSeasonDeletionRequest, SeasonCleanupRequestError } from './seasonCleanupRoute.ts';
+
 import { getArrDeleteTargets } from '../arr/delete.ts';
 import { getDownloadClientTargets } from '../mediaDeletion/targets.ts';
 import { resolveDownloadCleanup } from '../mediaDeletion/cleanup.ts';
@@ -268,33 +266,6 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
       uncertainEpisodeRatingKeys: analysis.uncertainEpisodeRatingKeys,
     } satisfies SeasonVersionAnalysisResponse,
   );
-});
-
-router.post('/seasons/:seasonRatingKey/deletion-preview', async (c) => {
-  try {
-    const intent = parseSeasonDeletionRequest(
-      c.req.param('seasonRatingKey'),
-      await c.req.json().catch(() => null),
-      false,
-    );
-    const active = await resolveActiveServer();
-    const plan = await buildAuthoritativeSeasonPlan({
-      serverId: active.serverId,
-      machineIdentifier: await active.client.identity(),
-      plexClient: active.client,
-      seasonRatingKey: intent.seasonRatingKey,
-      selections: intent.selections,
-      inspectSonarr: true,
-      sonarrMode: intent.sonarrMode,
-      inspectDownloadCleanup: true,
-      cleanupDownloads: intent.cleanupDownloads,
-    });
-    return c.json(plan.preview);
-  } catch (error) {
-    return c.json({
-      error: error instanceof Error ? error.message : 'could not build season deletion preview',
-    }, error instanceof SeasonCleanupRequestError ? 400 : 409);
-  }
 });
 
 export default router;

@@ -1,84 +1,38 @@
 # Durable deletion architecture
 
-Deletion is intentionally a workflow, not a route-side side effect. The HTTP layer proves and
-snapshots an exact request, then the durable worker revalidates that evidence before each external
-mutation. This directory owns the durable operation lifecycle; `../mediaDeletion/` owns preview,
-current-path and download-client evidence used by that lifecycle.
+All new deletion work uses service-owned policy 4. The backend never deletes media
+through local filesystem access, host discovery, retained-version adoption, or the
+retired route adapters.
 
 ## Lifecycle
 
-1. A flow-specific preview resolves Plex, Arr, path-mapping, playback, and download evidence.
-2. The client submits the preview fingerprint and a `clientRequestId`.
-3. `middleware.ts` validates the request and snapshots ordered targets in one operation.
-4. The worker claims one target and calls `workflow/targetWorkflow.ts`.
-5. Execution revalidates the snapshot and writes an attempt marker before every destructive call.
-6. Exact postconditions reconcile successful, failed, timed-out, and lost-response calls.
-7. Only verified completion releases reservations and updates projections/accounting. Ambiguous
-   outcomes remain visible as `needs_attention`.
+1. POST /api/service-deletions/preview collects current title-scoped Plex, Arr and
+   qBittorrent evidence through mediaDeletion/serviceOwnedPlanning.ts.
+2. The client reviews exact service decisions and submits the fingerprint, explicit
+   destination choices and a clientRequestId to POST /api/service-deletions.
+3. serviceOwnedRoute.ts rechecks the preview and snapshots ordered durable targets.
+4. service.ts claims a target. workflow/targetWorkflow.ts accepts only current
+   service-owned evidence and acquires the library operation lock.
+5. workflow/serviceOwnedWorkflow.ts revalidates ownership, records intent before
+   mutation, and verifies service-specific completion without replaying uncertainty.
+6. workflow/plexReconciliation.ts preserves retained Plex catalog entries and only
+   records removal accounting supported by confirmed outcomes.
 
-Retries resume from durable evidence. They must never infer success merely because a path, Arr
-record, download job, or Plex version is currently absent; the corresponding attempt and exact
-postcondition must make that absence attributable.
+Duplicate Quick Cleanup uses these same endpoints and review, in bounded batches.
+Old mutation and preview URLs return 410 so stale clients must obtain a new review.
 
-## TV flows in scope
+## Safety and stored history
 
-The current-location policy covers these four TV flows:
+- Plex is selected by default. Arr and qBittorrent are explicit optional choices.
+- Retained qBittorrent ownership vetoes overlapping actions, including Plex.
+- Failed reads are never absence. Request acceptance is not completion.
+- A retry must preserve immutable accepted evidence and never replay an uncertain
+  destructive attempt. Current playback, identity and remaining versions are checked.
+- Pre-policy-4 unfinished snapshots remain held for manual recovery. Attempt records,
+  reservations, schema and historical outcome readers are retained; executable legacy
+  deletion and adoption implementations are removed. Only work with no external or
+  uncertain attempt evidence can be cancelled through the upgrade hold.
+- Migration files describe existing installations and must remain intact.
 
-| Flow              | Durable target                | Planner / preview                                   |
-| ----------------- | ----------------------------- | --------------------------------------------------- |
-| Whole show        | whole item                    | `../mediaDeletion/previewRoute.ts`, `middleware.ts` |
-| Stale season      | whole season                  | `../libraries/seasonRemovalPlanner.ts`              |
-| Duplicate episode | media version                 | `../mediaDeletion/versionPlanning.ts`               |
-| Duplicate season  | ordered media-version targets | `../duplicates/seasonDeletionPlanner.ts`            |
-
-Each flow retains its own
-eligibility, remaining-version, season-membership, active-playback, and Arr-monitoring safeguards.
-
-## Safety invariants
-
-- New fingerprints and snapshots carry `currentLocationPolicyVersion`. Historical import paths
-  never authorize a new filesystem target. Arr history remains association evidence for current
-  download jobs; their live locations and full manifests must still pass ownership checks.
-- Legacy unfinished targets are upgrade-held before recovery, claiming, retry, and reconciliation.
-  Only explicitly upgrade-held targets without external or uncertain attempt evidence may be
-  cancelled; their reservations are released in the same transaction. Attempted work retains its
-  snapshots, attempt records and reservations for manual service outcome and monitoring recovery.
-  Completed legacy audit records are preserved. No legacy deletion or historical unlink is replayed.
-- Accepted ownership is immutable evidence. Live revalidation may downgrade an accepted path to
-  retained/unverified; it may not add a new destructive path.
-- Plex, Sonarr, qBittorrent, and local/container paths are separate namespaces. Cross-namespace
-  comparisons require the snapshotted mapping identities.
-- Map every connected qBittorrent instance's bounded live content catalog into the local namespace,
-  using hash-ordered pages and streaming fingerprints, then inspect manifests for intersecting jobs.
-  Library paths need no hypothetical QB mapping. Linux mount roots/device identities recognize bind
-  aliases, including nested mounts; conflicting stacked mounts fail closed. Case-folded identity is
-  a conservative veto only, never payload authority. Selected local deletion paths must exist before
-  mutation. Final Plex reconciliation may resolve an already-removed suffix beneath its
-  still-accessible mapped root after accepted Arr/download cleanup or an earlier Plex attempt.
-  Unmapped live download locations or failed catalog inspection mean unknown ownership and block
-  the affected mutation. Apply this even when QB is unchecked.
-- TV paths pass `livePathProtection.ts`. Preview checks use only
-  explicitly authorized cleanup job keys; immediately before Sonarr/Plex deletion, any remaining
-  live owner vetoes the mutation. Folder checks include contained torrent entries. No connected
-  download client means no ownership veto. This does not change movie/Radarr deletion policy.
-- A selected qBittorrent payload shared by season targets is coordinated once. Every sibling whose
-  retained copy depends on it must be protected before payload deletion.
-- Mutation order and attempt markers are correctness boundaries. Preserve them during refactors.
-- Recovery guidance is not authorization. Manual recovery endpoints still revalidate exact state.
-
-## Module map
-
-- `core/` — durable state, validation, ownership policy, coordination, and recovery primitives.
-- `arr/` — Sonarr/Radarr reassignment, removal, monitoring, rescan, and transition persistence.
-- `workflow/` — target execution and Plex reconciliation orchestration.
-- `recovery/` — explicit recovery workflows exposed for attention states.
-- `relocation/` — durable Radarr relocation state and resolution.
-- `middleware.ts` — destructive-route adapter, request validation, snapshotting, and enqueueing.
-- `service.ts` — operation persistence, claiming, retry, cancellation, and finalization.
-- `../mediaDeletion/cleanup/` — cleanup-domain types; `cleanup.ts` remains the stable public facade.
-- `../mediaDeletion/sonarr/` — Sonarr inventory, season inspection, ownership classification, and
-  season download-cleanup planning.
-- `../mediaDeletion/hardlinks.ts` and `pathNamespace.ts` — filesystem identity and namespace proofs.
-
-When changing a safety decision, add a focused unit test beside the deciding module and an
-integration test covering the affected durable flow. Run `deno task verify` on Linux before merge.
+Current API, worker, retention and integration tests cover service-owned execution;
+upgrade-policy tests cover refusal to execute old persisted requests.

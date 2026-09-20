@@ -35,8 +35,6 @@ export interface RadarrMovieRelocationCandidate {
   mappingIdentity: string;
 }
 
-export type RelocationCandidate = RadarrMovieRelocationCandidate;
-
 export interface RadarrMovieRelocationGuidanceV1 extends RadarrMovieRelocationCandidate {
   schemaVersion: 1;
   workflow: 'retained_version_relocation';
@@ -45,15 +43,6 @@ export interface RadarrMovieRelocationGuidanceV1 extends RadarrMovieRelocationCa
 }
 
 export type RelocationGuidance = RadarrMovieRelocationGuidanceV1;
-
-export function relocationManualReason(
-  value: RelocationCandidate | RelocationGuidance,
-): string {
-  switch (value.service) {
-    case 'radarr':
-      return 'Radarr can adopt the retained version only after the guided manual relocation';
-  }
-}
 
 export interface IncompleteRelocationSyncBarrier {
   guidanceId: string;
@@ -298,49 +287,6 @@ export function deriveRelocationNamespace(
     selectedArrPath: normalizeRemoteAbsolute(selectedArrPath)!.path,
     sourceArrPath: normalizeRemoteAbsolute(sourceArrPath)!.path,
     destinationPlexPath: [...destinations.values()][0]!,
-  };
-}
-
-export function createRelocationGuidance(
-  candidate: RelocationCandidate,
-  now = Math.floor(Date.now() / 1000),
-): RelocationGuidance {
-  const namespace = deriveRelocationNamespace(
-    candidate.mappingIdentity,
-    candidate.selectedPlexPath,
-    candidate.retainedPlexPath,
-    candidate.destinationArrPath,
-  );
-  if (
-    !namespace || !samePath(namespace.selectedArrPath, candidate.selectedArrPath) ||
-    !samePath(namespace.sourceArrPath, candidate.sourceArrPath) ||
-    !samePath(namespace.destinationPlexPath, candidate.destinationPlexPath)
-  ) {
-    throw new Error('Relocation candidate path evidence is inconsistent');
-  }
-  return {
-    schemaVersion: 1,
-    workflow: 'retained_version_relocation',
-    service: candidate.service,
-    mediaType: candidate.mediaType,
-    reason: candidate.reason,
-    guidanceId: crypto.randomUUID(),
-    selectedMediaId: candidate.selectedMediaId,
-    selectedPlexPath: candidate.selectedPlexPath,
-    selectedArrPath: normalizeRemoteAbsolute(candidate.selectedArrPath)!.path,
-    retainedMediaId: candidate.retainedMediaId,
-    retainedPlexPath: candidate.retainedPlexPath,
-    retainedFileSize: candidate.retainedFileSize,
-    managedDirectoryPath: normalizeRemoteAbsolute(candidate.managedDirectoryPath)!.path,
-    sourceArrPath: normalizeRemoteAbsolute(candidate.sourceArrPath)!.path,
-    destinationArrPath: normalizeRemoteAbsolute(candidate.destinationArrPath)!.path,
-    destinationPlexPath: normalizeRemoteAbsolute(candidate.destinationPlexPath)!.path,
-    arrInstanceId: candidate.arrInstanceId,
-    arrInstanceName: candidate.arrInstanceName.slice(0, MAX_INSTANCE_NAME_LENGTH),
-    arrRecordId: candidate.arrRecordId,
-    arrManagedFileId: candidate.arrManagedFileId,
-    mappingIdentity: candidate.mappingIdentity,
-    observedAt: now,
   };
 }
 

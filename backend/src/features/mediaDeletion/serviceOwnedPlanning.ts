@@ -3,7 +3,15 @@ import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { PlexMetadataIdentity } from '../../integrations/plex/types.ts';
 import type { ArrTorrentAssociation } from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
-import type { OrdinarySelection } from './ordinaryPlanning.ts';
+interface ServiceOwnedSelection {
+  title: string;
+  type: string;
+  tmdbId: number | null;
+  tvdbId: number | null;
+  ratingKey: string;
+  showRatingKey?: string;
+  seasonIndex?: number;
+}
 import type { DownloadClientTarget, DownloadJob, DownloadJobSummary } from './downloadClient.ts';
 import type { ServiceStorageEndpoint } from '../../../../shared/serviceStorage.ts';
 import {
@@ -52,7 +60,7 @@ export interface ServiceOwnedPlan {
   confidencePolicy?: 'service-owned-reasonable-v1';
   serverId: number;
   libraryKey: string;
-  selection: OrdinarySelection & { mediaId?: number; episodeIndex?: number };
+  selection: ServiceOwnedSelection & { mediaId?: number; episodeIndex?: number };
   arrSelected: boolean;
   qbSelected: boolean;
   connections: Array<{ key: string; configurationIdentity: string }>;

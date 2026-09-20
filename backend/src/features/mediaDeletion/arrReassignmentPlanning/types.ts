@@ -1,4 +1,3 @@
-import type { RadarrPathAdoptionPreview } from '@plex-librarian/shared/types.ts';
 import type { ArrDeleteTarget } from '../../arr/delete.ts';
 import type {
   PersistedPathNamespaceEvidence,
@@ -167,17 +166,4 @@ export interface PersistedArrOwnership {
   managedFileId: number | null;
   managedPath: string | null;
   managedMediaId: number | null;
-}
-
-export interface ArrReassignmentPlanningResult {
-  eligibleArrReassignments: EligibleArrReassignment[];
-  arrMappingIdentities: PersistedArrMappingIdentity[];
-  arrOwnerships: PersistedArrOwnership[];
-  arrOwnershipValid: boolean;
-  arrOwnershipReason?: string;
-  arrManagedMediaIds: number[];
-  arrReassignCandidateMediaIds: number[];
-  arrReassignStatus: 'resolved' | 'unavailable' | 'error';
-  arrReassignReason?: string;
-  radarrPathAdoption: RadarrPathAdoptionPreview;
 }

@@ -149,13 +149,6 @@ async function enrichThinDuplicateGroups(
   );
 }
 
-export async function enrichEpisodeTechnicalDetails(
-  serverId: number,
-  episodeVersions: Map<string, EpisodeVersionRow[]>,
-): Promise<void> {
-  await enrichThinDuplicateGroups(serverId, new Map(), episodeVersions);
-}
-
 /**
  * Refresh every episode in a bounded season review and return its live path hints.
  * Paths help match release families across a season, but remain non-authoritative:
@@ -210,16 +203,6 @@ export async function enrichSeasonEpisodeEvidence(
     ),
   );
   return evidence;
-}
-
-export function isValidSmartCleanupSelection(
-  candidate: SmartDuplicateCandidate,
-  deleteMediaIds: readonly number[],
-): boolean {
-  const candidateMediaIds = new Set(candidate.versions.map((version) => version.mediaId));
-  return deleteMediaIds.length === candidate.versions.length - 1 &&
-    new Set(deleteMediaIds).size === deleteMediaIds.length &&
-    deleteMediaIds.every((mediaId) => candidateMediaIds.has(mediaId));
 }
 
 export function limitSmartDuplicateCandidates(

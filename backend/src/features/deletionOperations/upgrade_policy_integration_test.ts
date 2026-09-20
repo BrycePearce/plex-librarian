@@ -18,9 +18,10 @@ const {
   setAutomaticDeletionWorkerForTest,
   repeatedDeletionOperation,
 } = await import('./service.ts');
-const { holdLegacyDeletionTargets, upgradeTargetCanCancel } = await import(
-  './core/upgradePolicy.ts'
-);
+const { holdLegacyDeletionTargets, upgradeTargetCanCancel, UPGRADE_RECOVERY_MESSAGE } =
+  await import(
+    './core/upgradePolicy.ts'
+  );
 const { recoverInterruptedDeletionWork } = await import('./core/recovery.ts');
 const { ensureDeletionTarget } = await import('./workflow/targetWorkflow.ts');
 const { validateArrMonitoringEvidence } = await import('./core/validation.ts');
@@ -182,7 +183,7 @@ Deno.test('legacy upgrade gates every replay and cancels only mutation-free targ
   assertEquals(await Deno.readTextFile(historicalFile), 'preserve historical bytes');
 });
 
-Deno.test('current snapshots reject every historical cleanup slot', () => {
+Deno.test('snapshots without service-owned plans reject every historical cleanup slot', () => {
   for (
     const slot of [
       'wholeItemDownloadCleanup',
@@ -206,7 +207,7 @@ Deno.test('current snapshots reject every historical cleanup slot', () => {
             } as unknown as Parameters<typeof validateArrMonitoringEvidence>[0],
           ),
         Error,
-        'historical cleanup',
+        UPGRADE_RECOVERY_MESSAGE,
       );
     }
   }
@@ -392,7 +393,7 @@ Deno.test('retirement mode holds current-location legacy versions and ordinary p
         "INSERT INTO media_version_reservations (server_id,media_kind,media_id,rating_key,operation_id,target_id,created_at) VALUES (1,'movie',?,?,?,?,1)",
       ).run(id, operation, operation, id);
     }
-    holdLegacyDeletionTargets(client, 300, false);
+    holdLegacyDeletionTargets(client, 300);
     assertEquals(
       client.prepare('SELECT status FROM deletion_targets WHERE id>=200 ORDER BY id').values(),
       variants.map(() => ['needs_attention']),
@@ -430,7 +431,7 @@ Deno.test('retirement mode holds current-location legacy versions and ordinary p
   );
 });
 
-Deno.test('retirement mode leaves current service-owned work eligible', () => {
+Deno.test('upgrade holds leave current service-owned work eligible', () => {
   withTransaction((client) => {
     client.prepare(
       "INSERT INTO deletion_operations (id,client_request_id,request_hash,server_id,library_key,kind,status,target_count,created_at,updated_at) VALUES ('current-retirement','current-retirement','current-retirement',1,'movies','movie_version','queued',1,1,1)",
@@ -444,7 +445,7 @@ Deno.test('retirement mode leaves current service-owned work eligible', () => {
     client.prepare(
       "INSERT INTO deletion_targets (id,operation_id,ordinal,target_kind,target_key,title,snapshot,status,phase,created_at,updated_at) VALUES (400,'current-retirement',0,'movie_version','current-retirement','Current',?,'queued','validating',1,1)",
     ).run(snapshot);
-    holdLegacyDeletionTargets(client, 400, false);
+    holdLegacyDeletionTargets(client, 400);
     assertEquals(
       client.prepare('SELECT status,snapshot FROM deletion_targets WHERE id=400').value(),
       ['queued', snapshot],

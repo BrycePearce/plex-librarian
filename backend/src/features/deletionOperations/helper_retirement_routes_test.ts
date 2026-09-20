@@ -26,6 +26,7 @@ Deno.test('retired helper and legacy deletion routes reject before reading servi
     ['POST', '/api/duplicates/episodes/1/media/deletion-preview'],
     ['POST', '/api/duplicates/seasons/1/deletion-preview'],
     ['POST', '/api/duplicates/seasons/1/cleanup'],
+    ['POST', '/api/duplicates/smart-cleanup'],
     ['POST', '/api/deletion-operations/old/resolve'],
     ['POST', '/api/deletion-operations/old/targets/1/accept-removed-unmonitored'],
     ['POST', '/api/deletion-operations/old/targets/1/retry-sonarr-reassignment'],

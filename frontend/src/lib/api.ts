@@ -53,7 +53,6 @@ import type {
   SharingRiskTrendResponse,
   ShowDetail,
   SmartDuplicateAnalysisResponse,
-  SmartDuplicateCleanupResponse,
   StaleQuickCleanupOrder,
   StaleQuickCleanupResponse,
   StaleQuickCleanupSort,
@@ -434,23 +433,6 @@ export const api = {
       apiFetch<SmartDuplicateAnalysisResponse>("/duplicates/smart-analysis", {
         method: "POST",
         body: JSON.stringify(options),
-      }),
-    smartCleanup: (
-      clientRequestId: string,
-      selections: Array<{
-        mediaType: "movie" | "episode";
-        ratingKey: string;
-        deleteMediaIds: number[];
-      }>,
-      includeNearIdentical: boolean,
-    ) =>
-      apiFetch<SmartDuplicateCleanupResponse>("/duplicates/smart-cleanup", {
-        method: "POST",
-        body: JSON.stringify({
-          clientRequestId,
-          selections,
-          includeNearIdentical,
-        }),
       }),
     seasonCleanup: (
       seasonRatingKey: string,

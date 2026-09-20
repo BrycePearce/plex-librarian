@@ -328,33 +328,3 @@ export function planServiceOwnedRetention(input: ServiceOwnedRetentionInput) {
 }
 
 export type ServiceOwnedRetentionPlan = ReturnType<typeof planServiceOwnedRetention>;
-export type ServiceOwnedActionOutcome = 'succeeded' | 'accepted' | 'failed' | 'uncertain';
-
-/** HTTP acceptance and job disappearance alone are not a confirmed service-specific postcondition. */
-export function summarizeServiceOwnedRetention(
-  plan: ServiceOwnedRetentionPlan,
-  outcomes: Readonly<Record<string, ServiceOwnedActionOutcome>>,
-) {
-  const candidates = plan.decisions.filter((d) => d.state === 'delete_candidate');
-  const keptActionIds = plan.decisions.filter((d) => d.state === 'kept').map((d) => d.actionId);
-  const succeeded = candidates.filter((d) => outcomes[d.actionId] === 'succeeded');
-  const trouble = plan.decisions.some((d) => d.state === 'held') ||
-    candidates.some((d) =>
-      outcomes[d.actionId] === 'failed' || outcomes[d.actionId] === 'uncertain'
-    );
-  const pending = candidates.some((d) =>
-    outcomes[d.actionId] === undefined || outcomes[d.actionId] === 'accepted'
-  );
-  return {
-    status: trouble
-      ? 'needs_attention'
-      : pending
-      ? 'pending'
-      : keptActionIds.length
-      ? 'completed_with_retention'
-      : 'completed',
-    succeededActionIds: succeeded.map((d) => d.actionId),
-    keptActionIds,
-    plexRemovalActionIds: succeeded.filter((d) => d.service === 'plex').map((d) => d.actionId),
-  };
-}

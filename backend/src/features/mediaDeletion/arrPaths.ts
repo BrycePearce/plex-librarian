@@ -69,10 +69,6 @@ export function resolveArrPath(
   return candidates.size === 1 ? [...candidates.values()][0]! : null;
 }
 
-export function arrPathIsWithin(path: string, root: string): boolean {
-  return remoteWithin(root, path);
-}
-
 export function arrDirname(path: string): string | null {
   const normalized = normalizeRemoteAbsolute(path);
   if (!normalized) return null;

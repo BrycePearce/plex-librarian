@@ -243,14 +243,6 @@ export function hasIncompleteRelocationBarrier(
   );
 }
 
-export function assertRelocationBarrierClear(serverId: number, libraryKey: string): void {
-  if (withTransaction((client) => hasIncompleteRelocationBarrier(client, serverId, libraryKey))) {
-    throw new RelocationConflictError(
-      'A targeted library sync is required to finish retained-version relocation before cleanup can continue',
-    );
-  }
-}
-
 export function hasBlockingRelocationGuidance(
   client: SqliteClient,
   serverId: number,
