@@ -56,6 +56,8 @@ export interface ServiceOwnedPlannedAction extends ServiceOwnedAction {
 }
 
 export interface ServiceOwnedPlan {
+  /** Bounded ownership paths for optional historical cleanup, not additional service actions. */
+  historicalRetainedEntries?: ServiceOwnedEntry[];
   policyVersion: 4;
   confidencePolicy?: 'service-owned-reasonable-v1';
   serverId: number;
@@ -118,8 +120,9 @@ export function serviceOwnedFingerprint(value: unknown): string {
   return createHash('sha256').update(stable(value)).digest('hex');
 }
 export function serviceOwnedPlanFingerprint(plan: Omit<ServiceOwnedPlan, 'fingerprint'>): string {
+  const { historicalRetainedEntries: _historical, ...servicePlan } = plan;
   return serviceOwnedFingerprint({
-    ...plan,
+    ...servicePlan,
     actions: plan.actions.map(serviceOwnedActionEvidence),
   });
 }
@@ -1112,6 +1115,7 @@ export async function buildServiceOwnedPlan(
     qbInventory,
   });
   const plan: Omit<ServiceOwnedPlan, 'fingerprint'> = {
+    historicalRetainedEntries: [...retainedEntries.values()],
     policyVersion: 4,
     confidencePolicy: 'service-owned-reasonable-v1',
     serverId: input.serverId,

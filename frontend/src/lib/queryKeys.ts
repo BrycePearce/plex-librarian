@@ -2,6 +2,7 @@
 // on them. Keep their string roots and common key shapes in this one registry.
 const roots = {
   auth: "auth",
+  historicalDownloadAccess: "historical-download-access",
   libraries: "libraries",
   sync: "sync",
   stale: "stale",
@@ -24,6 +25,7 @@ const roots = {
 } as const;
 
 export const queryKeys = {
+  historicalDownloadAccess: { all: [roots.historicalDownloadAccess] as const },
   auth: {
     all: [roots.auth] as const,
     status: [roots.auth, "status"] as const,
@@ -144,6 +146,7 @@ type QueryRootPolicy =
 // wide. Removal history and qBittorrent configuration are server-scoped, but a Plex
 // sync cannot change them.
 const rootPolicies = {
+  historicalDownloadAccess: { serverScoped: true, syncDerived: true },
   auth: { serverScoped: false, syncDerived: false },
   libraries: { serverScoped: true, syncDerived: true },
   sync: { serverScoped: true, syncDerived: true },

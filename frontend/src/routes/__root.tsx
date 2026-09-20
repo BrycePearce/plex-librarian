@@ -9,6 +9,7 @@ import { DeletionOperationCoordinator } from "../features/deletionOperations/Del
 import { DisconnectTransitionProvider } from "../features/auth/DisconnectTransition.tsx";
 import { IntegrationCompatibilityBanner } from "../features/integrationCompatibility/IntegrationCompatibilityBanner.tsx";
 import "./__root.css";
+import { HistoricalDownloadAccessBanner } from "../features/arr/HistoricalDownloadAccess.tsx";
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -54,6 +55,7 @@ function RootLayout() {
           <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">
             <div className="flex flex-col flex-1">
               <IntegrationCompatibilityBanner />
+              <HistoricalDownloadAccessBanner />
               <Outlet />
             </div>
           </div>

@@ -29,6 +29,7 @@ import {
   validateArrMonitoringEvidence,
 } from './core/validation.ts';
 import { ensureDeletionTarget } from './workflow/targetWorkflow.ts';
+import type { AcceptedHistoricalDownload } from '../mediaDeletion/historicalDownloadPlanning.ts';
 import { isRelocationSupersededTarget } from './relocation/relocationModel.ts';
 import {
   classifyRelocationLifecycle,
@@ -68,6 +69,7 @@ export interface NewDeletionTarget {
 }
 
 export interface NewDeletionOperation {
+  historicalDownloads?: AcceptedHistoricalDownload[];
   clientRequestId: string;
   serverId: number;
   libraryKey: string;
@@ -821,6 +823,28 @@ export async function enqueueDeletionOperations(
             );
         }
       }
+      for (const candidate of input.historicalDownloads ?? []) {
+        const journalId = `${operationId}:${candidate.id}`;
+        client.prepare(
+          'INSERT INTO historical_download_journal(id,operation_id,entry,evidence,status) VALUES(?,?,?,?,?)',
+        )
+          .run(
+            journalId,
+            operationId,
+            candidate.filesystem.entry,
+            JSON.stringify(candidate),
+            'pending',
+          );
+        try {
+          client.prepare(
+            'INSERT INTO historical_download_reservations(entry,journal_id) VALUES(?,?)',
+          ).run(candidate.filesystem.entry, journalId);
+        } catch {
+          throw new DeletionConflictError(
+            'A history-linked download entry is reserved by another operation',
+          );
+        }
+      }
       results.push({ operationId, status: 'queued' });
     }
     return results;
@@ -1165,6 +1189,20 @@ export function getDeletionOperation(id: string, serverId: number): Record<strin
       'updatedAt',
     ];
     const result = Object.fromEntries(keys.map((key, index) => [key, row[index]]));
+    result.optionalWarningCount = client.prepare(
+      "SELECT COUNT(*) FROM historical_download_journal WHERE operation_id=? AND status IN ('changed','skipped','failed','uncertain')",
+    ).value<[number]>(id)?.[0] ?? 0;
+    result.historicalDownloads = client.prepare(
+      'SELECT evidence,status,reason,CAST(intent_at AS REAL),CAST(finished_at AS REAL) FROM historical_download_journal WHERE operation_id=? ORDER BY id',
+    ).values<[string, string, string | null, number | null, number | null]>(id)
+      .map(([evidence, status, reason, intentAt, finishedAt]) => {
+        let path = 'Unavailable historical path';
+        try {
+          const source = (JSON.parse(evidence) as AcceptedHistoricalDownload)?.lineage?.source;
+          if (typeof source === 'string') path = source;
+        } catch { /* Preserve readable operation history for unsupported optional evidence. */ }
+        return { path, status, reason, intentAt, finishedAt };
+      });
     const aggregateCounts = client
       .prepare(
         `SELECT COUNT(*) FILTER (WHERE status = 'cancelled'),
@@ -1465,6 +1503,12 @@ export function cancelDeletionOperation(id: string, serverId: number): boolean {
       client.prepare('DELETE FROM media_version_reservations WHERE target_id = ?').run(targetId);
       client.prepare('DELETE FROM radarr_movie_reservations WHERE target_id = ?').run(targetId);
     }
+    client.prepare(
+      "UPDATE historical_download_journal SET status='skipped',reason='Cancelled before optional cleanup',finished_at=? WHERE operation_id=? AND status='pending'",
+    ).run(now * 1000, id);
+    client.prepare(
+      "DELETE FROM historical_download_reservations WHERE journal_id IN (SELECT id FROM historical_download_journal WHERE operation_id=? AND status='skipped')",
+    ).run(id);
     refreshDeletionOperation(client, id);
     return true;
   });

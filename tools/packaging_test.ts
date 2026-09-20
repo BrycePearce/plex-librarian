@@ -1,15 +1,19 @@
 import { deepStrictEqual as equal, ok } from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
-Deno.test('Unraid ships one app-data mount and no privileged discovery transport', async () => {
+Deno.test('Unraid preserves app data, offers optional download access and has no privileged transport', async () => {
   const app = await Deno.readTextFile(new URL('../plex-librarian.xml', import.meta.url));
   equal(/<ExtraParams>([^<]*)<\/ExtraParams>/.exec(app)?.[1], '--init');
-  equal(
-    [...app.matchAll(/<Config\s[\s\S]*?(?:<\/Config>|\/>)/g)]
-      .map((match) => match[0]).filter((config) => config.includes('Type="Path"'))
-      .map((config) => /Target="([^"]+)"/.exec(config)?.[1]),
-    ['/data'],
-  );
+  const paths = [...app.matchAll(/<Config\s[\s\S]*?(?:<\/Config>|\/>)/g)]
+    .map((match) => match[0]).filter((config) => config.includes('Type="Path"'));
+  equal(paths.map((config) => /Target="([^"]+)"/.exec(config)?.[1]), [
+    '/data',
+    '/cleanup-downloads',
+  ]);
+  const optional = paths.find((config) => config.includes('Target="/cleanup-downloads"'))!;
+  for (const attribute of ['Required="false"', 'Default=""', 'Mode="rw"', 'Display="advanced"']) {
+    ok(optional.includes(attribute), `Download access must preserve ${attribute}`);
+  }
   ok(!app.includes('/discovery'));
   ok(!app.includes('Target="/var/run/docker.sock"'));
   ok(!app.includes('--pid=host') && !app.includes('--privileged'));

@@ -71,6 +71,16 @@ export interface DeletionOperationsResponse {
 }
 
 export interface DeletionOperation {
+  optionalWarningCount?: number;
+  historicalDownloads?: Array<
+    {
+      path: string;
+      status: string;
+      reason: string | null;
+      intentAt: number | null;
+      finishedAt: number | null;
+    }
+  >;
   id: string;
   clientRequestId: string;
   libraryKey: string;

@@ -1,4 +1,5 @@
 import { ServiceActionDecisions } from "../features/mediaDeletion/ServiceActionDecisions.tsx";
+import { HistoricalDownloadPaths } from "../features/mediaDeletion/HistoricalDownloadPaths.tsx";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
@@ -148,6 +149,9 @@ function DeletionOperationPage() {
           <h1 className="text-3xl font-semibold mt-1">
             {manuallyDismissed
               ? "Problem dismissed after manual intervention"
+              : operation.status === "completed_with_warning" && !!operation.optionalWarningCount &&
+                  operation.warningCount === 0
+              ? "Service deletion completed; history-linked cleanup needs review"
               : operation.status === "completed_with_warning" &&
                   operation.removalConfirmedCount === 0
               ? "Arr removal completed; Plex removal was not confirmed"
@@ -162,6 +166,16 @@ function DeletionOperationPage() {
         </span>
       </div>
 
+      {!!operation.historicalDownloads?.length && (
+        <section className="card bg-base-200 border border-base-300 p-4">
+          <h2 className="font-semibold">History-linked download cleanup</h2>
+          <p className="text-sm">
+            Optional file outcomes are separate from service deletion. File sizes do not prove
+            physical disk space reclaimed.
+          </p>
+          <HistoricalDownloadPaths key={operation.id} outcomes={operation.historicalDownloads} />
+        </section>
+      )}
       <section className="card bg-base-200 border border-base-300">
         <div className="card-body gap-5">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">

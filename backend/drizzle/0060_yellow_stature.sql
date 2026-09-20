@@ -1,0 +1,1 @@
+ALTER TABLE `historical_download_journal` ADD `validation` text;

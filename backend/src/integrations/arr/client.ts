@@ -1,4 +1,5 @@
 import type { ArrType } from '@plex-librarian/shared/types.ts';
+import { parseHistoricalImports } from './historicalImports.ts';
 
 export interface ArrMediaRecord {
   id: number;
@@ -1018,6 +1019,19 @@ export class ArrClient {
       }
       return { id, path };
     });
+  }
+
+  /** Bounded exact lineage; unlike torrent associations this also covers absent/non-torrent IDs. */
+  async historicalImports(seriesId: number) {
+    if (this.type !== 'sonarr') throw new ArrApiError('Historical imports require Sonarr');
+    return parseHistoricalImports(
+      await this.boundedRequest<unknown>(
+        `/history/series?seriesId=${seriesId}&includeSeries=false&includeEpisode=false`,
+        ARR_HISTORY_MAX_BYTES,
+        'historical import response',
+      ),
+      seriesId,
+    );
   }
 
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {

@@ -2,7 +2,7 @@ import { assertEquals } from '@std/assert';
 import { Database } from '@db/sqlite';
 import { refreshDeletionOperation } from './state.ts';
 
-Deno.test('operation completion preserves verified hardlink totals above 32-bit range', () => {
+Deno.test('operation completion preserves service counts and large totals while surfacing separate optional warnings', () => {
   const sqlite = new Database(':memory:');
   try {
     sqlite.exec(`
@@ -24,6 +24,8 @@ Deno.test('operation completion preserves verified hardlink totals above 32-bit 
         server_id INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE historical_download_journal(operation_id TEXT, status TEXT);
+      INSERT INTO historical_download_journal VALUES ('operation','failed'),('operation','uncertain'),('operation','success');
       INSERT INTO deletion_operations
         (id, server_id, library_key, kind, status, target_count, updated_at)
       VALUES ('operation', 1, 'shows', 'whole_item', 'running', 1, 0);
@@ -41,6 +43,10 @@ Deno.test('operation completion preserves verified hardlink totals above 32-bit 
     );
     assertEquals(payload.verifiedHardlinkDataRemoved, 3_000_000_000);
     assertEquals(payload.verifiedTargetCount, 1);
+    assertEquals(payload.status, 'completed_with_warning');
+    assertEquals(payload.completedCount, 1);
+    assertEquals(payload.warningCount, 0);
+    assertEquals(payload.optionalWarningCount, 2);
   } finally {
     sqlite.close();
   }

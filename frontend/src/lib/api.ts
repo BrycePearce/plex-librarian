@@ -258,7 +258,41 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  historicalAccess: {
+    get: () =>
+      apiFetch<
+        {
+          serverId: number | null;
+          statuses: import("../../../shared/historicalDownloads.ts").HistoricalAccessStatus[];
+        }
+      >("/historical-download-access"),
+    save: (
+      instanceId: number,
+      configuration: import("../../../shared/historicalDownloads.ts").HistoricalAccessConfiguration,
+      id?: string,
+    ) =>
+      apiFetch("/historical-download-access", {
+        method: "POST",
+        body: JSON.stringify({ instanceId, configuration, id }),
+      }),
+    check: (id: string) =>
+      apiFetch<
+        { statuses: import("../../../shared/historicalDownloads.ts").HistoricalAccessStatus[] }
+      >("/historical-download-access/check", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      }),
+    dismiss: () => apiFetch("/historical-download-access/dismiss", { method: "POST" }),
+  },
   serviceDeletions: {
+    historicalPreview: (
+      choices: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionChoices,
+      signal?: AbortSignal,
+    ) =>
+      apiFetch<import("../../../shared/historicalDownloads.ts").HistoricalDownloadPreview>(
+        "/service-deletions/historical-preview",
+        { method: "POST", body: JSON.stringify(choices), signal },
+      ),
     preview: (choices: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionChoices) =>
       apiFetch<import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionPreview>(
         "/service-deletions/preview",

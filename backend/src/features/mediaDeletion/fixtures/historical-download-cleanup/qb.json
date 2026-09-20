@@ -1,0 +1,40 @@
+{
+  "provenance": "Synthetic DownloadJob adapter fixtures, not raw QB API captures. Only absent-target behavior is supported by the saved preview; empty full inventory and overlapping/current-to-new job transitions are invented.",
+  "historicalDownloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshots": {
+    "absent": [],
+    "overlappingCurrent": [
+      {
+        "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "Harbor overlap",
+        "state": "uploading",
+        "size": 5000000000,
+        "uploaded": 0,
+        "completedAt": 1735787100,
+        "ratio": 0,
+        "seedingTime": 60,
+        "contentPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01.mkv",
+        "savePath": "/fixture-downloads/Harbor.Lights.S03",
+        "trackerHost": null,
+        "fileCount": 1,
+        "files": [
+          {
+            "path": "Harbor.Lights.S03E01.mkv",
+            "size": 5000000000
+          }
+        ],
+        "filesTruncated": false,
+        "manifestFiles": [
+          {
+            "path": "Harbor.Lights.S03E01.mkv",
+            "size": 5000000000
+          }
+        ]
+      }
+    ]
+  },
+  "newlyAppearing": {
+    "before": "absent",
+    "after": "overlappingCurrent"
+  }
+}

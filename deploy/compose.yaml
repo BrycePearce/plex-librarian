@@ -6,6 +6,14 @@ services:
     restart: unless-stopped
     init: true
     ports: ["8288:8080"]
-    volumes: ["database:/data"]
+    volumes:
+      - "database:/data"
+      # Optional historical download cleanup. Keep the database mount above.
+      # - type: bind
+      #   source: /choose/your/completed-downloads
+      #   target: /cleanup-downloads
+      #   read_only: false
+      #   bind:
+      #     create_host_path: false
 volumes:
   database:

@@ -7,6 +7,7 @@ import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck.tsx";
 import { ArrConnectionWizard } from "./ArrConnectionWizard.tsx";
+import { HistoricalDownloadAccess } from "./HistoricalDownloadAccess.tsx";
 import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections.tsx";
 import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard.tsx";
 import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
@@ -301,6 +302,7 @@ export function ArrIntegrationDialog() {
                 </div>
               </div>
             )}
+            <HistoricalDownloadAccess instances={data?.instances ?? []} />
             <QbittorrentConnections
               onConfigure={openQbittorrentWizard}
               onRemove={(instance) => {

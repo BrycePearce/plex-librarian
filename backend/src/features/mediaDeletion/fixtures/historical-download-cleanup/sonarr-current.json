@@ -1,0 +1,51 @@
+{
+  "provenance": "Synthetic minimal API-shaped current inventory; file/path/size relationships reconstructed from saved history and before-preview, not a saved raw episode API response.",
+  "series": {
+    "id": 701,
+    "title": "Harbor Lights",
+    "path": "/fixture-library/Harbor Lights"
+  },
+  "episodes": [
+    {
+      "id": 801,
+      "seriesId": 701,
+      "seasonNumber": 3,
+      "episodeNumber": 1,
+      "episodeFileId": 601,
+      "monitored": true
+    },
+    {
+      "id": 802,
+      "seriesId": 701,
+      "seasonNumber": 3,
+      "episodeNumber": 2,
+      "episodeFileId": 602,
+      "monitored": true
+    }
+  ],
+  "episodeFiles": [
+    {
+      "id": 601,
+      "seriesId": 701,
+      "path": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+      "relativePath": "Season 3/Harbor Lights - S03E01.mkv",
+      "size": 5000000000
+    },
+    {
+      "id": 602,
+      "seriesId": 701,
+      "path": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E02.mkv",
+      "relativePath": "Season 3/Harbor Lights - S03E02.mkv",
+      "size": 6000000000
+    }
+  ],
+  "selections": {
+    "single": [
+      801
+    ],
+    "season": [
+      801,
+      802
+    ]
+  }
+}

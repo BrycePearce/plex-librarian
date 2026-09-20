@@ -1,0 +1,76 @@
+/// <reference lib="dom" />
+import { useState } from "react";
+import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
+import type { DeletionOperation } from "../../../../shared/types.ts";
+
+const PAGE_SIZE = 50;
+/** Bound rendered rows without dropping any path from the review or consent scope. */
+export function HistoricalDownloadPaths(
+  props:
+    | { preview: HistoricalDownloadPreview }
+    | { outcomes: NonNullable<DeletionOperation["historicalDownloads"]> },
+) {
+  const preview = "preview" in props ? props.preview : undefined;
+  const outcomes = "outcomes" in props ? props.outcomes : undefined;
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const total = preview ? preview.candidates.length + preview.skipped.length : outcomes!.length;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
+  const start = currentPage * PAGE_SIZE;
+  const end = Math.min(total, start + PAGE_SIZE);
+  const rows = [];
+  if (open) {
+    for (let i = start; i < end; i++) {
+      const candidate = preview?.candidates[i];
+      const skipped = preview?.skipped[i - preview.candidates.length];
+      const outcome = outcomes?.[i];
+      rows.push(
+        <p key={i} className="break-all">
+          {outcome
+            ? `${outcome.path}: ${outcome.status.replaceAll("_", " ")}${
+              outcome.reason ? ` — ${outcome.reason}` : ""
+            }`
+            : candidate
+            ? `${candidate.path} · ${candidate.ownerCount} episode owners`
+            : `${skipped!.source}: ${skipped!.reason}`}
+        </p>,
+      );
+    }
+  }
+  return (
+    <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        {preview ? "Review exact paths and skipped files" : "Review exact file outcomes"}
+      </summary>
+      {open && (
+        <>
+          <p>
+            {preview ? `Consent includes all ${preview.candidates.length} eligible paths. ` : ""}
+            {total ? start + 1 : 0}–{end} of {total} paths shown.
+          </p>
+          {rows}
+          {total > PAGE_SIZE && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={currentPage === 0}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Previous paths
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={end === total}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Next paths
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </details>
+  );
+}

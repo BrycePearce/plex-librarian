@@ -1142,6 +1142,47 @@ export const events = sqliteTable(
   }),
 );
 
+export const historicalDownloadAccess = sqliteTable('historical_download_access', {
+  id: text('id').primaryKey(),
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  arrInstanceId: integer('arr_instance_id').notNull().references(() => arrInstances.id, {
+    onDelete: 'cascade',
+  }),
+  configuration: text('configuration').notNull(),
+  revision: text('revision').notNull(),
+  status: text('status').notNull(),
+  sample: text('sample'),
+  reason: text('reason'),
+  checkedAt: integer('checked_at'),
+  succeededAt: integer('succeeded_at'),
+  problemRevision: text('problem_revision'),
+  dismissedRevision: text('dismissed_revision'),
+});
+
+export const historicalDownloadJournal = sqliteTable(
+  'historical_download_journal',
+  {
+    id: text('id').primaryKey(),
+    operationId: text('operation_id').notNull().references(() => deletionOperations.id),
+    entry: text('entry').notNull(),
+    evidence: text('evidence').notNull(),
+    validation: text('validation'),
+    status: text('status').notNull().default('pending'),
+    reason: text('reason'),
+    intentAt: integer('intent_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (table) => ({
+    operationIdx: index('historical_download_journal_operation_idx').on(table.operationId),
+  }),
+);
+
+// Global physical-entry key intentionally has no server prefix and is not an inode key.
+export const historicalDownloadReservations = sqliteTable('historical_download_reservations', {
+  entry: text('entry').primaryKey(),
+  journalId: text('journal_id').notNull().references(() => historicalDownloadJournal.id),
+});
+
 // Permanent accounting for logical Plex media removed through this app. Unlike the
 // activity feed, these rows are never pruned: their aggregate is the lifetime
 // "Media removed" metric. This deliberately measures the synced media payload, not

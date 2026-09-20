@@ -9,6 +9,12 @@ import arr from './features/arr/route.ts';
 import duplicates from './features/duplicates/route.ts';
 import deletionOperations from './features/deletionOperations/route.ts';
 import serviceOwnedDeletion from './features/deletionOperations/serviceOwnedRoute.ts';
+import historicalDownloadAccess from './features/arr/historicalDownloadRoute.ts';
+import {
+  discoverHistoricalAccess,
+  invalidateHistoricalAccessConfiguration,
+} from './features/arr/historicalDownloadAccess.ts';
+import { withTransaction } from './db/index.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
 import mediaRemovals from './features/mediaRemovals/route.ts';
@@ -61,6 +67,20 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
       }, 410);
     }
     await next();
+    if (
+      c.res.ok && c.req.method !== 'GET' && !/\/(test|verify-storage)$/.test(path) &&
+      (path.startsWith('/api/integrations/arr') ||
+        path.startsWith('/api/integrations/qbittorrent') ||
+        path.startsWith('/api/settings/plex-path-mappings') || path === '/api/auth/plex/server')
+    ) {
+      const serverId = withTransaction((db) =>
+        db.prepare('SELECT active_server_id FROM settings WHERE id=1').value<[number | null]>()?.[0]
+      );
+      if (serverId) {
+        invalidateHistoricalAccessConfiguration(serverId);
+        void discoverHistoricalAccess(serverId);
+      }
+    }
   });
   app.onError((err, c) => {
     console.error(err);
@@ -74,6 +94,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
   app.route('/api/duplicates', duplicates);
   app.route('/api/deletion-operations', deletionOperations);
   app.route('/api/service-deletions', serviceOwnedDeletion);
+  app.route('/api/historical-download-access', historicalDownloadAccess);
   app.route('/api/events', events);
   app.route('/api/libraries', libraries);
   app.route('/api/media-removals', mediaRemovals);

@@ -6,6 +6,7 @@ import { startScheduler, startupSyncIfStale } from './features/sync/scheduler.ts
 import { startPlexSessionMonitor } from './features/users/sessionMonitor.ts';
 import { createPlexClient, PlexConfigError } from './integrations/plex/index.ts';
 import { startDeletionWorker } from './features/deletionOperations/service.ts';
+import { checkActiveHistoricalAccess } from './features/arr/historicalDownloadAccess.ts';
 
 await runMigrations(
   Deno.env.get('DB_PATH') ?? './data/librarian.db',
@@ -21,6 +22,8 @@ startPlexSessionMonitor();
 
 const app = createApp();
 startDeletionWorker();
+checkActiveHistoricalAccess(true);
+setInterval(() => checkActiveHistoricalAccess(), 300_000);
 
 // Check Plex Pass availability in the background — don't block server startup
 void (async () => {

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { collectHistoricalDownloads } from '../mediaDeletion/historicalDownloadPlanning.ts';
 import type {
   ServiceDeletionChoices,
   ServiceDeletionPreview,
@@ -89,9 +90,10 @@ export function parseServiceDeletionChoices(value: unknown): ServiceDeletionChoi
   };
 }
 
-async function prepare(
+export async function prepare(
   choices: ServiceDeletionChoices,
   active: Awaited<ReturnType<typeof resolveActiveServer>>,
+  signal?: AbortSignal,
 ) {
   const { serverId, client: plex } = active;
   const { libraryKey } = choices;
@@ -121,6 +123,7 @@ async function prepare(
   const plans = [];
   let remainingDisplayFiles = SERVICE_PREVIEW_TOTAL_FILE_LIMIT;
   for (const requested of choices.targets) {
+    signal?.throwIfAborted();
     const live = await plex.metadataIdentity(requested.ratingKey);
     if (
       !live || live.librarySectionId !== libraryKey ||
@@ -352,10 +355,33 @@ async function prepare(
     ),
     targets: previews,
   };
-  return { preview, targets };
+  return { preview, targets, plans, arrTargets, downloadTargets };
 }
 
 const router = new Hono();
+router.post('/historical-preview', async (c) => {
+  try {
+    const choices = parseServiceDeletionChoices(await c.req.json());
+    const active = await resolveActiveServer();
+    const prepared = await prepare(choices, active, c.req.raw.signal);
+    const result = await collectHistoricalDownloads(
+      active.serverId,
+      prepared.plans,
+      prepared.arrTargets,
+      prepared.downloadTargets,
+      new Map(),
+      false,
+      new Map(),
+      c.req.raw.signal,
+    );
+    return c.json(result.preview);
+  } catch {
+    return c.json({
+      error:
+        'Optional history verification is unavailable. Continue without leftover cleanup or review Media connections.',
+    }, 409);
+  }
+});
 router.post('/preview', async (c) => {
   try {
     const choices = parseServiceDeletionChoices(await c.req.json());
@@ -388,7 +414,24 @@ router.post('/', async (c) => {
       );
     }
     const active = await resolveActiveServer();
-    const payload = { ...choices, previewFingerprint: body.previewFingerprint, serviceOwned: 4 };
+    const historical = body.historicalCleanup;
+    if (
+      historical !== undefined && (!historical || typeof historical !== 'object' ||
+        typeof historical.fingerprint !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(historical.fingerprint) ||
+        !Array.isArray(historical.candidateIds) || !historical.candidateIds.length ||
+        historical.candidateIds.length > 10_000 ||
+        !historical.candidateIds.every((id: unknown) =>
+          typeof id === 'string' && /^[a-f0-9]{64}$/.test(id)
+        ) ||
+        new Set(historical.candidateIds).size !== historical.candidateIds.length)
+    ) return c.json({ error: 'Invalid explicit historical cleanup consent' }, 400);
+    const payload = {
+      ...choices,
+      previewFingerprint: body.previewFingerprint,
+      serviceOwned: 4,
+      ...(historical ? { historicalCleanup: historical } : {}),
+    };
     const repeated = await repeatedDeletionOperation(
       active.serverId,
       body.clientRequestId,
@@ -412,6 +455,35 @@ router.post('/', async (c) => {
         preview,
       }, 409);
     }
+    let historicalDownloads;
+    if (historical) {
+      let checked: Awaited<ReturnType<typeof collectHistoricalDownloads>>;
+      try {
+        checked = await collectHistoricalDownloads(
+          active.serverId,
+          prepared.plans,
+          prepared.arrTargets,
+          prepared.downloadTargets,
+        );
+      } catch {
+        // This read-only phase has not enqueued this request. Keep opt-out available.
+        return c.json({
+          error:
+            'History verification is unavailable. Review again or continue without optional cleanup.',
+        }, 409);
+      }
+      const acceptedIds = new Set(checked.accepted.map((c) => c.id));
+      const selectedIds = new Set<string>(historical.candidateIds);
+      if (
+        checked.preview.fingerprint !== historical.fingerprint ||
+        [...selectedIds].some((id) => !acceptedIds.has(id))
+      ) {
+        return c.json({
+          error: 'History-linked files changed. Review again or continue without optional cleanup.',
+        }, 409);
+      }
+      historicalDownloads = checked.accepted.filter((c) => selectedIds.has(c.id));
+    }
     const result = await enqueueDeletionOperation({
       clientRequestId: body.clientRequestId,
       serverId: active.serverId,
@@ -419,6 +491,7 @@ router.post('/', async (c) => {
       kind: targets[0].kind,
       payload,
       targets,
+      historicalDownloads,
     });
     return c.json(result, 202);
   } catch (error) {

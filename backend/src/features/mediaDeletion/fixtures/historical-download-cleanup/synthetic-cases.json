@@ -1,0 +1,180 @@
+{
+  "provenance": "All cases in this file are synthetic and were not present in the saved evidence.",
+  "shared": {
+    "history": [
+      {
+        "id": 911,
+        "seriesId": 701,
+        "episodeId": 811,
+        "sourceTitle": "Harbor.Lights.S03E01E02",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "611",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01E02.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01E02.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "7000000000",
+          "releaseType": "SeasonPack"
+        }
+      },
+      {
+        "id": 912,
+        "seriesId": 701,
+        "episodeId": 812,
+        "sourceTitle": "Harbor.Lights.S03E01E02",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "611",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01E02.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01E02.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "7000000000",
+          "releaseType": "SeasonPack"
+        }
+      }
+    ],
+    "current": {
+      "series": {
+        "id": 701,
+        "title": "Harbor Lights",
+        "path": "/fixture-library/Harbor Lights"
+      },
+      "episodes": [
+        {
+          "id": 811,
+          "seriesId": 701,
+          "seasonNumber": 3,
+          "episodeNumber": 1,
+          "episodeFileId": 611,
+          "monitored": true
+        },
+        {
+          "id": 812,
+          "seriesId": 701,
+          "seasonNumber": 3,
+          "episodeNumber": 2,
+          "episodeFileId": 611,
+          "monitored": true
+        }
+      ],
+      "episodeFiles": [
+        {
+          "id": 611,
+          "seriesId": 701,
+          "path": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01E02.mkv",
+          "relativePath": "Season 3/Harbor Lights - S03E01E02.mkv",
+          "size": 7000000000
+        }
+      ]
+    },
+    "selections": {
+      "partial": [
+        811
+      ],
+      "complete": [
+        811,
+        812
+      ]
+    }
+  },
+  "malformed": {
+    "missingExactDroppedPath": [
+      {
+        "id": 921,
+        "seriesId": 701,
+        "episodeId": 801,
+        "sourceTitle": "Harbor.Lights.S03E01",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "601",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "5000000000",
+          "releaseType": "SeasonPack",
+          "sourcePath": "/fixture-downloads/Harbor.Lights.S03"
+        }
+      }
+    ],
+    "conflictingSizes": [
+      {
+        "id": 901,
+        "seriesId": 701,
+        "episodeId": 801,
+        "sourceTitle": "Harbor.Lights.S03E01",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "601",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "5000000000",
+          "releaseType": "SeasonPack"
+        }
+      },
+      {
+        "id": 922,
+        "seriesId": 701,
+        "episodeId": 801,
+        "sourceTitle": "Harbor.Lights.S03E01",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "601",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "5000000001",
+          "releaseType": "SeasonPack"
+        }
+      }
+    ],
+    "conflictingFileIds": [
+      {
+        "id": 923,
+        "seriesId": 701,
+        "episodeId": 801,
+        "sourceTitle": "Harbor.Lights.S03E01",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "601",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "5000000000",
+          "releaseType": "SeasonPack",
+          "FileId": "602"
+        }
+      }
+    ],
+    "malformedSize": [
+      {
+        "id": 924,
+        "seriesId": 701,
+        "episodeId": 801,
+        "sourceTitle": "Harbor.Lights.S03E01",
+        "date": "2025-01-02T03:04:05Z",
+        "downloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "eventType": "downloadFolderImported",
+        "data": {
+          "fileId": "601",
+          "droppedPath": "/fixture-downloads/Harbor.Lights.S03/Harbor.Lights.S03E01.mkv",
+          "importedPath": "/fixture-library/Harbor Lights/Season 3/Harbor Lights - S03E01.mkv",
+          "downloadClient": "qBittorrent",
+          "size": "not-a-size",
+          "releaseType": "SeasonPack"
+        }
+      }
+    ]
+  }
+}

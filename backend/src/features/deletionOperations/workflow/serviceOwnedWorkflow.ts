@@ -10,6 +10,7 @@ import {
   serviceOwnedActionEvidence,
   serviceOwnedFingerprint,
   type ServiceOwnedPlan,
+  serviceOwnedPlanFingerprint,
   type ServiceOwnedPlannedAction,
 } from '../../mediaDeletion/serviceOwnedPlanning.ts';
 import { type DurableTargetSnapshot, validateDeletionTarget } from '../core/validation.ts';
@@ -315,13 +316,7 @@ export async function ensureServiceOwnedDeletion(
     throw new Error('Invalid accepted service-owned scope');
   }
   const { fingerprint, ...evidence } = plan;
-  if (
-    fingerprint !==
-      await serviceOwnedFingerprint({
-        ...evidence,
-        actions: plan.actions.map(serviceOwnedActionEvidence),
-      })
-  ) {
+  if (fingerprint !== serviceOwnedPlanFingerprint(evidence)) {
     throw new Error('Accepted service-owned evidence is corrupt');
   }
   const attempts = snapshot.serviceOwnedAttempts ?? {};

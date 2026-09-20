@@ -206,7 +206,15 @@ function DeletionOperationToast({
                 data.removalConfirmedCount === 1 ? "" : "s"
               } removed · ${formatKilobytes(data.logicalSizeRemoved)} logical size removed`
               : warning && data
-              ? deletionWarningSummary(data.removalConfirmedCount, data.warningCount)
+              ? data.optionalWarningCount
+                ? `${
+                  data.warningCount
+                    ? deletionWarningSummary(data.removalConfirmedCount, data.warningCount) + " "
+                    : ""
+                }${data.optionalWarningCount} history-linked file${
+                  data.optionalWarningCount === 1 ? "" : "s"
+                } need review.`
+                : deletionWarningSummary(data.removalConfirmedCount, data.warningCount)
               : needsAttention && data
               ? deletionAttentionSummary(data.removalConfirmedCount, data.failedCount)
               : current

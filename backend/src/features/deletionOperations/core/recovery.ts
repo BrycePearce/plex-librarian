@@ -16,6 +16,14 @@ interface RecoveryClient {
 
 export function recoverInterruptedDeletionWork(client: RecoveryClient, now: number): void {
   try {
+    client.prepare(
+      "UPDATE historical_download_journal SET status='uncertain',reason='Interrupted after persisted intent; automatic replay is prohibited',finished_at=? WHERE status='intent'",
+    ).run(now * 1000);
+  } catch (error) {
+    // Older migration fixtures have no optional journal and cannot contain its work.
+    if (!(error instanceof Error) || !/no such table/i.test(error.message)) throw error;
+  }
+  try {
     holdLegacyDeletionTargets(client as SqliteClient, now);
   } catch (error) {
     if (!(error instanceof Error) || !/no such column/i.test(error.message)) throw error;

@@ -67,6 +67,7 @@ export interface ServiceDeletionPreviewFile {
 }
 
 export interface ServiceDeletionRequest extends ServiceDeletionChoices {
+  historicalCleanup?: { fingerprint: string; candidateIds: string[] };
   clientRequestId: string;
   previewFingerprint: string;
 }

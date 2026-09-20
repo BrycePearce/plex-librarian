@@ -39,6 +39,9 @@ Deno.test("server switch resets every server-scoped detail cache", async () => {
   const previewKey = queryKeys.downloadCleanupPreview.forItems("1", ["42"]);
 
   queryClient.setQueryData(movieKey, { movie: { title: "Old server" } });
+  queryClient.setQueryData(queryKeys.historicalDownloadAccess.all, {
+    statuses: [{ reason: "Old server root" }],
+  });
   queryClient.setQueryData(quickCleanupKey, { candidates: [{ title: "Old server" }] });
   queryClient.setQueryData(previewKey, { items: [{ title: "Old server" }] });
   queryClient.setQueryData(queryKeys.auth.status, { configured: true });
@@ -46,6 +49,7 @@ Deno.test("server switch resets every server-scoped detail cache", async () => {
   await resetServerScopedQueries(queryClient);
 
   assertEquals(queryClient.getQueryData(movieKey), undefined);
+  assertEquals(queryClient.getQueryData(queryKeys.historicalDownloadAccess.all), undefined);
   assertEquals(queryClient.getQueryData(quickCleanupKey), undefined);
   assertEquals(queryClient.getQueryData(previewKey), undefined);
   assertEquals(queryClient.getQueryData(queryKeys.auth.status), {

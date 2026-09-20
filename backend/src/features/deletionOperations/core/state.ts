@@ -46,6 +46,9 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
      FROM deletion_targets WHERE operation_id = ?`,
   ).value<[string, number, number, number]>(operationId) ?? ['0', 0, 0, 0];
   const active = running + queued + retrying;
+  const optionalWarningCount = client.prepare(
+    "SELECT COUNT(*) FROM historical_download_journal WHERE operation_id=? AND status IN ('changed','skipped','failed','uncertain')",
+  ).value<[number]>(operationId)?.[0] ?? 0;
   const sequentialSeasonCleanup = client.prepare(
     "SELECT 1 FROM deletion_targets WHERE operation_id = ? AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END, '$.seasonCleanup') = 1 LIMIT 1",
   ).value<[number]>(operationId) !== undefined;
@@ -61,7 +64,7 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
   } else {
     status = failed > 0
       ? 'needs_attention'
-      : warnings > 0
+      : warnings > 0 || (completed > 0 && optionalWarningCount > 0)
       ? 'completed_with_warning'
       : completed === 0 && cancelled > 0
       ? 'cancelled'
@@ -99,6 +102,7 @@ export function refreshDeletionOperation(client: SqliteClient, operationId: stri
         targetCount: operation[4],
         completedCount: completed,
         warningCount: warnings,
+        optionalWarningCount,
         removalConfirmedCount: confirmed,
         failedCount: failed,
         cancelledCount: cancelled,

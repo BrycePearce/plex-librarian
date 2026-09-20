@@ -1,3 +1,47 @@
+Deno.test('historical access revision invalidates only after a successful Plex mapping mutation', async () => {
+  try {
+    reset();
+    addEpisode();
+    configureSonarr(false, true);
+    withTransaction((db) =>
+      db.prepare(
+        "INSERT INTO historical_download_access(id,server_id,arr_instance_id,configuration,revision,status) VALUES('mapping-access',1,2,?,'before-mapping','not_enabled')",
+      ).run(
+        JSON.stringify({
+          enabled: false,
+          remoteRoot: '/downloads',
+          localRoot: '/cleanup-downloads',
+          noRemainingClient: true,
+        }),
+      )
+    );
+    const revision = () =>
+      withTransaction((db) =>
+        db.prepare(
+          "SELECT revision,configuration FROM historical_download_access WHERE id='mapping-access'",
+        ).value<[string, string]>()!
+      );
+    const id = withTransaction((db) =>
+      db.prepare('SELECT id FROM plex_path_mappings WHERE server_id=1').value<[number]>()![0]
+    );
+    assertEquals(
+      (await rawApp.request('/api/settings/plex-path-mappings/0', { method: 'DELETE' })).status,
+      400,
+    );
+    assertEquals(revision()[0], 'before-mapping');
+    assertEquals(
+      (await rawApp.request('/api/settings/plex-path-mappings/' + id, { method: 'DELETE' })).status,
+      204,
+    );
+    assertEquals(revision()[0] === 'before-mapping', false);
+    assertEquals(JSON.parse(revision()[1]).noRemainingClient, false);
+  } finally {
+    // PlexClient captures fetch at construction; the next fixture wraps fetch
+    // to count requests and must create its own client.
+    clearPlexClientCache();
+  }
+});
+
 Deno.test('service-owned multi-episode request scaling', async () => {
   for (const count of [4, 12, 24, 148]) {
     reset();
@@ -2299,6 +2343,9 @@ function reset(): void {
   withTransaction((client) => {
     for (
       const table of [
+        'historical_download_reservations',
+        'historical_download_journal',
+        'historical_download_access',
         'media_version_reservations',
         'deletion_targets',
         'deletion_operations',
@@ -2498,3 +2545,177 @@ async function settle(): Promise<void> {
 }
 
 /** Expose the current library and payload as separate hardlink directory entries. */
+
+Deno.test({
+  name: 'historical HTTP consent, idempotent enqueue, cancellation and real worker isolation',
+  ignore: Deno.build.os !== 'linux',
+  fn: async () => {
+    for (const scenario of ['success', 'changed', 'cancelled'] as const) {
+      reset();
+      addEpisode();
+      configureSonarr();
+      live.get('episode-1')!.Media = [{
+        id: 21,
+        Part: [{ file: sonarrManagedPath, size: 40_000 }],
+      }];
+      const root = await Deno.makeTempDir({ prefix: 'historical-http-' });
+      const downloads = root + '/downloads';
+      const library = root + '/library';
+      await Deno.mkdir(downloads);
+      await Deno.mkdir(library);
+      const source = downloads + '/old.mkv';
+      const selected = library + '/old.mkv';
+      await Deno.writeFile(source, new Uint8Array(40_000));
+      await Deno.link(source, selected);
+      await Deno.writeTextFile(downloads + '/retained.txt', 'keep');
+      withTransaction((db) =>
+        db.prepare(
+          "INSERT INTO historical_download_access(id,server_id,arr_instance_id,configuration,revision,status,sample) VALUES('http-access',1,2,?,'http-revision','available','/downloads/old.mkv')",
+        )
+          .run(
+            JSON.stringify({
+              enabled: true,
+              remoteRoot: '/downloads',
+              localRoot: downloads,
+              noRemainingClient: true,
+            }),
+          )
+      );
+      const fixtureFetch = globalThis.fetch;
+      let serviceDeletes = 0;
+      globalThis.fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'sonarr' && url.pathname === '/api/v3/history/series') {
+          return Response.json([{
+            id: 1,
+            seriesId: 8,
+            episodeId: 9,
+            date: '2026-01-01T00:00:00Z',
+            eventType: 'downloadFolderImported',
+            data: {
+              fileId: String(sonarrManagedFileId),
+              size: '40000',
+              importedPath: sonarrManagedPath,
+              droppedPath: '/downloads/old.mkv',
+            },
+          }]);
+        }
+        if (
+          url.hostname === 'sonarr' && init?.method === 'DELETE' &&
+          url.pathname.startsWith('/api/v3/episodefile/')
+        ) {
+          serviceDeletes++;
+          await Deno.remove(selected);
+        }
+        const response = await fixtureFetch(input, init);
+        if (
+          url.hostname === 'sonarr' && url.pathname === '/api/v3/episode' &&
+          url.searchParams.has('episodeFileId') && response.ok
+        ) {
+          const episodes = await response.json() as Array<{ episodeFileId: number }>;
+          return Response.json(
+            episodes.filter((e) =>
+              e.episodeFileId === Number(url.searchParams.get('episodeFileId'))
+            ),
+          );
+        }
+        return response;
+      };
+      try {
+        const choices = {
+          libraryKey: 'shows',
+          targets: [{ ratingKey: 'show-1' }],
+          arrSelected: true,
+          qbSelected: false,
+        };
+        const post = (path: string, body: unknown) =>
+          rawApp.request(path, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        const serviceResponse = await post('/api/service-deletions/preview', choices);
+        assertEquals(serviceResponse.status, 200, await serviceResponse.clone().text());
+        const servicePreview = await serviceResponse.json();
+        const historyResponse = await post('/api/service-deletions/historical-preview', choices);
+        assertEquals(historyResponse.status, 200, await historyResponse.clone().text());
+        const history = await historyResponse.json();
+        assertEquals(history.candidates.length, 1, JSON.stringify(history));
+        const body = {
+          ...choices,
+          previewFingerprint: servicePreview.fingerprint,
+          clientRequestId: crypto.randomUUID(),
+          historicalCleanup: {
+            fingerprint: history.fingerprint,
+            candidateIds: history.candidates.map((c: { id: string }) => c.id),
+          },
+        };
+        const response = await post('/api/service-deletions', body);
+        assertEquals(response.status, 202, await response.clone().text());
+        const accepted = await response.json();
+        const repeated = await post('/api/service-deletions', body);
+        assertEquals(repeated.status, 202);
+        assertEquals((await repeated.json()).operationId, accepted.operationId);
+        assertEquals(
+          withTransaction((db) =>
+            db.prepare('SELECT COUNT(*) FROM historical_download_journal WHERE operation_id=?')
+              .value<[number]>(accepted.operationId)![0]
+          ),
+          1,
+        );
+        if (scenario === 'cancelled') {
+          const cancelled = await post(
+            '/api/deletion-operations/' + accepted.operationId + '/cancel',
+            {},
+          );
+          assertEquals(cancelled.status, 200, await cancelled.clone().text());
+        } else if (scenario === 'changed') {
+          await Deno.remove(source);
+          await Deno.writeFile(source, new Uint8Array(40_000));
+        }
+        await settle();
+        const operation = getDeletionOperation(accepted.operationId, 1)!;
+        assertEquals(
+          operation.status,
+          scenario === 'success'
+            ? 'completed'
+            : scenario === 'changed'
+            ? 'completed_with_warning'
+            : 'cancelled',
+          JSON.stringify(operation),
+        );
+        assertEquals(
+          (operation.historicalDownloads as Array<{ status: string }>).map((r) => r.status),
+          [scenario === 'cancelled' ? 'skipped' : scenario],
+        );
+        const optionalResults = operation.historicalDownloads as Array<
+          { finishedAt: number; intentAt: number | null }
+        >;
+        assertEquals(optionalResults[0].finishedAt > 1_700_000_000_000, true);
+        if (scenario !== 'cancelled') {
+          assertEquals(
+            optionalResults[0].intentAt === null || optionalResults[0].intentAt > 1_700_000_000_000,
+            true,
+          );
+        }
+        assertEquals(serviceDeletes, scenario === 'cancelled' ? 0 : 1);
+        const exists = (path: string) =>
+          Deno.stat(path).then(() => true, (e) => {
+            if (e instanceof Deno.errors.NotFound) return false;
+            throw e;
+          });
+        assertEquals(await exists(source), scenario !== 'success');
+        assertEquals(await exists(selected), scenario === 'cancelled');
+        assertEquals(await Deno.readTextFile(downloads + '/retained.txt'), 'keep');
+        assertEquals((await Deno.stat(downloads)).isDirectory, true);
+        assertEquals((await Deno.stat(library)).isDirectory, true);
+        await settle();
+        assertEquals(serviceDeletes, scenario === 'cancelled' ? 0 : 1);
+      } finally {
+        globalThis.fetch = fixtureFetch;
+        clearPlexClientCache();
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+  },
+});
