@@ -15,6 +15,9 @@ FROM denoland/deno:2.9.5
 
 USER root
 
+# Read-only folder diagnostics use GNU coreutils test, not Deno's access emulation.
+RUN /usr/bin/test --version > /dev/null
+
 # Pin DENO_DIR so cached modules and the SQLite native DLL are baked into the image
 ENV DENO_DIR=/deno
 

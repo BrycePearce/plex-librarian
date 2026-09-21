@@ -1,66 +1,70 @@
 import { assertEquals, assertRejects } from '@std/assert';
 import {
   boundedHistoricalInspection,
+  HistoricalAccessError,
   inspectHistoricalAccessSample,
 } from './historicalAccessInspection.ts';
-
-Deno.test('a stalled read-only inspection times out and cannot become late success', async () => {
-  let finish!: (value: string) => void;
-  const work = new Promise<string>((resolve) => {
-    finish = resolve;
-  });
-  await assertRejects(() => boundedHistoricalInspection(work, 1), Error, 'timed out');
-  finish('late success');
-  assertEquals(await boundedHistoricalInspection(Promise.resolve('current')), 'current');
-});
-
-Deno.test('historical access distinguishes missing sample, missing root, denied access and non-file targets', async () => {
+Deno.test('read-only diagnostic distinguishes root, sample, denial and unsupported results', async () => {
   const directory = { isDirectory: true, isFile: false } as Deno.FileInfo;
   const file = { isDirectory: false, isFile: true } as Deno.FileInfo;
-  const inspect = (path: string) => Promise.resolve(path === '/downloads' ? directory : file);
+  const inspect = (p: string) => Promise.resolve(p === '/downloads' ? directory : file);
   const writable = () => Promise.resolve();
   assertEquals(
-    await inspectHistoricalAccessSample('/downloads', '/downloads/season/file', {
+    await inspectHistoricalAccessSample('/downloads', '/downloads/release/file', {
       inspect,
       writable,
     }),
     null,
   );
-  const missingSample = await inspectHistoricalAccessSample(
-    '/downloads',
-    '/downloads/season/file',
-    {
+  assertEquals(
+    await inspectHistoricalAccessSample('/downloads', '/downloads/release/file', {
       inspect: (p) =>
         p === '/downloads'
           ? Promise.resolve(directory)
           : Promise.reject(new Deno.errors.NotFound()),
       writable,
-    },
+    }),
+    { code: 'sample_absent', folder: '/downloads' },
   );
-  assertEquals(missingSample?.includes('root is accessible'), true);
-  await assertRejects(() =>
-    inspectHistoricalAccessSample('/downloads', '/downloads/file', {
-      inspect: () => Promise.reject(new Deno.errors.NotFound('missing mount')),
-      writable,
-    }), Deno.errors.NotFound);
-  await assertRejects(() =>
-    inspectHistoricalAccessSample('/downloads', '/downloads/file', {
-      inspect,
-      writable: () => Promise.reject(new Deno.errors.PermissionDenied('read-only or denied')),
-    }), Deno.errors.PermissionDenied);
-  await assertRejects(
+  for (
+    const [error, code] of [[new Deno.errors.NotFound(), 'missing_root'], [
+      new Deno.errors.PermissionDenied(),
+      'access_denied',
+    ], [new Error('unknown'), 'unsupported']] as const
+  ) {
+    const failure = await assertRejects(
+      () =>
+        inspectHistoricalAccessSample('/downloads', '/downloads/file', {
+          inspect: () => Promise.reject(error),
+          writable,
+        }),
+      HistoricalAccessError,
+    );
+    assertEquals(failure.diagnostic.code, code);
+  }
+  const parent = await assertRejects(
     () =>
-      inspectHistoricalAccessSample('/downloads', '/downloads/file', {
-        inspect: () => Promise.resolve(directory),
-        writable,
+      inspectHistoricalAccessSample('/downloads', '/downloads/release/file', {
+        inspect,
+        writable: (p) =>
+          p === '/downloads'
+            ? Promise.resolve()
+            : Promise.reject(new HistoricalAccessError({ code: 'read_only', folder: p })),
       }),
-    Error,
-    'regular file',
+    HistoricalAccessError,
   );
-  await assertRejects(
-    () =>
-      inspectHistoricalAccessSample('/downloads', '/downloads/../data/file', { inspect, writable }),
-    Error,
-    'safe sample',
+  assertEquals(parent.diagnostic, { code: 'read_only', folder: '/downloads/release' });
+});
+Deno.test('timeout discards late diagnostic success', async () => {
+  let finish!: () => void;
+  const work = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const failure = await assertRejects(
+    () => boundedHistoricalInspection(work, 1),
+    HistoricalAccessError,
   );
+  assertEquals(failure.diagnostic.code, 'timeout');
+  finish();
+  assertEquals(await boundedHistoricalInspection(Promise.resolve('current')), 'current');
 });

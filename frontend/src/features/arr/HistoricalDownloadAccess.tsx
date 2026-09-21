@@ -6,6 +6,7 @@ import type { HistoricalAccessStatus } from "../../../../shared/historicalDownlo
 import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import {
+  historicalAccessMessage,
   historicalAccessNotification,
   historicalCheckMessage,
   type HistoricalNoticeSnapshot,
@@ -241,11 +242,9 @@ export function HistoricalDownloadAccess(
                             {s.configuration.localRoot || "Not configured"}
                           </dd>
                         </dl>
-                        {s.status === "setup_needed" && (
-                          <p className="mt-3 text-xs text-base-content/55">
-                            Choose the matching folder inside Librarian to finish setup.
-                          </p>
-                        )}
+                        <p className="mt-3 text-xs text-base-content/55 break-words [overflow-wrap:anywhere]">
+                          {historicalAccessMessage(s)}
+                        </p>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                           <button
                             type="button"
@@ -299,6 +298,7 @@ export function HistoricalDownloadAccess(
                             <p>Sonarr: {s.configuration.remoteRoot}</p>
                             {s.sample && <p>Example file: {s.sample}</p>}
                             {s.reason && <p>{s.reason}</p>}
+                            {s.diagnostic?.details && <p>{s.diagnostic.details}</p>}
                             <p>
                               {s.checkedAt
                                 ? `Last checked: ${new Date(s.checkedAt).toLocaleString()}`
@@ -522,8 +522,8 @@ export function HistoricalDownloadAccessBanner() {
     <>
       {!!issues.length && (
         <div className="alert alert-warning mb-4">
-          <span>
-            Leftover download cleanup needs folder access. Plex/Sonarr deletion remains available.
+          <span className="break-words [overflow-wrap:anywhere]">
+            {historicalCheckMessage(issues)} Ordinary service deletion remains available.
           </span>
           <a className="link" href="/settings/sonarr-radarr">Review access</a>
           <button type="button" disabled={mutation.isPending} onClick={() => mutation.mutate(true)}>

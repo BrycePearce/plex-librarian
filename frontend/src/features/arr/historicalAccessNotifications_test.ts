@@ -22,15 +22,31 @@ const failed: HistoricalAccessStatus = {
   problemRevision: "problem",
   dismissedRevision: null,
 };
-Deno.test("manual access feedback includes actual root, status and diagnostic", () => {
-  assertEquals(historicalCheckMessage([failed]), "/downloads: setup needed. missing");
-  assertEquals(
-    historicalCheckMessage([{
+Deno.test("access guidance is actionable and never copies raw exceptions or sample paths", () => {
+  for (
+    const [code, expected] of [
+      ["missing_root", "Add its host-folder mount"],
+      ["access_denied", "container identity"],
+      ["read_only", "Read/Write"],
+      ["sample_absent", "old sample file is gone"],
+      ["timeout", "retry Check access"],
+      ["unsupported", "/usr/bin/test"],
+    ] as const
+  ) {
+    const text = historicalCheckMessage([{
       ...failed,
-      status: "waiting_for_sample",
-      reason: "No exact sample",
-    }]),
-    "/downloads: waiting for sample. No exact sample",
+      reason: "secret-token raw exception",
+      diagnostic: { code, folder: "/cleanup/release" },
+    }]);
+    assertEquals(text.includes(expected), true);
+    assertEquals(text.includes("secret-token"), false);
+    assertEquals(text.includes("/downloads/file"), false);
+  }
+  assertEquals(
+    historicalCheckMessage([{ ...failed, status: "available", reason: null }]).includes(
+      "passed read-only",
+    ),
+    true,
   );
 });
 Deno.test("access recovery notifies once, stays quiet on retries, and never carries notices across servers", () => {

@@ -1,4 +1,5 @@
 import { assertEquals, assertThrows } from '@std/assert';
+import { HistoricalAccessError } from './historicalAccessInspection.ts';
 
 Deno.env.set('DB_PATH', ':memory:');
 const { withTransaction } = await import('../../db/index.ts');
@@ -67,8 +68,12 @@ Deno.test('historical access coalesces checks, suppresses obsolete completions, 
   assertEquals(access.listHistoricalAccess(1)[0].status, 'available');
   assertEquals(access.listHistoricalAccess(1)[0].checkedAt! > 2 ** 31, true);
   assertEquals(access.listHistoricalAccess(1)[0].succeededAt! > 2 ** 31, true);
-  await access.checkHistoricalAccess(1, id, () => Promise.reject(new Error('readonly fixture')));
+  const readOnly = () =>
+    Promise.reject(new HistoricalAccessError({ code: 'read_only', folder: '/cleanup-downloads' }));
+  await access.checkHistoricalAccess(1, id, readOnly);
   const failure = access.listHistoricalAccess(1)[0];
+  assertEquals(failure.diagnostic?.code, 'read_only');
+  assertEquals(failure.reason, null);
   assertEquals(failure.status, 'access_lost');
   assertEquals(failure.succeededAt !== null, true);
   access.supplyHistoricalSample(1, 1, '/downloads/release/file');
@@ -80,13 +85,15 @@ Deno.test('historical access coalesces checks, suppresses obsolete completions, 
       'UPDATE historical_download_access SET dismissed_revision=problem_revision WHERE id=?',
     ).run(id)
   );
-  await access.checkHistoricalAccess(1, id, () => Promise.reject(new Error('readonly fixture')));
+  await access.checkHistoricalAccess(1, id, readOnly);
   assertEquals(
     access.listHistoricalAccess(1)[0].problemRevision,
     access.listHistoricalAccess(1)[0].dismissedRevision,
   );
   await access.checkHistoricalAccess(1, id, () => Promise.resolve(null));
   assertEquals(access.listHistoricalAccess(1)[0].problemRevision, null);
+  assertEquals(access.listHistoricalAccess(1)[0].diagnostic, undefined);
+  assertEquals(access.listHistoricalAccess(1)[0].reason, null);
   access.invalidateHistoricalAccessConfiguration(1);
   await access.checkHistoricalAccess(1, id);
   assertEquals(access.listHistoricalAccess(1)[0].configuration.noRemainingClient, false);

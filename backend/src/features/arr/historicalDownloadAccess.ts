@@ -2,10 +2,12 @@ import { dirname, resolve } from 'node:path';
 import { withTransaction } from '../../db/index.ts';
 import type {
   HistoricalAccessConfiguration,
+  HistoricalAccessDiagnostic,
   HistoricalAccessStatus,
 } from '../../../../shared/historicalDownloads.ts';
 import {
   boundedHistoricalInspection,
+  HistoricalAccessError,
   inspectHistoricalAccessSample,
 } from './historicalAccessInspection.ts';
 import type { ArrPathMapping } from '../../../../shared/types.ts';
@@ -14,6 +16,29 @@ import { ArrClient } from '../../integrations/arr/client.ts';
 
 export const historicalAppDataRoot = () =>
   dirname(resolve(Deno.env.get('DB_PATH') ?? './data/librarian.db'));
+function accessReason(
+  value: unknown,
+): { reason: string | null; diagnostic?: HistoricalAccessDiagnostic } {
+  if (typeof value !== 'string') return { reason: null };
+  try {
+    const diagnostic = JSON.parse(value);
+    if (
+      diagnostic &&
+      [
+        'missing_root',
+        'access_denied',
+        'read_only',
+        'sample_absent',
+        'timeout',
+        'unsupported',
+        'invalid_folder',
+      ].includes(diagnostic.code)
+    ) {
+      return { reason: null, diagnostic };
+    }
+  } catch { /* Older records contain plain-text diagnostics. */ }
+  return { reason: value };
+}
 export function listHistoricalAccess(serverId: number): HistoricalAccessStatus[] {
   return withTransaction((db) =>
     db.prepare(
@@ -27,7 +52,7 @@ export function listHistoricalAccess(serverId: number): HistoricalAccessStatus[]
       revision: r[3] as string,
       status: r[4] as HistoricalAccessStatus['status'],
       sample: r[5] as string | null,
-      reason: r[6] as string | null,
+      ...accessReason(r[6]),
       checkedAt: r[7] as number | null,
       succeededAt: r[8] as number | null,
       problemRevision: r[9] as string | null,
@@ -134,7 +159,6 @@ export function checkHistoricalAccess(
       )
     ) return;
     let sample = status.sample;
-    let attemptedLocal: string | null = null;
     let state: HistoricalAccessStatus['status'] = 'available';
     let reason: string | null = null;
     withTransaction((db) =>
@@ -168,16 +192,17 @@ export function checkHistoricalAccess(
           'No exact history-linked file is available to check yet. Sync or open a deletion preview.';
       } else {
         const local = historicalTranslation(sample, status.configuration);
-        attemptedLocal = local;
-        reason = await boundedHistoricalInspection(
+        const diagnostic = await boundedHistoricalInspection(
           inspectSample(status.configuration.localRoot, local),
         );
+        reason = diagnostic ? JSON.stringify(diagnostic) : null;
       }
     } catch (error) {
       state = status.succeededAt ? 'access_lost' : 'setup_needed';
-      reason = `${sample ? `Sonarr: ${sample}. ` : ''}Librarian ${
-        attemptedLocal ? `tried: ${attemptedLocal}` : `root: ${status.configuration.localRoot}`
-      }. ${String(error)}`;
+      // Never copy remote exceptions (which may contain credentials) into feedback.
+      reason = JSON.stringify(
+        error instanceof HistoricalAccessError ? error.diagnostic : { code: 'unsupported' },
+      );
     }
     const now = Date.now();
     if (state === 'available') retryDelay.delete(key);

@@ -1,3 +1,15 @@
+export interface HistoricalAccessDiagnostic {
+  code:
+    | 'missing_root'
+    | 'access_denied'
+    | 'read_only'
+    | 'sample_absent'
+    | 'timeout'
+    | 'unsupported'
+    | 'invalid_folder';
+  folder?: string;
+  details?: string;
+}
 export interface HistoricalAccessConfiguration {
   enabled: boolean;
   remoteRoot: string;
@@ -18,6 +30,7 @@ export interface HistoricalAccessStatus {
     | 'access_lost';
   sample: string | null;
   reason: string | null;
+  diagnostic?: HistoricalAccessDiagnostic;
   checkedAt: number | null;
   succeededAt: number | null;
   problemRevision: string | null;
