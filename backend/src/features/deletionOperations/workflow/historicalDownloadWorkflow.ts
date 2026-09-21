@@ -102,6 +102,7 @@ export async function ensureHistoricalDownloadPhase(
       checked.accepted,
       prepared.downloadTargets,
       listHistoricalAccess(target.serverId),
+      prepared.arrTargets,
     );
     return claims;
   });

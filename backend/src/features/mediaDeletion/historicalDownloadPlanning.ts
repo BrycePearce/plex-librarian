@@ -1,4 +1,5 @@
 import { dirname, posix } from 'node:path';
+import { type HistoricalQbMapping, historicalQbTranslations } from './historicalQbTranslation.ts';
 import { HistoricalIdentityUnavailable } from './historicalNativeStat.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { HistoricalImportEvidence } from '../../integrations/arr/historicalImports.ts';
@@ -69,11 +70,13 @@ function overlap(left: string, right: string) {
   return left === right || left.startsWith(right + '/') || right.startsWith(left + '/');
 }
 
-function localTranslations(path: string, mappings: Array<{ remote: string; local: string }>) {
+function localTranslations(path: string, mappings: HistoricalQbMapping[]) {
+  const applicable = mappings.filter((m) => path === m.remote || path.startsWith(m.remote + '/'));
+  const preferred = applicable.some((m) => m.explicit)
+    ? applicable.filter((m) => m.explicit)
+    : applicable;
   const paths = new Set(
-    mappings.filter((m) => path === m.remote || path.startsWith(m.remote + '/')).map((m) =>
-      m.local + path.slice(m.remote.length)
-    ),
+    preferred.map((m) => m.local + path.slice(m.remote.length)),
   );
   if (paths.size > 1) throw new Error('Conflicting path translations');
   return [...paths];
@@ -85,6 +88,7 @@ export async function historicalJobClaims(
   candidates: readonly AcceptedHistoricalDownload[],
   targets: readonly DownloadClientTarget[],
   access: readonly HistoricalAccessStatus[],
+  arr: readonly ArrDeleteTarget[],
   inventories = new Map<string, DownloadJobSummary[]>(),
   manifests = new Map<string, DownloadJob>(),
   signal?: AbortSignal,
@@ -106,19 +110,6 @@ export async function historicalJobClaims(
   const mounts = Deno.build.os === 'linux' ? await Deno.readTextFile('/proc/self/mountinfo') : '';
   for (const target of targets) {
     signal?.throwIfAborted();
-    const mappings = (target.pathMappings ?? []).map((m) => ({
-      remote: m.qbittorrentPath,
-      local: m.localPath,
-    }));
-    // Resolve configured roots once, not every file in a large manifest. This
-    // preserves known directory-symlink aliases as current-job veto evidence.
-    for (const mapping of mappings) {
-      try {
-        mapping.local = await existingAlias(mapping.local) ?? mapping.local;
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
-      }
-    }
     const summaries: DownloadJobSummary[] = [];
     const visit = (summary: DownloadJobSummary) => {
       signal?.throwIfAborted();
@@ -137,11 +128,22 @@ export async function historicalJobClaims(
       }
     } else throw new Error('Configured download client cannot provide a complete inventory');
     inventories.set(target.instanceKey, summaries);
+    const mappings = await historicalQbTranslations(
+      target,
+      arr,
+      access,
+      candidates,
+      summaries,
+      manifests,
+    );
+    for (const mapping of mappings) {
+      mapping.local = await existingAlias(mapping.local) ?? mapping.local;
+    }
     let manifestFiles = 0;
     for (const summary of summaries) {
       signal?.throwIfAborted();
       // Different container namespaces cannot establish non-overlap. Require an
-      // explicit translation before excluding any current job by its paths;
+      // evidenced translation before excluding any current job by its paths;
       // neither a missing history hash nor an unrelated-looking name is absence.
       if (
         candidates.length &&
@@ -149,8 +151,9 @@ export async function historicalJobClaims(
         !localTranslations(summary.contentPath, mappings).length
       ) {
         throw new Error(
-          'Current download ownership is unresolved: configure a qBittorrent path mapping for ' +
-            summary.contentPath,
+          'Optional historical cleanup cannot verify qBittorrent ownership for ' +
+            summary.contentPath +
+            '. Check matching qBittorrent endpoints in Sonarr and Librarian, remote path mappings in Sonarr, and historical folder access in Librarian’s Media connections. A matching live import or applicable Sonarr path mapping is needed to infer this relationship. Ordinary service deletion is still available.',
         );
       }
       const translatedRoots = [...localTranslations(summary.savePath + '/placeholder', mappings)]
@@ -183,7 +186,8 @@ export async function historicalJobClaims(
       if (manifestFiles > 100_000) {
         throw new Error('Relevant download manifests exceed the evidence budget');
       }
-      let jobClaims = claimCache.get(manifestKey);
+      const claimKey = manifestKey + ':' + serviceOwnedFingerprint(mappings);
+      let jobClaims = claimCache.get(claimKey);
       if (!jobClaims) {
         jobClaims = { remote: new Set(), entries: new Set() };
         for (const file of job.manifestFiles) {
@@ -208,7 +212,7 @@ export async function historicalJobClaims(
           }
           for (const path of local) jobClaims.entries.add(historicalMountEntry(path, mounts).entry);
         }
-        claimCache.set(manifestKey, jobClaims);
+        claimCache.set(claimKey, jobClaims);
       }
       for (const c of relevant) {
         if (
@@ -483,6 +487,7 @@ export async function collectHistoricalDownloads(
         accepted,
         qb,
         access,
+        arr,
         inventories,
         new Map(),
         signal,
@@ -501,10 +506,10 @@ export async function collectHistoricalDownloads(
       }
     } catch (error) {
       skipped.push(
-        ...accepted.map((c) => ({
-          source: c.lineage.source,
+        {
+          source: 'Optional historical download cleanup',
           reason: `Download ownership unavailable: ${String(error)}`,
-        })),
+        },
       );
       accepted.length = 0;
     }

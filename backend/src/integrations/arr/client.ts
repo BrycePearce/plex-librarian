@@ -1034,6 +1034,81 @@ export class ArrClient {
     );
   }
 
+  /** Ordering hints only: a limited recent page can prioritize live TV jobs in a
+   * mixed movie/TV client. These IDs never authorize a translation or imply absence. */
+  async recentImportedDownloadIds(): Promise<string[]> {
+    if (this.type !== 'sonarr') return [];
+    const params = new URLSearchParams({
+      eventType: '3', // Sonarr DownloadFolderImported
+      page: '1',
+      pageSize: '100',
+      sortKey: 'date',
+      sortDirection: 'descending',
+      includeSeries: 'false',
+      includeEpisode: 'false',
+    });
+    const payload = await this.boundedRequest<{
+      records?: Array<{ downloadId?: string }>;
+      totalRecords?: number;
+    }>(`/history?${params}`, ARR_HISTORY_MAX_BYTES, 'recent translation hints');
+    if (
+      !payload || !Array.isArray(payload.records) || payload.records.length > 100 ||
+      !Number.isSafeInteger(payload.totalRecords) || payload.totalRecords! < payload.records.length
+    ) throw new ArrApiError('Sonarr returned invalid recent translation hints');
+    return [
+      ...new Set(payload.records.flatMap((row) =>
+        typeof row?.downloadId === 'string' &&
+          /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(row.downloadId)
+          ? [row.downloadId.toLowerCase()]
+          : []
+      )),
+    ];
+  }
+
+  /** A bounded positive witness, not an exhaustive ownership inventory. Sonarr's
+   * QB adapter stores uppercase hashes; its history endpoint filters by downloadId.
+   * Never infer absence from this deliberately limited first page. */
+  async historicalImportsForDownload(downloadId: string) {
+    if (this.type !== 'sonarr' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(downloadId)) {
+      throw new ArrApiError('Historical translation requires a Sonarr torrent ID');
+    }
+    const params = new URLSearchParams({
+      downloadId: downloadId.toUpperCase(),
+      page: '1',
+      pageSize: '100',
+      sortKey: 'date',
+      sortDirection: 'descending',
+      includeSeries: 'false',
+      includeEpisode: 'false',
+    });
+    const payload = await this.boundedRequest<{
+      records?: Array<{ seriesId?: number; downloadId?: string }>;
+      totalRecords?: number;
+    }>(`/history?${params}`, ARR_HISTORY_MAX_BYTES, 'translation import response');
+    if (
+      !payload || !Array.isArray(payload.records) || payload.records.length > 100 ||
+      !Number.isSafeInteger(payload.totalRecords) || payload.totalRecords! < payload.records.length
+    ) {
+      throw new ArrApiError('Sonarr returned invalid translation import evidence');
+    }
+    const records = [];
+    for (const row of payload.records) {
+      if (
+        !row || typeof row.downloadId !== 'string' ||
+        row.downloadId.toLowerCase() !== downloadId.toLowerCase() ||
+        !Number.isSafeInteger(row.seriesId) || row.seriesId! <= 0
+      ) {
+        throw new ArrApiError('Sonarr returned conflicting translation import evidence');
+      }
+      const parsed = parseHistoricalImports([row], row.seriesId!);
+      if (parsed.problems.length) {
+        throw new ArrApiError('Sonarr returned malformed translation import evidence');
+      }
+      records.push(...parsed.records);
+    }
+    return records;
+  }
+
   async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {
     const path = this.type === 'radarr'
       ? `/history/movie?movieId=${mediaId}&includeMovie=false`
@@ -1205,7 +1280,37 @@ export class ArrClient {
     );
   }
 
-  async remotePathHints(): Promise<Array<{ host: string; remotePath: string; localPath: string }>> {
+  /** Credential-free endpoint identities; never expose download-client secrets. */
+  async qbittorrentEndpoints(): Promise<string[]> {
+    const raw = await this.boundedRequest<unknown>(
+      '/downloadclient',
+      1024 * 1024,
+      'download clients',
+    );
+    if (!Array.isArray(raw) || raw.length > 1000) throw new ArrApiError('Invalid download clients');
+    return raw.flatMap((row) => {
+      if (row?.implementation !== 'QBittorrent' || !Array.isArray(row.fields)) return [];
+      const fields = new Map<string, unknown>(
+        row.fields.map((f: { name: string; value: unknown }) => [f.name, f.value]),
+      );
+      const host = fields.get('host');
+      const port = Number(fields.get('port'));
+      const base = fields.get('urlBase') ?? '';
+      if (
+        typeof host !== 'string' || !/^[a-zA-Z0-9.-]+$/.test(host) ||
+        !Number.isInteger(port) || port < 1 || port > 65535 || typeof base !== 'string' ||
+        (base !== '' && (!base.startsWith('/') || base.includes('?') || base.includes('#')))
+      ) return [];
+      return [
+        new URL(`${fields.get('useSsl') === true ? 'https' : 'http'}://${host}:${port}${base}`).href
+          .replace(/\/$/, ''),
+      ];
+    });
+  }
+
+  async remotePathHints(
+    strict = false,
+  ): Promise<Array<{ host: string; remotePath: string; localPath: string }>> {
     const raw = await this.boundedRequest<unknown>(
       '/remotepathmapping',
       1024 * 1024,
@@ -1213,6 +1318,17 @@ export class ArrClient {
     );
     if (!Array.isArray(raw) || raw.length > 1000) {
       throw new ArrApiError('Invalid remote mapping hints');
+    }
+    if (
+      strict && raw.some((row) =>
+        typeof row?.host !== 'string' || !row.host.trim() ||
+        typeof row.remotePath !== 'string' || !row.remotePath.trim() ||
+        typeof row.localPath !== 'string' || !row.localPath.trim()
+      )
+    ) {
+      throw new ArrApiError(
+        'Incomplete remote path mappings; optional cleanup cannot infer ownership',
+      );
     }
     return raw.flatMap((row) =>
       typeof row?.host === 'string' && row.host.trim() &&

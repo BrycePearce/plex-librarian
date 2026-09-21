@@ -119,6 +119,13 @@ Deno.test({
         addImportExclusion: false,
         pathMappings: [{ kind: 'library', arrPath: '/library', localPath: library }],
         client: {
+          qbittorrentEndpoints: () => Promise.resolve(['http://qb.fixture:8080']),
+          remotePathHints: () =>
+            Promise.resolve([{
+              host: 'qb.fixture',
+              remotePath: '/downloads',
+              localPath: instanceId === 1 ? '/downloads' : '/alias',
+            }]),
           historicalImports: () => {
             historyReads++;
             return Promise.resolve(structuredClone(evidence));
@@ -225,14 +232,9 @@ Deno.test({
         instanceKey: 'qb:1',
         instanceId: 1,
         instanceName: 'mock QB',
+        instanceUrl: 'http://qb.fixture:8080',
         configurationIdentity: 'fixture',
-        pathMappings: [{
-          id: 1,
-          revision: 1,
-          caseSensitive: true,
-          qbittorrentPath: '/downloads',
-          localPath: downloads,
-        }],
+        pathMappings: [],
         client: {
           scanJobSummaries: async (visit: (s: DownloadJobSummary) => Promise<void>) => {
             inventories++;
@@ -333,6 +335,12 @@ Deno.test({
         unmappedQb.accepted.length,
         0,
         'Different unmapped QB namespaces cannot establish absence of current ownership',
+      );
+      strictEqual(
+        unmappedQb.preview.skipped.filter((s) =>
+          s.reason.includes('Download ownership unavailable')
+        ).length,
+        1,
       );
       const qbSymlink = await collectHistoricalDownloads(1, plans, arr, [aliasClient]);
       strictEqual(
@@ -534,10 +542,16 @@ Deno.test({
       // Cancellation while preparing cannot proceed to unlink; recovery never replays intent.
       const remaining = preview.accepted.find((c) => c.lineage.source === '/downloads/100.mkv')!;
       for (
-        const [scenarioIndex, scenario] of ['cancel', 'configuration', 'intent']
+        const [scenarioIndex, scenario] of ['cancel', 'configuration', 'translation', 'intent']
           .entries()
       ) {
         const originalOwners = arr[0].client.sonarrEpisodeFileOwnerIds;
+        const originalHints = arr.map((a) => a.client.remotePathHints);
+        if (scenario === 'translation') {
+          // Sonarr changed after preview: there is no surviving import hash to
+          // replace the removed namespace evidence. No old inference may replay.
+          for (const a of arr) a.client.remotePathHints = () => Promise.resolve([]);
+        }
         if (scenario === 'configuration') {
           newJob = false;
           arr[0].client.sonarrEpisodeFileOwnerIds = async (...args) => {
@@ -602,6 +616,7 @@ Deno.test({
           scenario === 'intent' ? 'uncertain' : 'skipped',
         );
         strictEqual((await Deno.stat(downloads + '/100.mkv')).isFile, true);
+        for (const [index, a] of arr.entries()) a.client.remotePathHints = originalHints[index];
         if (scenario === 'configuration') {
           arr[0].client.sonarrEpisodeFileOwnerIds = originalOwners;
           newJob = true;

@@ -9,6 +9,73 @@ import {
   RADARR_CATALOG_MAX_RECORDS,
 } from './client.ts';
 
+Deno.test('recent Sonarr translation hints are bounded import-only IDs, never evidence', async () => {
+  const hash = 'ab'.repeat(20);
+  let payload: unknown = {
+    records: [{ downloadId: hash.toUpperCase() }, { downloadId: hash }, { downloadId: null }],
+    totalRecords: 500,
+  };
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    const url = new URL(String(input));
+    assertEquals(url.pathname, '/api/v3/history');
+    assertEquals(url.searchParams.get('eventType'), '3');
+    assertEquals(url.searchParams.get('pageSize'), '100');
+    assertEquals(url.searchParams.get('page'), '1');
+    return Promise.resolve(Response.json(payload));
+  });
+  assertEquals(await client.recentImportedDownloadIds(), [hash]);
+  payload = { records: [], totalRecords: 500 };
+  assertEquals(await client.recentImportedDownloadIds(), []);
+  payload = { records: Array(101).fill({ downloadId: hash }), totalRecords: 101 };
+  await assertRejects(() => client.recentImportedDownloadIds(), ArrApiError);
+});
+
+Deno.test('Sonarr translation witnesses use bounded download-ID history with uppercase QB hashes', async () => {
+  const hash = 'ab'.repeat(20);
+  const row = {
+    id: 1,
+    seriesId: 2,
+    episodeId: 3,
+    downloadId: hash.toUpperCase(),
+    date: '2026-01-01T00:00:00Z',
+    eventType: 'downloadFolderImported',
+    data: {
+      fileId: '4',
+      size: '7',
+      droppedPath: '/downloads/other.mkv',
+      importedPath: '/tv/other.mkv',
+    },
+  };
+  let reads = 0;
+  let payload: unknown = { records: [row], totalRecords: 500 };
+  const client = new ArrClient('sonarr', 'http://sonarr', 'key', (input) => {
+    reads++;
+    const url = new URL(String(input));
+    assertEquals(url.pathname, '/api/v3/history');
+    assertEquals(url.searchParams.get('downloadId'), hash.toUpperCase());
+    assertEquals(url.searchParams.get('pageSize'), '100');
+    assertEquals(url.searchParams.get('page'), '1');
+    return Promise.resolve(Response.json(payload));
+  });
+  assertEquals(
+    (await client.historicalImportsForDownload(hash))[0].droppedPath,
+    '/downloads/other.mkv',
+  );
+  assertEquals(reads, 1, 'A positive witness does not require exhaustive history');
+  for (
+    const invalid of [
+      null,
+      { records: [row], totalRecords: 0 },
+      { records: Array(101).fill(row), totalRecords: 101 },
+      { records: [{ ...row, downloadId: 'cd'.repeat(20) }], totalRecords: 1 },
+      { records: [{ ...row, data: { ...row.data, Size: '8' } }], totalRecords: 1 },
+    ]
+  ) {
+    payload = invalid;
+    await assertRejects(() => client.historicalImportsForDownload(hash), ArrApiError);
+  }
+});
+
 Deno.test('Radarr extra scope rejects unsafe paths and incomplete bounded reads', async () => {
   for (
     const relativePath of [
@@ -111,6 +178,32 @@ Deno.test('remote mapping suggestions preserve their download-client host and om
     { host: 'qb-one', remotePath: '/downloads', localPath: '/data/downloads' },
     { host: 'qb-two', remotePath: '/downloads', localPath: '/other/downloads' },
   ]);
+  await assertRejects(() => client.remotePathHints(true), ArrApiError, 'Incomplete remote path');
+});
+
+Deno.test('Sonarr download-client endpoint evidence preserves scheme, port and base without credentials', async () => {
+  const client = new ArrClient(
+    'sonarr',
+    'http://fixture.invalid',
+    'fixture',
+    (() =>
+      Promise.resolve(Response.json([
+        {
+          implementation: 'QBittorrent',
+          fields: [
+            { name: 'host', value: 'QB.fixture' },
+            { name: 'port', value: 443 },
+            { name: 'useSsl', value: true },
+            { name: 'urlBase', value: '/torrent' },
+            { name: 'username', value: 'private' },
+            { name: 'password', value: 'secret' },
+          ],
+        },
+        { implementation: 'Transmission', fields: [{ name: 'host', value: 'other' }] },
+        { implementation: 'QBittorrent', fields: [{ name: 'host', value: 'qb.fixture' }] },
+      ]))) as typeof fetch,
+  );
+  assertEquals(await client.qbittorrentEndpoints(), ['https://qb.fixture/torrent']);
 });
 
 Deno.test('ArrClient reads Sonarr and Radarr root folders in stable order with duplicates', async () => {
