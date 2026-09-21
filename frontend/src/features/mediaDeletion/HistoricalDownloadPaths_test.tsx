@@ -19,14 +19,18 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
               { length: 101 },
               (_, i) => ({ id: String(i), path: `/download/${i}`, ownerCount: 1, size: 2 }),
             ),
-            skipped: [{ source: "/kept", reason: "Retained owner" }],
+            skipped: [{
+              source: "/kept",
+              reason: "Retained owner",
+              details: "download root: invalid ino 0",
+            }],
           }}
         />,
       );
     });
     assertEquals(renderer.root.findAllByType("p").length, 0);
     await act(async () => {
-      renderer.root.findByType("details").props.onToggle({ currentTarget: { open: true } });
+      renderer.root.findAllByType("details")[0].props.onToggle({ currentTarget: { open: true } });
     });
     assertEquals(renderer.root.findAllByType("p").length, 51);
     for (let i = 0; i < 2; i++) {
@@ -40,6 +44,10 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
       "/kept: Retained owner",
     ]);
     assertEquals(renderer.root.findAllByType("button")[1].props.disabled, true);
+    const technical = renderer.root.findAllByType("details")[1];
+    assertEquals(technical.props.open, undefined);
+    assertEquals(technical.findByType("summary").children, ["Technical details"]);
+    assertEquals(technical.findByType("pre").children, ["download root: invalid ino 0"]);
   } finally {
     await act(async () => {
       renderer?.unmount();

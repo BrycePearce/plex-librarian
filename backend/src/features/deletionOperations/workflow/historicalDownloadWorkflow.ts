@@ -126,6 +126,9 @@ export async function ensureHistoricalDownloadPhase(
       await runHistoricalDownloadAttempt(store, id, {
         cancelled,
         validate: async () => {
+          if (accepted.filesystem.version !== 2) {
+            throw new Error('Older filesystem evidence requires a fresh preview and consent');
+          }
           const reserved = withTransaction((db) =>
             db.prepare(
               'SELECT 1 FROM historical_download_reservations WHERE entry=? AND journal_id=?',

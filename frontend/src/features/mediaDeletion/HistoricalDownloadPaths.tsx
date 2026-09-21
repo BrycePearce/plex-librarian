@@ -25,15 +25,23 @@ export function HistoricalDownloadPaths(
       const skipped = preview?.skipped[i - preview.candidates.length];
       const outcome = outcomes?.[i];
       rows.push(
-        <p key={i} className="break-all">
-          {outcome
-            ? `${outcome.path}: ${outcome.status.replaceAll("_", " ")}${
-              outcome.reason ? ` — ${outcome.reason}` : ""
-            }`
-            : candidate
-            ? `${candidate.path} · ${candidate.ownerCount} episode owners`
-            : `${skipped!.source}: ${skipped!.reason}`}
-        </p>,
+        <div key={i} className="break-all">
+          <p>
+            {outcome
+              ? `${outcome.path}: ${outcome.status.replaceAll("_", " ")}${
+                outcome.reason ? ` — ${outcome.reason}` : ""
+              }`
+              : candidate
+              ? `${candidate.path} · ${candidate.ownerCount} episode owners`
+              : `${skipped!.source}: ${skipped!.reason}`}
+          </p>
+          {skipped?.details && (
+            <details>
+              <summary>Technical details</summary>
+              <pre className="whitespace-pre-wrap">{skipped.details}</pre>
+            </details>
+          )}
+        </div>,
       );
     }
   }

@@ -1,5 +1,6 @@
 import { strictEqual, throws } from 'node:assert';
 import { runHistoricalDownloadAttempt } from './historicalDownloadJournal.ts';
+import { serviceOwnedFingerprint } from '../../mediaDeletion/serviceOwnedPlanning.ts';
 import {
   planServiceOwnedRetention,
   type ServiceOwnedAction,
@@ -173,4 +174,63 @@ Deno.test('SQLite optional results and reservations remain isolated from real se
     { operationId: 'success', serverId: 1 } as import('../core/types.ts').DeletionWorkTarget,
   );
   strictEqual(historicalDownloadJournalStore('success', 'shared:success').get().status, 'skipped');
+  // Old filesystem evidence is rejected inside validation; interrupted intents
+  // still take the existing no-replay path before any validation or inventory.
+  for (const status of ['pending', 'intent']) {
+    const evidence = {
+      version: 1,
+      filesystem: { version: 1, entry: 'shared:success', device: 1, inode: 2 },
+    };
+    withTransaction((db) =>
+      db.prepare('UPDATE historical_download_journal SET status=?,evidence=? WHERE id=?').run(
+        status,
+        JSON.stringify({ ...evidence, id: serviceOwnedFingerprint(evidence) }),
+        'success',
+      )
+    );
+    await ensureHistoricalDownloadPhase(
+      { operationId: 'success', serverId: 1 } as import('../core/types.ts').DeletionWorkTarget,
+    );
+    const result = historicalDownloadJournalStore('success', 'shared:success').get();
+    strictEqual(result.status, status === 'intent' ? 'uncertain' : 'skipped');
+    strictEqual(
+      result.reason?.includes(status === 'intent' ? 'never replayed' : 'fresh preview'),
+      true,
+    );
+  }
+  const exact = {
+    version: 2,
+    device: '44',
+    inode: '649925721227816726',
+    rootIdentity: '44:648799825613029714',
+    parentIdentity: '44:649925725556681959',
+  };
+  const roundtrip = withTransaction((db) => {
+    db.prepare('UPDATE historical_download_journal SET evidence=? WHERE id=?').run(
+      JSON.stringify(exact),
+      'success',
+    );
+    return JSON.parse(
+      db.prepare('SELECT evidence FROM historical_download_journal WHERE id=?').value<[string]>(
+        'success',
+      )![0],
+    );
+  });
+  strictEqual(roundtrip.inode, exact.inode);
+  strictEqual(roundtrip.device, exact.device);
+  strictEqual(roundtrip.rootIdentity, exact.rootIdentity);
+  strictEqual(roundtrip.parentIdentity, exact.parentIdentity);
+  strictEqual(serviceOwnedFingerprint(roundtrip), serviceOwnedFingerprint(exact));
+  for (
+    const change of [
+      { inode: '649925721227816727' },
+      { rootIdentity: '44:648799825613029715' },
+      { parentIdentity: '44:649925725556681960' },
+    ]
+  ) {
+    strictEqual(
+      serviceOwnedFingerprint({ ...exact, ...change }) === serviceOwnedFingerprint(exact),
+      false,
+    );
+  }
 });

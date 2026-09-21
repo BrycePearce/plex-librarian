@@ -1,30 +1,27 @@
 import { dirname, posix } from 'node:path';
 import { lstatChain } from './pathNamespace.ts';
 import { HistoricalUnlinkNotAttempted } from './historicalDownloadErrors.ts';
+import { exactHistoricalId, historicalNativeStat } from './historicalNativeStat.ts';
 
 export interface HistoricalFileSnapshot {
-  version: 1;
+  version: 2;
   path: string;
   root: string;
   entry: string;
   rootIdentity: string;
   parentIdentity: string;
   mount: string;
-  device: number;
-  inode: number;
+  device: string;
+  inode: string;
   size: number;
-  mtime: number | null;
-  ctime: number | null;
+  mtime: string;
+  ctime: string;
 }
 
-export function stableFilesystemIdentity(info: Pick<Deno.FileInfo, 'dev' | 'ino'>): string {
-  if (
-    !Number.isSafeInteger(info.dev) || info.dev! < 0 ||
-    !Number.isSafeInteger(info.ino) || info.ino! <= 0
-  ) {
-    throw new Error('Stable filesystem identity is unavailable');
-  }
-  return `${info.dev}:${info.ino}`;
+export function stableFilesystemIdentity(
+  info: { dev: string | number | null; ino: string | number | null },
+): string {
+  return `${exactHistoricalId(info.dev, 'dev')}:${exactHistoricalId(info.ino, 'ino')}`;
 }
 
 function absolute(path: string): void {
@@ -102,9 +99,15 @@ export async function inspectHistoricalFile(
   const info = await lstatChain(path);
   if (!info.isFile) throw new Error('Historical source is not a regular file');
   const parent = await lstatChain(dirname(path));
-  const rootIdentity = stableFilesystemIdentity(rootInfo);
-  stableFilesystemIdentity(info);
-  const parentIdentity = stableFilesystemIdentity(parent);
+  if (!parent.isDirectory) throw new Error('Historical parent is not a directory');
+  const nativeRoot = await historicalNativeStat(root, 'download root');
+  const nativeSource = await historicalNativeStat(path, 'source file');
+  const nativeParent = await historicalNativeStat(dirname(path), 'parent directory');
+  if (nativeRoot.type !== 0x4000 || nativeParent.type !== 0x4000 || nativeSource.type !== 0x8000) {
+    throw new Error('Historical path type changed during inspection');
+  }
+  const rootIdentity = stableFilesystemIdentity(nativeRoot);
+  const parentIdentity = stableFilesystemIdentity(nativeParent);
   const mounts = await Deno.readTextFile('/proc/self/mountinfo');
   const physical = historicalMountEntry(path, mounts);
   const app = historicalMountEntry(appDataRoot, mounts).entry;
@@ -112,18 +115,18 @@ export async function inspectHistoricalFile(
     throw new Error('App-data alias is unsafe');
   }
   return {
-    version: 1,
+    version: 2,
     path,
     root,
     rootIdentity,
     parentIdentity,
     entry: physical.entry,
     mount: physical.mount,
-    device: info.dev!,
-    inode: info.ino!,
-    size: info.size,
-    mtime: info.mtime?.getTime() ?? null,
-    ctime: info.ctime?.getTime() ?? null,
+    device: nativeSource.dev,
+    inode: nativeSource.ino,
+    size: nativeSource.size,
+    mtime: nativeSource.mtime,
+    ctime: nativeSource.ctime,
   };
 }
 
@@ -131,16 +134,27 @@ export async function historicalFileUnchanged(
   snapshot: HistoricalFileSnapshot,
   appDataRoot: string,
 ) {
+  // Never upgrade old numeric evidence into authority, even when it looks safe.
+  if (snapshot.version !== 2) return false;
   const fresh = await inspectHistoricalFile(snapshot.path, snapshot.root, appDataRoot);
   return JSON.stringify(fresh) === JSON.stringify(snapshot);
 }
 
 /** Absence is meaningful only while the accepted root and source mount still exist. */
 export async function historicalRootUnchanged(snapshot: HistoricalFileSnapshot): Promise<boolean> {
+  if (snapshot.version !== 2) return false;
   const root = await lstatChain(snapshot.root);
-  if (!root.isDirectory || stableFilesystemIdentity(root) !== snapshot.rootIdentity) return false;
+  const nativeRoot = await historicalNativeStat(snapshot.root, 'download root');
+  if (
+    !root.isDirectory || nativeRoot.type !== 0x4000 ||
+    stableFilesystemIdentity(nativeRoot) !== snapshot.rootIdentity
+  ) return false;
   const parent = await lstatChain(dirname(snapshot.path));
-  if (!parent.isDirectory || stableFilesystemIdentity(parent) !== snapshot.parentIdentity) {
+  const nativeParent = await historicalNativeStat(dirname(snapshot.path), 'parent directory');
+  if (
+    !parent.isDirectory || nativeParent.type !== 0x4000 ||
+    stableFilesystemIdentity(nativeParent) !== snapshot.parentIdentity
+  ) {
     return false;
   }
   const physical = historicalMountEntry(

@@ -17,6 +17,8 @@ USER root
 
 # Read-only folder diagnostics use GNU coreutils test, not Deno's access emulation.
 RUN /usr/bin/test --version > /dev/null
+# Exact historical cleanup IDs must not pass through Deno's numeric stat API.
+RUN /usr/bin/stat --version > /dev/null
 
 # Pin DENO_DIR so cached modules and the SQLite native DLL are baked into the image
 ENV DENO_DIR=/deno

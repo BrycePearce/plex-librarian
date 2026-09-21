@@ -39,5 +39,5 @@ export interface HistoricalAccessStatus {
 export interface HistoricalDownloadPreview {
   fingerprint: string;
   candidates: Array<{ id: string; path: string; size: number; ownerCount: number }>;
-  skipped: Array<{ source: string; reason: string }>;
+  skipped: Array<{ source: string; reason: string; details?: string }>;
 }

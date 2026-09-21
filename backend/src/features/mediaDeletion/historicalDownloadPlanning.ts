@@ -1,4 +1,5 @@
 import { dirname, posix } from 'node:path';
+import { HistoricalIdentityUnavailable } from './historicalNativeStat.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { HistoricalImportEvidence } from '../../integrations/arr/historicalImports.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
@@ -450,7 +451,11 @@ export async function collectHistoricalDownloads(
           accepted.push({ ...value, id: serviceOwnedFingerprint(value) });
         } catch (error) {
           if (candidateEntry) blockedEntries.add(candidateEntry);
-          skipped.push({ source: candidate.source, reason: String(error) });
+          skipped.push({
+            source: candidate.source,
+            reason: error instanceof HistoricalIdentityUnavailable ? error.message : String(error),
+            ...(error instanceof HistoricalIdentityUnavailable ? { details: error.details } : {}),
+          });
         }
       }
     } catch (error) {
