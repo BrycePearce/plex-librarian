@@ -2764,8 +2764,27 @@ Deno.test({
       );
       const fixtureFetch = globalThis.fetch;
       let serviceDeletes = 0;
+      let operationId: string | undefined;
+      let replacedAfterVerification = false;
       globalThis.fetch = async (input, init) => {
         const url = new URL(String(input));
+        // Discovery approves names, not inode evidence. Replace only after the
+        // worker has persisted its filesystem snapshot, during the last playback
+        // check before unlink, so this exercises the immediate mutation guard.
+        if (
+          scenario === 'changed' && operationId && !replacedAfterVerification &&
+          url.pathname === '/status/sessions' &&
+          withTransaction((db) =>
+            !!db.prepare(
+              "SELECT 1 FROM historical_download_journal WHERE operation_id=? AND status='pending' AND json_extract(evidence, '$.version')=1",
+            ).value(operationId)
+          )
+        ) {
+          assertEquals(serviceDeletes, 0);
+          await Deno.remove(source);
+          await Deno.writeFile(source, new Uint8Array(40_000));
+          replacedAfterVerification = true;
+        }
         if (url.hostname === 'sonarr' && url.pathname === '/api/v3/history/series') {
           return Response.json([{
             id: 1,
@@ -2833,6 +2852,7 @@ Deno.test({
         const response = await post('/api/service-deletions', body);
         assertEquals(response.status, 202, await response.clone().text());
         const accepted = await response.json();
+        operationId = accepted.operationId;
         const repeated = await post('/api/service-deletions', body);
         assertEquals(repeated.status, 202);
         assertEquals((await repeated.json()).operationId, accepted.operationId);
@@ -2849,11 +2869,9 @@ Deno.test({
             {},
           );
           assertEquals(cancelled.status, 200, await cancelled.clone().text());
-        } else if (scenario === 'changed') {
-          await Deno.remove(source);
-          await Deno.writeFile(source, new Uint8Array(40_000));
         }
         await settle();
+        assertEquals(replacedAfterVerification, scenario === 'changed');
         const operation = getDeletionOperation(accepted.operationId, 1)!;
         assertEquals(
           operation.status,
