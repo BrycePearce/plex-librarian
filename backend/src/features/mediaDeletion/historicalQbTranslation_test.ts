@@ -38,7 +38,6 @@ function fixture() {
       imports: [{
         downloadId: 'season-hash',
         droppedPath: `/completed/Manhattan/${i}.mkv`,
-        size: 7,
       }],
     },
     filesystem: { entry: `/fixture-local/Manhattan/${i}.mkv` },
@@ -134,7 +133,6 @@ function unrelatedLiveImport(f: ReturnType<typeof fixture>) {
     downloadId: hash.toUpperCase(),
     droppedPath: '/completed/Other Show/episode.mkv',
     importedPath: '/library/Other Show/episode.mkv',
-    size: 7,
     date: '2026-01-01T00:00:00Z',
   }]);
   return hash;
@@ -151,16 +149,17 @@ Deno.test('absent selected jobs use another live import without any remote mappi
   assertEquals(await f.resolve(), [], 'Fresh checks must not reuse old witness evidence');
 });
 
-Deno.test('unrelated live import requires exact hash/path/size agreement and matching endpoint', async () => {
-  for (const change of ['hash', 'path', 'size', 'endpoint', 'conflict']) {
+Deno.test('unrelated live import requires exact hash/path agreement and matching endpoint', async () => {
+  for (const change of ['hash', 'path', 'endpoint', 'conflict']) {
     const f = fixture();
     const hash = unrelatedLiveImport(f);
     const records = f.history.get(hash)!;
     if (change === 'hash') records[0].downloadId = 'cd'.repeat(20);
     if (change === 'path') records[0].droppedPath = '/completed/Other Show/wrong.mkv';
-    if (change === 'size') records[0].size++;
     if (change === 'endpoint') f.endpoints[0] = 'http://different.fixture:8080';
-    if (change === 'conflict') records.push({ ...records[0], size: 8 });
+    if (change === 'conflict') {
+      records.push({ ...records[0], droppedPath: '/completed/Other Show/conflict.mkv' });
+    }
     assertEquals(await f.resolve(), [], change);
   }
 });

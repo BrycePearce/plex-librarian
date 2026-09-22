@@ -1,4 +1,5 @@
 import { dirname, posix } from 'node:path';
+import { historicalDownloadCoverage } from './historicalDownloadCoverage.ts';
 import { type HistoricalQbMapping, historicalQbTranslations } from './historicalQbTranslation.ts';
 import { HistoricalIdentityUnavailable } from './historicalNativeStat.ts';
 import { withTransaction } from '../../db/index.ts';
@@ -250,6 +251,8 @@ export async function collectHistoricalDownloads(
   const access = listHistoricalAccess(serverId);
   const accepted: AcceptedHistoricalDownload[] = [];
   const skipped: HistoricalDownloadPreview['skipped'] = [];
+  const handled: NonNullable<HistoricalDownloadPreview['handled']> = [];
+  const manifests = new Map<string, DownloadJob>();
   const connectionRevision = historicalConnectionRevision(arr, qb);
   const contexts = new Map<
     string,
@@ -357,10 +360,31 @@ export async function collectHistoricalDownloads(
         if (matched) selected.add(episode.id);
       }
       const lineage = historicalDownloadLineage(history, current, selected);
-      skipped.push(...lineage.skipped);
-      const verifiedSources = new Set(lineage.candidates.map((c) => c.source));
+      let covered: typeof handled = [];
+      if (!deferJobClaims) {
+        try {
+          covered = await historicalDownloadCoverage(
+            history,
+            selected,
+            target,
+            plans,
+            qb,
+            access,
+            manifests,
+          );
+          handled.push(...covered);
+        } catch { /* Optional display evidence cannot invalidate ordinary deletion or cleanup. */ }
+      }
+      const coveredSources = new Set(covered.map((c) => c.source));
+      skipped.push(...lineage.skipped.filter((s) => !coveredSources.has(s.source)));
+      const uncoveredCandidates = lineage.candidates.filter((c) => !coveredSources.has(c.source));
+      const verifiedSources = new Set(uncoveredCandidates.map((c) => c.source));
       const unverifiedSources = new Set(
-        history.records.map((r) => r.droppedPath).filter((p) => !verifiedSources.has(p)),
+        [
+          ...history.records.map((r) => r.droppedPath),
+          ...history.problems.flatMap((p) => p.droppedPath ? [p.droppedPath] : []),
+        ]
+          .filter((p) => !verifiedSources.has(p)),
       );
       const ownerMounts = Deno.build.os === 'linux'
         ? await Deno.readTextFile('/proc/self/mountinfo')
@@ -408,7 +432,7 @@ export async function collectHistoricalDownloads(
           if (alias) blockedEntries.add(historicalMountEntry(alias, ownerMounts).entry);
         }
       }
-      for (const candidate of lineage.candidates) {
+      for (const candidate of uncoveredCandidates) {
         signal?.throwIfAborted();
         if (accepted.length >= 10_000) {
           throw new Error(
@@ -435,9 +459,6 @@ export async function collectHistoricalDownloads(
             root.configuration.localRoot,
             historicalAppDataRoot(),
           );
-          if (filesystem.size !== candidate.size) {
-            throw new Error('Historical source size disagrees with recorded import size');
-          }
           if (claimedPaths.has(candidate.source) || claimedEntries.has(filesystem.entry)) {
             throw new Error('A current or retained service owner claims this source or its alias');
           }
@@ -481,7 +502,7 @@ export async function collectHistoricalDownloads(
     })));
     accepted.length = 0;
   }
-  if (!deferJobClaims) {
+  if (!deferJobClaims && accepted.length) {
     try {
       const claims = await historicalJobClaims(
         accepted,
@@ -525,6 +546,7 @@ export async function collectHistoricalDownloads(
       ownerCount: historicalOwnerContexts(c).reduce((sum, o) => sum + o.lineage.owners.length, 0),
     })),
     skipped,
+    handled,
   };
   return { preview, accepted: unique };
 }

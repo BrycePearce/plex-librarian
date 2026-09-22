@@ -2,13 +2,19 @@ import { posix } from 'node:path';
 import type { HistoricalAccessStatus } from '../../../../shared/historicalDownloads.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob, DownloadJobSummary } from './downloadClient.ts';
-import type { AcceptedHistoricalDownload } from './historicalDownloadPlanning.ts';
 import type { HistoricalImport } from '../../integrations/arr/historicalImports.ts';
 
 export interface HistoricalQbMapping {
   remote: string;
   local: string;
   explicit?: boolean;
+}
+/** Translation witnesses do not need filesystem/unlink eligibility. */
+export interface HistoricalTranslationContext {
+  accessId: string;
+  accessRevision: string;
+  lineage: { imports: HistoricalImport[] };
+  contexts?: HistoricalTranslationContext[];
 }
 const beneath = (path: string, root: string) => path === root || path.startsWith(root + '/');
 const safe = (path: string) =>
@@ -25,7 +31,7 @@ export async function historicalQbTranslations(
   target: DownloadClientTarget,
   arr: readonly ArrDeleteTarget[],
   access: readonly HistoricalAccessStatus[],
-  candidates: readonly AcceptedHistoricalDownload[],
+  candidates: readonly HistoricalTranslationContext[],
   summaries: readonly DownloadJobSummary[],
   manifests: Map<string, DownloadJob>,
 ): Promise<HistoricalQbMapping[]> {
@@ -162,12 +168,12 @@ export async function historicalQbTranslations(
         manifests.set(key, job);
         const exactFiles = new Set(
           job.manifestFiles.filter((f) => f.path && !f.path.startsWith('/') && safe('/' + f.path))
-            .map((f) => `${posix.join(job.savePath, f.path)}\0${f.size}`),
+            .map((f) => posix.join(job.savePath, f.path)),
         );
         if (
           records.every((r) =>
             r.downloadId?.toLowerCase() === hash &&
-            exactFiles.has(`${r.droppedPath}\0${r.size}`)
+            exactFiles.has(r.droppedPath)
           )
         ) {
           inferred.push({ remote: remoteRoot, local: localRoot });

@@ -4,6 +4,7 @@ import TestRenderer, { act } from "react-test-renderer";
 import { api } from "../../lib/api.ts";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
 import { DeletionDialogFooter } from "./DeletionDialog.tsx";
+import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
 import type { ServiceDeletionRequest } from "../../../../shared/serviceOwnedDeletion.ts";
 
@@ -19,6 +20,7 @@ const historical: HistoricalDownloadPreview = {
   fingerprint: "historical-fingerprint",
   candidates: [{ id: "one-exact-file", path: "/downloads/episode", size: 10, ownerCount: 2 }],
   skipped: [],
+  handled: [{ source: "/downloads/tracked", service: "qb", actionIds: ["job"] }],
 };
 const preview = {
   fingerprint: "service-fingerprint",
@@ -138,6 +140,86 @@ Deno.test("history consent binds reviewed candidates; opting out or cancelling v
     await settleReact(() => {
       renderer?.unmount();
     });
+    Object.assign(api.serviceDeletions, original);
+    globals.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});
+
+Deno.test("QB coverage refreshes on selection changes and handled paths never gain unlink consent", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const original = { ...api.serviceDeletions };
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const selections: boolean[] = [];
+  api.serviceDeletions.preview = (choices) =>
+    Promise.resolve({
+      ...preview,
+      qbConfigured: true,
+      targets: [{
+        ...preview.targets[0],
+        decisions: [...preview.targets[0].decisions, {
+          actionId: "job",
+          targetId: "job",
+          service: "qb",
+          presence: "current",
+          matchedToSelection: true,
+          requested: choices.qbSelected,
+          state: choices.qbSelected ? "delete_candidate" : "kept",
+          reason: "fixture",
+          evidenceRevision: "fixture",
+        }],
+      }],
+    });
+  api.serviceDeletions.historicalPreview = (choices) => {
+    selections.push(choices.qbSelected);
+    return Promise.resolve({
+      fingerprint: String(choices.qbSelected),
+      candidates: [],
+      handled: choices.qbSelected ? historical.handled : [],
+      skipped: choices.qbSelected
+        ? []
+        : [{ source: "/downloads/tracked", reason: "A current download job owns this entry" }],
+    });
+  };
+  api.serviceDeletions.create = () => {
+    throw new Error("Review must never submit deletion");
+  };
+  try {
+    await settleReact(() => {
+      renderer = TestRenderer.create(
+        <ServiceOwnedDeletionDialog
+          libraryKey="fixture"
+          targets={[{ ratingKey: "season" }]}
+          dialogRef={{ current: null }}
+          onCreated={() => {}}
+          onCancel={() => {}}
+          focusCancel={false}
+        />,
+      );
+    });
+    const toggle = (checked: boolean) =>
+      settleReact(() => {
+        renderer!.root.findByType(DestinationOptions).props.options.find((o: { id: string }) =>
+          o.id === "cleanup"
+        ).onChange(checked);
+      });
+    await toggle(true);
+    const labels = () =>
+      renderer!.root.findAllByType("label").map((l) =>
+        l.children.filter((c) => typeof c !== "object").join("")
+      );
+    assertEquals(labels().some((t) => t.includes("1 handled by qBittorrent")), true);
+    assertEquals(
+      renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
+        .length,
+      0,
+    );
+    await toggle(false);
+    assertEquals(labels().some((t) => t.includes("0 handled by qBittorrent")), true);
+    assertEquals(selections.at(-1), false);
+  } finally {
+    await settleReact(() => renderer?.unmount());
     Object.assign(api.serviceDeletions, original);
     globals.IS_REACT_ACT_ENVIRONMENT = previous;
   }

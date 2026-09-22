@@ -362,7 +362,8 @@ function SelectionDialog({
                 )}
                 Remove history-linked download files ({historical?.candidates.length ?? 0} eligible,
                 {" "}
-                {historical?.skipped.length ?? 0} skipped)
+                {historical?.handled?.length ?? 0} handled by qBittorrent,{" "}
+                {historical?.skipped.length ?? 0} unresolved or retained)
               </label>
             )}
           <p className="text-xs mt-1">

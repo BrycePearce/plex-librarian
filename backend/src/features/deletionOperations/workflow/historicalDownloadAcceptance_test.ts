@@ -89,7 +89,6 @@ Deno.test({
           episodeId: index,
           importedPath: '/library/' + name,
           droppedPath: '/downloads/' + name,
-          size: 7,
           date: '2026-01-01',
           downloadId: null,
         });

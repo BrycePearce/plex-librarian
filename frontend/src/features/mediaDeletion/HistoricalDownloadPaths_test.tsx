@@ -24,6 +24,7 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
               reason: "Retained owner",
               details: "download root: invalid ino 0",
             }],
+            handled: [{ source: "/tracked", service: "qb", actionIds: ["job"] }],
           }}
         />,
       );
@@ -39,9 +40,10 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
       });
     }
     assertEquals(renderer.root.findAllByType("p").map((p) => p.children.join("")), [
-      "Consent includes all 101 eligible paths. 101–102 of 102 paths shown.",
+      "Consent includes all 101 eligible paths. 101–103 of 103 paths shown.",
       "/download/100 · 1 episode owners",
       "/kept: Retained owner",
+      "/tracked: Handled by qBittorrent (selected eligible action)",
     ]);
     assertEquals(renderer.root.findAllByType("button")[1].props.disabled, true);
     const technical = renderer.root.findAllByType("details")[1];

@@ -87,13 +87,28 @@ Deno.test('historical prototype: exact lineage without a torrent, full shared ow
       new Set<number>(selected),
     );
   strictEqual(collect(history).candidates.length, 2);
+  // Historical size is never authority: omitted, malformed, mismatched or
+  // conflicting fields have the same lineage as records containing a size.
+  for (const sizeFields of [{}, { size: 'invalid' }, { size: '1' }, { size: '1', Size: '2' }]) {
+    const rows = history.map((r: { data: Record<string, unknown> }) => {
+      const data = { ...r.data };
+      delete data.size;
+      delete data.Size;
+      return { ...r, data: { ...data, ...sizeFields } };
+    });
+    equal(collect(rows), collect(history));
+  }
   strictEqual(
     collect(history.map((r: Record<string, unknown>) => ({ ...r, downloadId: undefined })))
       .candidates.length,
     2,
   );
   strictEqual(collect(history, current, current.selections.single).candidates.length, 1);
-  for (const rows of Object.values(synthetic.malformed)) {
+  for (const [kind, rows] of Object.entries(synthetic.malformed)) {
+    if (kind === 'conflictingSizes' || kind === 'malformedSize') {
+      strictEqual(collect(rows).candidates.length, 1);
+      continue;
+    }
     strictEqual(collect(rows).candidates.length, 0);
     strictEqual(collect(rows).skipped.length > 0, true);
   }
@@ -111,7 +126,7 @@ Deno.test('historical prototype: exact lineage without a torrent, full shared ow
   strictEqual(collect(shared.history, changed, shared.selections.complete).candidates.length, 0);
 });
 
-Deno.test('historical execution refresh checks file ID, series, path, size and complete owners', async () => {
+Deno.test('historical execution refresh checks file ID, series, path and complete owners', async () => {
   const { shared } = await fixture('synthetic-cases');
   const current = snapshot(shared.current);
   const lineage = historicalDownloadLineage(
@@ -134,7 +149,7 @@ Deno.test('historical execution refresh checks file ID, series, path, size and c
   };
   strictEqual(await historicalSelectedFilesUnchanged(client, 701, lineage), true);
   for (
-    const changed of [{ path: '/replacement.mkv' }, { size: 1 }, { seriesId: 702 }, { id: 612 }]
+    const changed of [{ path: '/replacement.mkv' }, { seriesId: 702 }, { id: 612 }]
   ) {
     file = { ...current.files[0], ...changed };
     strictEqual(await historicalSelectedFilesUnchanged(client, 701, lineage), false);

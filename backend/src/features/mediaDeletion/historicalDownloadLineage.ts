@@ -9,7 +9,6 @@ export interface HistoricalLineageCandidate {
   imports: HistoricalImport[];
   owners: number[];
   fileIds: number[];
-  size: number;
 }
 
 /** Refresh the exact imported file as well as its complete owners before unlink. */
@@ -27,7 +26,7 @@ export async function historicalSelectedFilesUnchanged(
     const expected = new Set(imports.map((r) => r.episodeId));
     if (
       !file || file.id !== fileId || file.seriesId !== seriesId ||
-      imports.some((r) => r.importedPath !== file.path || r.size !== file.size) ||
+      imports.some((r) => r.importedPath !== file.path) ||
       owners.length !== expected.size || owners.some((o) => !expected.has(o))
     ) return false;
   }
@@ -62,7 +61,7 @@ export function historicalDownloadLineage(
       if (
         !file || !episode || episode.seriesId !== row.seriesId ||
         episode.episodeFileId !== row.fileId || file.seriesId !== row.seriesId ||
-        file.path !== row.importedPath || file.size !== row.size || row.size !== imports[0].size ||
+        file.path !== row.importedPath ||
         !actualOwners.length || actualOwners.length !== new Set(file.episodeIds).size ||
         !actualOwners.every((id) => file.episodeIds.includes(id)) ||
         actualOwners.some((id) =>
@@ -82,13 +81,25 @@ export function historicalDownloadLineage(
         imports,
         owners: [...owners].sort((a, b) => a - b),
         fileIds: [...new Set(imports.map((r) => r.fileId))],
-        size: imports[0].size,
       });}
   }
   for (const problem of evidence.problems) {
     if (problem.episodeId === null || selectedEpisodeIds.has(problem.episodeId)) {
-      skipped.push({ source: '(exact source unavailable)', reason: problem.reason });
+      skipped.push({
+        source: problem.droppedPath ?? '(exact source unavailable)',
+        reason: problem.reason,
+      });
     }
   }
-  return { candidates, skipped };
+  const unique = new Map<string, { source: string; reason: string }>();
+  for (const entry of skipped) {
+    // Unknown sources remain record-level problems; they cannot be file-deduplicated.
+    const key = entry.source === '(exact source unavailable)'
+      ? `unknown:${unique.size}`
+      : entry.source;
+    const previous = unique.get(key);
+    if (!previous) unique.set(key, { ...entry });
+    else if (!previous.reason.includes(entry.reason)) previous.reason += '; ' + entry.reason;
+  }
+  return { candidates, skipped: [...unique.values()] };
 }

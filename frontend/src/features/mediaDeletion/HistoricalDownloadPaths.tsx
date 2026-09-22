@@ -14,7 +14,9 @@ export function HistoricalDownloadPaths(
   const outcomes = "outcomes" in props ? props.outcomes : undefined;
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(0);
-  const total = preview ? preview.candidates.length + preview.skipped.length : outcomes!.length;
+  const total = preview
+    ? preview.candidates.length + preview.skipped.length + (preview.handled?.length ?? 0)
+    : outcomes!.length;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
   const start = currentPage * PAGE_SIZE;
   const end = Math.min(total, start + PAGE_SIZE);
@@ -23,6 +25,7 @@ export function HistoricalDownloadPaths(
     for (let i = start; i < end; i++) {
       const candidate = preview?.candidates[i];
       const skipped = preview?.skipped[i - preview.candidates.length];
+      const handled = preview?.handled?.[i - preview.candidates.length - preview.skipped.length];
       const outcome = outcomes?.[i];
       rows.push(
         <div key={i} className="break-all">
@@ -33,6 +36,8 @@ export function HistoricalDownloadPaths(
               }`
               : candidate
               ? `${candidate.path} · ${candidate.ownerCount} episode owners`
+              : handled
+              ? `${handled.source}: Handled by qBittorrent (selected eligible action)`
               : `${skipped!.source}: ${skipped!.reason}`}
           </p>
           {skipped?.details && (
@@ -48,7 +53,7 @@ export function HistoricalDownloadPaths(
   return (
     <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
-        {preview ? "Review exact paths and skipped files" : "Review exact file outcomes"}
+        {preview ? "Review exact paths and coverage" : "Review exact file outcomes"}
       </summary>
       {open && (
         <>

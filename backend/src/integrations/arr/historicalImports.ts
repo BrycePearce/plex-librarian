@@ -7,14 +7,20 @@ export interface HistoricalImport {
   fileId: number;
   droppedPath: string;
   importedPath: string;
-  size: number;
   date: string;
   downloadId: string | null;
 }
 
 export interface HistoricalImportEvidence {
   records: HistoricalImport[];
-  problems: Array<{ episodeId: number | null; reason: string }>;
+  problems: Array<{
+    episodeId: number | null;
+    reason: string;
+    /** Independently validated provenance, never standalone unlink authority. */
+    droppedPath?: string;
+    importedPath?: string;
+    historyId?: number;
+  }>;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -33,12 +39,14 @@ function positive(value: unknown): number {
 
 function decimal(values: unknown[], label: string): number {
   const present = values.filter((v) => v !== undefined);
+  if (!present.length) throw new Error(`Missing ${label}`);
   if (
-    !present.length || !present.every((v) =>
+    !present.every((v) =>
       typeof v === 'string' && /^(0|[1-9]\d*)$/.test(v) &&
-      Number.isSafeInteger(Number(v)) && v === present[0]
+      Number.isSafeInteger(Number(v))
     )
-  ) throw new Error(`Missing, malformed or conflicting ${label}`);
+  ) throw new Error(`Malformed ${label}`);
+  if (!present.every((v) => v === present[0])) throw new Error(`Conflicting ${label}`);
   return Number(present[0]);
 }
 
@@ -63,13 +71,27 @@ export function parseHistoricalImports(
   const result: HistoricalImportEvidence = { records: [], problems: [] };
   for (const raw of payload) {
     let episodeId: number | null = null;
+    const provenance: Pick<
+      HistoricalImportEvidence['problems'][number],
+      'droppedPath' | 'importedPath' | 'historyId'
+    > = {};
     try {
       const row = object(raw);
       if (typeof row.eventType !== 'string') throw new Error('Malformed history event');
       if (row.eventType.toLowerCase() !== 'downloadfolderimported') continue;
-      episodeId = positive(row.episodeId);
-      if (positive(row.seriesId) !== seriesId) throw new Error('Conflicting import series');
       const data = object(row.data);
+      // Parse independently: a bad file ID must not erase an exact source,
+      // and a bad destination must not hide the separately valid source either.
+      for (const key of ['droppedPath', 'importedPath'] as const) {
+        try {
+          provenance[key] = path(data[key]);
+        } catch { /* No guessed path. */ }
+      }
+      try {
+        provenance.historyId = positive(row.id);
+      } catch { /* Preserve other fields. */ }
+      if (positive(row.seriesId) !== seriesId) throw new Error('Conflicting import series');
+      episodeId = positive(row.episodeId);
       const fileId = decimal([data.fileId, data.FileId], 'imported file ID');
       positive(fileId);
       if (typeof row.date !== 'string' || !Number.isFinite(Date.parse(row.date))) {
@@ -82,12 +104,11 @@ export function parseHistoricalImports(
         fileId,
         droppedPath: path(data.droppedPath),
         importedPath: path(data.importedPath),
-        size: decimal([data.size, data.Size], 'recorded byte size'),
         date: row.date,
         downloadId: typeof row.downloadId === 'string' ? row.downloadId : null,
       });
     } catch (error) {
-      result.problems.push({ episodeId, reason: (error as Error).message });
+      result.problems.push({ episodeId, reason: (error as Error).message, ...provenance });
     }
   }
   return result;

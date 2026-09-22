@@ -53,9 +53,9 @@ entry checks, fresh ownership, accepted scope and explicit consent are still nee
 | Shared + partial selection | Retain the source: episode 812 also owns current file 611 and is unselected. |
 | Shared + complete selection | One source can qualify, with both import records/owners retained and one eventual candidate/attempt. |
 | Missing exact dropped path | Skip: synthetic `sourcePath` is only a release directory; it must not substitute for `droppedPath`. |
-| Conflicting sizes | Skip: two records for the same episode/file/source report different sizes; one disagrees with current size. Do not choose the convenient record. |
+| Conflicting sizes | Historical size is ignored; exact lineage and current owners still apply. |
 | Conflicting file IDs | Skip: synthetic `fileId` and `FileId` disagree; do not select one casing. |
-| Malformed size | Skip: recorded size is not numeric; do not replace it with current size. |
+| Malformed size | Historical size is ignored; exact lineage and current owners still apply. |
 
 Shared owners, missing paths, size/ID conflicts, malformed size, and QB overlaps or
 transitions were not observed in the saved evidence. No local stat, inode, hardlink,

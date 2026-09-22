@@ -40,4 +40,6 @@ export interface HistoricalDownloadPreview {
   fingerprint: string;
   candidates: Array<{ id: string; path: string; size: number; ownerCount: number }>;
   skipped: Array<{ source: string; reason: string; details?: string }>;
+  /** Covered by eligible selected service actions; never part of optional unlink consent. */
+  handled?: Array<{ source: string; service: 'qb'; actionIds: string[] }>;
 }
