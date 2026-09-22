@@ -94,32 +94,11 @@ export function ServiceDeletionPreviewList(
                 />
               );
             })}
-            {!!historical?.candidates.length && (
-              <BasicDeletionRow
-                title="Leftover download files"
-                titleText="Exact files linked by Sonarr import history"
-                badges={<span className="badge badge-ghost badge-xs">Downloads</span>}
-                marks={
-                  <span className="text-xs text-base-content/60">
-                    {historical.candidates.length} files
-                  </span>
-                }
-                size={historical.discovery ? "Size not yet checked" : formatKilobytes(
-                  historical.candidates.reduce((sum, file) => sum + file.size / 1000, 0),
-                )}
-              />
-            )}
           </BasicDeletionList>
         }
         advanced={<ServiceDeletionFileTree preview={preview} historical={historical} />}
       />
-      {!!historical?.candidates.length && (
-        <p className="mt-2 text-xs text-base-content/60">
-          Includes leftover download files linked by Sonarr history. Only listed files are
-          considered; parent folders are kept.
-        </p>
-      )}
-      {!!historical?.skipped.length && (
+      {mode === "advanced" && !!historical?.skipped.length && (
         <div className="mt-2 text-xs text-base-content/60">
           <HistoricalDownloadPaths
             exclusionsOnly

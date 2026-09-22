@@ -121,10 +121,8 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
       historical,
     );
     assertEquals(
-      renderer!.root.findAllByType(BasicDeletionRow).some((row) =>
-        row.props.title === "Leftover download files"
-      ),
-      true,
+      renderer!.root.findAllByType(BasicDeletionRow).map((row) => row.props.title),
+      ["Fixture season"],
     );
     await settleReact(() => {
       renderer!.root.findByType(DeletionPreview).props.onModeChange("advanced");
