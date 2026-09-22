@@ -230,7 +230,19 @@ export interface PlexMediaVersion {
 // a path that changed after this lookup.
 export interface PlexMediaPathPreview {
   /** Bounded file-backed version identities, requested by ordinary deletion. */
-  versionFiles?: Array<{ ratingKey: string; mediaId: number; path: string; size: number }>;
+  versionFiles?: Array<{
+    ratingKey: string;
+    mediaId: number;
+    path: string;
+    size: number;
+    /** Live leaf metadata for scope discovery, not independent ownership verification. */
+    episodeIdentity?: {
+      showRatingKey: string;
+      librarySectionId: string;
+      seasonIndex: number;
+      episodeIndex: number;
+    };
+  }>;
   /** Optional current Part byte sizes for bounded current-payload verification. */
   fileSizes?: Record<string, number | null>;
   pathAccessSample?: { ratingKey: string; mediaId: number; path: string; size: number };

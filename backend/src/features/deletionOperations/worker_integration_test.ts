@@ -53,6 +53,12 @@ Deno.test('history discovery shares reads; optional verification failure cannot 
         body: JSON.stringify(choices),
       })).json();
       assertEquals(preview.historical.candidates.length, 1);
+      assertEquals(
+        preview.historical.candidates[0].actionIds,
+        preview.targets[0].decisions.filter((decision: { service: string; presence: string }) =>
+          decision.service === 'sonarr' && decision.presence === 'current'
+        ).map((decision: { actionId: string }) => decision.actionId),
+      );
       assertEquals(historyReads, 1);
       const body = {
         ...choices,

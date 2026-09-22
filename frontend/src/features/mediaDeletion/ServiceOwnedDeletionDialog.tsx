@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
+import type { ArrIntegrationSettings, QbittorrentIntegrationSettings } from "@shared/types";
 import type { ReactNode, RefObject } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -7,6 +9,7 @@ import type {
   ServiceDeletionSelection,
 } from "../../../../shared/serviceOwnedDeletion.ts";
 import { api, ApiError, deletionOperationIdFromError } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 import {
   DeletionDialogFooter,
   DeletionModalShell,
@@ -74,6 +77,21 @@ function SelectionDialog({
   focusCancel = true,
   selectionDisabled = false,
 }: ServiceOwnedDeletionDialogProps) {
+  // Cached configuration only sizes placeholders; it never determines availability
+  // or consent. Unknown cache entries retain the generic loading placeholders.
+  const queryClient = useContext(QueryClientContext);
+  const arrConnections = queryClient?.getQueryData<ArrIntegrationSettings>(
+    queryKeys.arrIntegrations.all,
+  );
+  const qbConnections = queryClient?.getQueryData<QbittorrentIntegrationSettings>(
+    queryKeys.qbittorrentIntegrations.all,
+  );
+  const loadingOptionCount =
+    Number(arrConnections === undefined || arrConnections.instances.length > 0) +
+    Number(
+      qbConnections === undefined || qbConnections.envConfigured ||
+        qbConnections.instances.length > 0,
+    );
   const cancelButtonRef = useDeletionDialogCancelFocus(dialogRef, libraryKey, focusCancel);
   const [arrSelected, setArrSelected] = useState(false);
   const [qbSelected, setQbSelected] = useState(false);
@@ -273,6 +291,7 @@ function SelectionDialog({
       {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
       <DestinationOptions
         loading={loading}
+        loadingOptionCount={loadingOptionCount}
         options={[
           ...(arrNames
             ? [{

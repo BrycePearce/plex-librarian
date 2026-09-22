@@ -286,9 +286,11 @@ export function downloadJobFiles(job: DownloadCleanupJob): TreeFile[] {
 export function ActiveServiceMark({
   service,
   label,
+  historical = false,
 }: {
   service: ServiceIconName;
   label: string;
+  historical?: boolean;
 }) {
   const color = service === "plex"
     ? "bg-plex/15"
@@ -304,7 +306,11 @@ export function ActiveServiceMark({
       role="img"
       aria-label={label}
     >
-      <ServiceIcon service={service} className="size-3.5" />
+      <ServiceIcon
+        service={service}
+        historical={historical}
+        className={historical ? "size-4" : "size-3.5"}
+      />
     </span>
   );
 }

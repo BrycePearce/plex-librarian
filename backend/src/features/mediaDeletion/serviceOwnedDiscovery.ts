@@ -39,6 +39,7 @@ export async function discoverHistoricalDownloads(
   const scope: HistoricalDiscovery[] = [];
   const skipped: HistoricalDownloadPreview['skipped'] = [];
   const access = listHistoricalAccess(serverId);
+  const fileActions = new Map<string, Set<string>>();
   const contexts = new Map<
     string,
     { instanceId: number; seriesId: number; episodes: Set<number> }
@@ -48,6 +49,10 @@ export async function discoverHistoricalDownloads(
       continue;
     }
     const key = `${action.instanceId}:${action.recordId}`;
+    const fileKey = `${key}:${action.fileId}`;
+    const actionIds = fileActions.get(fileKey) ?? new Set<string>();
+    actionIds.add(action.id);
+    fileActions.set(fileKey, actionIds);
     const context = contexts.get(key) ??
       { instanceId: action.instanceId, seriesId: action.recordId, episodes: new Set<number>() };
     for (const id of action.episodeIds ?? []) context.episodes.add(id);
@@ -109,6 +114,13 @@ export async function discoverHistoricalDownloads(
         path: c.lineage.source,
         size: 0,
         ownerCount: c.lineage.owners.length,
+        actionIds: [
+          ...new Set(
+            c.lineage.fileIds.flatMap((
+              fileId,
+            ) => [...(fileActions.get(`${c.instanceId}:${c.seriesId}:${fileId}`) ?? [])]),
+          ),
+        ],
       })),
       skipped,
     },

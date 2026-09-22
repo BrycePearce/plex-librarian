@@ -177,6 +177,18 @@ function appendMediaPaths(
             mediaId: Number(media.id),
             path: part.file,
             size,
+            ...(item.type === 'episode' && item.grandparentRatingKey &&
+                item.librarySectionID != null && Number.isSafeInteger(item.parentIndex) &&
+                item.parentIndex! >= 0 && Number.isSafeInteger(item.index) && item.index! > 0
+              ? {
+                episodeIdentity: {
+                  showRatingKey: String(item.grandparentRatingKey),
+                  librarySectionId: String(item.librarySectionID),
+                  seasonIndex: item.parentIndex!,
+                  episodeIndex: item.index!,
+                },
+              }
+              : {}),
           });
         }
         if (seen.has(part.file)) {

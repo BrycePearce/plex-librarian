@@ -59,6 +59,7 @@ export function ServiceDeletionPreviewList(
   },
 ) {
   const [mode, setMode] = useState<"basic" | "advanced">("basic");
+  const historicalActions = new Set(historical?.candidates.flatMap((file) => file.actionIds ?? []));
   return (
     <div aria-busy={loading}>
       <DeletionPreview
@@ -69,6 +70,10 @@ export function ServiceDeletionPreviewList(
           <BasicDeletionList>
             {(preview?.targets ?? selectionDetails.map((target) => ({ ...target, decisions: [] })))
               .map((target) => {
+                const includesHistorical = target.decisions.some((action) =>
+                  action.service === "sonarr" && action.requested &&
+                  historicalActions.has(action.actionId)
+                );
                 const context = [
                   target.showTitle,
                   target.episodeIndex != null
@@ -115,7 +120,10 @@ export function ServiceDeletionPreviewList(
                           <ActiveServiceMark
                             key={service}
                             service={service === "qb" ? "qbittorrent" : service}
-                            label={deletionServiceNames[service] + " deletion"}
+                            historical={service === "sonarr" && includesHistorical}
+                            label={service === "sonarr" && includesHistorical
+                              ? "Sonarr + historical downloads"
+                              : deletionServiceNames[service] + " deletion"}
                           />
                         ))}
                       </span>
@@ -302,7 +310,14 @@ export function ServiceDeletionFileTree({ preview, historical }: {
         <PathTreeRoot
           key={root}
           path={root}
-          source="Downloads"
+          source="Historical downloads"
+          marks={
+            <ActiveServiceMark
+              service="sonarr"
+              historical
+              label="Sonarr + historical downloads"
+            />
+          }
           files={files}
           totalFiles={files.length}
           info="Intended leftover files linked by Sonarr history; eligibility is checked after confirmation."

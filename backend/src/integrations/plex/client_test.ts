@@ -1384,3 +1384,49 @@ Deno.test('media path preview cancellation interrupts retry backoff', async () =
   // waiting for that timer, while leaving generous headroom for a busy test runner.
   assertEquals(performance.now() - startedAt < 500, true);
 });
+
+Deno.test('version path discovery preserves complete live episode coordinates and exact paths', async () => {
+  const base = {
+    ratingKey: 'episode',
+    type: 'episode',
+    title: 'Episode',
+    grandparentRatingKey: 'show',
+    librarySectionID: 7,
+    parentIndex: 0,
+    index: 1,
+    Media: [{ id: 10, Part: [{ file: '/TV/Exact Name.mkv', size: 100 }] }],
+  };
+  for (
+    const patch of [{}, { parentIndex: undefined }, { index: 0 }, { librarySectionID: undefined }, {
+      type: 'movie',
+    }]
+  ) {
+    const raw = { ...base, ...patch };
+    const client = new PlexClient(
+      'http://fixture.invalid',
+      'fixture-token',
+      undefined,
+      (() =>
+        Promise.resolve(
+          Response.json({ MediaContainer: { totalSize: 1, Metadata: [raw] } }),
+        )) as typeof fetch,
+    );
+    const preview = await client.mediaPathPreview('show', 'show', 10, undefined, true, true);
+    assertEquals(preview.versionFiles![0], {
+      ratingKey: 'episode',
+      mediaId: 10,
+      path: '/TV/Exact Name.mkv',
+      size: 100,
+      ...(Object.keys(patch).length === 0
+        ? {
+          episodeIdentity: {
+            showRatingKey: 'show',
+            librarySectionId: '7',
+            seasonIndex: 0,
+            episodeIndex: 1,
+          },
+        }
+        : {}),
+    });
+  }
+});

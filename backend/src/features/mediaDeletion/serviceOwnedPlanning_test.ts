@@ -1,5 +1,5 @@
 import { deepStrictEqual as equal, notDeepStrictEqual, rejects } from 'node:assert/strict';
-import type { PlexClient } from '../../integrations/plex/client.ts';
+import { PlexClient } from '../../integrations/plex/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob, DownloadJobSummary } from './downloadClient.ts';
 import { buildServiceOwnedPlan, type ServiceOwnedPlanningInput } from './serviceOwnedPlanning.ts';
@@ -1023,4 +1023,103 @@ Deno.test('discovery reuses the route owner identity but execution reads it fres
     });
     equal(wrongOwner.actions[0].presence, 'unknown');
   }
+});
+
+Deno.test('live leaf discovery avoids per-episode HTTP reads while worker verification remains fresh', async () => {
+  const f = fixture();
+  const show = {
+    ratingKey: 'show',
+    title: 'Show',
+    type: 'show',
+    librarySectionID: '1',
+    Guid: [{ id: 'tvdb://123' }],
+  };
+  const leaves = Array.from({ length: 24 }, (_, i) => ({
+    ratingKey: String(i + 1),
+    title: `Episode ${i + 1}`,
+    type: 'episode',
+    librarySectionID: '1',
+    grandparentRatingKey: 'show',
+    parentIndex: 1,
+    index: i + 1,
+    Media: [{ id: i + 1, Part: [{ file: `/plex/Show/${i + 1}.mkv`, size: 100 }] }],
+  }));
+  const requests: string[] = [];
+  let delay = 20;
+  let moved = false;
+  let incompleteLeaf = false;
+  const plex = new PlexClient(
+    'http://fixture.invalid',
+    'fixture-token',
+    undefined,
+    (async (input) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(path);
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (path.endsWith('/allLeaves')) {
+        return Response.json({
+          MediaContainer: {
+            totalSize: leaves.length,
+            Metadata: leaves.map((leaf, index) =>
+              incompleteLeaf && index === 0 ? { ...leaf, librarySectionID: undefined } : leaf
+            ),
+          },
+        });
+      }
+      const key = path.split('/').at(-1);
+      const item = key === 'show' ? show : leaves.find((leaf) => leaf.ratingKey === key);
+      return Response.json({
+        MediaContainer: {
+          Metadata: item
+            ? [{ ...item, ...(moved && key !== 'show' ? { grandparentRatingKey: 'other' } : {}) }]
+            : [],
+        },
+      });
+    }) as typeof fetch,
+  );
+  const input: ServiceOwnedPlanningInput = {
+    ...f.input,
+    plex,
+    arrTargets: [],
+    selection: { ratingKey: 'show', title: 'Show', type: 'show', tmdbId: null, tvdbId: 123 },
+  };
+  const started = performance.now();
+  const discovery = await buildServiceOwnedPlan({ ...input, discovery: true });
+  console.log(
+    `live leaf discovery: ${
+      Math.round(performance.now() - started)
+    }ms; HTTP reads=${requests.length}`,
+  );
+  equal(requests.length, 2);
+  equal(discovery.actions[0].presence, 'current');
+  equal(discovery.actions[0].files.length, 24);
+  equal(
+    discovery.actions[0].plexParts!.map((p) => p.episode).sort((a, b) => a! - b!),
+    Array.from({ length: 24 }, (_, i) => i + 1),
+  );
+  delay = 0;
+  incompleteLeaf = true;
+  requests.length = 0;
+  const fallback = await buildServiceOwnedPlan({ ...input, discovery: true });
+  equal(requests.length, 3);
+  equal(fallback.actions[0].plexParts, discovery.actions[0].plexParts);
+  incompleteLeaf = false;
+  requests.length = 0;
+  const verified = await buildServiceOwnedPlan(input);
+  equal(verified.actions[0].plexParts, discovery.actions[0].plexParts);
+  equal(requests.filter((path) => /^\/library\/metadata\/\d+$/.test(path)).length, 24);
+  moved = true;
+  equal((await buildServiceOwnedPlan(input)).actions[0].presence, 'unknown');
+  moved = false;
+  leaves[0].grandparentRatingKey = 'other';
+  equal(
+    (await buildServiceOwnedPlan({ ...input, discovery: true })).actions[0].presence,
+    'unknown',
+  );
+  leaves[0].grandparentRatingKey = 'show';
+  leaves[0].librarySectionID = 'other';
+  equal(
+    (await buildServiceOwnedPlan({ ...input, discovery: true })).actions[0].presence,
+    'unknown',
+  );
 });

@@ -40,7 +40,14 @@ export interface HistoricalDownloadPreview {
   /** No filesystem sizes or eligibility have been verified yet. */
   discovery?: boolean;
   fingerprint: string;
-  candidates: Array<{ id: string; path: string; size: number; ownerCount: number }>;
+  candidates: Array<{
+    id: string;
+    path: string;
+    size: number;
+    ownerCount: number;
+    /** Display-only association with the preview's Sonarr actions. */
+    actionIds?: string[];
+  }>;
   skipped: Array<{ source: string; reason: string; details?: string }>;
   /** Covered by eligible selected service actions; never part of optional unlink consent. */
   handled?: Array<{ source: string; service: 'qb'; actionIds: string[] }>;

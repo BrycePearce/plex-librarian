@@ -23,9 +23,11 @@ const paths: Record<ServiceIconName, string> = {
 export function ServiceIcon({
   service,
   className,
+  historical = false,
 }: {
   service: ServiceIconName;
   className?: string;
+  historical?: boolean;
 }) {
   return (
     <svg
@@ -34,7 +36,21 @@ export function ServiceIcon({
       className={`${colorClasses[service]} ${className ?? ""}`}
       fill="currentColor"
     >
-      <path d={paths[service]} />
+      {service === "sonarr" && historical
+        ? (
+          <>
+            <path d={paths.sonarr} transform="scale(.78)" />
+            <circle cx="18" cy="18" r="6" className="fill-base-100" />
+            <path
+              d="M18 14.5v7M14.5 18h7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+          </>
+        )
+        : <path d={paths[service]} />}
     </svg>
   );
 }

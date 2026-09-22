@@ -8,7 +8,7 @@ import {
   ServiceDeletionFileTree,
   ServiceDeletionPreviewList,
 } from "./ServiceDeletionPreviewList.tsx";
-import { PathTreeRoot } from "./DeletionTree.tsx";
+import { ActiveServiceMark, PathTreeRoot } from "./DeletionTree.tsx";
 import { BasicDeletionRow, DeletionPreview } from "./DeletionDialog.tsx";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
@@ -24,7 +24,13 @@ function settleReact(work: () => void) {
 
 const historical: HistoricalDownloadPreview = {
   fingerprint: "historical-fingerprint",
-  candidates: [{ id: "one-exact-file", path: "/downloads/episode", size: 10, ownerCount: 2 }],
+  candidates: [{
+    id: "one-exact-file",
+    path: "/downloads/episode",
+    size: 10,
+    ownerCount: 2,
+    actionIds: ["sonarr-file"],
+  }],
   skipped: [],
   handled: [{ source: "/downloads/tracked", service: "qb", actionIds: ["job"] }],
 };
@@ -36,6 +42,12 @@ const preview = {
   targets: [{
     ratingKey: "season",
     title: "Fixture season",
+    files: [{
+      path: "/tv/episode.mkv",
+      size: 10,
+      service: "sonarr" as const,
+      actionId: "sonarr-file",
+    }],
     decisions: [{
       actionId: "sonarr-file",
       targetId: "file",
@@ -112,6 +124,13 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
     await toggleSonarr(true);
 
     assertEquals(
+      renderer!.root.findAllByType(ActiveServiceMark).filter((mark) => mark.props.historical).map((
+        mark,
+      ) => mark.props.label),
+      ["Sonarr + historical downloads"],
+    );
+
+    assertEquals(
       renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
         .length,
       0,
@@ -129,11 +148,18 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
     });
     const tree = renderer!.root.findByType(ServiceDeletionFileTree);
     const downloadRoots = tree.findAllByType(PathTreeRoot).filter((root) =>
-      root.props.source === "Downloads"
+      root.props.source === "Historical downloads"
     );
     assertEquals(downloadRoots.map((root) => [root.props.path, root.props.files]), [["/downloads", [
       { path: "episode", size: 10 },
     ]]]);
+    assertEquals(downloadRoots[0].findByType(ActiveServiceMark).props.historical, true);
+    assertEquals(
+      tree.findAllByType(PathTreeRoot).find((root) => root.props.source === "Sonarr")!.findByType(
+        ActiveServiceMark,
+      ).props.historical,
+      undefined,
+    );
     await settleReact(() => {
       renderer!.root.findByType(DeletionDialogFooter).props.onConfirm();
     });
@@ -150,6 +176,11 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
     assertEquals(historyReads, 0);
     // Checkbox changes use the same inventory and withdraw optional consent.
     await toggleSonarr(false);
+    assertEquals(
+      renderer!.root.findAllByType(ActiveServiceMark).filter((mark) => mark.props.historical)
+        .length,
+      0,
+    );
 
     assertEquals(
       renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
@@ -162,6 +193,38 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
     assertEquals(requests[2].historicalCleanup, undefined);
     assertEquals(previewReads, 3);
     assertEquals(requests[1].consentToken, "bound-scope");
+    // A batch may include historical files for only one of its Sonarr titles.
+    const targets = ["sonarr-file", "unrelated-file"].map((actionId) => ({
+      ...preview.targets[0],
+      ratingKey: actionId,
+      decisions: [{
+        ...preview.targets[0].decisions[0],
+        actionId,
+        requested: true,
+        state: "delete_candidate" as const,
+      }],
+    }));
+    await settleReact(() =>
+      renderer!.update(
+        <ServiceDeletionPreviewList preview={{ ...preview, targets }} historical={historical} />,
+      )
+    );
+    assertEquals(
+      renderer!.root.findAllByType(ActiveServiceMark).map((mark) => mark.props.historical),
+      [true, false],
+    );
+    await settleReact(() =>
+      renderer!.update(
+        <ServiceDeletionPreviewList
+          preview={{ ...preview, targets }}
+          historical={{ ...historical, candidates: [] }}
+        />,
+      )
+    );
+    assertEquals(
+      renderer!.root.findAllByType(ActiveServiceMark).map((mark) => mark.props.historical),
+      [false, false],
+    );
   } finally {
     await settleReact(() => {
       renderer?.unmount();

@@ -60,18 +60,21 @@ function DestinationOption({
 export function DestinationOptions({
   options,
   loading = false,
+  loadingOptionCount = 2,
 }: {
   options: DeletionDestinationOption[];
   loading?: boolean;
+  loadingOptionCount?: number;
 }) {
   if (loading) {
+    if (loadingOptionCount === 0) return null;
     return (
       <div
         className="mt-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-2"
         role="status"
         aria-label="Loading service options"
       >
-        {["w-36", "w-40"].map((width) => (
+        {["w-36", "w-40"].slice(0, loadingOptionCount).map((width) => (
           <span key={width} className="inline-flex items-center gap-1.5" aria-hidden="true">
             <span className="skeleton size-5 rounded-md motion-reduce:animate-none" />
             <span className={`skeleton h-4 rounded ${width} motion-reduce:animate-none`} />
