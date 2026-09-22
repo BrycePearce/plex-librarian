@@ -353,7 +353,7 @@ export function DeletionDialogFooter({
         className="btn btn-sm btn-error relative min-w-40 transition-[color,background-color,border-color,opacity] duration-200"
         onClick={onConfirm}
         disabled={confirmDisabled}
-        aria-label={showPreparing ? "Checking deletion safety" : undefined}
+        aria-label={showPreparing ? "Loading deletion preview" : undefined}
       >
         <span
           className={`flex items-center gap-2 ${showPreparing ? "invisible" : ""}`}
@@ -370,7 +370,7 @@ export function DeletionDialogFooter({
             role="status"
           >
             <span className="loading loading-spinner loading-xs" />
-            Checking safety…
+            Loading preview…
           </span>
         )}
       </button>

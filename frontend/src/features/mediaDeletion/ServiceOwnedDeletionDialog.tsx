@@ -17,6 +17,7 @@ import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
 import {
+  type DeletionSelectionDetails,
   deletionServiceNames,
   detectedDestinations,
   ServiceDeletionPreviewList,
@@ -27,6 +28,7 @@ export interface ServiceOwnedDeletionDialogProps {
   dialogRef: RefObject<HTMLDialogElement | null>;
   libraryKey: string;
   targets: ServiceDeletionSelection[];
+  selectionDetails?: DeletionSelectionDetails[];
   onCreated: (operationId: string) => void;
   onCancel: () => void;
   embedded?: boolean;
@@ -58,6 +60,7 @@ function SelectionDialog({
   dialogRef,
   libraryKey,
   targets,
+  selectionDetails = [],
   onCreated,
   onCancel,
   embedded,
@@ -94,6 +97,7 @@ function SelectionDialog({
   const [selection] = useState(() => targets.map((target) => ({ ...target })));
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     if (selection.length === 0) {
       setLoading(false);
       setPreview(undefined);
@@ -109,7 +113,7 @@ function SelectionDialog({
         arrSelected: false,
         qbSelected: false,
         quickCleanupThresholdDays,
-      })
+      }, controller.signal)
         .then((result) => {
           if (active) {
             setPreview(result);
@@ -128,6 +132,7 @@ function SelectionDialog({
     if (timer === undefined) loadPreview();
     return () => {
       active = false;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [
@@ -216,6 +221,18 @@ function SelectionDialog({
   }
 
   const destinations = detectedDestinations(displayPreview);
+  const details = selection.map((target) =>
+    selectionDetails.find((detail) =>
+      detail.ratingKey === target.ratingKey && detail.mediaId === target.mediaId
+    ) ?? { ...target, title: "Selected item", fileSize: null }
+  );
+  const sizes = (displayPreview?.targets ?? details).map((target) => target.fileSize);
+  const knownSize = sizes.reduce<number>((total, size) => total + (size ?? 0), 0);
+  const sizeLabel = sizes.some((size) => size == null)
+    ? sizes.some((size) => size != null)
+      ? `${formatKilobytes(knownSize)} + unknown size`
+      : "Unknown size"
+    : formatKilobytes(knownSize);
   const arrNames = destinations.filter((service) => service !== "qb")
     .map((service) => deletionServiceNames[service]).join(" / ");
 
@@ -229,12 +246,7 @@ function SelectionDialog({
       summary={
         <>
           <span className="font-semibold text-base-content">
-            {formatKilobytes(
-              displayPreview?.targets.reduce(
-                (total, target) => total + (target.fileSize ?? 0),
-                0,
-              ) ?? 0,
-            )} selected
+            {sizeLabel} selected
           </span>
           {"\u00a0"}
           This cannot be undone.
@@ -248,9 +260,11 @@ function SelectionDialog({
           error,
           historical: loading || !arrSelected ? undefined : historical,
         })
-        : displayPreview && (
+        : (
           <ServiceDeletionPreviewList
             preview={displayPreview}
+            selectionDetails={details}
+            loading={loading}
             historical={loading || !arrSelected ? undefined : historical}
             collapsible={!embedded}
             showWarnings={false}
@@ -258,6 +272,7 @@ function SelectionDialog({
         )}
       {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
       <DestinationOptions
+        loading={loading}
         options={[
           ...(arrNames
             ? [{
@@ -288,12 +303,6 @@ function SelectionDialog({
             : []),
         ]}
       />
-      {preview?.discovery && (
-        <p className="mt-2 text-xs text-base-content/60">
-          Intended scope. Eligibility is verified after confirmation; retained or changed files may
-          be skipped.
-        </p>
-      )}
       <DeletionPreviewStatus
         error={error ?? null}
         onRetry={request.current ? undefined : refresh}

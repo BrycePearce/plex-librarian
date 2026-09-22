@@ -59,9 +59,27 @@ function DestinationOption({
 
 export function DestinationOptions({
   options,
+  loading = false,
 }: {
   options: DeletionDestinationOption[];
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div
+        className="mt-2 flex flex-wrap items-center justify-end gap-x-5 gap-y-2"
+        role="status"
+        aria-label="Loading service options"
+      >
+        {["w-36", "w-40"].map((width) => (
+          <span key={width} className="inline-flex items-center gap-1.5" aria-hidden="true">
+            <span className="skeleton size-5 rounded-md motion-reduce:animate-none" />
+            <span className={`skeleton h-4 rounded ${width} motion-reduce:animate-none`} />
+          </span>
+        ))}
+      </div>
+    );
+  }
   if (options.length === 0) return null;
 
   return (

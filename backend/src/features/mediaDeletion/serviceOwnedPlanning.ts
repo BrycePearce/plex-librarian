@@ -81,6 +81,7 @@ export interface ServiceOwnedPlanningInput {
   boundaryCheck?: boolean;
   discoveryHistory?: Map<string, Promise<unknown>>;
   discoveredIdentity?: PlexMetadataIdentity;
+  discoveredOwner?: PlexMetadataIdentity;
   discoveredSeasons?: Map<string, Awaited<ReturnType<PlexClient['seasonDeletionEpisodes']>>>;
   sonarrSnapshots?: Map<
     string,
@@ -333,8 +334,12 @@ export async function buildServiceOwnedPlan(
         if (!key || selection.showRatingKey && selection.showRatingKey !== key) {
           throw new Error('Plex ancestry changed');
         }
-        const show = await read(() => input.plex.metadataIdentity(key));
-        if (!show || show.type !== 'show' || show.librarySectionId !== input.libraryKey) {
+        const show = (input.discovery ? input.discoveredOwner : undefined) ??
+          await read(() => input.plex.metadataIdentity(key));
+        if (
+          !show || show.ratingKey !== key || show.type !== 'show' ||
+          show.librarySectionId !== input.libraryKey
+        ) {
           throw new Error('Plex show identity changed');
         }
         owner = show;
@@ -410,35 +415,54 @@ export async function buildServiceOwnedPlan(
         if (selection.mediaId !== undefined && new Set(all.map((p) => p.mediaId)).size < 2) {
           throw new Error('A remaining Plex version is required');
         }
-        for (
-          const file of all.filter((p) =>
-            selection.mediaId === undefined || p.mediaId === selection.mediaId
-          )
-        ) {
-          let season = identity.seasonIndex ?? undefined, episode = identity.index ?? undefined;
-          if (selection.type === 'show') {
-            const accepted = input.focus?.acceptedPlexParts.find((part) =>
-              part.ratingKey === file.ratingKey && part.mediaId === file.mediaId &&
-              part.path === file.path && part.size === file.size
+        const chosen = all.filter((p) =>
+          selection.mediaId === undefined || p.mediaId === selection.mediaId
+        );
+        // Discovery needs episode coordinates for intended Sonarr file IDs. Read four
+        // distinct children at a time, reusing each result for multi-part/version files.
+        // Verification keeps its existing fresh, sequential reads.
+        const batchSize = input.discovery && selection.type === 'show' ? 4 : 1;
+        for (let offset = 0; offset < chosen.length; offset += batchSize) {
+          const batch = chosen.slice(offset, offset + batchSize);
+          const children = new Map<string, PlexMetadataIdentity | null>();
+          if (input.discovery && selection.type === 'show') {
+            const keys = [...new Set(batch.map((file) => file.ratingKey))];
+            const results = await Promise.allSettled(
+              keys.map((key) => read(() => input.plex.metadataIdentity(key))),
             );
-            const focused = !accepted ||
-              input.focus!.action.episodes?.some((entry) =>
-                entry.seasonNumber === accepted.season && entry.episodeNumber === accepted.episode
-              );
-            if (accepted && !focused) {
-              selectedParts.push({ ...file, season: accepted.season, episode: accepted.episode });
-              continue;
+            for (const [index, result] of results.entries()) {
+              if (result.status === 'rejected') throw result.reason;
+              children.set(keys[index], result.value);
             }
-            const child = await read(() => input.plex.metadataIdentity(file.ratingKey));
-            if (
-              !child || child.type !== 'episode' ||
-              child.grandparentRatingKey !== identity.ratingKey ||
-              child.librarySectionId !== input.libraryKey
-            ) throw new Error('Plex child changed');
-            season = child.seasonIndex ?? undefined;
-            episode = child.index ?? undefined;
           }
-          selectedParts.push({ ...file, season, episode });
+          for (const file of batch) {
+            let season = identity.seasonIndex ?? undefined, episode = identity.index ?? undefined;
+            if (selection.type === 'show') {
+              const accepted = input.focus?.acceptedPlexParts.find((part) =>
+                part.ratingKey === file.ratingKey && part.mediaId === file.mediaId &&
+                part.path === file.path && part.size === file.size
+              );
+              const focused = !accepted ||
+                input.focus!.action.episodes?.some((entry) =>
+                  entry.seasonNumber === accepted.season && entry.episodeNumber === accepted.episode
+                );
+              if (accepted && !focused) {
+                selectedParts.push({ ...file, season: accepted.season, episode: accepted.episode });
+                continue;
+              }
+              const child = children.has(file.ratingKey)
+                ? children.get(file.ratingKey)
+                : await read(() => input.plex.metadataIdentity(file.ratingKey));
+              if (
+                !child || child.type !== 'episode' ||
+                child.grandparentRatingKey !== identity.ratingKey ||
+                child.librarySectionId !== input.libraryKey
+              ) throw new Error('Plex child changed');
+              season = child.seasonIndex ?? undefined;
+              episode = child.index ?? undefined;
+            }
+            selectedParts.push({ ...file, season, episode });
+          }
         }
         if (
           !input.discovery && !input.boundaryCheck && stable(paths) !== stable(

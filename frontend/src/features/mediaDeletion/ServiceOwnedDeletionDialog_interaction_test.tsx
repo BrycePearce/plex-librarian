@@ -492,3 +492,118 @@ Deno.test("restored advanced preview shows real paths with retained decisions an
     globals.IS_REACT_ACT_ENVIRONMENT = previousAct;
   }
 });
+
+Deno.test("pending discovery keeps page details, rejects stale responses and never resets local choices", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const oldAct = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const oldPreview = api.serviceDeletions.preview;
+  const calls: Array<
+    {
+      resolve: (value: ServiceDeletionPreview) => void;
+      reject: (reason: Error) => void;
+      signal?: AbortSignal;
+    }
+  > = [];
+  api.serviceDeletions.preview = (_choices, signal) =>
+    new Promise((resolve, reject) => calls.push({ resolve, reject, signal }));
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  const render = (key: string, size: number | null = 2048) => (
+    <ServiceOwnedDeletionDialog
+      dialogRef={{ current: null }}
+      libraryKey="tv"
+      targets={[{ ratingKey: key }]}
+      selectionDetails={[{ ratingKey: key, title: `Title ${key}`, fileSize: size }]}
+      embedded
+      onCreated={() => {}}
+      onCancel={() => {}}
+    />
+  );
+  const text = () => JSON.stringify(renderer!.toJSON());
+  const footer = () => renderer!.root.findByType(DeletionDialogFooter).props;
+  const loadingServices = () =>
+    renderer!.root.findAll((node) =>
+      node.props.role === "status" && node.props["aria-label"] === "Loading service options"
+    );
+  const result = (key: string): ServiceDeletionPreview => ({
+    discovery: true,
+    fingerprint: key,
+    consentToken: key,
+    canConfirm: true,
+    arrConfigured: true,
+    qbConfigured: false,
+    targets: [{
+      ratingKey: key,
+      title: `Title ${key}`,
+      fileSize: 2048,
+      decisions: [{
+        actionId: "arr",
+        targetId: key,
+        service: "sonarr",
+        requested: false,
+        state: "kept",
+        presence: "current",
+        reason: "",
+        evidenceRevision: key,
+      }],
+    }],
+  });
+  try {
+    await flushAct(() => {
+      renderer = TestRenderer.create(render("old"));
+    });
+    assertEquals(text().includes("Title old"), true);
+    assertEquals(text().includes("2 MB"), true);
+    assertEquals(text().includes("0 KB"), false);
+    assertEquals(loadingServices().length, 1);
+    assertEquals(text().includes("Loading paths and services"), false);
+    assertEquals(footer().confirmDisabled, true);
+    assertEquals(renderer!.root.findAllByType("input").length, 0);
+    await flushAct(() => {
+      renderer!.root.findAllByType("button").find((b) => b.children.includes("advanced"))!.props
+        .onClick();
+    });
+    assertEquals(text().includes("Title old"), true);
+    assertEquals(text().includes("No file paths reported"), false);
+    await flushAct(() => {
+      renderer!.update(render("new", null));
+    });
+    assertEquals(calls[0].signal?.aborted, true);
+    assertEquals(text().includes("Title old"), false);
+    assertEquals(text().includes("Unknown size"), true);
+    await flushAct(() => calls[0].resolve(result("old")));
+    assertEquals(text().includes("Title old"), false);
+    assertEquals(footer().confirmDisabled, true);
+    await flushAct(() => calls[1].reject(new Error("offline")));
+    assertEquals(loadingServices().length, 0);
+    assertEquals(text().includes("Title new"), true);
+    assertEquals(text().includes("Unknown size"), true);
+    assertEquals(footer().confirmDisabled, true);
+    await flushAct(() =>
+      renderer!.root.findAllByType("button").find((b) => b.children.includes("Retry"))!.props
+        .onClick()
+    );
+    await flushAct(() => calls[2].resolve(result("new")));
+    assertEquals(loadingServices().length, 0);
+    assertEquals(
+      text().includes("Intended scope. Eligibility is verified after confirmation"),
+      false,
+    );
+    assertEquals(footer().confirmDisabled, false);
+    await flushAct(() =>
+      renderer!.root.findByType("input").props.onChange({ target: { checked: true } })
+    );
+    await flushAct(() => renderer!.update(render("new", 4096)));
+    assertEquals(calls.length, 3);
+    assertEquals(renderer!.root.findByType("input").props.checked, true);
+    assertEquals(footer().confirmDisabled, false);
+    await flushAct(() => renderer!.update(render("third")));
+    assertEquals(footer().confirmDisabled, true);
+    await flushAct(() => calls[3].resolve(result("third")));
+    assertEquals(renderer!.root.findByType("input").props.checked, false);
+  } finally {
+    await flushAct(() => renderer?.unmount());
+    api.serviceDeletions.preview = oldPreview;
+    globals.IS_REACT_ACT_ENVIRONMENT = oldAct;
+  }
+});

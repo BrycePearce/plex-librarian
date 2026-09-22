@@ -141,6 +141,7 @@ export async function prepare(
     Awaited<ReturnType<typeof plex.seasonDeletionEpisodes>>
   >();
   const discoveryHistory = new Map<string, Promise<unknown>>();
+  const discoveredOwners = new Map<string, Awaited<ReturnType<typeof plex.metadataIdentity>>>();
   const sonarrSnapshots = new Map<
     string,
     Awaited<ReturnType<(typeof arrTargets)[number]['client']['sonarrSeriesSnapshot']>>
@@ -185,7 +186,11 @@ export async function prepare(
     ) {
       throw new Error('Selected media is playing');
     }
-    const show = showKey ? await plex.metadataIdentity(showKey) : null;
+    const show = showKey
+      ? (discovery ? discoveredOwners.get(showKey) : undefined) ??
+        await plex.metadataIdentity(showKey)
+      : null;
+    if (discovery && showKey && show) discoveredOwners.set(showKey, show);
     const local = withTransaction((db) => {
       const owner = showKey ?? requested.ratingKey;
       if (
@@ -260,6 +265,7 @@ export async function prepare(
       discovery,
       discoveryHistory,
       discoveredIdentity: live,
+      ...(discovery && show ? { discoveredOwner: show } : {}),
       ...(discovery ? { discoveredSeasons } : {}),
       ...(discovery ? { sonarrSnapshots } : {}),
       relatedPlexItems: () => relatedServiceOwnedPlexItems(serverId, selection),

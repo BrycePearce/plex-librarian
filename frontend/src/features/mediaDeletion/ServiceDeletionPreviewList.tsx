@@ -14,6 +14,20 @@ export const deletionServiceNames = {
   qb: "qBittorrent",
 };
 
+/** Page metadata only: never used as service inventory or consent. */
+export type DeletionSelectionDetails = Pick<
+  ServiceDeletionPreview["targets"][number],
+  | "ratingKey"
+  | "mediaId"
+  | "title"
+  | "fileSize"
+  | "showTitle"
+  | "seasonIndex"
+  | "episodeIndex"
+  | "videoResolution"
+  | "fileName"
+>;
+
 /** Applicability comes from live inventory, independently of optional consent. */
 export function detectedDestinations(preview: ServiceDeletionPreview | undefined) {
   return (["sonarr", "radarr", "qb"] as const).filter((service) =>
@@ -28,8 +42,17 @@ export function detectedDestinations(preview: ServiceDeletionPreview | undefined
 
 /** One row per selected item/version; episode-level execution details stay out of ordinary review. */
 export function ServiceDeletionPreviewList(
-  { preview, historical, collapsible = false, showWarnings = true }: {
-    preview: ServiceDeletionPreview;
+  {
+    preview,
+    selectionDetails = [],
+    loading = false,
+    historical,
+    collapsible = false,
+    showWarnings = true,
+  }: {
+    preview?: ServiceDeletionPreview;
+    selectionDetails?: DeletionSelectionDetails[];
+    loading?: boolean;
     historical?: HistoricalDownloadPreview;
     collapsible?: boolean;
     showWarnings?: boolean;
@@ -37,66 +60,97 @@ export function ServiceDeletionPreviewList(
 ) {
   const [mode, setMode] = useState<"basic" | "advanced">("basic");
   return (
-    <div>
+    <div aria-busy={loading}>
       <DeletionPreview
         mode={mode}
         onModeChange={setMode}
         collapsible={collapsible}
         basic={
           <BasicDeletionList>
-            {preview.targets.map((target) => {
-              const context = [
-                target.showTitle,
-                target.episodeIndex != null
-                  ? `S${String(target.seasonIndex ?? 0).padStart(2, "0")}E${
-                    String(target.episodeIndex).padStart(2, "0")
-                  }`
-                  : undefined,
-                target.title,
-              ].filter(Boolean).join(" · ");
-              return (
-                <BasicDeletionRow
-                  key={`${target.ratingKey}:${target.mediaId ?? "whole"}`}
-                  title={target.fileName
-                    ? (
-                      <span>
-                        {context}
-                        <span className="block truncate text-xs text-base-content/60">
-                          {target.fileName}
+            {(preview?.targets ?? selectionDetails.map((target) => ({ ...target, decisions: [] })))
+              .map((target) => {
+                const context = [
+                  target.showTitle,
+                  target.episodeIndex != null
+                    ? `S${String(target.seasonIndex ?? 0).padStart(2, "0")}E${
+                      String(target.episodeIndex).padStart(2, "0")
+                    }`
+                    : undefined,
+                  target.title,
+                ].filter(Boolean).join(" · ");
+                return (
+                  <BasicDeletionRow
+                    key={`${target.ratingKey}:${target.mediaId ?? "whole"}`}
+                    title={target.fileName
+                      ? (
+                        <span>
+                          {context}
+                          <span className="block truncate text-xs text-base-content/60">
+                            {target.fileName}
+                          </span>
                         </span>
+                      )
+                      : context}
+                    titleText={[context, target.fileName].filter(Boolean).join(" · ")}
+                    badges={target.mediaId !== undefined && (
+                      <span className="badge badge-sm badge-outline">
+                        {target.videoResolution || "Selected version"}
                       </span>
-                    )
-                    : context}
-                  titleText={[context, target.fileName].filter(Boolean).join(" · ")}
-                  badges={target.mediaId !== undefined && (
-                    <span className="badge badge-sm badge-outline">
-                      {target.videoResolution || "Selected version"}
-                    </span>
-                  )}
-                  marks={
-                    <span className="flex gap-1">
-                      {[
-                        ...new Set(
-                          target.decisions.filter((action) =>
-                            action.requested && action.state === "delete_candidate"
-                          ).map((action) => action.service),
-                        ),
-                      ].map((service) => (
-                        <ActiveServiceMark
-                          key={service}
-                          service={service === "qb" ? "qbittorrent" : service}
-                          label={deletionServiceNames[service] + " deletion"}
-                        />
-                      ))}
-                    </span>
-                  }
-                  size={target.fileSize == null ? "" : formatKilobytes(target.fileSize)}
-                />
-              );
-            })}
+                    )}
+                    marks={
+                      <span className="flex gap-1">
+                        {loading && (
+                          <span
+                            className="skeleton size-5 rounded motion-reduce:animate-none"
+                            aria-hidden="true"
+                          />
+                        )}
+                        {[
+                          ...new Set(
+                            target.decisions.filter((action) =>
+                              action.requested && action.state === "delete_candidate"
+                            ).map((action) => action.service),
+                          ),
+                        ].map((service) => (
+                          <ActiveServiceMark
+                            key={service}
+                            service={service === "qb" ? "qbittorrent" : service}
+                            label={deletionServiceNames[service] + " deletion"}
+                          />
+                        ))}
+                      </span>
+                    }
+                    size={target.fileSize == null
+                      ? "Unknown size"
+                      : formatKilobytes(target.fileSize)}
+                  />
+                );
+              })}
           </BasicDeletionList>
         }
-        advanced={<ServiceDeletionFileTree preview={preview} historical={historical} />}
+        advanced={preview
+          ? <ServiceDeletionFileTree preview={preview} historical={historical} />
+          : (
+            <BasicDeletionList>
+              {selectionDetails.map((target) => (
+                <BasicDeletionRow
+                  key={`${target.ratingKey}:${target.mediaId ?? "whole"}`}
+                  title={
+                    <span>
+                      {target.title}
+                      {loading && (
+                        <span
+                          className="skeleton mt-1 block h-3 w-40 max-w-full rounded motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </span>
+                  }
+                  size={target.fileSize == null ? "Unknown size" : formatKilobytes(target.fileSize)}
+                />
+              ))}
+            </BasicDeletionList>
+          )}
       />
       {mode === "advanced" && !!historical?.skipped.length && (
         <div className="mt-2 text-xs text-base-content/60">
@@ -106,7 +160,7 @@ export function ServiceDeletionPreviewList(
           />
         </div>
       )}
-      {showWarnings && <ServiceDeletionWarnings preview={preview} />}
+      {showWarnings && preview && <ServiceDeletionWarnings preview={preview} />}
     </div>
   );
 }

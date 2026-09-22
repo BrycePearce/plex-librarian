@@ -919,3 +919,108 @@ Deno.test('immediate boundary refreshes ownership once without repeating full ph
   f.setJobs([{ ...f.job, id: 'new-owner', savePath: '/plex', contentPath: '/plex/Movie.mkv' }]);
   equal(decisions(await buildServiceOwnedPlan({ ...f.input, boundaryCheck: true })).plex, 'kept');
 });
+
+Deno.test('delayed show discovery bounds child reads and preserves intended files', async () => {
+  const f = fixture();
+  const show = { ...f.identity, ratingKey: 'show', type: 'show', tmdbId: null, tvdbId: 123 };
+  let active = 0, peak = 0, reads = 0;
+  const plex = {
+    ...f.plex,
+    metadataIdentity: async (key: string) => {
+      if (key === 'show') return show;
+      reads++;
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return {
+        ...show,
+        ratingKey: key,
+        type: 'episode',
+        grandparentRatingKey: 'show',
+        seasonIndex: 1,
+        index: Number(key),
+      };
+    },
+    mediaPathPreview: () =>
+      Promise.resolve({
+        truncated: false,
+        paths: [],
+        versionFiles: Array.from(
+          { length: 24 },
+          (_, i) => ({
+            ratingKey: String(i + 1),
+            mediaId: i + 1,
+            path: `/plex/Show/${i + 1}.mkv`,
+            size: 100,
+          }),
+        ),
+      }),
+  };
+  const started = performance.now();
+  const plan = await buildServiceOwnedPlan({
+    ...f.input,
+    discovery: true,
+    arrTargets: [],
+    selection: { ...f.input.selection, ratingKey: 'show', type: 'show', tmdbId: null, tvdbId: 123 },
+    plex: plex as unknown as PlexClient,
+  });
+  console.log(
+    `24 children, 20ms/read: ${
+      Math.round(performance.now() - started)
+    }ms; reads=${reads}; peak=${peak}`,
+  );
+  equal(reads, 24);
+  equal(peak, 4);
+  equal(active, 0);
+  equal(plan.actions[0].presence, 'current');
+  equal(plan.actions[0].files.length, 24);
+  equal(
+    plan.actions[0].plexParts!.map((p) => p.episode).sort((a, b) => a! - b!),
+    Array.from({ length: 24 }, (_, i) => i + 1),
+  );
+  plex.metadataIdentity = (key) =>
+    key === '2' ? Promise.reject(new Error('offline')) : Promise.resolve({
+      ...show,
+      ratingKey: key,
+      type: key === 'show' ? 'show' : 'episode',
+      grandparentRatingKey: 'show',
+      seasonIndex: 1,
+      index: Number(key),
+    });
+  const failed = await buildServiceOwnedPlan({
+    ...f.input,
+    discovery: true,
+    arrTargets: [],
+    selection: plan.selection,
+    plex: plex as unknown as PlexClient,
+  });
+  equal(failed.actions[0].presence, 'unknown');
+  equal(failed.actions[0].effectsComplete, false);
+});
+
+Deno.test('discovery reuses the route owner identity but execution reads it fresh', async () => {
+  for (const type of ['season', 'episode'] as const) {
+    const f = tvFixture(type);
+    const owner = await f.tvPlex.metadataIdentity('show');
+    const readIdentity = f.tvPlex.metadataIdentity;
+    let ownerReads = 0;
+    f.tvPlex.metadataIdentity = (key) => {
+      if (key === 'show') ownerReads++;
+      return readIdentity(key);
+    };
+    const input = { ...f.input, discoveredOwner: owner };
+    const discovery = await buildServiceOwnedPlan({ ...input, discovery: true });
+    equal(ownerReads, 0);
+    equal(discovery.actions[0].presence, 'current');
+    equal(discovery.actions.find((a) => a.service === 'sonarr')!.fileId, 5);
+    const verified = await buildServiceOwnedPlan(input);
+    equal(ownerReads > 0, true);
+    equal(verified.actions[0].presence, 'current');
+    const wrongOwner = await buildServiceOwnedPlan({
+      ...input,
+      discovery: true,
+      discoveredOwner: { ...owner, ratingKey: 'different-show' },
+    });
+    equal(wrongOwner.actions[0].presence, 'unknown');
+  }
+});

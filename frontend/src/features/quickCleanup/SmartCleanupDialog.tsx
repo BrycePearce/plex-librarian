@@ -217,6 +217,18 @@ export const SmartCleanupDialog = forwardRef<SmartCleanupDialogHandle>(
                 dialogRef={dialogRef}
                 libraryKey={reviewBatches[0].libraryKey}
                 targets={reviewBatches[0].targets}
+                selectionDetails={reviewBatches[0].targets.map((target) => {
+                  const candidate = chosen.find((c) =>
+                    c.libraryKey === reviewBatches[0].libraryKey && c.ratingKey === target.ratingKey
+                  )!;
+                  const version = candidate.versions.find((v) => v.mediaId === target.mediaId);
+                  return {
+                    ...target,
+                    title: candidate.title,
+                    fileSize: version?.fileSize,
+                    videoResolution: version?.videoResolution,
+                  };
+                })}
                 title={reviewBatches.length > 1
                   ? `Review cleanup · ${reviewBatches.length} batches remaining`
                   : "Review cleanup"}

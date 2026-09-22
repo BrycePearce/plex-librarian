@@ -134,7 +134,13 @@ Deno.test("duplicate inline preview debounces selection and preserves picker sta
     assertEquals(requests.length, 0);
     const inputs = renderer!.root.findAllByType("input");
     assertEquals(inputs.map((input) => input.props.checked), [true, false]);
-    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
+    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 1);
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
+    const review = () => renderer!.root.findByType(DeletionPreview);
+    assertEquals(
+      review().findAllByType("span").some((span) => span.props.title === "Example"),
+      true,
+    );
     await act(() => inputs[1].props.onChange());
     assertEquals(requests.length, 0);
     await act(async () => {
@@ -221,6 +227,12 @@ Deno.test("season episode selection preserves the picker and expansion across to
     const inputs = renderer!.root.findAllByType("input");
     await act(() => inputs[0].props.onChange());
     assertEquals(renderer!.root.findByType("details"), row);
+    const review = renderer!.root.findByType(DeletionPreview);
+    assertEquals(
+      review.findAllByType("span").some((span) => span.props.title === "Example · S01E01 · Pilot"),
+      true,
+    );
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
     assertEquals(renderer!.root.findAllByType("input")[1].props.disabled, true);
     assertEquals(requests, 0);
     await act(() => renderer!.root.findAllByType("input")[0].props.onChange());

@@ -291,6 +291,7 @@ export function QuickCleanupPanel({
         embedded
         libraryKey={libraryKey}
         targets={selectedItems.map((item) => ({ ratingKey: item.ratingKey }))}
+        selectionDetails={selectedItems}
         quickCleanupThresholdDays={thresholdDays}
         onPendingChange={onReviewPendingChange}
         onCreated={(operationId) => {

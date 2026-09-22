@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Layers3, LoaderCircle } from "lucide-react";
+import { ChevronDown, Layers3 } from "lucide-react";
 import { api } from "../../lib/api.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../../lib/api.ts";
 import type { ServiceDeletionSelection } from "../../../../shared/serviceOwnedDeletion.ts";
@@ -18,7 +18,6 @@ import {
 } from "../../routes/-duplicates/SeasonDuplicateDialog.tsx";
 import { BasicDeletionList, BasicDeletionRow, DeletionModalShell } from "./DeletionDialog.tsx";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
-import { ServiceDeletionPreviewList } from "./ServiceDeletionPreviewList.tsx";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo.tsx";
 import { formatKilobytes } from "../../lib/format.ts";
 import { needsTechnicalDetailRefresh, versionLabel } from "../../lib/mediaVersion.ts";
@@ -139,6 +138,15 @@ export function ServiceVersionPickerDialog(
         selected.has(`${g.mediaType === "movie" ? g.ratingKey : g.episodeRatingKey}:${v.mediaId}`)
       ).reduce((s, v) => s + (v.fileSize ?? 0), 0),
     0,
+  );
+  const unknownSize = displayGroups.some((group) =>
+    group.versions.some((version) =>
+      selected.has(
+        `${
+          group.mediaType === "movie" ? group.ratingKey : group.episodeRatingKey
+        }:${version.mediaId}`,
+      ) && version.fileSize == null
+    )
   );
   function toggle(key: string) {
     if (pending) return;
@@ -413,50 +421,39 @@ export function ServiceVersionPickerDialog(
             hideIntro
             libraryKey={first.libraryKey}
             targets={targets}
+            selectionDetails={targets.map((target) => {
+              const group = displayGroups.find((g) =>
+                (g.mediaType === "movie" ? g.ratingKey : g.episodeRatingKey) === target.ratingKey
+              )!;
+              const versions = group.versions.filter((v) =>
+                target.mediaId === undefined || v.mediaId === target.mediaId
+              );
+              return {
+                ...target,
+                title: group.mediaType === "movie" ? group.title : group.episodeTitle,
+                ...(group.mediaType === "episode"
+                  ? {
+                    showTitle: group.showTitle,
+                    seasonIndex: group.seasonIndex,
+                    episodeIndex: group.episodeIndex,
+                  }
+                  : {}),
+                fileSize: versions.some((v) => v.fileSize == null)
+                  ? null
+                  : versions.reduce((sum, v) => sum + v.fileSize!, 0),
+                videoResolution: versions.length === 1 ? versions[0].videoResolution : undefined,
+              };
+            })}
             onPendingChange={setPending}
             onCreated={onCreated}
             onCancel={onCancel}
             selectionDisabled={!valid || targets.length === 0}
             previewDelayMs={300}
             focusCancel={false}
-            renderPreview={(preview, state) =>
-              preview
-                ? (
-                  <ServiceDeletionPreviewList
-                    preview={preview}
-                    historical={state.historical}
-                    showWarnings={false}
-                  />
-                )
-                : (
-                  <section
-                    className="version-picker-checking"
-                    aria-live="polite"
-                    aria-busy={state.loading && targets.length > 0}
-                  >
-                    {targets.length > 0 && state.loading && (
-                      <LoaderCircle className="size-5 animate-spin text-primary" />
-                    )}
-                    <strong>
-                      {targets.length === 0
-                        ? "Deletion preview"
-                        : state.error
-                        ? "Preview unavailable"
-                        : "Checking selected versions"}
-                    </strong>
-                    <p>
-                      {targets.length === 0
-                        ? "Select versions above to preview their removal."
-                        : state.error
-                        ? "Retry the checks below to review current files and services."
-                        : "Checking current files, service ownership, and retained copies."}
-                    </p>
-                  </section>
-                )}
             confirmLabel={
               <>
-                Delete {count} {count === 1 ? "version" : "versions"} ({formatKilobytes(size)}{" "}
-                logical media)
+                Delete {count} {count === 1 ? "version" : "versions"}{" "}
+                ({unknownSize ? "Unknown size" : formatKilobytes(size)} logical media)
               </>
             }
           />

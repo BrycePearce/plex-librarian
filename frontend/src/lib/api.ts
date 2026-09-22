@@ -293,10 +293,13 @@ export const api = {
         "/service-deletions/historical-preview",
         { method: "POST", body: JSON.stringify(choices), signal },
       ),
-    preview: (choices: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionChoices) =>
+    preview: (
+      choices: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionChoices,
+      signal?: AbortSignal,
+    ) =>
       apiFetch<import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionPreview>(
         "/service-deletions/preview",
-        { method: "POST", body: JSON.stringify(choices) },
+        { method: "POST", body: JSON.stringify(choices), signal },
       ),
     create: (request: import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionRequest) =>
       apiFetch<import("../../../shared/serviceOwnedDeletion.ts").ServiceDeletionCreated>(

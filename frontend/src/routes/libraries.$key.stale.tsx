@@ -654,6 +654,7 @@ function StalePage() {
           dialogRef={dialogRef}
           libraryKey={key}
           targets={confirmItems.map((item) => ({ ratingKey: item.ratingKey }))}
+          selectionDetails={confirmItems}
           onCreated={deletionCreated}
           onCancel={closeConfirm}
         />
@@ -663,6 +664,7 @@ function StalePage() {
           dialogRef={seasonDialogRef}
           libraryKey={key}
           targets={[{ ratingKey: confirmSeason.ratingKey }]}
+          selectionDetails={[confirmSeason]}
           onCreated={deletionCreated}
           onCancel={closeConfirm}
         />
