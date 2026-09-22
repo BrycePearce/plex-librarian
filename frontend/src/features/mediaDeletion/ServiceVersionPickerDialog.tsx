@@ -421,7 +421,13 @@ export function ServiceVersionPickerDialog(
             focusCancel={false}
             renderPreview={(preview, state) =>
               preview
-                ? <ServiceDeletionPreviewList preview={preview} showWarnings={false} />
+                ? (
+                  <ServiceDeletionPreviewList
+                    preview={preview}
+                    historical={state.historical}
+                    showWarnings={false}
+                  />
+                )
                 : (
                   <section
                     className="version-picker-checking"

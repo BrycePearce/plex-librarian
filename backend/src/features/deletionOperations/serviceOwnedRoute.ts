@@ -1,5 +1,10 @@
 import { Hono } from 'hono';
-import { collectHistoricalDownloads } from '../mediaDeletion/historicalDownloadPlanning.ts';
+import {
+  discoverHistoricalDownloads,
+  openDiscovery,
+  sealDiscovery,
+} from '../mediaDeletion/serviceOwnedDiscovery.ts';
+import { serviceOwnedPlanFingerprint } from '../mediaDeletion/serviceOwnedPlanning.ts';
 import type {
   ServiceDeletionChoices,
   ServiceDeletionPreview,
@@ -27,7 +32,11 @@ import {
   type NewDeletionTarget,
   repeatedDeletionOperation,
 } from './service.ts';
-import { type DurableTargetSnapshot, validateLiveDeletionIdentity } from './core/validation.ts';
+import {
+  type DurableTargetSnapshot,
+  validateLiveDeletionIdentity,
+  validateLocalTarget,
+} from './core/validation.ts';
 import {
   SERVICE_PREVIEW_TOTAL_FILE_LIMIT,
   serviceOwnedDisplayFiles,
@@ -94,6 +103,7 @@ export async function prepare(
   choices: ServiceDeletionChoices,
   active: Awaited<ReturnType<typeof resolveActiveServer>>,
   signal?: AbortSignal,
+  discovery = false,
 ) {
   const { serverId, client: plex } = active;
   const { libraryKey } = choices;
@@ -114,10 +124,27 @@ export async function prepare(
       getArrDeleteTargets(serverId, libraryKey),
       getDownloadClientTargets(serverId),
       serviceEndpoints(serverId),
-      plex.identity(),
-      plex.activeSessions(),
+      discovery
+        ? Promise.resolve(
+          withTransaction((db) =>
+            db.prepare('SELECT machine_identifier FROM servers WHERE id=?').value<[string]>(
+              serverId,
+            )![0]
+          ),
+        )
+        : plex.identity(),
+      discovery ? Promise.resolve([]) : plex.activeSessions(),
     ],
   );
+  const discoveredSeasons = new Map<
+    string,
+    Awaited<ReturnType<typeof plex.seasonDeletionEpisodes>>
+  >();
+  const discoveryHistory = new Map<string, Promise<unknown>>();
+  const sonarrSnapshots = new Map<
+    string,
+    Awaited<ReturnType<(typeof arrTargets)[number]['client']['sonarrSeriesSnapshot']>>
+  >();
   const targets: NewDeletionTarget[] = [];
   const previews: ServiceDeletionPreview['targets'] = [];
   const plans = [];
@@ -136,7 +163,7 @@ export async function prepare(
       requested.mediaId === undefined && live.type === 'episode'
     ) throw new Error('Unsupported deletion unit');
     if (
-      quick &&
+      !discovery && quick &&
       (live.type === 'movie' && live.media.length >= 2 ||
         live.type === 'show' && await plex.showHasMultiVersionEpisodes(live.ratingKey))
     ) throw new Error('Quick cleanup version scope changed');
@@ -230,6 +257,11 @@ export async function prepare(
         : {}),
     };
     const plan = await buildServiceOwnedPlan({
+      discovery,
+      discoveryHistory,
+      discoveredIdentity: live,
+      ...(discovery ? { discoveredSeasons } : {}),
+      ...(discovery ? { sonarrSnapshots } : {}),
       relatedPlexItems: () => relatedServiceOwnedPlexItems(serverId, selection),
       serverId,
       libraryKey,
@@ -243,7 +275,8 @@ export async function prepare(
     });
     plans.push(plan);
     const episodes = live.type === 'season'
-      ? await plex.seasonDeletionEpisodes(requested.ratingKey)
+      ? discoveredSeasons.get(requested.ratingKey) ??
+        await plex.seasonDeletionEpisodes(requested.ratingKey)
       : undefined;
     const snapshot = {
       currentLocationPolicyVersion: CURRENT_LOCATION_POLICY_VERSION,
@@ -284,12 +317,14 @@ export async function prepare(
         ? {}
         : { operationMediaIds, selectedMediaIds: operationMediaIds }),
     };
-    await validateLiveDeletionIdentity(
-      plex,
-      kind,
-      snapshot as unknown as DurableTargetSnapshot,
-      live,
-    );
+    if (!discovery) {
+      await validateLiveDeletionIdentity(
+        plex,
+        kind,
+        snapshot as unknown as DurableTargetSnapshot,
+        live,
+      );
+    }
     targets.push({
       kind,
       key: requested.mediaId === undefined
@@ -355,42 +390,59 @@ export async function prepare(
     ),
     targets: previews,
   };
-  return { preview, targets, plans, arrTargets, downloadTargets };
+  return {
+    preview,
+    targets,
+    plans,
+    arrTargets,
+    downloadTargets,
+    sonarrSnapshots,
+    discoveryHistory,
+  };
 }
 
 const router = new Hono();
-router.post('/historical-preview', async (c) => {
-  try {
-    const choices = parseServiceDeletionChoices(await c.req.json());
-    const active = await resolveActiveServer();
-    const prepared = await prepare(choices, active, c.req.raw.signal);
-    const result = await collectHistoricalDownloads(
-      active.serverId,
-      prepared.plans,
-      prepared.arrTargets,
-      prepared.downloadTargets,
-      new Map(),
-      false,
-      new Map(),
-      c.req.raw.signal,
-    );
-    return c.json(result.preview);
-  } catch {
-    return c.json({
-      error:
-        'Optional history verification is unavailable. Continue without leftover cleanup or review Media connections.',
-    }, 409);
-  }
-});
+router.post(
+  '/historical-preview',
+  (c) => c.json({ error: 'Refresh the deletion preview to discover historical scope' }, 410),
+);
 router.post('/preview', async (c) => {
   try {
     const choices = parseServiceDeletionChoices(await c.req.json());
-    const { preview } = await prepare(choices, await resolveActiveServer());
+    const active = await resolveActiveServer();
+    // Discover optional effects once, irrespective of the initial checkboxes.
+    const prepared = await prepare(
+      { ...choices, arrSelected: true, qbSelected: true },
+      active,
+      c.req.raw.signal,
+      true,
+    );
+    const historical = await discoverHistoricalDownloads(
+      active.serverId,
+      prepared.plans,
+      prepared.arrTargets,
+      prepared.sonarrSnapshots,
+      prepared.discoveryHistory,
+    );
+    const preview = prepared.preview;
+    if (preview.targets.some((t) => t.filesTruncated)) {
+      throw new Error('Select fewer items to review every intended path');
+    }
+    preview.historical = historical.preview;
+    preview.discovery = true;
+    preview.consentToken = sealDiscovery({
+      serverId: active.serverId,
+      choices,
+      fingerprint: preview.fingerprint,
+      targets: prepared.targets,
+      historical: historical.scope,
+      historicalFingerprint: historical.preview.fingerprint,
+    });
     return c.json(preview);
   } catch {
     return c.json({
       error:
-        'Current service evidence could not be verified. Refresh the selection and check service connections.',
+        'The intended service scope could not be read. Refresh the selection and check service connections.',
     }, 409);
   }
 });
@@ -430,6 +482,7 @@ router.post('/', async (c) => {
       ...choices,
       previewFingerprint: body.previewFingerprint,
       serviceOwned: 4,
+      consentToken: body.consentToken,
       ...(historical ? { historicalCleanup: historical } : {}),
     };
     const repeated = await repeatedDeletionOperation(
@@ -438,52 +491,55 @@ router.post('/', async (c) => {
       payload,
     );
     if (repeated) return c.json(repeated, 202);
-    let prepared: Awaited<ReturnType<typeof prepare>>;
+    let consent: ReturnType<typeof openDiscovery>;
     try {
-      prepared = await prepare(choices, active);
-    } catch {
-      // This attempt has not enqueued anything. The client must still preserve
-      // the same request identity if a previous submission had an unknown result.
-      return c.json({
-        error: 'Current service evidence could not be verified. Refresh the preview.',
-      }, 409);
-    }
-    const { preview, targets } = prepared;
-    if (!preview.canConfirm || preview.fingerprint !== body.previewFingerprint) {
-      return c.json({
-        error: 'Service evidence changed or remains unavailable. Review the current preview.',
-        preview,
-      }, 409);
-    }
-    let historicalDownloads;
-    if (historical) {
-      let checked: Awaited<ReturnType<typeof collectHistoricalDownloads>>;
-      try {
-        checked = await collectHistoricalDownloads(
-          active.serverId,
-          prepared.plans,
-          prepared.arrTargets,
-          prepared.downloadTargets,
-        );
-      } catch {
-        // This read-only phase has not enqueued this request. Keep opt-out available.
-        return c.json({
-          error:
-            'History verification is unavailable. Review again or continue without optional cleanup.',
-        }, 409);
-      }
-      const acceptedIds = new Set(checked.accepted.map((c) => c.id));
-      const selectedIds = new Set<string>(historical.candidateIds);
+      consent = openDiscovery(body.consentToken);
+      const { arrSelected: _arr, qbSelected: _qb, ...selection } = choices;
+      const { arrSelected: _oldArr, qbSelected: _oldQb, ...discoveredSelection } = consent.choices;
       if (
-        checked.preview.fingerprint !== historical.fingerprint ||
-        [...selectedIds].some((id) => !acceptedIds.has(id))
-      ) {
-        return c.json({
-          error: 'History-linked files changed. Review again or continue without optional cleanup.',
-        }, 409);
-      }
-      historicalDownloads = checked.accepted.filter((c) => selectedIds.has(c.id));
+        consent.serverId !== active.serverId || consent.fingerprint !== body.previewFingerprint ||
+        evidenceFingerprint(selection) !== evidenceFingerprint(discoveredSelection)
+      ) throw new Error('Selection changed');
+      if (
+        historical &&
+        (!choices.arrSelected || historical.fingerprint !== consent.historicalFingerprint ||
+          historical.candidateIds.some((id: string) =>
+            !consent.historical.some((c) => c.id === id)
+          ))
+      ) throw new Error('Historical scope changed');
+    } catch {
+      return c.json({ error: 'The reviewed scope changed or expired. Refresh the preview.' }, 409);
     }
+    const targets = consent.targets;
+    for (const target of targets) {
+      const snapshot = target.snapshot as unknown as DurableTargetSnapshot;
+      const plan = snapshot.serviceOwnedPlan!;
+      plan.arrSelected = choices.arrSelected;
+      plan.qbSelected = choices.qbSelected;
+      for (const action of plan.actions) {
+        action.selected = action.service === 'plex' ||
+          (action.service === 'qb'
+            ? choices.qbSelected && action.matchedToSelection === true
+            : choices.arrSelected);
+      }
+      for (const decision of plan.retention.decisions) {
+        decision.requested = plan.actions.find((a) =>
+          a.id === decision.actionId
+        )!.selected === true;
+        if (!decision.requested) {
+          decision.state = 'kept';
+          decision.reason = 'not_selected';
+        }
+      }
+      plan.fingerprint = serviceOwnedPlanFingerprint(plan);
+      snapshot.mode = choices.arrSelected ? 'coordinated' : 'plex-only';
+      snapshot.cleanupDownloads = choices.qbSelected;
+      snapshot.serviceOwnedDiscovery = structuredClone(plan);
+      validateLocalTarget(active.serverId, target.kind, snapshot);
+    }
+    const historicalDiscovery = historical
+      ? consent.historical.filter((c) => historical.candidateIds.includes(c.id))
+      : [];
     const result = await enqueueDeletionOperation({
       clientRequestId: body.clientRequestId,
       serverId: active.serverId,
@@ -491,7 +547,7 @@ router.post('/', async (c) => {
       kind: targets[0].kind,
       payload,
       targets,
-      historicalDownloads,
+      historicalDiscovery,
     });
     return c.json(result, 202);
   } catch (error) {

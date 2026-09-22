@@ -7,7 +7,10 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
-import { useDeletionOutcomeRefresh } from "./useDeletionOutcomeRefresh.ts";
+import {
+  deletionInsightQueryKeys,
+  useDeletionOutcomeRefresh,
+} from "./useDeletionOutcomeRefresh.ts";
 import {
   activeDeletionStatuses,
   deletionAttentionSummary,
@@ -46,16 +49,22 @@ export function DeletionOperationCoordinator({
 }: {
   children: React.ReactNode;
 }) {
+  const qc = useQueryClient();
   const [tracked, setTracked] = useState<TrackedDeletion[]>([]);
 
   const trackDeletionOperation = useCallback(
     (id: string, invalidateQueryKeys: QueryKey[]) => {
+      // The enqueue response means ownership is already durable. Refresh now,
+      // rather than leaving selectable rows visible until the worker finishes.
+      for (const queryKey of deletionInsightQueryKeys(invalidateQueryKeys)) {
+        void qc.invalidateQueries({ queryKey });
+      }
       setTracked((current) => {
         if (current.some((operation) => operation.id === id)) return current;
         return [...current, { id, invalidateQueryKeys }];
       });
     },
-    [],
+    [qc],
   );
 
   const dismiss = useCallback((id: string) => {

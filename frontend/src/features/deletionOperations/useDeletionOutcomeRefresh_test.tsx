@@ -50,13 +50,15 @@ const operation: DeletionOperation = {
   targets: [target],
 };
 
-for (const initialStatus of ["needs_attention", "completed_with_warning"] as const) {
-  Deno.test(`terminal ${initialStatus} refreshes again after reconciliation between polls`, async () => {
+for (
+  const initialStatus of ["queued", "running", "needs_attention", "completed_with_warning"] as const
+) {
+  Deno.test(`${initialStatus} refreshes ownership immediately and again when released`, async () => {
     const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const prior = globals.IS_REACT_ACT_ENVIRONMENT;
     globals.IS_REACT_ACT_ENVIRONMENT = true;
     const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
-    const listKeys = [["duplicates"], ["stale", "movies"]];
+    const listKeys = [["stale", "movies"], ["duplicates"]];
     for (const key of listKeys) client.setQueryData(key, ["selected version"]);
     const invalidations: unknown[] = [];
     const unsubscribe = client.getQueryCache().subscribe((event) => {

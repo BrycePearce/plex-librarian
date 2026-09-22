@@ -7,9 +7,10 @@ const PAGE_SIZE = 50;
 /** Bound rendered rows without dropping any path from the review or consent scope. */
 export function HistoricalDownloadPaths(
   props:
-    | { preview: HistoricalDownloadPreview }
+    | { preview: HistoricalDownloadPreview; exclusionsOnly?: boolean }
     | { outcomes: NonNullable<DeletionOperation["historicalDownloads"]> },
 ) {
+  const exclusionsOnly = "exclusionsOnly" in props && props.exclusionsOnly;
   const preview = "preview" in props ? props.preview : undefined;
   const outcomes = "outcomes" in props ? props.outcomes : undefined;
   const [open, setOpen] = useState(false);
@@ -53,12 +54,18 @@ export function HistoricalDownloadPaths(
   return (
     <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
-        {preview ? "Review exact paths and coverage" : "Review exact file outcomes"}
+        {exclusionsOnly
+          ? "Download paths not included"
+          : preview
+          ? "Review exact paths and coverage"
+          : "Review exact file outcomes"}
       </summary>
       {open && (
         <>
           <p>
-            {preview ? `Consent includes all ${preview.candidates.length} eligible paths. ` : ""}
+            {preview && !exclusionsOnly
+              ? `Consent includes all ${preview.candidates.length} listed paths. `
+              : ""}
             {total ? start + 1 : 0}–{end} of {total} paths shown.
           </p>
           {rows}

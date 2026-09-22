@@ -1,3 +1,4 @@
+import type { HistoricalDiscovery } from '../../mediaDeletion/serviceOwnedDiscovery.ts';
 import { withTransaction } from '../../../db/index.ts';
 import { HistoricalUnlinkNotAttempted } from '../../mediaDeletion/historicalDownloadErrors.ts';
 import type { DeletionWorkTarget } from '../core/types.ts';
@@ -33,6 +34,11 @@ export async function ensureHistoricalDownloadPhase(
     resolveActiveServer: typeof resolveActiveServer;
     prepare: typeof import('../serviceOwnedRoute.ts').prepare;
   },
+  verified?: NonNullable<
+    Awaited<
+      ReturnType<typeof import('./serviceOwnedWorkflow.ts').verifyDiscoveredServiceOperation>
+    >['historical']
+  >,
 ) {
   const rows = withTransaction((db) =>
     db.prepare(
@@ -63,7 +69,7 @@ export async function ensureHistoricalDownloadPhase(
     const first = plans[0];
     // One execution-time selection/retained-owner inventory for this optional
     // phase. Services have not mutated yet; per-file owners are checked below.
-    const prepared = await prepare({
+    const prepared = verified ?? await prepare({
       libraryKey: first.libraryKey,
       arrSelected: first.arrSelected,
       qbSelected: first.qbSelected,
@@ -106,7 +112,79 @@ export async function ensureHistoricalDownloadPhase(
     );
     return claims;
   });
+  // Turn approved names into verified filesystem evidence only in the worker.
+  // Reserve canonical entries atomically before any unlink. Failure is optional,
+  // and cannot widen a path or replay a journal with persisted intent.
+  for (const row of rows) {
+    const [id, evidence, entry] = row;
+    const discovery = JSON.parse(evidence) as HistoricalDiscovery;
+    if (discovery.discovery !== 1) continue;
+    try {
+      if (cancelled() || hasPriorServiceAttempt) {
+        throw new Error('Optional discovery was cancelled or service execution already began');
+      }
+      const { checked } = await operation();
+      const candidate = checked.accepted.find((c) =>
+        c.filesystem.path === discovery.path &&
+        historicalOwnerContexts(c).some((o) =>
+          o.instanceId === discovery.instanceId && o.seriesId === discovery.seriesId &&
+          o.accessId === discovery.accessId && o.accessRevision === discovery.accessRevision &&
+          serviceOwnedFingerprint(o.lineage) === serviceOwnedFingerprint(discovery.lineage)
+        )
+      );
+      if (!candidate) {
+        throw new Error(
+          'The reviewed historical path is absent, changed, retained or could not be verified',
+        );
+      }
+      // Every owner of a merged physical entry must have been explicitly reviewed.
+      if (
+        !historicalOwnerContexts(candidate).every((o) =>
+          rows.some(([, raw]) => {
+            const d = JSON.parse(raw) as HistoricalDiscovery;
+            return d.discovery === 1 && (d.contexts ?? [d]).some((owner) =>
+              owner.path === candidate.filesystem.path && owner.instanceId === o.instanceId &&
+              owner.seriesId === o.seriesId && owner.accessId === o.accessId &&
+              owner.accessRevision === o.accessRevision &&
+              serviceOwnedFingerprint(owner.lineage) === serviceOwnedFingerprint(o.lineage)
+            );
+          })
+        )
+      ) throw new Error('New historical ownership requires fresh review');
+      withTransaction((db) => {
+        if (
+          !db.prepare(
+            "SELECT 1 FROM historical_download_journal WHERE id=? AND status='pending' AND evidence=?",
+          ).value(id, evidence)
+        ) throw new Error('Optional journal changed');
+        db.prepare('INSERT INTO historical_download_reservations(entry,journal_id) VALUES(?,?)')
+          .run(candidate.filesystem.entry, id);
+        db.prepare('DELETE FROM historical_download_reservations WHERE entry=? AND journal_id=?')
+          .run(entry, id);
+        db.prepare('UPDATE historical_download_journal SET entry=?,evidence=? WHERE id=?').run(
+          candidate.filesystem.entry,
+          JSON.stringify(candidate),
+          id,
+        );
+      });
+      row[1] = JSON.stringify(candidate);
+      row[2] = candidate.filesystem.entry;
+    } catch (error) {
+      withTransaction((db) => {
+        db.prepare(
+          "UPDATE historical_download_journal SET status='skipped',reason=?,finished_at=? WHERE id=? AND status='pending'",
+        ).run(
+          error instanceof Error ? error.message : 'Optional verification unavailable',
+          Date.now(),
+          id,
+        );
+        db.prepare('DELETE FROM historical_download_reservations WHERE entry=? AND journal_id=?')
+          .run(entry, id);
+      });
+    }
+  }
   for (const [id, evidence, entry] of rows) {
+    if ((JSON.parse(evidence) as HistoricalDiscovery).discovery === 1) continue;
     const store = historicalDownloadJournalStore(id, entry);
     try {
       const accepted = JSON.parse(evidence) as AcceptedHistoricalDownload;

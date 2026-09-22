@@ -1022,14 +1022,10 @@ export class ArrClient {
   }
 
   /** Bounded exact lineage; unlike torrent associations this also covers absent/non-torrent IDs. */
-  async historicalImports(seriesId: number) {
+  async historicalImports(seriesId: number, discoveredHistory?: unknown) {
     if (this.type !== 'sonarr') throw new ArrApiError('Historical imports require Sonarr');
     return parseHistoricalImports(
-      await this.boundedRequest<unknown>(
-        `/history/series?seriesId=${seriesId}&includeSeries=false&includeEpisode=false`,
-        ARR_HISTORY_MAX_BYTES,
-        'historical import response',
-      ),
+      discoveredHistory ?? await this.downloadHistory(seriesId),
       seriesId,
     );
   }
@@ -1109,7 +1105,7 @@ export class ArrClient {
     return records;
   }
 
-  async torrentAssociations(mediaId: number): Promise<ArrTorrentAssociation[]> {
+  async downloadHistory(mediaId: number): Promise<unknown> {
     const path = this.type === 'radarr'
       ? `/history/movie?movieId=${mediaId}&includeMovie=false`
       : `/history/series?seriesId=${mediaId}&includeSeries=false&includeEpisode=false`;
@@ -1118,6 +1114,14 @@ export class ArrClient {
       ARR_HISTORY_MAX_BYTES,
       'download history response',
     );
+    return payload;
+  }
+
+  async torrentAssociations(
+    mediaId: number,
+    discoveredHistory?: unknown,
+  ): Promise<ArrTorrentAssociation[]> {
+    const payload = discoveredHistory ?? await this.downloadHistory(mediaId);
     if (!Array.isArray(payload) || payload.length > ARR_HISTORY_MAX_RECORDS) {
       throw new ArrApiError('Arr returned unsupported or oversized download history evidence');
     }

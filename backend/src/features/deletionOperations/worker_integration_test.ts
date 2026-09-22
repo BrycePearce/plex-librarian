@@ -1,3 +1,165 @@
+Deno.test('history discovery shares reads; optional verification failure cannot block native deletion or replay cancellation', async () => {
+  for (const cancelled of [false, true]) {
+    reset();
+    addEpisode();
+    configureSonarr();
+    live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
+    withTransaction((db) =>
+      db.prepare(
+        "INSERT INTO historical_download_access(id,server_id,arr_instance_id,configuration,revision,status) VALUES('discovery-root',1,2,?,'scope-1','available')",
+      ).run(
+        JSON.stringify({
+          enabled: true,
+          remoteRoot: '/downloads',
+          localRoot: '/nonexistent-disposable-downloads',
+          noRemainingClient: true,
+        }),
+      )
+    );
+    const fixtureFetch = globalThis.fetch;
+    let historyReads = 0;
+    globalThis.fetch = (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'sonarr' && url.pathname === '/api/v3/history/series') {
+        historyReads++;
+        return Promise.resolve(
+          Response.json([{
+            id: 1,
+            seriesId: 8,
+            episodeId: 9,
+            date: '2026-01-01T00:00:00Z',
+            eventType: 'downloadFolderImported',
+            data: {
+              fileId: String(sonarrManagedFileId),
+              importedPath: sonarrManagedPath,
+              droppedPath: '/downloads/old.mkv',
+            },
+          }]),
+        );
+      }
+      return fixtureFetch(input, init);
+    };
+    clearPlexClientCache();
+    try {
+      const choices = {
+        libraryKey: 'shows',
+        targets: [{ ratingKey: 'show-1' }],
+        arrSelected: true,
+        qbSelected: false,
+      };
+      const preview = await (await rawApp.request('/api/service-deletions/preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(choices),
+      })).json();
+      assertEquals(preview.historical.candidates.length, 1);
+      assertEquals(historyReads, 1);
+      const body = {
+        ...choices,
+        clientRequestId: crypto.randomUUID(),
+        previewFingerprint: preview.fingerprint,
+        consentToken: preview.consentToken,
+        historicalCleanup: {
+          fingerprint: preview.historical.fingerprint,
+          candidateIds: preview.historical.candidates.map((c: { id: string }) => c.id),
+        },
+      };
+      const response = await rawApp.request('/api/service-deletions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assertEquals(response.status, 202, await response.clone().text());
+      assertEquals(historyReads, 1);
+      const { operationId } = await response.json();
+      if (cancelled) assertEquals(cancelDeletionOperation(operationId, 1), true);
+      else {withTransaction((db) => {
+          db.prepare("UPDATE deletion_targets SET status='running' WHERE operation_id=?").run(
+            operationId,
+          );
+          recoverInterruptedDeletionWork(db, Math.floor(Date.now() / 1000));
+        });}
+      await settle();
+      const operation = getDeletionOperation(operationId, 1)!;
+      assertEquals(
+        operation.status,
+        cancelled ? 'cancelled' : 'completed_with_warning',
+        JSON.stringify(operation),
+      );
+      assertEquals(sonarrManagedFilePresent, cancelled);
+      const journal = withTransaction((db) =>
+        db.prepare('SELECT status FROM historical_download_journal WHERE operation_id=?').value<
+          [string]
+        >(operationId)
+      );
+      assertEquals(journal?.[0], 'skipped');
+    } finally {
+      globalThis.fetch = fixtureFetch;
+      clearPlexClientCache();
+    }
+  }
+});
+
+Deno.test('enqueue uses reviewed consent without live verification and rejects altered scope', async () => {
+  reset();
+  addMovie('consent-a', [11]);
+  addMovie('consent-b', [12]);
+  reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
+  const value = await servicePreview('consent-a');
+  const fixtureFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = () => {
+    reads++;
+    throw new Error('Enqueue must not read service evidence');
+  };
+  try {
+    const response = await acceptServicePreview(value);
+    assertEquals(response.status, 202, await response.clone().text());
+    assertEquals(reads, 0);
+    const altered = {
+      ...value,
+      choices: { ...value.choices, targets: [{ ratingKey: 'consent-b' }] },
+    };
+    assertEquals((await acceptServicePreview(altered)).status, 409);
+    assertEquals(
+      (await acceptServicePreview({
+        ...value,
+        preview: { ...value.preview, consentToken: value.preview.consentToken.slice(2) },
+      })).status,
+      409,
+    );
+    assertEquals(reads, 0);
+  } finally {
+    globalThis.fetch = fixtureFetch;
+  }
+});
+
+Deno.test('all approved targets verify before mutations, including a failed sibling on the next worker pass', async () => {
+  reset();
+  addMovie('phase-a', [11]);
+  addMovie('phase-b', [12]);
+  reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
+  const choices = {
+    libraryKey: 'movies',
+    targets: [{ ratingKey: 'phase-a' }, { ratingKey: 'phase-b' }],
+    arrSelected: false,
+    qbSelected: false,
+  };
+  const preview = await (await rawApp.request('/api/service-deletions/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(choices),
+  })).json();
+  const response = await acceptServicePreview({ choices, preview });
+  assertEquals(response.status, 202);
+  const { operationId } = await response.json();
+  live.get('phase-a')!.title = 'Changed identity';
+  await settle();
+  await settle();
+  assertEquals(wholeDeleteOrder, []);
+  assertEquals(getDeletionOperation(operationId, 1)!.status, 'needs_attention');
+});
+
 Deno.test('historical access revision invalidates only after a successful Plex mapping mutation', async () => {
   try {
     reset();
@@ -109,6 +271,7 @@ Deno.test('service-owned multi-episode request scaling', async () => {
         body: JSON.stringify({
           ...choices,
           previewFingerprint: preview.fingerprint,
+          consentToken: preview.consentToken,
           clientRequestId: crypto.randomUUID(),
         }),
       });
@@ -176,6 +339,7 @@ Deno.test('service-owned retry preserves an accepted operation across server-res
   const body = {
     ...choices,
     previewFingerprint: preview.fingerprint,
+    consentToken: preview.consentToken,
     clientRequestId: crypto.randomUUID(),
   };
   const submit = () =>
@@ -210,7 +374,7 @@ Deno.test('service-owned retry preserves an accepted operation across server-res
   );
 });
 
-Deno.test('service-owned preview and worker reject playback and failed configured QB reads', async () => {
+Deno.test('discovery defers playback and configured QB verification to the worker', async () => {
   reset();
   addMovie('service-read-guard', [11]);
   reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
@@ -232,7 +396,7 @@ Deno.test('service-owned preview and worker reject playback and failed configure
   const preview = await response.json();
   assertEquals(preview.canConfirm, true);
   activePlaybackRatingKey = 'service-read-guard';
-  assertEquals((await previewRequest()).status, 409);
+  assertEquals((await previewRequest()).status, 200);
   activePlaybackRatingKey = null;
   const accepted = await acceptServicePreview({ choices, preview });
   assertEquals(accepted.status, 202);
@@ -254,8 +418,8 @@ Deno.test('service-owned preview and worker reject playback and failed configure
       : fixtureFetch(input, init);
   try {
     const failedRead = await previewRequest();
-    if (failedRead.status === 200) assertEquals((await failedRead.json()).canConfirm, false);
-    else assertEquals(failedRead.status, 409);
+    assertEquals(failedRead.status, 200);
+    assertEquals((await failedRead.json()).discovery, true);
     assertEquals(wholeDeleteOrder.length, 0);
   } finally {
     globalThis.fetch = fixtureFetch;
@@ -290,6 +454,7 @@ async function acceptServicePreview(
       ...value.choices,
       clientRequestId: requestId,
       previewFingerprint: value.preview.fingerprint,
+      consentToken: value.preview.consentToken,
     }),
   });
 }
@@ -355,6 +520,7 @@ Deno.test('service-owned API covers whole shows and seasons without Sonarr or st
       body: JSON.stringify({
         ...choices,
         previewFingerprint: preview.fingerprint,
+        consentToken: preview.consentToken,
         clientRequestId: crypto.randomUUID(),
       }),
     });
@@ -477,6 +643,7 @@ Deno.test('service-owned duplicate deletion removes one version and preserves it
     body: JSON.stringify({
       ...choices,
       previewFingerprint: preview.fingerprint,
+      consentToken: preview.consentToken,
       clientRequestId: crypto.randomUUID(),
     }),
   });
@@ -530,6 +697,7 @@ Deno.test('service-owned batch deletes two movie versions and preserves the thir
       body: JSON.stringify({
         ...choices,
         previewFingerprint: preview.fingerprint,
+        consentToken: preview.consentToken,
         clientRequestId: crypto.randomUUID(),
       }),
     });
@@ -605,6 +773,7 @@ Deno.test('service-owned batch deletes versions across episodes of the same show
         body: JSON.stringify({
           ...choices,
           previewFingerprint: preview.fingerprint,
+          consentToken: preview.consentToken,
           clientRequestId: crypto.randomUUID(),
         }),
       });
@@ -810,6 +979,7 @@ Deno.test('service-owned season and show finish explained partial and empty Plex
         body: JSON.stringify({
           ...choices,
           previewFingerprint: preview.fingerprint,
+          consentToken: preview.consentToken,
           clientRequestId: crypto.randomUUID(),
         }),
       });
@@ -1039,8 +1209,8 @@ Deno.test('service-owned populated Sonarr season deletes selected file and unmon
       );
       assertEquals(
         preview.targets[0].decisions.find((d: { service: string }) => d.service === 'plex').state,
-        sharedPlex ? 'kept' : 'delete_candidate',
-        JSON.stringify(preview),
+        'delete_candidate', // Discovery does not authorize retained-owner decisions.
+        JSON.stringify(preview.targets),
       );
       const accepted = await rawApp.request('/api/service-deletions', {
         method: 'POST',
@@ -1048,6 +1218,7 @@ Deno.test('service-owned populated Sonarr season deletes selected file and unmon
         body: JSON.stringify({
           ...choices,
           previewFingerprint: preview.fingerprint,
+          consentToken: preview.consentToken,
           clientRequestId: crypto.randomUUID(),
         }),
       });
@@ -1153,6 +1324,7 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
       body: JSON.stringify({
         ...choices,
         previewFingerprint: preview.fingerprint,
+        consentToken: preview.consentToken,
         clientRequestId: crypto.randomUUID(),
       }),
     });
@@ -1205,7 +1377,7 @@ Deno.test('service-owned retained QB completes without Plex removal or catalog p
   assertEquals(value.preview.canConfirm, true, JSON.stringify(value.preview));
   assertEquals(
     value.preview.targets[0].decisions.find((d: { service: string }) => d.service === 'plex').state,
-    'kept',
+    'delete_candidate',
   );
   const response = await acceptServicePreview(value);
   assertEquals(response.status, 202, await response.clone().text());
@@ -1240,7 +1412,15 @@ Deno.test('service-owned changed preview and lost response never grant new delet
   reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
   const initial = await servicePreview('service-drift');
   live.get('service-drift')!.Media![0].Part![0].file = '/new/location.mkv';
-  assertEquals((await acceptServicePreview(initial)).status, 409);
+  const driftResponse = await acceptServicePreview(initial);
+  assertEquals(driftResponse.status, 202);
+  const driftOperation = (await driftResponse.json()).operationId;
+  await settle();
+  assertEquals(getDeletionOperation(driftOperation, 1)!.status, 'needs_attention');
+  assertEquals(wholeDeleteOrder.length, 0);
+  reset();
+  addMovie('service-drift', [11]);
+  reportedPlexLibraries = [{ key: 'movies', title: 'Movies', type: 'movie' }];
   const current = await servicePreview('service-drift');
   const response = await acceptServicePreview(current);
   assertEquals(response.status, 202, await response.clone().text());
@@ -1294,6 +1474,7 @@ await runMigrations(testDbPath, resolve(import.meta.dirname!, '../../../drizzle'
 const { withTransaction } = await import('../../db/index.ts');
 const {
   getDeletionOperation,
+  cancelDeletionOperation,
   retryDeletionOperation,
   recheckPlexReconciliationAfterSync,
   runDeletionWorkerOnceForTest,
@@ -2637,13 +2818,12 @@ Deno.test({
         const serviceResponse = await post('/api/service-deletions/preview', choices);
         assertEquals(serviceResponse.status, 200, await serviceResponse.clone().text());
         const servicePreview = await serviceResponse.json();
-        const historyResponse = await post('/api/service-deletions/historical-preview', choices);
-        assertEquals(historyResponse.status, 200, await historyResponse.clone().text());
-        const history = await historyResponse.json();
+        const history = servicePreview.historical;
         assertEquals(history.candidates.length, 1, JSON.stringify(history));
         const body = {
           ...choices,
           previewFingerprint: servicePreview.fingerprint,
+          consentToken: servicePreview.consentToken,
           clientRequestId: crypto.randomUUID(),
           historicalCleanup: {
             fingerprint: history.fingerprint,

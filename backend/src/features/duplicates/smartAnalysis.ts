@@ -284,6 +284,7 @@ export async function buildSmartDuplicateAnalysis(
             sql`${episodeMediaVersions.libraryKey}`,
             sql`${episodeMediaVersions.episodeRatingKey}`,
             sql`${episodeMediaVersions.showRatingKey}`,
+            sql`${episodeMediaVersions.seasonRatingKey}`,
           )),
         ))
         .groupBy(episodeMediaVersions.episodeRatingKey)

@@ -2,7 +2,10 @@ import { currentLocationSnapshot, UPGRADE_RECOVERY_MESSAGE } from '../core/upgra
 import { tryAcquireLibraryOperation } from '../../../services/libraryOperations.ts';
 import { DeletionConvergenceError, type DeletionWorkTarget } from '../core/types.ts';
 import type { DurableTargetSnapshot } from '../core/validation.ts';
-import { ensureServiceOwnedDeletion } from './serviceOwnedWorkflow.ts';
+import {
+  ensureServiceOwnedDeletion,
+  verifyDiscoveredServiceOperation,
+} from './serviceOwnedWorkflow.ts';
 import { ensureHistoricalDownloadPhase } from './historicalDownloadWorkflow.ts';
 
 export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<void> {
@@ -14,8 +17,13 @@ export async function ensureDeletionTarget(target: DeletionWorkTarget): Promise<
   const release = tryAcquireLibraryOperation(target.serverId, snapshot.libraryKey, 'deletion');
   if (!release) throw new DeletionConvergenceError('the library is currently being modified');
   try {
-    await ensureHistoricalDownloadPhase(target);
-    await ensureServiceOwnedDeletion(target, snapshot);
+    const verified = await verifyDiscoveredServiceOperation(target);
+    await ensureHistoricalDownloadPhase(target, undefined, verified.historical);
+    await ensureServiceOwnedDeletion(
+      target,
+      JSON.parse(target.snapshot) as DurableTargetSnapshot,
+      verified.freshTargets.has(target.id),
+    );
   } finally {
     release();
   }

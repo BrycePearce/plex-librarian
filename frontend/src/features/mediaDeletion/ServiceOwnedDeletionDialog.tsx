@@ -15,7 +15,7 @@ import {
 } from "./DeletionDialog.tsx";
 import { formatKilobytes } from "../../lib/format.ts";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
-import { HistoricalDownloadPaths } from "./HistoricalDownloadPaths.tsx";
+import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
 import {
   deletionServiceNames,
   detectedDestinations,
@@ -35,7 +35,7 @@ export interface ServiceOwnedDeletionDialogProps {
   quickCleanupThresholdDays?: number;
   renderPreview?: (
     preview: ServiceDeletionPreview | undefined,
-    state: { loading: boolean; error: string | undefined },
+    state: { loading: boolean; error: string | undefined; historical?: HistoricalDownloadPreview },
   ) => ReactNode;
   previewDelayMs?: number;
   focusCancel?: boolean;
@@ -74,17 +74,11 @@ function SelectionDialog({
   const cancelButtonRef = useDeletionDialogCancelFocus(dialogRef, libraryKey, focusCancel);
   const [arrSelected, setArrSelected] = useState(false);
   const [qbSelected, setQbSelected] = useState(false);
-  const [historicalSelected, setHistoricalSelected] = useState(false);
-  const [historical, setHistorical] = useState<
-    import("../../../../shared/historicalDownloads.ts").HistoricalDownloadPreview
-  >();
-  const [historicalLoading, setHistoricalLoading] = useState(false);
-  const [historicalError, setHistoricalError] = useState<string>();
-  const historicalGeneration = useRef(0);
-  const historicalRequest = useRef<AbortController | undefined>(undefined);
   const [revision, setRevision] = useState(0);
-  const [preview, setPreview] = useState<ServiceDeletionPreview>();
-  const [displayPreview, setDisplayPreview] = useState<ServiceDeletionPreview>();
+  const [inventory, setPreview] = useState<ServiceDeletionPreview>();
+  const preview = inventory ? selectPreviewServices(inventory, arrSelected, qbSelected) : undefined;
+  const displayPreview = preview;
+  const historical = arrSelected ? inventory?.historical : undefined;
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
@@ -103,7 +97,6 @@ function SelectionDialog({
     if (selection.length === 0) {
       setLoading(false);
       setPreview(undefined);
-      setDisplayPreview(undefined);
       return;
     }
     setLoading(true);
@@ -113,14 +106,13 @@ function SelectionDialog({
       api.serviceDeletions.preview({
         libraryKey,
         targets: selection,
-        arrSelected,
-        qbSelected,
+        arrSelected: false,
+        qbSelected: false,
         quickCleanupThresholdDays,
       })
         .then((result) => {
           if (active) {
             setPreview(result);
-            setDisplayPreview(result);
           }
         })
         .catch(() => {
@@ -141,8 +133,6 @@ function SelectionDialog({
   }, [
     libraryKey,
     selection,
-    arrSelected,
-    qbSelected,
     revision,
     quickCleanupThresholdDays,
     previewDelayMs,
@@ -150,54 +140,9 @@ function SelectionDialog({
 
   function changeDestination(service: "arr" | "qb", checked: boolean) {
     if (pending || request.current) return;
-    setPreview(undefined);
-    setLoading(true);
     if (service === "arr") setArrSelected(checked);
     else setQbSelected(checked);
   }
-
-  useEffect(() => {
-    const generation = ++historicalGeneration.current;
-    setHistoricalSelected(false);
-    setHistorical(undefined);
-    setHistoricalError(undefined);
-    if (
-      !preview?.canConfirm ||
-      !preview.targets.some((t) =>
-        t.decisions.some((d) => d.service === "sonarr" && d.presence === "current")
-      )
-    ) {
-      setHistoricalLoading(false);
-      return;
-    }
-    setHistoricalLoading(true);
-    const controller = new AbortController();
-    historicalRequest.current = controller;
-    api.serviceDeletions.historicalPreview({
-      libraryKey,
-      targets: selection,
-      arrSelected,
-      qbSelected,
-      quickCleanupThresholdDays,
-    }, controller.signal)
-      .then((result) => {
-        if (generation === historicalGeneration.current) setHistorical(result);
-      })
-      .catch(() => {
-        if (generation === historicalGeneration.current) {
-          setHistoricalError(
-            "History verification is unavailable. Service deletion remains available.",
-          );
-        }
-      })
-      .finally(() => {
-        if (generation === historicalGeneration.current) setHistoricalLoading(false);
-      });
-    return () => {
-      historicalGeneration.current++;
-      controller.abort();
-    };
-  }, [preview, libraryKey, selection, arrSelected, qbSelected, quickCleanupThresholdDays]);
 
   function refresh() {
     if (pending || request.current) return;
@@ -209,15 +154,9 @@ function SelectionDialog({
     setRevision((value) => value + 1);
   }
 
-  async function submit(withoutHistorical = false) {
+  async function submit() {
     if (pending || (!request.current && (selectionDisabled || loading || !preview?.canConfirm))) {
       return;
-    }
-    if (withoutHistorical || !historicalSelected) {
-      historicalGeneration.current++;
-      historicalRequest.current?.abort();
-      setHistoricalSelected(false);
-      setHistoricalLoading(false);
     }
     request.current ??= {
       libraryKey,
@@ -226,8 +165,9 @@ function SelectionDialog({
       qbSelected,
       clientRequestId: uuidv4(),
       previewFingerprint: preview!.fingerprint,
+      consentToken: preview!.consentToken,
       quickCleanupThresholdDays,
-      ...(!withoutHistorical && historicalSelected && historical
+      ...(arrSelected && historical?.candidates.length
         ? {
           historicalCleanup: {
             fingerprint: historical.fingerprint,
@@ -303,10 +243,15 @@ function SelectionDialog({
       onClose={cancel}
     >
       {renderPreview
-        ? renderPreview(displayPreview, { loading, error })
+        ? renderPreview(displayPreview, {
+          loading,
+          error,
+          historical: loading || !arrSelected ? undefined : historical,
+        })
         : displayPreview && (
           <ServiceDeletionPreviewList
             preview={displayPreview}
+            historical={loading || !arrSelected ? undefined : historical}
             collapsible={!embedded}
             showWarnings={false}
           />
@@ -319,8 +264,9 @@ function SelectionDialog({
               id: "arr" as const,
               service: destinations.includes("sonarr") ? "sonarr" as const : "radarr" as const,
               label: "Delete from " + arrNames,
-              info:
-                "Delete current matched media through the selected service. Files needed by a service you keep are retained.",
+              info: destinations.includes("sonarr")
+                ? "Delete current matched media through Sonarr, including eligible history-linked download files shown in the preview. Files needed by a service you keep are retained."
+                : "Delete current matched media through the selected service. Files needed by a service you keep are retained.",
               checked: arrSelected,
               disabled: loading || submissionLocked || !preview?.arrConfigured,
               warning: false,
@@ -342,70 +288,11 @@ function SelectionDialog({
             : []),
         ]}
       />
-      {preview?.targets.some((t) =>
-        t.decisions.some((d) => d.service === "sonarr" && d.presence === "current")
-      ) && (
-        <div className="my-3 text-sm">
-          {historicalLoading
-            ? <p>Checking history-linked download files…</p>
-            : (
-              <label className="flex gap-2 items-center">
-                {!!historical?.candidates.length && (
-                  <input
-                    type="checkbox"
-                    aria-label="Remove history-linked download files"
-                    className="checkbox checkbox-sm"
-                    checked={historicalSelected}
-                    disabled={submissionLocked}
-                    onChange={(e) => setHistoricalSelected(e.target.checked)}
-                  />
-                )}
-                Remove history-linked download files ({historical?.candidates.length ?? 0} eligible,
-                {" "}
-                {historical?.handled?.length ?? 0} handled by qBittorrent,{" "}
-                {historical?.skipped.length ?? 0} unresolved or retained)
-              </label>
-            )}
-          <p className="text-xs mt-1">
-            Linked by Sonarr import history and checked against current ownership; not byte-for-byte
-            verified. Files replaced before inspection may qualify. Parent folders are kept.
-          </p>
-          {historicalError && <p>{historicalError}</p>}
-          {historical && (
-            <HistoricalDownloadPaths key={historical.fingerprint} preview={historical} />
-          )}
-          <a href="/settings/sonarr-radarr" className="link">Review folder access</a>
-          {historicalLoading && (
-            <button
-              type="button"
-              className="btn btn-sm ml-2"
-              disabled={pending || !preview.canConfirm}
-              onClick={() => void submit(true)}
-            >
-              Continue without leftover cleanup
-            </button>
-          )}
-          {historicalLoading && (
-            <button
-              type="button"
-              className="btn btn-sm ml-2"
-              disabled={submissionLocked}
-              onClick={() => {
-                historicalGeneration.current++;
-                historicalRequest.current?.abort();
-                setHistoricalLoading(false);
-                setHistoricalError("Optional verification cancelled. No deletion was submitted.");
-              }}
-            >
-              Cancel verification
-            </button>
-          )}
-          {historicalLoading && (
-            <p className="text-xs">
-              Continuing may remove service history needed for a later cleanup review.
-            </p>
-          )}
-        </div>
+      {preview?.discovery && (
+        <p className="mt-2 text-xs text-base-content/60">
+          Intended scope. Eligibility is verified after confirmation; retained or changed files may
+          be skipped.
+        </p>
       )}
       <DeletionPreviewStatus
         error={error ?? null}
@@ -428,4 +315,36 @@ function SelectionDialog({
       />
     </DeletionModalShell>
   );
+}
+
+/** Checkbox changes only select previously discovered effects; no service reads. */
+export function selectPreviewServices(
+  preview: ServiceDeletionPreview,
+  arr: boolean,
+  qb: boolean,
+): ServiceDeletionPreview {
+  return {
+    ...preview,
+    targets: preview.targets.map((target) => ({
+      ...target,
+      decisions: target.decisions.map((decision) => {
+        const requested = decision.service === "plex" ||
+          (decision.service === "qb" ? qb && decision.matchedToSelection === true : arr);
+        return {
+          ...decision,
+          requested,
+          state: !requested && decision.presence !== "unknown"
+            ? "kept"
+            : preview.discovery && decision.presence === "current"
+            ? "delete_candidate"
+            : decision.state,
+          reason: !requested && decision.presence !== "unknown"
+            ? "This optional service target was not selected"
+            : preview.discovery
+            ? "Intended action; eligibility is verified after confirmation"
+            : decision.reason,
+        };
+      }),
+    })),
+  };
 }

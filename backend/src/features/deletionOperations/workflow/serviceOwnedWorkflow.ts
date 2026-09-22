@@ -1,3 +1,4 @@
+import { boundServiceOwnedConsent } from '../../mediaDeletion/serviceOwnedConsent.ts';
 import type { ServiceDeletionResponse } from '../../../../../shared/serviceStorage.ts';
 import { withTransaction } from '../../../db/index.ts';
 import { getArrDeleteTargets } from '../../arr/delete.ts';
@@ -302,10 +303,116 @@ export async function executeServiceOwnedActions(
   }
 }
 
+/** Complete discovery authorization for every target before the first mutation.
+ * Checkpoints preserve consent; resumes revalidate through the normal action workflow. */
+export async function verifyDiscoveredServiceOperation(target: DeletionWorkTarget) {
+  const freshTargets = new Set<number>();
+  let historical: {
+    plans: ServiceOwnedPlan[];
+    arrTargets: Awaited<ReturnType<typeof getArrDeleteTargets>>;
+    downloadTargets: Awaited<ReturnType<typeof getDownloadClientTargets>>;
+  } | undefined;
+  const pendingHistory = withTransaction((db) =>
+    !!db.prepare(
+      "SELECT 1 FROM historical_download_journal WHERE operation_id=? AND status='pending' LIMIT 1",
+    ).value(target.operationId)
+  );
+  const rows = withTransaction((db) =>
+    db.prepare(
+      "SELECT id,snapshot,target_kind,target_key,logical_size,phase,removal_confirmed_at,plex_attempt_count FROM deletion_targets WHERE operation_id=? AND status IN ('queued','running','waiting_retry','needs_attention') ORDER BY ordinal",
+    ).values<
+      [
+        number,
+        string,
+        DeletionWorkTarget['targetKind'],
+        string,
+        number | null,
+        DeletionWorkTarget['phase'],
+        number | null,
+        number,
+      ]
+    >(target.operationId)
+  );
+  for (
+    const [id, raw, targetKind, targetKey, logicalSize, phase, removalConfirmedAt, plexAttemptCount]
+      of rows
+  ) {
+    const snapshot = JSON.parse(raw) as DurableTargetSnapshot;
+    if (!snapshot.serviceOwnedDiscovery || snapshot.serviceOwnedVerified && !pendingHistory) {
+      continue;
+    }
+    if (
+      Object.keys(snapshot.serviceOwnedAttempts ?? {}).length || plexAttemptCount ||
+      phase !== 'validating'
+    ) throw new Error('Unverified work has prior attempt evidence; replay is held');
+    const work = {
+      ...target,
+      id,
+      snapshot: raw,
+      targetKind,
+      targetKey,
+      logicalSize,
+      phase,
+      removalConfirmedAt,
+      plexAttemptCount,
+    };
+    const { client: plex } = await verificationRead(() =>
+      validateDeletionTarget(target.serverId, work)
+    );
+    const approved = snapshot.serviceOwnedDiscovery;
+    if (approved.fingerprint !== serviceOwnedPlanFingerprint(approved)) {
+      throw new Error('Approved discovery scope is corrupt');
+    }
+    const [arrTargets, downloadTargets, connections] = await Promise.all([
+      getArrDeleteTargets(target.serverId, approved.libraryKey),
+      getDownloadClientTargets(target.serverId),
+      serviceEndpoints(target.serverId),
+    ]);
+    const current = await collectStableServiceOwnedScope(() =>
+      buildServiceOwnedPlan({
+        serverId: target.serverId,
+        libraryKey: approved.libraryKey,
+        selection: approved.selection,
+        arrSelected: approved.arrSelected,
+        qbSelected: approved.qbSelected,
+        plex,
+        arrTargets,
+        downloadTargets,
+        connections,
+        relatedPlexItems: () => relatedServiceOwnedPlexItems(target.serverId, approved.selection),
+      })
+    );
+    if (current.actions.some((a) => a.presence === 'unknown' && !a.associationUnavailable)) {
+      throw new ServiceOwnedVerificationPending('Service inventory could not be verified');
+    }
+    if (
+      activeWholeItemRatingKeys(
+        new Set([snapshot.ratingKey, snapshot.showRatingKey ?? snapshot.ratingKey]),
+        await plex.activeSessions(),
+      ).size
+    ) throw new Error('Selected media is playing');
+    snapshot.serviceOwnedPlan = boundServiceOwnedConsent(approved, current);
+    snapshot.serviceOwnedVerified = true;
+    const next = JSON.stringify(snapshot);
+    const changed = withTransaction((db) =>
+      db.prepare(
+        "UPDATE deletion_targets SET snapshot=?,updated_at=? WHERE id=? AND snapshot=? AND status IN ('queued','running','waiting_retry','needs_attention')",
+      ).run(next, Math.floor(Date.now() / 1000), id, raw)
+    );
+    if (changed !== 1) throw new Error('Operation changed during verification');
+    if (id === target.id) target.snapshot = next;
+    freshTargets.add(id);
+    historical ??= { plans: [], arrTargets, downloadTargets };
+    historical.plans.push(snapshot.serviceOwnedPlan);
+  }
+  return { freshTargets, historical: freshTargets.size === rows.length ? historical : undefined };
+}
+
 /** Adapter into the existing durable worker; all deletion calls carry service-local IDs. */
 export async function ensureServiceOwnedDeletion(
   target: DeletionWorkTarget,
   snapshot: DurableTargetSnapshot,
+  initiallyVerified = false,
 ): Promise<void> {
   const plan = snapshot.serviceOwnedPlan!;
   if (
@@ -432,8 +539,9 @@ export async function ensureServiceOwnedDeletion(
         );
       }
     }
-    const current = await collectStableServiceOwnedScope(async () =>
+    let current = await collectStableServiceOwnedScope(async () =>
       buildServiceOwnedPlan({
+        boundaryCheck: pending !== undefined,
         // Only a Sonarr file boundary can use focused individual reads. Plex/QB,
         // resume, catalog cleanup and service transitions keep full collection.
         ...(pending?.service === 'sonarr' && !actionFor(pending).catalogOnly
@@ -458,6 +566,28 @@ export async function ensureServiceOwnedDeletion(
         connections: await serviceEndpoints(target.serverId),
       })
     );
+    if (snapshot.serviceOwnedDiscovery) {
+      if (!completed.size) {
+        current = boundServiceOwnedConsent(snapshot.serviceOwnedDiscovery, current);
+      } else {
+        // Existing continuation explains only recorded completed effects. Preserve
+        // initial consent holds without comparing partially removed files to discovery.
+        for (const decision of plan.retention.decisions) {
+          const accepted = plan.actions.find((a) => a.id === decision.actionId)!;
+          if (
+            accepted.unavailableReason !==
+              'The current service effect was not included in the reviewed scope; fresh review is required'
+          ) continue;
+          const action = current.actions.find((a) => a.id === decision.actionId);
+          const next = current.retention.decisions.find((d) => d.actionId === decision.actionId);
+          if (action && next) {
+            action.unavailableReason = accepted.unavailableReason;
+            next.state = decision.state;
+            next.reason = decision.reason;
+          }
+        }
+      }
+    }
     if (
       plan.retention.decisions.every((d) =>
         d.state === 'delete_candidate' && completed.has(d.actionId) || d.state === 'not_applicable'
@@ -559,7 +689,13 @@ export async function ensureServiceOwnedDeletion(
   await executeServiceOwnedActions(plan, attempts, {
     save,
     present: (action) => verificationRead(() => present(action)),
-    revalidate: (completed, pending) => verificationRead(() => revalidate(completed, pending)),
+    revalidate: (completed, pending) => {
+      if (initiallyVerified && !pending && !completed.size && !Object.keys(attempts).length) {
+        initiallyVerified = false;
+        return Promise.resolve();
+      }
+      return verificationRead(() => revalidate(completed, pending));
+    },
     async reconcileAbsent(base, completed) {
       const action = actionFor(base);
       const sources = serviceOwnedAbsenceSources(action, plan.actions, attempts, completed);
@@ -704,7 +840,9 @@ export async function assertServiceOwnedContinuation(
   ) {
     throw new Error('Service configuration changed after confirmation');
   }
-  const unavailable = current.actions.find((action) => action.presence === 'unknown');
+  const unavailable = current.actions.find((action) =>
+    action.presence === 'unknown' && !action.associationUnavailable
+  );
   if (unavailable) {
     throw new ServiceOwnedVerificationPending(
       `${unavailable.service} inventory could not be verified after confirmation: ${

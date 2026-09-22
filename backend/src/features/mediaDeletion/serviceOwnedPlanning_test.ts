@@ -3,6 +3,74 @@ import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob, DownloadJobSummary } from './downloadClient.ts';
 import { buildServiceOwnedPlan, type ServiceOwnedPlanningInput } from './serviceOwnedPlanning.ts';
+import { boundServiceOwnedConsent } from './serviceOwnedConsent.ts';
+
+Deno.test('discovery reads each intended file once and leaves ownership inventories to verification', async () => {
+  const f = fixture();
+  f.setJobs([f.job]);
+  f.input.downloadTargets = [f.download];
+  f.input.qbSelected = true;
+  let scans = 0, ownership = 0, manifests = 0;
+  const scan = f.qb.scanJobSummaries;
+  f.qb.scanJobSummaries = (visit) => {
+    scans++;
+    return scan(visit);
+  };
+  f.arr.downloadIdIsExclusiveTo = () => {
+    ownership++;
+    return Promise.resolve(true);
+  };
+  const find = f.qb.findJob;
+  f.qb.findJob = (id) => {
+    manifests++;
+    return find(id);
+  };
+  const discovered = await buildServiceOwnedPlan({ ...f.input, discovery: true });
+  equal(scans, 0);
+  equal(ownership, 0);
+  equal(manifests, 1);
+  equal(f.calls, ['plex.identity', 'plex.files']);
+  equal(discovered.actions.find((a) => a.service === 'qb')!.files, [{
+    path: '/qb/Movie.mkv',
+    size: 100,
+  }]);
+  const verified = await buildServiceOwnedPlan(f.input);
+  equal(scans, 2);
+  equal(ownership, 1);
+  equal(decisions(boundServiceOwnedConsent(discovered, verified)), {
+    radarr: 'delete_candidate',
+    plex: 'delete_candidate',
+    qb: 'delete_candidate',
+  });
+});
+
+Deno.test('worker consent ceiling holds new paths and propagates retention without widening service effects', async () => {
+  const f = fixture();
+  const approved = await buildServiceOwnedPlan({ ...f.input, discovery: true });
+  f.arr.extraFiles = () =>
+    Promise.resolve([{ relativePath: 'Movie.srt', movieFileId: 5, type: 'subtitle' }]);
+  const current = boundServiceOwnedConsent(approved, await buildServiceOwnedPlan(f.input));
+  equal(decisions(current), { radarr: 'held', plex: 'delete_candidate' });
+  equal(approved.actions.find((a) => a.service === 'radarr')!.files.length, 1);
+});
+
+Deno.test('verification narrows selected QB jobs with changed ownership and rejects changed connections', async () => {
+  const f = fixture();
+  f.input.downloadTargets = [f.download];
+  f.input.qbSelected = true;
+  f.setJobs([f.job]);
+  const approved = await buildServiceOwnedPlan({ ...f.input, discovery: true });
+  f.arr.downloadIdIsExclusiveTo = () => Promise.resolve(false);
+  equal(
+    decisions(boundServiceOwnedConsent(approved, await buildServiceOwnedPlan(f.input))).qb,
+    'kept',
+  );
+  f.download.configurationIdentity = 'changed-mapping';
+  await rejects(
+    async () => boundServiceOwnedConsent(approved, await buildServiceOwnedPlan(f.input)),
+    /configuration changed/,
+  );
+});
 
 function fixture() {
   const file = { id: 5, path: '/arr/Movie.mkv', relativePath: 'Movie.mkv', size: 100 };
@@ -828,4 +896,26 @@ Deno.test('unmanaged episode version keeps positively identified remaining Sonar
       equal(decisions(plan).sonarr, 'held', scenario);
     }
   }
+});
+
+Deno.test('immediate boundary refreshes ownership once without repeating full phase verification', async () => {
+  const f = fixture();
+  f.input.downloadTargets = [f.download];
+  f.setJobs([f.job]);
+  let scans = 0;
+  const scan = f.qb.scanJobSummaries;
+  f.qb.scanJobSummaries = (visit) => {
+    scans++;
+    return scan(visit);
+  };
+  const verified = await buildServiceOwnedPlan(f.input);
+  f.calls.length = 0;
+  scans = 0;
+  const boundary = await buildServiceOwnedPlan({ ...f.input, boundaryCheck: true });
+  equal(boundary.fingerprint, verified.fingerprint);
+  equal(scans, 1);
+  equal(f.calls, ['plex.identity', 'plex.files']);
+  // A newly observed live job still protects its files at the boundary.
+  f.setJobs([{ ...f.job, id: 'new-owner', savePath: '/plex', contentPath: '/plex/Movie.mkv' }]);
+  equal(decisions(await buildServiceOwnedPlan({ ...f.input, boundaryCheck: true })).plex, 'kept');
 });

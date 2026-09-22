@@ -50,6 +50,8 @@ export interface DurableTargetSnapshot {
   upgradeHold?: string;
   serviceOwnedVerificationRetries?: number;
   serviceOwnedVerificationProgress?: number;
+  serviceOwnedDiscovery?: import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
+  serviceOwnedVerified?: boolean;
   serviceOwnedPlan?: import('../../mediaDeletion/serviceOwnedPlanning.ts').ServiceOwnedPlan;
   serviceOwnedAttempts?: Record<
     string,
@@ -297,7 +299,7 @@ function validateLiveItem(snapshot: DurableTargetSnapshot, live: PlexMetadataIde
   }
 }
 
-function validateLocalTarget(
+export function validateLocalTarget(
   serverId: number,
   kind: DurableTargetRecord['targetKind'],
   snapshot: DurableTargetSnapshot,

@@ -41,9 +41,7 @@ export function deletionTargetProgress(
     return target.serviceOwnedDeletion ? "Waiting for service verification" : "Waiting to retry";
   }
   if (target.phase === "validating") {
-    return target.serviceOutcomes?.length
-      ? "Processing service deletion"
-      : "Checking deletion safety";
+    return target.serviceOutcomes?.length ? "Processing service deletion" : "Verifying�";
   }
   if (target.phase === "download_cleanup") return "Cleaning selected downloads";
   if (target.phase === "arr_coordination") return "Coordinating with Sonarr/Radarr";

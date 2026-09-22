@@ -40,7 +40,7 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
       });
     }
     assertEquals(renderer.root.findAllByType("p").map((p) => p.children.join("")), [
-      "Consent includes all 101 eligible paths. 101–103 of 103 paths shown.",
+      "Consent includes all 101 listed paths. 101–103 of 103 paths shown.",
       "/download/100 · 1 episode owners",
       "/kept: Retained owner",
       "/tracked: Handled by qBittorrent (selected eligible action)",

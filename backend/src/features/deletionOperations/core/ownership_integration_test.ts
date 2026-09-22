@@ -649,3 +649,62 @@ Deno.test('finalized audit warnings cannot be rechecked or dismissed', async () 
   });
   assertEquals(dismiss.status, 409);
 });
+
+Deno.test('whole-season ownership hides stale and duplicate targets until cancellation', async () => {
+  const id = 'active-season-cleanup';
+  const staleUrl = '/api/libraries/shows/stale?days=0&minAgeDays=0&scope=season&limit=100';
+  const visibleSeason = async () => {
+    const response = await app.request(staleUrl);
+    assertEquals(response.status, 200);
+    const data = await response.json();
+    return data.items.some((item: { ratingKey: string }) =>
+      item.ratingKey === 'visible-show-season'
+    );
+  };
+  assertEquals(await visibleSeason(), true);
+  insertOperation(id, 'shows', 'whole_item', 'queued', 'Season 1', {
+    ratingKey: 'visible-show-season',
+    showRatingKey: 'visible-show',
+    type: 'season',
+  });
+  try {
+    assertEquals(await visibleSeason(), false);
+    const shows =
+      await (await app.request('/api/libraries/shows/stale?days=0&minAgeDays=0&limit=100')).json();
+    assertEquals(
+      shows.items.some((item: { ratingKey: string }) => item.ratingKey === 'visible-show'),
+      false,
+    );
+    const duplicates = await (await app.request('/api/duplicates?type=tv&limit=100')).json();
+    assertEquals(
+      duplicates.groups.some((group: { showRatingKey?: string }) =>
+        group.showRatingKey === 'visible-show'
+      ),
+      false,
+    );
+    assertEquals(isStaleQuickCleanupCandidate(1, 'shows', 365, 'visible-show', NOW), false);
+    const analysis = await app.request('/api/duplicates/seasons/visible-show-season/analysis', {
+      method: 'POST',
+    });
+    assertEquals(analysis.status, 409);
+    withTransaction((client) => {
+      client.prepare("UPDATE deletion_targets SET status = 'cancelled' WHERE operation_id = ?").run(
+        id,
+      );
+      client.prepare("UPDATE deletion_operations SET status = 'cancelled' WHERE id = ?").run(id);
+    });
+    assertEquals(await visibleSeason(), true);
+    const restored = await (await app.request('/api/duplicates?type=tv&limit=100')).json();
+    assertEquals(
+      restored.groups.some((group: { showRatingKey?: string }) =>
+        group.showRatingKey === 'visible-show'
+      ),
+      true,
+    );
+  } finally {
+    withTransaction((client) => {
+      client.prepare('DELETE FROM deletion_targets WHERE operation_id = ?').run(id);
+      client.prepare('DELETE FROM deletion_operations WHERE id = ?').run(id);
+    });
+  }
+});

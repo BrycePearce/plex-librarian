@@ -37,6 +37,8 @@ export interface HistoricalAccessStatus {
   dismissedRevision: string | null;
 }
 export interface HistoricalDownloadPreview {
+  /** No filesystem sizes or eligibility have been verified yet. */
+  discovery?: boolean;
   fingerprint: string;
   candidates: Array<{ id: string; path: string; size: number; ownerCount: number }>;
   skipped: Array<{ source: string; reason: string; details?: string }>;

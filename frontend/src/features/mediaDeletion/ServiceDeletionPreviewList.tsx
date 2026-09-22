@@ -1,3 +1,5 @@
+import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
+import { HistoricalDownloadPaths } from "./HistoricalDownloadPaths.tsx";
 import { useState } from "react";
 import { ActiveServiceMark, PathTreeRoot } from "./DeletionTree.tsx";
 import { DeletionPreview } from "./DeletionDialog.tsx";
@@ -26,8 +28,9 @@ export function detectedDestinations(preview: ServiceDeletionPreview | undefined
 
 /** One row per selected item/version; episode-level execution details stay out of ordinary review. */
 export function ServiceDeletionPreviewList(
-  { preview, collapsible = false, showWarnings = true }: {
+  { preview, historical, collapsible = false, showWarnings = true }: {
     preview: ServiceDeletionPreview;
+    historical?: HistoricalDownloadPreview;
     collapsible?: boolean;
     showWarnings?: boolean;
   },
@@ -91,10 +94,39 @@ export function ServiceDeletionPreviewList(
                 />
               );
             })}
+            {!!historical?.candidates.length && (
+              <BasicDeletionRow
+                title="Leftover download files"
+                titleText="Exact files linked by Sonarr import history"
+                badges={<span className="badge badge-ghost badge-xs">Downloads</span>}
+                marks={
+                  <span className="text-xs text-base-content/60">
+                    {historical.candidates.length} files
+                  </span>
+                }
+                size={historical.discovery ? "Size not yet checked" : formatKilobytes(
+                  historical.candidates.reduce((sum, file) => sum + file.size / 1000, 0),
+                )}
+              />
+            )}
           </BasicDeletionList>
         }
-        advanced={<ServiceDeletionFileTree preview={preview} />}
+        advanced={<ServiceDeletionFileTree preview={preview} historical={historical} />}
       />
+      {!!historical?.candidates.length && (
+        <p className="mt-2 text-xs text-base-content/60">
+          Includes leftover download files linked by Sonarr history. Only listed files are
+          considered; parent folders are kept.
+        </p>
+      )}
+      {!!historical?.skipped.length && (
+        <div className="mt-2 text-xs text-base-content/60">
+          <HistoricalDownloadPaths
+            exclusionsOnly
+            preview={{ ...historical, candidates: [], handled: [] }}
+          />
+        </div>
+      )}
       {showWarnings && <ServiceDeletionWarnings preview={preview} />}
     </div>
   );
@@ -140,7 +172,21 @@ export function ServiceDeletionWarnings({ preview }: { preview: ServiceDeletionP
   );
 }
 
-export function ServiceDeletionFileTree({ preview }: { preview: ServiceDeletionPreview }) {
+export function ServiceDeletionFileTree({ preview, historical }: {
+  preview: ServiceDeletionPreview;
+  historical?: HistoricalDownloadPreview;
+}) {
+  const downloadGroups = new Map<string, Array<{ path: string; size: number | null }>>();
+  for (const file of historical?.candidates ?? []) {
+    const separator = Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"));
+    const root = file.path.slice(0, separator) || "/";
+    const files = downloadGroups.get(root) ?? [];
+    files.push({
+      path: file.path.slice(separator + 1),
+      size: historical?.discovery ? null : file.size,
+    });
+    downloadGroups.set(root, files);
+  }
   return (
     <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-base-300 bg-base-200/40 p-3">
       {preview.targets.map((target) => {
@@ -219,6 +265,16 @@ export function ServiceDeletionFileTree({ preview }: { preview: ServiceDeletionP
           </div>
         );
       })}
+      {[...downloadGroups].map(([root, files]) => (
+        <PathTreeRoot
+          key={root}
+          path={root}
+          source="Downloads"
+          files={files}
+          totalFiles={files.length}
+          info="Intended leftover files linked by Sonarr history; eligibility is checked after confirmation."
+        />
+      ))}
     </div>
   );
 }

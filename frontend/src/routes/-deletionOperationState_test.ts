@@ -101,7 +101,7 @@ Deno.test("generic terminal warnings do not assume confirmed removal or a partic
 
 Deno.test("queued and validating work do not claim deletion has started", () => {
   assertEquals(deletionOperationTitle("queued", "validating"), "Deletion queued");
-  assertEquals(deletionOperationTitle("running", "validating"), "Checking deletion safety");
+  assertEquals(deletionOperationTitle("running", "validating"), "Verifying�");
   assertEquals(
     deletionTargetProgress({ status: "waiting_retry", phase: "plex_reconciliation" }),
     "Waiting to retry",

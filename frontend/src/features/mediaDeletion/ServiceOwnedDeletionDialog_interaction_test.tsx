@@ -271,7 +271,8 @@ Deno.test("service dialog resets optional consent on refresh and selection and r
     await flushAct(() => {
       inputs()[0].props.onChange({ target: { checked: true } });
     });
-    assertEquals(previews.at(-1)!.arrSelected, true);
+    assertEquals(previews.length, 1);
+    assertEquals(inputs()[0].props.checked, true);
     assertEquals(
       renderer!.root.findAllByType("button").some((entry) => entry.children.includes("Refresh")),
       false,
@@ -392,10 +393,7 @@ Deno.test("failed preview discards confirmation and a definite rejection require
       button("Retry").props.onClick();
     });
     assertEquals(button("Confirm deletion").props.disabled, true);
-    assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), [
-      false,
-      false,
-    ]);
+    assertEquals(renderer!.root.findAllByType("input").map((input) => input.props.checked), []);
     failRead = false;
     await flushAct(() => {
       button("Retry").props.onClick();

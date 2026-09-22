@@ -681,7 +681,7 @@ function phaseLabel(phase: string): string {
   return (
     (
       {
-        validating: "Safety checks",
+        validating: "Verifying�",
         download_cleanup: "Download cleanup",
         arr_coordination: "Sonarr/Radarr coordination",
         plex_reconciliation: "Plex reconciliation",

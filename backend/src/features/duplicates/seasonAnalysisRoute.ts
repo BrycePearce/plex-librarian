@@ -146,6 +146,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
       sql`${episodeMediaVersions.libraryKey}`,
       sql`${episodeMediaVersions.episodeRatingKey}`,
       sql`${episodeMediaVersions.showRatingKey}`,
+      sql`${episodeMediaVersions.seasonRatingKey}`,
     )),
   )).groupBy(episodeMediaVersions.episodeRatingKey).having(sql`count(*) >= 2`).limit(
     MAX_EPISODES + 1,

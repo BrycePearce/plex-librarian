@@ -58,6 +58,7 @@ export function episodeRootIsWorkflowOwned(
   libraryKey: string | SQL,
   episodeRatingKey: string | SQL,
   showRatingKey: string | SQL,
+  seasonRatingKey: string | SQL,
 ): SQL {
   return ownedTargetExists(
     serverId,
@@ -66,7 +67,9 @@ export function episodeRootIsWorkflowOwned(
       (${deletionTargets.targetKind} = 'episode_version'
         and json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${episodeRatingKey})
       or (${deletionTargets.targetKind} = 'whole_item'
-        and json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${showRatingKey})
+        and (json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${showRatingKey}
+          or (json_extract(${deletionTargets.snapshot}, '$.type') = 'season'
+            and json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${seasonRatingKey})))
     )`,
   );
 }
@@ -81,7 +84,9 @@ export function showRootIsWorkflowOwned(
     libraryKey,
     sql`(
       (${deletionTargets.targetKind} = 'whole_item'
-        and json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${showRatingKey})
+        and (json_extract(${deletionTargets.snapshot}, '$.ratingKey') = ${showRatingKey}
+          or (json_extract(${deletionTargets.snapshot}, '$.type') = 'season'
+            and json_extract(${deletionTargets.snapshot}, '$.showRatingKey') = ${showRatingKey})))
       or (${deletionTargets.targetKind} = 'episode_version'
         and json_extract(${deletionTargets.snapshot}, '$.showRatingKey') = ${showRatingKey})
     )`,
@@ -118,7 +123,9 @@ export function seasonRootIsWorkflowOwned(
 export function workflowOwnedItemSql(libraryType: string): string {
   const identity = libraryType === 'show'
     ? `(
-        (t.target_kind = 'whole_item' AND json_extract(t.snapshot, '$.ratingKey') = i.rating_key)
+        (t.target_kind = 'whole_item' AND (json_extract(t.snapshot, '$.ratingKey') = i.rating_key
+          OR (json_extract(t.snapshot, '$.type') = 'season'
+            AND json_extract(t.snapshot, '$.showRatingKey') = i.rating_key)))
         OR (t.target_kind = 'episode_version'
           AND json_extract(t.snapshot, '$.showRatingKey') = i.rating_key)
       )`

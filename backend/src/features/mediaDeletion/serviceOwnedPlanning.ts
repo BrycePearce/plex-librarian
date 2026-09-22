@@ -74,6 +74,18 @@ export interface ServiceOwnedPlan {
 }
 
 export interface ServiceOwnedPlanningInput {
+  /** Discovery lists intended effects; only the worker may authorize them. */
+  discovery?: boolean;
+  /** Immediate mutation boundary: refresh required ownership/effects once, without
+   * repeating the first phase's paired stability observations. */
+  boundaryCheck?: boolean;
+  discoveryHistory?: Map<string, Promise<unknown>>;
+  discoveredIdentity?: PlexMetadataIdentity;
+  discoveredSeasons?: Map<string, Awaited<ReturnType<PlexClient['seasonDeletionEpisodes']>>>;
+  sonarrSnapshots?: Map<
+    string,
+    Awaited<ReturnType<ArrDeleteTarget['client']['sonarrSeriesSnapshot']>>
+  >;
   serverId: number;
   libraryKey: string;
   selection: ServiceOwnedPlan['selection'];
@@ -120,7 +132,8 @@ export function serviceOwnedFingerprint(value: unknown): string {
   return createHash('sha256').update(stable(value)).digest('hex');
 }
 export function serviceOwnedPlanFingerprint(plan: Omit<ServiceOwnedPlan, 'fingerprint'>): string {
-  const { historicalRetainedEntries: _historical, ...servicePlan } = plan;
+  const { historicalRetainedEntries: _historical, fingerprint: _fingerprint, ...servicePlan } =
+    plan as ServiceOwnedPlan;
   return serviceOwnedFingerprint({
     ...servicePlan,
     actions: plan.actions.map(serviceOwnedActionEvidence),
@@ -302,7 +315,8 @@ export async function buildServiceOwnedPlan(
   const unselectedVersionPaths: string[] = [];
   const unselectedParts: typeof selectedParts = [];
   try {
-    identity = await read(() => input.plex.metadataIdentity(selection.ratingKey));
+    identity = input.discoveredIdentity ??
+      await read(() => input.plex.metadataIdentity(selection.ratingKey));
     if (!identity) {
       plexAction.presence = 'absent';
       plexAction.effectsComplete = true;
@@ -340,6 +354,7 @@ export async function buildServiceOwnedPlan(
         const episodes = await read(() =>
           input.plex.seasonDeletionEpisodes(selection.ratingKey, MAX_FILES)
         );
+        input.discoveredSeasons?.set(selection.ratingKey, episodes);
         charge(episodes.length);
         for (const episode of episodes) {
           if (episode.showRatingKey !== owner.ratingKey || episode.seasonIndex !== identity.index) {
@@ -359,9 +374,9 @@ export async function buildServiceOwnedPlan(
           }
         }
         if (
-          stable(episodes) !== stable(
-            await read(() => input.plex.seasonDeletionEpisodes(selection.ratingKey, MAX_FILES)),
-          )
+          !input.discovery && !input.boundaryCheck && stable(episodes) !== stable(
+              await read(() => input.plex.seasonDeletionEpisodes(selection.ratingKey, MAX_FILES)),
+            )
         ) {
           throw new Error('Plex season changed during collection');
         }
@@ -426,18 +441,18 @@ export async function buildServiceOwnedPlan(
           selectedParts.push({ ...file, season, episode });
         }
         if (
-          stable(paths) !== stable(
-            await read(() =>
-              input.plex.mediaPathPreview(
-                selection.ratingKey,
-                selection.type,
-                MAX_FILES,
-                undefined,
-                true,
-                true,
-              )
-            ),
-          )
+          !input.discovery && !input.boundaryCheck && stable(paths) !== stable(
+              await read(() =>
+                input.plex.mediaPathPreview(
+                  selection.ratingKey,
+                  selection.type,
+                  MAX_FILES,
+                  undefined,
+                  true,
+                  true,
+                )
+              ),
+            )
         ) {
           throw new Error('Plex effects changed during collection');
         }
@@ -447,9 +462,9 @@ export async function buildServiceOwnedPlan(
         selectedParts.some((p) => !Number.isSafeInteger(p.size) || p.size <= 0)
       ) throw new Error('Incomplete Plex file evidence');
       if (
-        stable(identity) !== stable(
-          await read(() => input.plex.metadataIdentity(selection.ratingKey)),
-        )
+        !input.discovery && !input.boundaryCheck && stable(identity) !== stable(
+            await read(() => input.plex.metadataIdentity(selection.ratingKey)),
+          )
       ) throw new Error('Plex identity changed during collection');
       setFiles(plexAction, [
         ...new Map(selectedParts.map((p) => [p.path, { path: p.path, size: p.size }])).values(),
@@ -497,7 +512,10 @@ export async function buildServiceOwnedPlan(
       }
       const record = await read(() => target.client.lookup(externalId!));
       if (!record) {
-        if (await read(() => target.client.lookup(externalId!))) {
+        if (
+          !input.discovery && !input.boundaryCheck &&
+          await read(() => target.client.lookup(externalId!))
+        ) {
           throw new Error('Arr record appeared during collection');
         }
         placeholder.presence = 'absent';
@@ -520,7 +538,10 @@ export async function buildServiceOwnedPlan(
       let extrasComplete = false;
       let ownedFileCount = 0;
       if (target.instanceType === 'sonarr') {
-        const snapshot = await read(() => target.client.sonarrSeriesSnapshot(record.id));
+        const snapshotKey = `${target.instanceId}:${record.id}`;
+        const snapshot = input.sonarrSnapshots?.get(snapshotKey) ??
+          await read(() => target.client.sonarrSeriesSnapshot(record.id));
+        input.sonarrSnapshots?.set(snapshotKey, snapshot);
         charge(snapshot.files.length + snapshot.episodes.length);
         ownedFileCount = snapshot.files.length;
         episodes = snapshot.episodes;
@@ -537,6 +558,7 @@ export async function buildServiceOwnedPlan(
           if (file.episodeIds.some((id) => !ids.has(id))) retain(serviceKey, file.path);
         }
         for (const file of files) {
+          if (input.discovery) continue;
           if (
             input.focus &&
             (input.focus.action.instanceId !== target.instanceId ||
@@ -558,7 +580,7 @@ export async function buildServiceOwnedPlan(
           }
         }
         if (
-          stable(snapshot) !==
+          !input.discovery && !input.boundaryCheck && stable(snapshot) !==
             stable(await read(() => target.client.sonarrSeriesSnapshot(record.id)))
         ) throw new Error('Sonarr inventory changed');
         // Accept the native EpisodeFile ID boundary, including Sonarr-owned linked extras.
@@ -591,17 +613,32 @@ export async function buildServiceOwnedPlan(
         }
         extrasComplete = true;
         if (
-          stable(file) !== stable(await read(() => target.client.radarrManagedFile(record.id))) ||
-          stable(observedExtras) !== stable(await read(() => target.client.extraFiles(record.id)))
+          !input.discovery && !input.boundaryCheck &&
+          (stable(file) !== stable(
+                await read(() => target.client.radarrManagedFile(record.id)),
+              ) ||
+            stable(observedExtras) !==
+              stable(await read(() => target.client.extraFiles(record.id))))
         ) throw new Error('Radarr inventory changed');
       }
       let imports: ArrTorrentAssociation[] = [];
       if (files.length) {
         try {
-          imports = await read(() => target.client.torrentAssociations(record.id));
+          let history: unknown;
+          if (input.discovery && input.discoveryHistory && target.client.downloadHistory) {
+            const key = `${target.instanceId}:${record.id}`;
+            if (!input.discoveryHistory.has(key)) {
+              input.discoveryHistory.set(
+                key,
+                read(() => target.client.downloadHistory(record.id)),
+              );
+            }
+            history = await input.discoveryHistory.get(key);
+          }
+          imports = await read(() => target.client.torrentAssociations(record.id, history));
           charge(imports.length);
           if (
-            stable(imports) !==
+            !input.discovery && !input.boundaryCheck && stable(imports) !==
               stable(await read(() => target.client.torrentAssociations(record.id)))
           ) {
             for (const item of imports) unverifiedImportHashes.add(item.hash.toLowerCase());
@@ -614,7 +651,10 @@ export async function buildServiceOwnedPlan(
           provenanceUnavailable = true;
         }
       }
-      if (stable(record) !== stable(await read(() => target.client.lookup(externalId!)))) {
+      if (
+        !input.discovery && !input.boundaryCheck &&
+        stable(record) !== stable(await read(() => target.client.lookup(externalId!)))
+      ) {
         throw new Error('Arr record changed');
       }
       if (!files.length) {
@@ -815,25 +855,41 @@ export async function buildServiceOwnedPlan(
       const seen = new Set<string>();
       const summaries: DownloadJobSummary[] = [];
       const all: DownloadJobSummary[] = [];
-      await read(() =>
-        target.client.scanJobSummaries!((summary: DownloadJobSummary) => {
-          if (seen.has(summary.id) || seen.size >= MAX_ENTRIES) {
-            throw new Error('Invalid or excessive QB inventory');
-          }
-          seen.add(summary.id);
+      const discoveredJobs = new Map<string, DownloadJob>();
+      if (input.discovery) {
+        for (const hash of historyHashes) {
+          const job = await read(() => target.client.findJob(hash));
+          if (!job) continue;
+          discoveredJobs.set(job.id, job);
           all.push({
-            id: summary.id,
-            size: summary.size,
-            contentPath: summary.contentPath,
-            savePath: summary.savePath,
+            id: job.id,
+            size: job.size,
+            contentPath: job.contentPath,
+            savePath: job.savePath,
           });
-          return Promise.resolve();
-        })
-      );
+        }
+      } else {
+        await read(() =>
+          target.client.scanJobSummaries!((summary: DownloadJobSummary) => {
+            if (seen.has(summary.id) || seen.size >= MAX_ENTRIES) {
+              throw new Error('Invalid or excessive QB inventory');
+            }
+            seen.add(summary.id);
+            all.push({
+              id: summary.id,
+              size: summary.size,
+              contentPath: summary.contentPath,
+              savePath: summary.savePath,
+            });
+            return Promise.resolve();
+          })
+        );
+      }
       const collect = async (summary: DownloadJobSummary) => {
         if (summaries.length >= MAX_JOBS) throw new Error('Relevant QB inventory budget exceeded');
         summaries.push(summary);
-        const job = await read(() => target.client.findJob(summary.id));
+        const job = discoveredJobs.get(summary.id) ??
+          await read(() => target.client.findJob(summary.id));
         if (
           !job || job.id !== summary.id || job.size !== summary.size ||
           job.savePath !== summary.savePath || job.contentPath !== summary.contentPath ||
@@ -886,7 +942,7 @@ export async function buildServiceOwnedPlan(
             )
           );
           let exclusive = allOwned && currentInstances.size <= 1;
-          if (exclusive) {
+          if (exclusive && !input.discovery) {
             for (
               const h of [
                 ...new Map(sources.map(({ h }) => [`${h.target.instanceId}:${h.recordId}`, h]))
@@ -904,7 +960,9 @@ export async function buildServiceOwnedPlan(
             current.unavailableReason = 'Whole QB payload includes unproved or retained owners';
           }
         }
-        const after = await read(() => target.client.findJob(summary.id));
+        const after = input.discovery || input.boundaryCheck
+          ? job
+          : await read(() => target.client.findJob(summary.id));
         if (!after || stable(jobEvidence(job)) !== stable(jobEvidence(after))) {
           throw new Error('QB manifest changed');
         }
@@ -954,19 +1012,25 @@ export async function buildServiceOwnedPlan(
           'Current import provenance could not be verified; no QB deletion is authorized';
         actions.push(unknownAssociation);
       }
+      if (input.discovery) continue;
       const repeated: DownloadJobSummary[] = [];
       const repeatedIds = new Set<string>();
-      await read(() =>
-        target.client.scanJobSummaries!((summary) => {
-          if (repeatedIds.has(summary.id) || repeatedIds.size >= MAX_ENTRIES) {
-            throw new Error('Invalid QB inventory');
-          }
-          repeatedIds.add(summary.id);
-          if (relevantSummary(summary)) repeated.push(summary);
-          if (repeated.length > MAX_JOBS) throw new Error('Relevant QB inventory budget exceeded');
-          return Promise.resolve();
-        })
-      );
+      if (input.boundaryCheck) repeated.push(...summaries);
+      else {
+        await read(() =>
+          target.client.scanJobSummaries!((summary) => {
+            if (repeatedIds.has(summary.id) || repeatedIds.size >= MAX_ENTRIES) {
+              throw new Error('Invalid QB inventory');
+            }
+            repeatedIds.add(summary.id);
+            if (relevantSummary(summary)) repeated.push(summary);
+            if (repeated.length > MAX_JOBS) {
+              throw new Error('Relevant QB inventory budget exceeded');
+            }
+            return Promise.resolve();
+          })
+        );
+      }
       const summaryEvidence = (list: DownloadJobSummary[]) =>
         serviceOwnedFingerprint(
           list.map(({ id, size, contentPath, savePath }) => ({ id, size, contentPath, savePath }))
@@ -997,9 +1061,14 @@ export async function buildServiceOwnedPlan(
       retain(entry.serviceKey, entry.path);
     }
     for (const path of unselectedVersionPaths) retain(plexKey, path);
-    const related = input.relatedPlexItems ? await read(input.relatedPlexItems) : [];
+    const related = !input.discovery && input.relatedPlexItems
+      ? await read(input.relatedPlexItems)
+      : [];
     if (related.length > 200) throw new Error('Related Plex title budget exceeded');
-    if ((selection.type === 'season' || selection.type === 'episode') && selection.showRatingKey) {
+    if (
+      !input.discovery && (selection.type === 'season' || selection.type === 'episode') &&
+      selection.showRatingKey
+    ) {
       related.push({
         ratingKey: selection.showRatingKey,
         libraryKey: input.libraryKey,

@@ -70,6 +70,7 @@ export interface NewDeletionTarget {
 
 export interface NewDeletionOperation {
   historicalDownloads?: AcceptedHistoricalDownload[];
+  historicalDiscovery?: import('../mediaDeletion/serviceOwnedDiscovery.ts').HistoricalDiscovery[];
   clientRequestId: string;
   serverId: number;
   libraryKey: string;
@@ -821,6 +822,32 @@ export async function enqueueDeletionOperations(
               now,
               now,
             );
+        }
+      }
+      const historicalGroups = new Map<
+        string,
+        NonNullable<NewDeletionOperation['historicalDiscovery']>
+      >();
+      for (const scope of input.historicalDiscovery ?? []) {
+        const group = historicalGroups.get(scope.path) ?? [];
+        group.push(scope);
+        historicalGroups.set(scope.path, group);
+      }
+      for (const contexts of historicalGroups.values()) {
+        const candidate = { ...contexts[0], contexts };
+        const journalId = `${operationId}:${candidate.id}`;
+        const entry = `discovery:${candidate.path}`;
+        client.prepare(
+          'INSERT INTO historical_download_journal(id,operation_id,entry,evidence,status) VALUES(?,?,?,?,?)',
+        ).run(journalId, operationId, entry, JSON.stringify(candidate), 'pending');
+        try {
+          client.prepare(
+            'INSERT INTO historical_download_reservations(entry,journal_id) VALUES(?,?)',
+          ).run(entry, journalId);
+        } catch {
+          throw new DeletionConflictError(
+            'A history-linked download path is reserved by another operation',
+          );
         }
       }
       for (const candidate of input.historicalDownloads ?? []) {

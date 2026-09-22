@@ -34,6 +34,9 @@ export interface ServiceActionDecision {
 }
 
 export interface ServiceDeletionPreview {
+  discovery?: boolean;
+  consentToken?: string;
+  historical?: import('./historicalDownloads.ts').HistoricalDownloadPreview;
   fingerprint: string;
   arrConfigured: boolean;
   qbConfigured: boolean;
@@ -67,6 +70,7 @@ export interface ServiceDeletionPreviewFile {
 }
 
 export interface ServiceDeletionRequest extends ServiceDeletionChoices {
+  consentToken?: string;
   historicalCleanup?: { fingerprint: string; candidateIds: string[] };
   clientRequestId: string;
   previewFingerprint: string;

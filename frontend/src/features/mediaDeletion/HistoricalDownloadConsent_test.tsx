@@ -4,6 +4,12 @@ import TestRenderer, { act } from "react-test-renderer";
 import { api } from "../../lib/api.ts";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
 import { DeletionDialogFooter } from "./DeletionDialog.tsx";
+import {
+  ServiceDeletionFileTree,
+  ServiceDeletionPreviewList,
+} from "./ServiceDeletionPreviewList.tsx";
+import { PathTreeRoot } from "./DeletionTree.tsx";
+import { BasicDeletionRow, DeletionPreview } from "./DeletionDialog.tsx";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
 import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
 import type { ServiceDeletionRequest } from "../../../../shared/serviceOwnedDeletion.ts";
@@ -43,19 +49,28 @@ const preview = {
   }],
 };
 
-Deno.test("history consent binds reviewed candidates; opting out or cancelling verification cannot adopt late results", async () => {
+Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection includes history and deselection excludes it", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previous = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
   const original = { ...api.serviceDeletions };
   const requests: ServiceDeletionRequest[] = [];
-  let resolve!: (p: HistoricalDownloadPreview) => void;
+  let historyReads = 0;
+  let previewReads = 0;
   let renderer: TestRenderer.ReactTestRenderer | undefined;
-  api.serviceDeletions.preview = () => Promise.resolve(preview);
-  api.serviceDeletions.historicalPreview = () =>
-    new Promise((r) => {
-      resolve = r;
+  api.serviceDeletions.preview = () => {
+    previewReads++;
+    return Promise.resolve({
+      ...preview,
+      discovery: true,
+      consentToken: "bound-scope",
+      historical,
     });
+  };
+  api.serviceDeletions.historicalPreview = () => {
+    historyReads++;
+    throw new Error("Modal must not verify history");
+  };
   api.serviceDeletions.create = (request) => {
     requests.push(request);
     return Promise.resolve({ operationId: "fixture", status: "queued", targetCount: 1 });
@@ -71,52 +86,56 @@ Deno.test("history consent binds reviewed candidates; opting out or cancelling v
       focusCancel={false}
     />
   );
-  const button = (text: string) =>
-    renderer!.root.findAllByType("button").find((b) => b.children.join("") === text)!;
+  const toggleSonarr = (checked: boolean) =>
+    settleReact(() => {
+      renderer!.root.findByType(DestinationOptions).props.options.find((o: { id: string }) =>
+        o.id === "arr"
+      ).onChange(checked);
+    });
   try {
     await settleReact(() => {
       renderer = TestRenderer.create(render("opt-out"));
     });
+    assertEquals(historyReads, 0);
     await settleReact(() => {
-      button("Continue without leftover cleanup").props.onClick();
-    });
-    assertEquals(requests.length, 1);
-    assertEquals(requests[0].historicalCleanup, undefined);
-    await settleReact(() => {
-      resolve(historical);
+      renderer!.root.findByType(DeletionDialogFooter).props.onConfirm();
     });
     assertEquals(requests.length, 1);
     assertEquals(requests[0].historicalCleanup, undefined);
 
-    await settleReact(() => {
-      renderer!.update(render("cancel-only"));
-    });
-    await settleReact(() => {
-      button("Cancel verification").props.onClick();
-    });
-    await settleReact(() => {
-      resolve(historical);
-    });
     assertEquals(requests.length, 1);
+    assertEquals(requests[0].historicalCleanup, undefined);
+
+    await settleReact(() => {
+      renderer!.update(render("consent"));
+    });
+    await toggleSonarr(true);
+
     assertEquals(
       renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
         .length,
       0,
     );
-
+    assertEquals(
+      renderer!.root.findByType(ServiceDeletionPreviewList).props.historical,
+      historical,
+    );
+    assertEquals(
+      renderer!.root.findAllByType(BasicDeletionRow).some((row) =>
+        row.props.title === "Leftover download files"
+      ),
+      true,
+    );
     await settleReact(() => {
-      renderer!.update(render("consent"));
+      renderer!.root.findByType(DeletionPreview).props.onModeChange("advanced");
     });
-    await settleReact(() => {
-      resolve(historical);
-    });
-    const checkbox = renderer!.root.findByProps({
-      "aria-label": "Remove history-linked download files",
-    });
-    assertEquals(checkbox.props.checked, false);
-    await settleReact(() => {
-      checkbox.props.onChange({ target: { checked: true } });
-    });
+    const tree = renderer!.root.findByType(ServiceDeletionFileTree);
+    const downloadRoots = tree.findAllByType(PathTreeRoot).filter((root) =>
+      root.props.source === "Downloads"
+    );
+    assertEquals(downloadRoots.map((root) => [root.props.path, root.props.files]), [["/downloads", [
+      { path: "episode", size: 10 },
+    ]]]);
     await settleReact(() => {
       renderer!.root.findByType(DeletionDialogFooter).props.onConfirm();
     });
@@ -128,14 +147,23 @@ Deno.test("history consent binds reviewed candidates; opting out or cancelling v
     await settleReact(() => {
       renderer!.update(render("new-selection"));
     });
-    await settleReact(() => {
-      resolve(historical);
-    });
+    await toggleSonarr(true);
+    assertEquals(previewReads, 3);
+    assertEquals(historyReads, 0);
+    // Checkbox changes use the same inventory and withdraw optional consent.
+    await toggleSonarr(false);
+
     assertEquals(
-      renderer!.root.findByProps({ "aria-label": "Remove history-linked download files" }).props
-        .checked,
-      false,
+      renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
+        .length,
+      0,
     );
+    assertEquals(renderer!.root.findByType(ServiceDeletionPreviewList).props.historical, undefined);
+    await settleReact(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());
+    assertEquals(requests[2].arrSelected, false);
+    assertEquals(requests[2].historicalCleanup, undefined);
+    assertEquals(previewReads, 3);
+    assertEquals(requests[1].consentToken, "bound-scope");
   } finally {
     await settleReact(() => {
       renderer?.unmount();
@@ -145,7 +173,7 @@ Deno.test("history consent binds reviewed candidates; opting out or cancelling v
   }
 });
 
-Deno.test("QB coverage refreshes on selection changes and handled paths never gain unlink consent", async () => {
+Deno.test("QB selection is independent and never requests another history inventory", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previous = globals.IS_REACT_ACT_ENVIRONMENT;
   globals.IS_REACT_ACT_ENVIRONMENT = true;
@@ -156,6 +184,8 @@ Deno.test("QB coverage refreshes on selection changes and handled paths never ga
     Promise.resolve({
       ...preview,
       qbConfigured: true,
+      discovery: true,
+      historical: { ...historical, candidates: [] },
       targets: [{
         ...preview.targets[0],
         decisions: [...preview.targets[0].decisions, {
@@ -204,20 +234,25 @@ Deno.test("QB coverage refreshes on selection changes and handled paths never ga
           o.id === "cleanup"
         ).onChange(checked);
       });
+    assertEquals(selections, []);
+    await settleReact(() => {
+      renderer!.root.findByType(DestinationOptions).props.options.find((o: { id: string }) =>
+        o.id === "arr"
+      ).onChange(true);
+    });
     await toggle(true);
-    const labels = () =>
-      renderer!.root.findAllByType("label").map((l) =>
-        l.children.filter((c) => typeof c !== "object").join("")
-      );
-    assertEquals(labels().some((t) => t.includes("1 handled by qBittorrent")), true);
     assertEquals(
       renderer!.root.findAllByProps({ "aria-label": "Remove history-linked download files" })
         .length,
       0,
     );
     await toggle(false);
-    assertEquals(labels().some((t) => t.includes("0 handled by qBittorrent")), true);
-    assertEquals(selections.at(-1), false);
+
+    assertEquals(selections, []);
+    assertEquals(
+      renderer!.root.findByType(ServiceDeletionPreviewList).props.historical.candidates,
+      [],
+    );
   } finally {
     await settleReact(() => renderer?.unmount());
     Object.assign(api.serviceDeletions, original);
