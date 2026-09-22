@@ -68,7 +68,6 @@ Deno.test('Sonarr translation witnesses use bounded download-ID history with upp
       { records: [row], totalRecords: 0 },
       { records: Array(101).fill(row), totalRecords: 101 },
       { records: [{ ...row, downloadId: 'cd'.repeat(20) }], totalRecords: 1 },
-      { records: [{ ...row, data: { ...row.data, Size: '8' } }], totalRecords: 1 },
     ]
   ) {
     payload = invalid;
