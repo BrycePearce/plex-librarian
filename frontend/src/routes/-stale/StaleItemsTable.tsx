@@ -44,9 +44,6 @@ export function StaleItemsTable({
   params,
   onSort,
   isFetching,
-  selected,
-  onToggle,
-  onToggleAll,
   onDeleteOne,
   hasAnimatedIn,
   historySyncedAt,
@@ -57,9 +54,6 @@ export function StaleItemsTable({
   params: StaleParams;
   onSort: (f: SortKey) => void;
   isFetching: boolean;
-  selected: Map<string, StaleItem>;
-  onToggle: (item: StaleItem) => void;
-  onToggleAll: () => void;
   onDeleteOne: (item: StaleItem) => void;
   hasAnimatedIn: boolean;
   historySyncedAt: number | null;
@@ -67,10 +61,6 @@ export function StaleItemsTable({
   thisLibraryItemCount: number;
 }) {
   const maxFileSize = Math.max(1, ...items.map((i) => i.fileSize ?? 0));
-  const allOnPageSelected = items.length > 0 &&
-    items.every((i) => selected.has(i.ratingKey));
-  const someOnPageSelected = items.some((i) => selected.has(i.ratingKey));
-
   const rows = items.map((item, index) => (
     <StaleItemRow
       key={item.ratingKey}
@@ -78,8 +68,6 @@ export function StaleItemsTable({
       index={index}
       animateIn={!hasAnimatedIn}
       maxFileSize={maxFileSize}
-      selected={selected.has(item.ratingKey)}
-      onToggle={() => onToggle(item)}
       onDelete={() => onDeleteOne(item)}
       historyUnknown={historySyncedAt === null}
     />
@@ -94,7 +82,6 @@ export function StaleItemsTable({
       />
       <table className="table table-sm table-fixed overflow-hidden">
         <colgroup>
-          <col className="w-8" />
           <col />
           <col className="w-24" />
           <col className="w-32" />
@@ -104,20 +91,6 @@ export function StaleItemsTable({
         </colgroup>
         <thead>
           <tr>
-            <th>
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm"
-                checked={allOnPageSelected}
-                ref={(el) => {
-                  if (el) {
-                    el.indeterminate = !allOnPageSelected && someOnPageSelected;
-                  }
-                }}
-                onChange={onToggleAll}
-                aria-label="Select all on this page"
-              />
-            </th>
             <SortTh
               label="Title"
               field="title"

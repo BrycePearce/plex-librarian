@@ -16,7 +16,6 @@ import { NotSyncedYetCard } from "../components/NotSyncedYetCard.tsx";
 import { ErrorAlert } from "../components/ErrorAlert.tsx";
 import { HistorySyncWarning } from "../components/HistorySyncWarning.tsx";
 import { Pagination } from "../components/Pagination.tsx";
-import { useItemSelection } from "./-stale/useItemSelection.ts";
 import { useScrollToOffset } from "./-stale/useScrollToOffset.ts";
 import {
   lastStalePageOffset,
@@ -28,9 +27,7 @@ import { StaleFilters } from "./-stale/StaleFilters.tsx";
 import { ExpandableSearch } from "../components/ExpandableSearch.tsx";
 import { normalizeSearchQuery } from "@shared/search";
 import { StaleItemsTable } from "./-stale/StaleItemsTable.tsx";
-import { SelectionActionBar } from "./-stale/SelectionActionBar.tsx";
 
-import { LibraryQuickCleanupAction } from "./-stale/LibraryQuickCleanupAction.tsx";
 import { ServiceOwnedDeletionDialog } from "../features/mediaDeletion/ServiceOwnedDeletionDialog.tsx";
 import { InfoTip } from "../features/mediaDeletion/InfoTip.tsx";
 import {
@@ -161,8 +158,6 @@ function StalePage() {
   const thisLibraryItemCount = thisLibrary?.itemCount ?? 0;
   const params = Route.useSearch();
   const seasonScope = thisLibrary?.type === "show" && params.scope === "season";
-  const supportsQuickCleanup = thisLibrary?.type === "movie" ||
-    (thisLibrary?.type === "show" && !seasonScope);
   const navigate = Route.useNavigate();
 
   function setParams(updater: (prev: StaleParams) => StaleParams) {
@@ -276,27 +271,8 @@ function StalePage() {
   });
 
   const pageItems = data?.items ?? [];
-  // Selection belongs to the exact visible result page. TanStack Router keeps this route
-  // mounted for search-param navigation, so key it explicitly instead of carrying hidden
-  // selections across pagination, filtering, searching, or sorting.
-  const selectionScope = JSON.stringify([
-    key,
-    params.scope,
-    params.days ?? data?.days ?? "",
-    params.minAgeDays ?? "",
-    params.filter,
-    params.duplicatesOnly ? "duplicates" : "all",
-    params.search,
-    params.sort,
-    params.order,
-    params.offset,
-  ]);
-  const selection = useItemSelection(pageItems, selectionScope);
-
-  const [confirmItems, setConfirmItems] = useState<StaleItem[]>([]);
+  const [confirmItem, setConfirmItem] = useState<StaleItem | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const seasonDialogRef = useRef<HTMLDialogElement>(null);
-  const [confirmSeason, setConfirmSeason] = useState<StaleItem | null>(null);
   const { trackDeletionOperation } = useDeletionOperationTracker();
 
   function deletionCreated(operationId: string) {
@@ -306,13 +282,11 @@ function StalePage() {
       queryKeys.mediaRemovals.all,
       queryKeys.libraries.all,
     ]);
-    selection.clear();
     closeConfirm();
   }
   useEffect(() => {
-    if (confirmSeason) seasonDialogRef.current?.showModal();
-    else if (confirmItems.length) dialogRef.current?.showModal();
-  }, [confirmSeason, confirmItems]);
+    if (confirmItem) dialogRef.current?.showModal();
+  }, [confirmItem]);
   const goToOffset = useScrollToOffset(
     params.offset ?? 0,
     (offset) => setParams((p) => ({ ...p, offset })),
@@ -331,21 +305,9 @@ function StalePage() {
     });
   }, [data, isFetching, isPlaceholderData, navigate, params.offset]);
 
-  function openConfirm(items: StaleItem[]) {
-    if (seasonScope) {
-      if (items.length !== 1) return;
-      setConfirmSeason(items[0]!);
-
-      return;
-    }
-    setConfirmItems(items);
-  }
-
   function closeConfirm() {
     dialogRef.current?.close();
-    seasonDialogRef.current?.close();
-    setConfirmItems([]);
-    setConfirmSeason(null);
+    setConfirmItem(null);
   }
 
   function setGracePeriod(value: string) {
@@ -380,9 +342,7 @@ function StalePage() {
 
   return (
     <div
-      className={`stale-page ${workspaceToneClass(libraryTone(thisLibrary?.type))} space-y-6 ${
-        selection.selected.size > 0 ? "pb-20" : ""
-      }`}
+      className={`stale-page ${workspaceToneClass(libraryTone(thisLibrary?.type))} space-y-6`}
     >
       {
         /* Sticky (not the table) per explicit preference: the back/title/sync row and the
@@ -460,29 +420,17 @@ function StalePage() {
           </div>
           <div className="library-header-actions flex flex-col items-end gap-1">
             <div className="flex gap-2">
-              {supportsQuickCleanup
-                ? (
-                  <LibraryQuickCleanupAction
-                    libraryKey={key}
-                    libraryItemCount={thisLibraryItemCount}
-                    automaticThresholdDays={thisLibrary?.automaticQuickCleanupDays ?? 1_095}
-                    isSyncing={isSyncing}
-                    isSyncStatusLoading={isSyncStatusLoading}
-                  />
-                )
-                : (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm gap-2 library-sync-action"
-                    onClick={trigger}
-                    disabled={isSyncing}
-                  >
-                    <RefreshCw
-                      className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
-                    />
-                    {isSyncing ? "Syncing…" : "Sync"}
-                  </button>
-                )}
+              <button
+                type="button"
+                className="btn btn-primary btn-sm gap-2 library-sync-action"
+                onClick={trigger}
+                disabled={isSyncing}
+              >
+                <RefreshCw
+                  className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+                />
+                {isSyncing ? "Syncing…" : "Sync"}
+              </button>
             </div>
             {isError && (
               <span className="text-xs text-error">
@@ -612,28 +560,13 @@ function StalePage() {
                 : undefined}
             />
 
-            <SelectionActionBar
-              count={selection.selected.size}
-              totalSize={selection.selectedTotalSize}
-              onClear={selection.clear}
-              onDelete={() => openConfirm(selection.selectedItems)}
-              deleteDisabled={seasonScope && selection.selected.size !== 1}
-              deleteTitle={seasonScope && selection.selected.size !== 1
-                ? "Whole-season removal currently accepts one season at a time"
-                : undefined}
-              noun={seasonScope ? "season" : "item"}
-            />
-
             {isLoading ? <StaleTableSkeleton /> : (
               <StaleItemsTable
                 items={pageItems}
                 params={params}
                 onSort={setSort}
                 isFetching={isFetching}
-                selected={selection.selected}
-                onToggle={selection.toggleOne}
-                onToggleAll={selection.toggleAllOnPage}
-                onDeleteOne={(item) => openConfirm([item])}
+                onDeleteOne={setConfirmItem}
                 hasAnimatedIn={hasAnimatedIn}
                 historySyncedAt={data?.historySyncedAt ?? null}
                 isSyncing={isSyncing}
@@ -649,22 +582,12 @@ function StalePage() {
           </>
         )}
 
-      {confirmItems.length > 0 && (
+      {confirmItem && (
         <ServiceOwnedDeletionDialog
           dialogRef={dialogRef}
           libraryKey={key}
-          targets={confirmItems.map((item) => ({ ratingKey: item.ratingKey }))}
-          selectionDetails={confirmItems}
-          onCreated={deletionCreated}
-          onCancel={closeConfirm}
-        />
-      )}
-      {confirmSeason && (
-        <ServiceOwnedDeletionDialog
-          dialogRef={seasonDialogRef}
-          libraryKey={key}
-          targets={[{ ratingKey: confirmSeason.ratingKey }]}
-          selectionDetails={[confirmSeason]}
+          targets={[{ ratingKey: confirmItem.ratingKey }]}
+          selectionDetails={[confirmItem]}
           onCreated={deletionCreated}
           onCancel={closeConfirm}
         />

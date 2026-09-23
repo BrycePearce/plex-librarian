@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import { Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api.ts";
@@ -43,8 +42,6 @@ export function StaleItemRow({
   index,
   animateIn,
   maxFileSize,
-  selected,
-  onToggle,
   onDelete,
   historyUnknown,
 }: {
@@ -52,8 +49,6 @@ export function StaleItemRow({
   index: number;
   animateIn: boolean;
   maxFileSize: number;
-  selected: boolean;
-  onToggle: () => void;
   onDelete: () => void;
   historyUnknown: boolean;
 }) {
@@ -105,57 +100,31 @@ export function StaleItemRow({
           delay: Math.min(index, 12) * 0.02,
         }
         : undefined}
-      className={`row-hover group polished-row cursor-pointer ${selected ? "row-selected" : ""}`}
-      onClick={onToggle}
+      className="row-hover group polished-row cursor-pointer"
+      onClick={onDelete}
     >
-      <td
-        className={`${selected ? "shadow-[inset_3px_0_0_0_var(--color-primary)]" : ""}`}
-      >
-        <input
-          type="checkbox"
-          className="checkbox checkbox-sm"
-          checked={selected}
-          onChange={onToggle}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={`Select ${item.title}`}
-        />
-      </td>
       <td>
-        {item.type === "show" || item.type === "movie" || isSeason
-          ? (
-            <Link
-              to={item.type === "show" || isSeason
-                ? "/libraries/$key/shows/$ratingKey"
-                : "/libraries/$key/movies/$ratingKey"}
-              params={{
-                key: item.libraryKey,
-                ratingKey: isSeason ? item.showRatingKey! : item.ratingKey,
-              }}
-              onClick={(e) => e.stopPropagation()}
-              className="group/poster inline-flex items-center gap-3 hover:text-primary transition-colors max-w-full"
-            >
-              <PosterThumb
-                thumb={item.thumb}
-                width={60}
-                height={90}
-                className="w-10 h-14"
-                hoverScope="poster"
-              />
-              {titleEl}
-            </Link>
-          )
-          : (
-            <div className="flex items-center gap-3">
-              <PosterThumb
-                thumb={item.thumb}
-                width={60}
-                height={90}
-                className="w-10 h-14"
-                hoverScope="row"
-              />
-              {titleEl}
-            </div>
-          )}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          aria-label={`Review deletion of ${item.title}${
+            isSeason ? `, season ${item.seasonIndex}` : ""
+          }`}
+          aria-haspopup="dialog"
+          className="group/poster inline-flex items-center gap-3 text-left hover:text-primary transition-colors max-w-full rounded focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          <PosterThumb
+            thumb={item.thumb}
+            width={60}
+            height={90}
+            className="w-10 h-14"
+            hoverScope="row"
+          />
+          {titleEl}
+        </button>
       </td>
       <td className="text-sm font-mono truncate relative overflow-hidden">
         {item.fileSize != null && (
@@ -207,29 +176,19 @@ export function StaleItemRow({
         {item.viewCount ?? 0}
       </td>
       <td className="overflow-hidden">
-        <motion.button
+        <button
           type="button"
-          className={`btn btn-ghost btn-xs btn-square text-error ${
-            selected ? "" : "pointer-events-none"
-          }`}
+          className="btn btn-ghost btn-xs btn-square text-error"
           onClick={(e) => {
             e.stopPropagation();
             onDelete();
           }}
-          aria-label={`Delete ${item.title}`}
-          title="Delete this item"
-          tabIndex={selected ? 0 : -1}
-          initial={false}
-          animate={{ opacity: selected ? 1 : 0, x: selected ? 0 : -36 }}
-          transition={{
-            type: "spring",
-            stiffness: 180,
-            damping: 16,
-            mass: 0.6,
-          }}
+          aria-label={`Review deletion of ${item.title}`}
+          aria-haspopup="dialog"
+          title="Review deletion"
         >
           <Trash2 className="w-4 h-4" />
-        </motion.button>
+        </button>
       </td>
     </motion.tr>
   );
