@@ -1210,35 +1210,61 @@ export class ArrClient {
   }
 
   async downloadIdIsExclusiveTo(mediaId: number | null, hash: string): Promise<boolean> {
+    if (
+      !Number.isSafeInteger(mediaId) || mediaId === null || mediaId <= 0 ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(hash)
+    ) return false;
     const pageSize = 100;
     const maxRecords = 1_000;
+    let total: number | undefined;
+    const seen = new Set<number>();
     for (let page = 1; page <= Math.ceil(maxRecords / pageSize); page++) {
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
         sortKey: 'date',
         sortDirection: 'descending',
-        downloadId: hash,
+        // Both Arr QB adapters store uppercase IDs; history filtering is case-sensitive.
+        downloadId: hash.toUpperCase(),
       });
-      const response = await this.request<{
+      const response = await this.boundedRequest<{
         totalRecords?: number;
-        records?: Array<{ movieId?: number; seriesId?: number }>;
-      }>(`/history?${params}`);
+        records?: Array<
+          {
+            id?: number;
+            downloadId?: string;
+            movieId?: number;
+            seriesId?: number;
+          } | null
+        >;
+      }>(`/history?${params}`, ARR_HISTORY_MAX_BYTES, 'download ownership history');
       if (
-        !Array.isArray(response.records) ||
-        !Number.isInteger(response.totalRecords) ||
+        !response || !Array.isArray(response.records) ||
+        !Number.isSafeInteger(response.totalRecords) ||
         response.totalRecords! < 0
       ) {
         throw new ArrApiError('Arr returned an invalid download history response');
       }
-      if (response.totalRecords! > maxRecords) return false;
+      // Empty, changing or incomplete evidence cannot establish exclusive ownership.
+      if (response.totalRecords === 0 || response.totalRecords! > maxRecords) return false;
+      total ??= response.totalRecords!;
+      if (
+        response.totalRecords !== total ||
+        response.records.length !== Math.min(pageSize, total - seen.size)
+      ) return false;
       for (const record of response.records) {
+        if (
+          !record || !Number.isSafeInteger(record.id) || record.id! <= 0 ||
+          seen.has(record.id!) || typeof record.downloadId !== 'string' ||
+          record.downloadId.toLowerCase() !== hash.toLowerCase()
+        ) return false;
         const recordMediaId = this.type === 'radarr' ? record.movieId : record.seriesId;
         if (!Number.isInteger(recordMediaId) || mediaId === null || recordMediaId !== mediaId) {
           return false;
         }
+        seen.add(record.id!);
       }
-      if (page * pageSize >= response.totalRecords!) return true;
+      if (seen.size === total) return true;
     }
     return false;
   }

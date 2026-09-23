@@ -805,7 +805,7 @@ Deno.test('download history detects a hash associated with another Arr title', a
       Promise.resolve(
         Response.json({
           totalRecords: 2,
-          records: [{ movieId: 42 }, { movieId: 42 }],
+          records: [1, 2].map((id) => ({ id, movieId: 42, downloadId: 'A'.repeat(40) })),
         }),
       )) as typeof fetch,
   );
@@ -819,11 +819,64 @@ Deno.test('download history detects a hash associated with another Arr title', a
       Promise.resolve(
         Response.json({
           totalRecords: 2,
-          records: [{ seriesId: 7 }, { seriesId: 9 }],
+          records: [7, 9].map((seriesId) => ({
+            id: seriesId,
+            seriesId,
+            downloadId: 'A'.repeat(40),
+          })),
         }),
       )) as typeof fetch,
   );
   assertEquals(await shared.downloadIdIsExclusiveTo(7, 'a'.repeat(40)), false);
+});
+
+Deno.test('download exclusivity normalizes case and requires complete positive ownership evidence', async () => {
+  const hash = 'a'.repeat(40);
+  const row = (id: number) => ({ id, movieId: 7, downloadId: hash.toUpperCase() });
+  for (
+    const scenario of [
+      'exclusive',
+      'shared',
+      'empty',
+      'short',
+      'changed',
+      'repeated',
+      'wrong-hash',
+      'missing-id',
+      'null',
+    ] as const
+  ) {
+    const client = new ArrClient(
+      'radarr',
+      'http://radarr:7878',
+      'secret',
+      ((input) => {
+        const url = new URL(String(input));
+        // The installed API returns an empty page for lowercase hashes.
+        if (url.searchParams.get('downloadId') !== hash.toUpperCase()) {
+          return Promise.resolve(Response.json({ totalRecords: 0, records: [] }));
+        }
+        const page = Number(url.searchParams.get('page'));
+        const records: unknown[] = page === 1
+          ? Array.from({ length: 100 }, (_, i) => row(i + 1))
+          : [row(101)];
+        let totalRecords = 101;
+        if (scenario === 'shared' && page === 2) records[0] = { ...row(101), movieId: 8 };
+        if (scenario === 'empty') {
+          totalRecords = 0;
+          records.length = 0;
+        }
+        if (scenario === 'short') records.pop();
+        if (scenario === 'changed' && page === 2) totalRecords = 102;
+        if (scenario === 'repeated' && page === 2) records[0] = row(1);
+        if (scenario === 'wrong-hash') records[0] = { ...row(1), downloadId: 'B'.repeat(40) };
+        if (scenario === 'missing-id') records[0] = { movieId: 7, downloadId: hash };
+        if (scenario === 'null') records[0] = null;
+        return Promise.resolve(Response.json({ totalRecords, records }));
+      }) as typeof fetch,
+    );
+    assertEquals(await client.downloadIdIsExclusiveTo(7, hash), scenario === 'exclusive', scenario);
+  }
 });
 
 Deno.test('Radarr lookup and extra files expose its managed deletion boundary', async () => {
