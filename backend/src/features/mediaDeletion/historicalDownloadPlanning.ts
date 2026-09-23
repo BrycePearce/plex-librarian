@@ -1,6 +1,10 @@
 import { dirname, posix } from 'node:path';
 import { historicalDownloadCoverage } from './historicalDownloadCoverage.ts';
-import { type HistoricalQbMapping, historicalQbTranslations } from './historicalQbTranslation.ts';
+import {
+  type HistoricalQbMapping,
+  historicalQbTranslations,
+  type HistoricalQbWitnessCache,
+} from './historicalQbTranslation.ts';
 import { HistoricalIdentityUnavailable } from './historicalNativeStat.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { HistoricalImportEvidence } from '../../integrations/arr/historicalImports.ts';
@@ -10,6 +14,9 @@ import { serviceOwnedFingerprint, type ServiceOwnedPlan } from './serviceOwnedPl
 import {
   historicalDownloadLineage,
   type HistoricalLineageCandidate,
+  type HistoricalOwner,
+  radarrHistoricalDownloadLineage,
+  selectedRadarrHistoricalFiles,
 } from './historicalDownloadLineage.ts';
 import {
   type HistoricalFileSnapshot,
@@ -27,25 +34,26 @@ import type {
   HistoricalDownloadPreview,
 } from '../../../../shared/historicalDownloads.ts';
 
-export interface AcceptedHistoricalDownload {
+export type AcceptedHistoricalDownload = HistoricalOwner & {
   /** All contributing namespaces authorize one physical unlink. */
   contexts?: HistoricalDownloadOwnerContext[];
   version: 1;
   id: string;
   instanceId: number;
-  seriesId: number;
   lineage: HistoricalLineageCandidate;
   filesystem: HistoricalFileSnapshot;
   accessId: string;
   accessRevision: string;
   connectionRevision: string;
-  selectedEpisodeIds: number[];
-}
+  selectedEpisodeIds?: number[];
+};
 
-export type HistoricalDownloadOwnerContext = Pick<
-  AcceptedHistoricalDownload,
-  'instanceId' | 'seriesId' | 'lineage' | 'accessId' | 'accessRevision' | 'selectedEpisodeIds'
->;
+export type HistoricalDownloadOwnerContext =
+  & HistoricalOwner
+  & Pick<
+    AcceptedHistoricalDownload,
+    'instanceId' | 'lineage' | 'accessId' | 'accessRevision' | 'selectedEpisodeIds'
+  >;
 
 export function historicalOwnerContexts(
   value: AcceptedHistoricalDownload,
@@ -95,6 +103,7 @@ export async function historicalJobClaims(
   signal?: AbortSignal,
   aliasCache = new Map<string, Promise<string | null>>(),
   claimCache: HistoricalJobClaimCache = new Map(),
+  witnesses: HistoricalQbWitnessCache = new Map(),
 ): Promise<Set<string>> {
   const claimed = new Set<string>();
   const existingAlias = (path: string) => {
@@ -136,6 +145,7 @@ export async function historicalJobClaims(
       candidates,
       summaries,
       manifests,
+      witnesses,
     );
     for (const mapping of mappings) {
       mapping.local = await existingAlias(mapping.local) ?? mapping.local;
@@ -154,7 +164,7 @@ export async function historicalJobClaims(
         throw new Error(
           'Optional historical cleanup cannot verify qBittorrent ownership for ' +
             summary.contentPath +
-            '. Check matching qBittorrent endpoints in Sonarr and Librarian, remote path mappings in Sonarr, and historical folder access in Librarian’s Media connections. A matching live import or applicable Sonarr path mapping is needed to infer this relationship. Ordinary service deletion is still available.',
+            '. Check matching qBittorrent endpoints in Sonarr/Radarr and Librarian, remote path mappings in Sonarr/Radarr, and historical folder access in Librarian’s Media connections. A matching live import or applicable service path mapping is needed to infer this relationship. Ordinary service deletion is still available.',
         );
       }
       const translatedRoots = [...localTranslations(summary.savePath + '/placeholder', mappings)]
@@ -253,6 +263,8 @@ export async function collectHistoricalDownloads(
   const skipped: HistoricalDownloadPreview['skipped'] = [];
   const handled: NonNullable<HistoricalDownloadPreview['handled']> = [];
   const manifests = new Map<string, DownloadJob>();
+  const witnesses: HistoricalQbWitnessCache = new Map();
+  const downloadOwners = new Map<string, Promise<boolean>>();
   const connectionRevision = historicalConnectionRevision(arr, qb);
   const contexts = new Map<
     string,
@@ -267,7 +279,7 @@ export async function collectHistoricalDownloads(
     signal?.throwIfAborted();
     for (const action of plan.actions) {
       if (
-        action.service !== 'sonarr' || !action.recordId || !action.fileId ||
+        !['sonarr', 'radarr'].includes(action.service) || !action.recordId || !action.fileId ||
         action.presence !== 'current'
       ) continue;
       const target = arr.find((a) => a.instanceId === action.instanceId);
@@ -322,7 +334,9 @@ export async function collectHistoricalDownloads(
       }
       const [history, current] = await Promise.all([
         historyCache.get(historyKey)!,
-        target.client.sonarrSeriesSnapshot(seriesId),
+        target.instanceType === 'radarr'
+          ? target.client.radarrMovieSnapshot(seriesId)
+          : target.client.sonarrSeriesSnapshot(seriesId),
       ]);
       historyRecordCount += history.records.length + history.problems.length;
       if (historyRecordCount > 50_000) {
@@ -340,28 +354,70 @@ export async function collectHistoricalDownloads(
       }
       const selected = new Set<number>();
       const currentFiles = new Map(current.files.map((file) => [file.id, file]));
-      for (const episode of current.episodes) {
-        const file = currentFiles.get(episode.episodeFileId);
-        if (!file) continue;
-        const matched = scoped.some((p) => {
-          const selection = p.selection;
-          const inScope = selection.type === 'show' ||
-            selection.type === 'season' && selection.seasonIndex === episode.seasonNumber ||
-            selection.type === 'episode' && selection.seasonIndex === episode.seasonNumber &&
-              selection.episodeIndex === episode.episodeNumber;
-          return inScope &&
-            p.actions.some((a) =>
-              a.service === 'sonarr' && a.instanceId === target.instanceId &&
-              a.recordId === seriesId && a.fileId === file.id && a.effectsComplete &&
-              !a.retainedOwnership &&
-              a.files.some((f) => f.path === file.path && f.size === file.size)
-            );
-        });
-        if (matched) selected.add(episode.id);
+      if ('episodes' in current) {
+        for (const episode of current.episodes) {
+          const file = currentFiles.get(episode.episodeFileId);
+          if (!file) continue;
+          const matched = scoped.some((p) => {
+            const selection = p.selection;
+            const inScope = selection.type === 'show' ||
+              selection.type === 'season' && selection.seasonIndex === episode.seasonNumber ||
+              selection.type === 'episode' && selection.seasonIndex === episode.seasonNumber &&
+                selection.episodeIndex === episode.episodeNumber;
+            return inScope &&
+              p.actions.some((a) =>
+                a.service === 'sonarr' && a.instanceId === target.instanceId &&
+                a.recordId === seriesId && a.fileId === file.id && a.effectsComplete &&
+                !a.retainedOwnership &&
+                a.files.some((f) => f.path === file.path && f.size === file.size)
+              );
+          });
+          if (matched) selected.add(episode.id);
+        }
       }
-      const lineage = historicalDownloadLineage(history, current, selected);
+      const eligibleFiles = 'movieId' in current
+        ? selectedRadarrHistoricalFiles(scoped, target.instanceId, current)
+        : new Set<number>();
+      if ('movieId' in current && eligibleFiles.size) selected.add(current.movieId);
+      const lineage = 'movieId' in current
+        ? radarrHistoricalDownloadLineage(history, current, eligibleFiles)
+        : historicalDownloadLineage(history, current, selected);
+      if (target.instanceType === 'radarr') {
+        for (let i = lineage.candidates.length - 1; i >= 0; i--) {
+          const candidate = lineage.candidates[i];
+          let exclusive = true;
+          for (
+            const hash of new Set(
+              candidate.imports.flatMap((r) =>
+                r.downloadId && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(r.downloadId)
+                  ? [r.downloadId.toLowerCase()]
+                  : []
+              ),
+            )
+          ) {
+            const key = `${target.instanceId}:${seriesId}:${hash}`;
+            if (!downloadOwners.has(key)) {
+              // The existing exclusivity reader is capped at 1,000 records. Charge
+              // that upper bound against the same collection-wide history budget.
+              historyRecordCount += 1_000;
+              if (historyRecordCount > 50_000) {
+                throw new Error('Historical download ownership read budget exceeded');
+              }
+              downloadOwners.set(key, target.client.downloadIdIsExclusiveTo(seriesId, hash));
+            }
+            if (!await downloadOwners.get(key)) exclusive = false;
+          }
+          if (!exclusive) {
+            lineage.candidates.splice(i, 1);
+            lineage.skipped.push({
+              source: candidate.source,
+              reason: 'Download-linked history has another owner or incomplete ownership evidence',
+            });
+          }
+        }
+      }
       let covered: typeof handled = [];
-      if (!deferJobClaims) {
+      {
         try {
           covered = await historicalDownloadCoverage(
             history,
@@ -371,13 +427,16 @@ export async function collectHistoricalDownloads(
             qb,
             access,
             manifests,
+            witnesses,
           );
-          handled.push(...covered);
+          handled.push(...covered.map((entry) => ({ ...entry, instanceId: target.instanceId })));
         } catch { /* Optional display evidence cannot invalidate ordinary deletion or cleanup. */ }
       }
       const coveredSources = new Set(covered.map((c) => c.source));
       skipped.push(...lineage.skipped.filter((s) => !coveredSources.has(s.source)));
-      const uncoveredCandidates = lineage.candidates.filter((c) => !coveredSources.has(c.source));
+      const uncoveredCandidates = lineage.candidates.filter((c) =>
+        deferJobClaims || !coveredSources.has(c.source)
+      );
       const verifiedSources = new Set(uncoveredCandidates.map((c) => c.source));
       const unverifiedSources = new Set(
         [
@@ -465,13 +524,17 @@ export async function collectHistoricalDownloads(
           const value = {
             version: 1 as const,
             instanceId: target.instanceId,
-            seriesId,
+            ...(target.instanceType === 'radarr'
+              ? { service: 'radarr' as const, movieId: seriesId }
+              : { seriesId }),
             lineage: candidate,
             filesystem,
             accessId: root.id,
             accessRevision: root.revision,
             connectionRevision,
-            selectedEpisodeIds: [...candidate.owners].sort((a, b) => a - b),
+            ...(target.instanceType === 'sonarr'
+              ? { selectedEpisodeIds: [...candidate.owners].sort((a, b) => a - b) }
+              : {}),
           };
           accepted.push({ ...value, id: serviceOwnedFingerprint(value) });
         } catch (error) {
@@ -487,7 +550,7 @@ export async function collectHistoricalDownloads(
       signal?.throwIfAborted();
       incompleteContext = true;
       skipped.push({
-        source: `Sonarr series ${seriesId}`,
+        source: `Arr title ${seriesId}`,
         reason: `History or ownership unavailable: ${String(error)}`,
       });
       break;
@@ -498,7 +561,7 @@ export async function collectHistoricalDownloads(
     // Without its lineage there is no sound way to limit that uncertainty by path.
     skipped.push(...accepted.map((c) => ({
       source: c.lineage.source,
-      reason: 'Another selected Sonarr context has unavailable history or ownership',
+      reason: 'Another selected service context has unavailable history or ownership',
     })));
     accepted.length = 0;
   }
@@ -512,6 +575,9 @@ export async function collectHistoricalDownloads(
         inventories,
         new Map(),
         signal,
+        new Map(),
+        new Map(),
+        witnesses,
       );
       for (let i = accepted.length - 1; i >= 0; i--) {
         if (claims.has(accepted[i].id)) {

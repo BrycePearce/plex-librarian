@@ -141,6 +141,10 @@ export async function prepare(
     Awaited<ReturnType<typeof plex.seasonDeletionEpisodes>>
   >();
   const discoveryHistory = new Map<string, Promise<unknown>>();
+  const radarrFiles = new Map<
+    string,
+    ReturnType<(typeof arrTargets)[number]['client']['radarrManagedFile']>
+  >();
   const discoveredOwners = new Map<string, Awaited<ReturnType<typeof plex.metadataIdentity>>>();
   const sonarrSnapshots = new Map<
     string,
@@ -267,7 +271,7 @@ export async function prepare(
       discoveredIdentity: live,
       ...(discovery && show ? { discoveredOwner: show } : {}),
       ...(discovery ? { discoveredSeasons } : {}),
-      ...(discovery ? { sonarrSnapshots } : {}),
+      ...(discovery ? { sonarrSnapshots, radarrFiles } : {}),
       relatedPlexItems: () => relatedServiceOwnedPlexItems(serverId, selection),
       serverId,
       libraryKey,
@@ -403,6 +407,7 @@ export async function prepare(
     arrTargets,
     downloadTargets,
     sonarrSnapshots,
+    radarrFiles,
     discoveryHistory,
   };
 }
@@ -429,6 +434,7 @@ router.post('/preview', async (c) => {
       prepared.arrTargets,
       prepared.sonarrSnapshots,
       prepared.discoveryHistory,
+      prepared.radarrFiles,
     );
     const preview = prepared.preview;
     if (preview.targets.some((t) => t.filesTruncated)) {

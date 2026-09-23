@@ -45,10 +45,10 @@ export interface HistoricalDownloadPreview {
     path: string;
     size: number;
     ownerCount: number;
-    /** Display-only association with the preview's Sonarr actions. */
+    /** Display-only association with the preview's Arr actions. */
     actionIds?: string[];
   }>;
   skipped: Array<{ source: string; reason: string; details?: string }>;
   /** Covered by eligible selected service actions; never part of optional unlink consent. */
-  handled?: Array<{ source: string; service: 'qb'; actionIds: string[] }>;
+  handled?: Array<{ source: string; service: 'qb'; actionIds: string[]; instanceId?: number }>;
 }

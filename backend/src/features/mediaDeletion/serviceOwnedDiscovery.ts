@@ -8,6 +8,10 @@ import { historicalTranslation, listHistoricalAccess } from '../arr/historicalDo
 import {
   historicalDownloadLineage,
   type HistoricalLineageCandidate,
+  type HistoricalOwner,
+  historicalOwnerId,
+  radarrHistoricalDownloadLineage,
+  selectedRadarrHistoricalFiles,
 } from './historicalDownloadLineage.ts';
 import {
   serviceOwnedFingerprint,
@@ -15,17 +19,16 @@ import {
   type ServiceOwnedPlanningInput,
 } from './serviceOwnedPlanning.ts';
 
-export interface HistoricalDiscovery {
+export type HistoricalDiscovery = HistoricalOwner & {
   contexts?: HistoricalDiscovery[];
   discovery: 1;
   id: string;
   instanceId: number;
-  seriesId: number;
   path: string;
   accessId: string;
   accessRevision: string;
   lineage: HistoricalLineageCandidate;
-}
+};
 
 /** Read history once per title, sharing the native inventory already needed for the preview.
  * No filesystem, alias, download-ownership or repeated stability reads belong here. */
@@ -35,6 +38,7 @@ export async function discoverHistoricalDownloads(
   arr: readonly ArrDeleteTarget[],
   snapshots: NonNullable<ServiceOwnedPlanningInput['sonarrSnapshots']>,
   historyReads = new Map<string, Promise<unknown>>(),
+  radarrFiles: NonNullable<ServiceOwnedPlanningInput['radarrFiles']> = new Map(),
 ): Promise<{ preview: HistoricalDownloadPreview; scope: HistoricalDiscovery[] }> {
   const scope: HistoricalDiscovery[] = [];
   const skipped: HistoricalDownloadPreview['skipped'] = [];
@@ -45,7 +49,10 @@ export async function discoverHistoricalDownloads(
     { instanceId: number; seriesId: number; episodes: Set<number> }
   >();
   for (const action of plans.flatMap((p) => p.actions)) {
-    if (action.service !== 'sonarr' || !action.recordId || !action.instanceId || !action.fileId) {
+    if (
+      !['sonarr', 'radarr'].includes(action.service) || !action.recordId || !action.instanceId ||
+      !action.fileId
+    ) {
       continue;
     }
     const key = `${action.instanceId}:${action.recordId}`;
@@ -62,7 +69,9 @@ export async function discoverHistoricalDownloads(
   for (const [key, context] of contexts) {
     try {
       const target = arr.find((a) => a.instanceId === context.instanceId)!;
-      const current = snapshots.get(key);
+      const current = target.instanceType === 'radarr'
+        ? await target.client.radarrMovieSnapshot(context.seriesId, await radarrFiles.get(key))
+        : snapshots.get(key);
       if (!current) throw new Error('Current title inventory unavailable');
       const history = await target.client.historicalImports(
         context.seriesId,
@@ -70,7 +79,12 @@ export async function discoverHistoricalDownloads(
       );
       records += history.records.length + history.problems.length;
       if (records > 50_000) throw new Error('History discovery budget exceeded');
-      const lineage = historicalDownloadLineage(history, current, context.episodes);
+      const eligibleFiles = 'movieId' in current
+        ? selectedRadarrHistoricalFiles(plans, context.instanceId, current)
+        : new Set<number>();
+      const lineage = 'movieId' in current
+        ? radarrHistoricalDownloadLineage(history, current, eligibleFiles)
+        : historicalDownloadLineage(history, current, context.episodes);
       skipped.push(...lineage.skipped);
       for (const candidate of lineage.candidates) {
         const roots = access.filter((a) =>
@@ -89,7 +103,9 @@ export async function discoverHistoricalDownloads(
         const value = {
           discovery: 1 as const,
           instanceId: context.instanceId,
-          seriesId: context.seriesId,
+          ...(target.instanceType === 'radarr'
+            ? { service: 'radarr' as const, movieId: context.seriesId }
+            : { seriesId: context.seriesId }),
           path: historicalTranslation(candidate.source, root.configuration),
           accessId: root.id,
           accessRevision: root.revision,
@@ -99,7 +115,7 @@ export async function discoverHistoricalDownloads(
       }
     } catch {
       skipped.push({
-        source: `Sonarr series ${context.seriesId}`,
+        source: `Arr title ${context.seriesId}`,
         reason: 'History discovery unavailable; optional files are excluded',
       });
     }
@@ -118,7 +134,7 @@ export async function discoverHistoricalDownloads(
           ...new Set(
             c.lineage.fileIds.flatMap((
               fileId,
-            ) => [...(fileActions.get(`${c.instanceId}:${c.seriesId}:${fileId}`) ?? [])]),
+            ) => [...(fileActions.get(`${c.instanceId}:${historicalOwnerId(c)}:${fileId}`) ?? [])]),
           ),
         ],
       })),

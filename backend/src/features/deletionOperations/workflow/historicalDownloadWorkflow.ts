@@ -25,7 +25,11 @@ import {
 } from './historicalDownloadJournal.ts';
 import { activeWholeItemRatingKeys } from '../../mediaDeletion/activePlayback.ts';
 import type { DurableTargetSnapshot } from '../core/validation.ts';
-import { historicalSelectedFilesUnchanged } from '../../mediaDeletion/historicalDownloadLineage.ts';
+import {
+  historicalOwnerId,
+  historicalSelectedFilesUnchanged,
+  radarrHistoricalDownloadLineage,
+} from '../../mediaDeletion/historicalDownloadLineage.ts';
 import { serviceOwnedFingerprint } from '../../mediaDeletion/serviceOwnedPlanning.ts';
 
 export async function ensureHistoricalDownloadPhase(
@@ -123,11 +127,28 @@ export async function ensureHistoricalDownloadPhase(
       if (cancelled() || hasPriorServiceAttempt) {
         throw new Error('Optional discovery was cancelled or service execution already began');
       }
+      if (
+        !listHistoricalAccess(target.serverId).some((a) =>
+          a.id === discovery.accessId && a.configuration.enabled &&
+          a.revision === discovery.accessRevision
+        )
+      ) throw new Error('Reviewed historical access changed; optional cleanup skipped');
       const { checked } = await operation();
+      const coverage = checked.preview.handled?.find((c) =>
+        c.instanceId === discovery.instanceId && c.source === discovery.lineage.source
+      );
+      if (coverage) {
+        throw new Error(
+          'Handled only by selected qBittorrent action(s) ' + coverage.actionIds.join(', ') +
+            '; local unlink skipped. Completion or failure is reported in service outcomes; no local fallback.',
+        );
+      }
       const candidate = checked.accepted.find((c) =>
         c.filesystem.path === discovery.path &&
         historicalOwnerContexts(c).some((o) =>
-          o.instanceId === discovery.instanceId && o.seriesId === discovery.seriesId &&
+          o.instanceId === discovery.instanceId &&
+          (o.service ?? 'sonarr') === (discovery.service ?? 'sonarr') &&
+          historicalOwnerId(o) === historicalOwnerId(discovery) &&
           o.accessId === discovery.accessId && o.accessRevision === discovery.accessRevision &&
           serviceOwnedFingerprint(o.lineage) === serviceOwnedFingerprint(discovery.lineage)
         )
@@ -144,7 +165,8 @@ export async function ensureHistoricalDownloadPhase(
             const d = JSON.parse(raw) as HistoricalDiscovery;
             return d.discovery === 1 && (d.contexts ?? [d]).some((owner) =>
               owner.path === candidate.filesystem.path && owner.instanceId === o.instanceId &&
-              owner.seriesId === o.seriesId && owner.accessId === o.accessId &&
+              (owner.service ?? 'sonarr') === (o.service ?? 'sonarr') &&
+              historicalOwnerId(owner) === historicalOwnerId(o) && owner.accessId === o.accessId &&
               owner.accessRevision === o.accessRevision &&
               serviceOwnedFingerprint(owner.lineage) === serviceOwnedFingerprint(o.lineage)
             );
@@ -242,11 +264,18 @@ export async function ensureHistoricalDownloadPhase(
           for (const owner of historicalOwnerContexts(accepted)) {
             const latestArr = prepared.arrTargets.find((a) => a.instanceId === owner.instanceId);
             if (
-              !latestArr || !await historicalSelectedFilesUnchanged(
-                latestArr.client,
-                owner.seriesId,
-                owner.lineage,
-              )
+              !latestArr || latestArr.instanceType !== (owner.service ?? 'sonarr') ||
+              !(owner.service === 'radarr'
+                ? radarrHistoricalDownloadLineage(
+                  { records: owner.lineage.imports, problems: [] },
+                  await latestArr.client.radarrMovieSnapshot(owner.movieId),
+                  new Set(owner.lineage.fileIds),
+                ).candidates.length === 1
+                : await historicalSelectedFilesUnchanged(
+                  latestArr.client,
+                  owner.seriesId,
+                  owner.lineage,
+                ))
             ) return 'changed';
           }
           if (activeWholeItemRatingKeys(keys, await active.client.activeSessions()).size) {

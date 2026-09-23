@@ -2,7 +2,86 @@ import type {
   HistoricalImport,
   HistoricalImportEvidence,
 } from '../../integrations/arr/historicalImports.ts';
-import type { ArrClient, SonarrSeriesSnapshot } from '../../integrations/arr/client.ts';
+import type {
+  ArrClient,
+  RadarrMovieSnapshot,
+  SonarrSeriesSnapshot,
+} from '../../integrations/arr/client.ts';
+import type { ServiceOwnedPlan } from './serviceOwnedPlanning.ts';
+
+/** Absence of a discriminator is legacy Sonarr evidence only. */
+export type HistoricalOwner =
+  | { service?: 'sonarr'; seriesId: number; movieId?: never }
+  | { service: 'radarr'; movieId: number; seriesId?: never };
+
+export const historicalOwnerId = (owner: HistoricalOwner) =>
+  owner.service === 'radarr' ? owner.movieId : owner.seriesId;
+
+/** Historical permission follows the requested, eligible native file action. */
+export function selectedRadarrHistoricalFiles(
+  plans: readonly ServiceOwnedPlan[],
+  instanceId: number,
+  current: RadarrMovieSnapshot,
+) {
+  return new Set(
+    plans.flatMap((p) =>
+      p.actions.filter((a) =>
+        p.arrSelected && a.service === 'radarr' && a.instanceId === instanceId &&
+        a.recordId === current.movieId && a.presence === 'current' && a.effectsComplete &&
+        !a.retainedOwnership && p.retention.decisions.some((d) =>
+          d.actionId === a.id && d.requested && d.state === 'delete_candidate'
+        ) && current.files.some((f) =>
+          f.id === a.fileId &&
+          a.files.some((e) =>
+            e.path === f.path && e.size === f.size
+          )
+        )
+      ).map((a) => a.fileId!)
+    ),
+  );
+}
+
+export function radarrHistoricalDownloadLineage(
+  evidence: HistoricalImportEvidence,
+  current: RadarrMovieSnapshot,
+  selectedFileIds: ReadonlySet<number>,
+) {
+  const candidates: HistoricalLineageCandidate[] = [];
+  const skipped: Array<{ source: string; reason: string }> = [];
+  const groups = new Map<string, HistoricalImport[]>();
+  for (const row of evidence.records) {
+    const group = groups.get(row.droppedPath) ?? [];
+    group.push(row);
+    groups.set(row.droppedPath, group);
+  }
+  for (const [source, imports] of groups) {
+    const valid = imports.every((r) => {
+      const file = current.files.find((f) => f.id === r.fileId);
+      return r.service === 'radarr' && r.movieId === current.movieId &&
+        current.movieFileId === r.fileId && file?.movieId === current.movieId &&
+        file.path === r.importedPath && source !== file.path && selectedFileIds.has(file.id);
+    });
+    // A problem with a known, different source cannot invalidate an independent import.
+    const conflict = evidence.problems.some((p) => !p.droppedPath || p.droppedPath === source);
+    if (!valid || conflict) {
+      skipped.push({
+        source,
+        reason: 'Exact current movie import lineage or selected ownership could not be verified',
+      });
+    } else {candidates.push({
+        source,
+        imports,
+        owners: [current.movieId],
+        fileIds: [current.movieFileId],
+      });}
+  }
+  for (const p of evidence.problems) {
+    if (!skipped.some((s) => s.source === p.droppedPath)) {
+      skipped.push({ source: p.droppedPath ?? '(exact source unavailable)', reason: p.reason });
+    }
+  }
+  return { candidates, skipped };
+}
 
 export interface HistoricalLineageCandidate {
   source: string;
@@ -43,12 +122,15 @@ export function historicalDownloadLineage(
   const skipped: Array<{ source: string; reason: string }> = [];
   const groups = new Map<string, HistoricalImport[]>();
   for (const record of evidence.records) {
+    if (record.service === 'radarr') continue;
     const group = groups.get(record.droppedPath) ?? [];
     group.push(record);
     groups.set(record.droppedPath, group);
   }
   for (const [source, imports] of groups) {
-    if (!imports.some((r) => selectedEpisodeIds.has(r.episodeId))) continue;
+    if (!imports.some((r) => r.episodeId !== undefined && selectedEpisodeIds.has(r.episodeId))) {
+      continue;
+    }
     const owners = new Set<number>();
     let reason = '';
     for (const row of imports) {

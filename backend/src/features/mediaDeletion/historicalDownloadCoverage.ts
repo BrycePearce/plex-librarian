@@ -7,7 +7,11 @@ import type {
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { DownloadClientTarget, DownloadJob } from './downloadClient.ts';
 import type { ServiceOwnedPlan } from './serviceOwnedPlanning.ts';
-import { type HistoricalQbMapping, historicalQbTranslations } from './historicalQbTranslation.ts';
+import {
+  type HistoricalQbMapping,
+  historicalQbTranslations,
+  type HistoricalQbWitnessCache,
+} from './historicalQbTranslation.ts';
 
 export function exactHistoricalTranslation(path: string, mappings: readonly HistoricalQbMapping[]) {
   const applicable = mappings.filter((m) => path.startsWith(m.remote + '/'));
@@ -30,10 +34,14 @@ export async function historicalDownloadCoverage(
   qb: readonly DownloadClientTarget[],
   access: readonly HistoricalAccessStatus[],
   manifests: Map<string, DownloadJob>,
+  witnesses: HistoricalQbWitnessCache = new Map(),
 ): Promise<NonNullable<HistoricalDownloadPreview['handled']>> {
   const sources = new Set([
-    ...history.records.filter((r) => selected.has(r.episodeId)).map((r) => r.droppedPath),
-    ...history.problems.filter((p) => p.episodeId !== null && selected.has(p.episodeId))
+    ...history.records.filter((r) => selected.has(r.service === 'radarr' ? r.movieId : r.episodeId))
+      .map((r) => r.droppedPath),
+    ...history.problems.filter((
+      p,
+    ) => ((p.movieId ?? p.episodeId) !== null && selected.has((p.movieId ?? p.episodeId)!)))
       .flatMap((p) => p.droppedPath ? [p.droppedPath] : []),
   ]);
   if (!sources.size) return [];
@@ -94,6 +102,7 @@ export async function historicalDownloadCoverage(
       contexts,
       jobs,
       manifests,
+      witnesses,
     );
     for (const action of actions) {
       const job = action.job!;

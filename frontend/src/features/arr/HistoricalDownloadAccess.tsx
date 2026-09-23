@@ -83,7 +83,7 @@ export function HistoricalDownloadAccess(
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: accessKey }),
   });
-  const sonarr = instances.filter((i) => i.type === "sonarr");
+  const services = instances.filter((i) => i.type === "sonarr" || i.type === "radarr");
   const statuses = query.data?.statuses ?? [];
   const ready = statuses.filter((s) => s.configuration.enabled && s.status === "available").length;
   const needsSetup = statuses.some((s) =>
@@ -91,7 +91,7 @@ export function HistoricalDownloadAccess(
   );
   function edit(status?: HistoricalAccessStatus) {
     setInstanceId(
-      status ? String(status.instanceId) : sonarr.length === 1 ? String(sonarr[0].id) : "",
+      status ? String(status.instanceId) : services.length === 1 ? String(services[0].id) : "",
     );
     setRemoteRoot(status?.configuration.remoteRoot ?? "");
     setLocalRoot(status?.configuration.localRoot || "/cleanup-downloads");
@@ -100,7 +100,7 @@ export function HistoricalDownloadAccess(
     setSetupOpen(true);
     setMessage("");
   }
-  if (!sonarr.length) return null;
+  if (!services.length) return null;
   return (
     <>
       <section className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-base-300 bg-base-200/30 p-4">
@@ -113,7 +113,7 @@ export function HistoricalDownloadAccess(
             <span className="badge badge-ghost badge-xs">Optional</span>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-            Clean up download files left behind after a Sonarr import.
+            Clean up download files left behind after a Sonarr/Radarr import.
           </p>
           <p className="mt-1 text-xs text-base-content/50">
             {query.isError
@@ -127,7 +127,7 @@ export function HistoricalDownloadAccess(
               : statuses.some((s) => s.status === "checking")
               ? "Checking folder access…"
               : statuses.some((s) => s.status === "waiting_for_sample")
-              ? "Waiting for Sonarr import history"
+              ? "Waiting for Sonarr/Radarr import history"
               : statuses.length
               ? "Folder cleanup is disabled"
               : "Set up folder access to get started"}
@@ -169,8 +169,8 @@ export function HistoricalDownloadAccess(
                 </h2>
                 <p className="mt-1 text-sm leading-relaxed text-base-content/55">
                   {setupOpen
-                    ? "Match the same completed-downloads folder in Sonarr and Librarian."
-                    : "Allow access to exact download files recorded in Sonarr history."}
+                    ? "Match the same completed-downloads folder in Sonarr/Radarr and Librarian."
+                    : "Allow access to exact download files recorded in Sonarr/Radarr history."}
                 </p>
               </div>
               <button
@@ -219,21 +219,22 @@ export function HistoricalDownloadAccess(
                   <div className="mt-2 space-y-3">
                     {!statuses.length && (
                       <div className="rounded-xl border border-dashed border-base-300 p-6 text-center text-sm text-base-content/55">
-                        No folders configured. Add the completed-downloads folder used by Sonarr.
+                        No folders configured. Add the completed-downloads folder used by
+                        Sonarr/Radarr.
                       </div>
                     )}
                     {statuses.map((s) => (
                       <div key={s.id} className="min-w-0 rounded-xl border border-base-300 p-4">
                         <div className="flex items-center justify-between gap-3">
                           <h4 className="text-sm font-semibold">
-                            {sonarr.find((i) =>
+                            {services.find((i) =>
                               i.id === s.instanceId
-                            )?.name ?? "Sonarr"}
+                            )?.name ?? "Sonarr/Radarr"}
                           </h4>
                           <AccessBadge status={s.status} />
                         </div>
                         <dl className="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
-                          <dt className="text-base-content/45">Sonarr</dt>
+                          <dt className="text-base-content/45">Sonarr/Radarr</dt>
                           <dd className="truncate font-mono" title={s.configuration.remoteRoot}>
                             {s.configuration.remoteRoot}
                           </dd>
@@ -295,7 +296,7 @@ export function HistoricalDownloadAccess(
                             Access details
                           </summary>
                           <div className="mt-2 space-y-2 break-words [overflow-wrap:anywhere]">
-                            <p>Sonarr: {s.configuration.remoteRoot}</p>
+                            <p>Sonarr/Radarr: {s.configuration.remoteRoot}</p>
                             {s.sample && <p>Example file: {s.sample}</p>}
                             {s.reason && <p>{s.reason}</p>}
                             {s.diagnostic?.details && <p>{s.diagnostic.details}</p>}
@@ -346,7 +347,7 @@ export function HistoricalDownloadAccess(
                 >
                   <fieldset disabled={mutation.isPending} className="mt-5 space-y-4">
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium">Sonarr connection</span>
+                      <span className="text-xs font-medium">Sonarr/Radarr connection</span>
                       <select
                         className="select select-bordered select-sm w-full"
                         value={instanceId}
@@ -354,12 +355,12 @@ export function HistoricalDownloadAccess(
                         disabled={!!editing}
                         onChange={(e) => setInstanceId(e.target.value)}
                       >
-                        <option value="">Choose Sonarr</option>
-                        {sonarr.map((i) => <option value={i.id} key={i.id}>{i.name}</option>)}
+                        <option value="">Choose Sonarr/Radarr</option>
+                        {services.map((i) => <option value={i.id} key={i.id}>{i.name}</option>)}
                       </select>
                     </label>
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium">Sonarr download folder</span>
+                      <span className="text-xs font-medium">Sonarr/Radarr download folder</span>
                       <input
                         className="input input-bordered input-sm w-full font-mono"
                         value={remoteRoot}
@@ -376,16 +377,24 @@ export function HistoricalDownloadAccess(
                       <input
                         className="input input-bordered input-sm w-full font-mono"
                         value={localRoot}
+                        list="historical-mounted-folders"
                         required
                         onChange={(e) => {
                           setLocalRoot(e.target.value);
                           setNoRemainingClient(false);
                         }}
                       />
+                      <datalist id="historical-mounted-folders">
+                        {[
+                          ...new Set(
+                            statuses.map((s) => s.configuration.localRoot).filter(Boolean),
+                          ),
+                        ].map((root) => <option key={root} value={root} />)}
+                      </datalist>
                     </label>
                     <p className="text-xs leading-relaxed text-base-content/55">
-                      Both paths must point to the same folder. If Sonarr suggested a single release
-                      folder, change it to match the completed-downloads folder you mounted.
+                      Both paths must point to the same folder. If Sonarr/Radarr suggested a single
+                      release folder, change it to match the completed-downloads folder you mounted.
                     </p>
                     <label className="flex items-start gap-3 rounded-lg border border-base-300 p-3">
                       <input

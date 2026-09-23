@@ -51,6 +51,12 @@ export interface RadarrMovieRecord {
   path: string;
 }
 
+export interface RadarrMovieSnapshot {
+  movieId: number;
+  movieFileId: number;
+  files: Array<ArrManagedVersionFile & { movieId: number; path: string; size: number }>;
+}
+
 export const RADARR_PATH_ADOPTION_MIN_VERSION = '6.3.0.10514';
 export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export const RADARR_CATALOG_MAX_RECORDS = 50_000;
@@ -136,6 +142,7 @@ export interface ArrManagedFile {
 }
 
 export interface ArrManagedVersionFile extends ArrManagedFile {
+  movieId?: number;
   id: number;
   path: string | null;
 }
@@ -632,14 +639,15 @@ export class ArrClient {
 
   async radarrManagedFile(mediaId: number): Promise<ArrManagedVersionFile | null> {
     if (this.type !== 'radarr') return null;
-    const records = await this.request<
+    const records = await this.boundedRequest<
       Array<{
         id?: number;
+        movieId?: number;
         relativePath?: string;
         path?: string;
         size?: number;
       }>
-    >(`/moviefile?movieId=${mediaId}`);
+    >(`/moviefile?movieId=${mediaId}`, RADARR_CATALOG_MAX_BYTES, 'movie file inventory');
     if (!Array.isArray(records)) {
       throw new ArrApiError('Radarr returned an invalid managed-file response');
     }
@@ -663,9 +671,39 @@ export class ArrClient {
     const size = record.size;
     return {
       id: record.id!,
+      ...(record.movieId === undefined ? {} : { movieId: record.movieId }),
       relativePath,
       path: absolutePath,
       size: Number.isSafeInteger(size) && size! >= 0 ? size! : null,
+    };
+  }
+
+  /** Optional cleanup requires the pointer and returned file owner, not just a path match. */
+  async radarrMovieSnapshot(
+    movieId: number,
+    knownFile?: ArrManagedVersionFile | null,
+  ): Promise<RadarrMovieSnapshot> {
+    if (this.type !== 'radarr' || !Number.isSafeInteger(movieId) || movieId <= 0) {
+      throw new ArrApiError('A positive Radarr movie ID is required');
+    }
+    const [movie, file] = await Promise.all([
+      this.boundedRequest<{ id?: number; movieFileId?: number }>(
+        `/movie/${movieId}`,
+        RADARR_CATALOG_MAX_BYTES,
+        'current movie pointer',
+      ),
+      knownFile === undefined ? this.radarrManagedFile(movieId) : Promise.resolve(knownFile),
+    ]);
+    if (
+      !movie || movie.id !== movieId || !file || movie.movieFileId !== file.id ||
+      file.movieId !== movieId || !file.path || !Number.isSafeInteger(file.size) || file.size! <= 0
+    ) {
+      throw new ArrApiError('Current Radarr movie/file ownership is unavailable or conflicting');
+    }
+    return {
+      movieId,
+      movieFileId: file.id,
+      files: [{ ...file, movieId, path: file.path, size: file.size! }],
     };
   }
 
@@ -1022,26 +1060,26 @@ export class ArrClient {
   }
 
   /** Bounded exact lineage; unlike torrent associations this also covers absent/non-torrent IDs. */
-  async historicalImports(seriesId: number, discoveredHistory?: unknown) {
-    if (this.type !== 'sonarr') throw new ArrApiError('Historical imports require Sonarr');
+  async historicalImports(mediaId: number, discoveredHistory?: unknown) {
     return parseHistoricalImports(
-      discoveredHistory ?? await this.downloadHistory(seriesId),
-      seriesId,
+      discoveredHistory ?? await this.downloadHistory(mediaId),
+      mediaId,
+      this.type,
     );
   }
 
-  /** Ordering hints only: a limited recent page can prioritize live TV jobs in a
+  /** Ordering hints only: a limited recent page can prioritize live service jobs in a
    * mixed movie/TV client. These IDs never authorize a translation or imply absence. */
   async recentImportedDownloadIds(): Promise<string[]> {
-    if (this.type !== 'sonarr') return [];
     const params = new URLSearchParams({
-      eventType: '3', // Sonarr DownloadFolderImported
+      eventType: '3', // Arr DownloadFolderImported
       page: '1',
       pageSize: '100',
       sortKey: 'date',
       sortDirection: 'descending',
       includeSeries: 'false',
       includeEpisode: 'false',
+      includeMovie: 'false',
     });
     const payload = await this.boundedRequest<{
       records?: Array<{ downloadId?: string }>;
@@ -1050,7 +1088,7 @@ export class ArrClient {
     if (
       !payload || !Array.isArray(payload.records) || payload.records.length > 100 ||
       !Number.isSafeInteger(payload.totalRecords) || payload.totalRecords! < payload.records.length
-    ) throw new ArrApiError('Sonarr returned invalid recent translation hints');
+    ) throw new ArrApiError('Arr returned invalid recent translation hints');
     return [
       ...new Set(payload.records.flatMap((row) =>
         typeof row?.downloadId === 'string' &&
@@ -1061,12 +1099,12 @@ export class ArrClient {
     ];
   }
 
-  /** A bounded positive witness, not an exhaustive ownership inventory. Sonarr's
+  /** A bounded positive witness, not an exhaustive ownership inventory. Arr's
    * QB adapter stores uppercase hashes; its history endpoint filters by downloadId.
    * Never infer absence from this deliberately limited first page. */
   async historicalImportsForDownload(downloadId: string) {
-    if (this.type !== 'sonarr' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(downloadId)) {
-      throw new ArrApiError('Historical translation requires a Sonarr torrent ID');
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(downloadId)) {
+      throw new ArrApiError('Historical translation requires a Arr torrent ID');
     }
     const params = new URLSearchParams({
       downloadId: downloadId.toUpperCase(),
@@ -1078,27 +1116,28 @@ export class ArrClient {
       includeEpisode: 'false',
     });
     const payload = await this.boundedRequest<{
-      records?: Array<{ seriesId?: number; downloadId?: string }>;
+      records?: Array<{ seriesId?: number; movieId?: number; downloadId?: string }>;
       totalRecords?: number;
     }>(`/history?${params}`, ARR_HISTORY_MAX_BYTES, 'translation import response');
     if (
       !payload || !Array.isArray(payload.records) || payload.records.length > 100 ||
       !Number.isSafeInteger(payload.totalRecords) || payload.totalRecords! < payload.records.length
     ) {
-      throw new ArrApiError('Sonarr returned invalid translation import evidence');
+      throw new ArrApiError('Arr returned invalid translation import evidence');
     }
     const records = [];
     for (const row of payload.records) {
+      const owner = this.type === 'radarr' ? row?.movieId : row?.seriesId;
       if (
         !row || typeof row.downloadId !== 'string' ||
         row.downloadId.toLowerCase() !== downloadId.toLowerCase() ||
-        !Number.isSafeInteger(row.seriesId) || row.seriesId! <= 0
+        !Number.isSafeInteger(owner) || owner! <= 0
       ) {
-        throw new ArrApiError('Sonarr returned conflicting translation import evidence');
+        throw new ArrApiError('Arr returned conflicting translation import evidence');
       }
-      const parsed = parseHistoricalImports([row], row.seriesId!);
+      const parsed = parseHistoricalImports([row], owner!, this.type);
       if (parsed.problems.length) {
-        throw new ArrApiError('Sonarr returned malformed translation import evidence');
+        throw new ArrApiError('Arr returned malformed translation import evidence');
       }
       records.push(...parsed.records);
     }

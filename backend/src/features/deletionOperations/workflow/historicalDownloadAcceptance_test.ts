@@ -95,8 +95,10 @@ Deno.test({
       }
       // A second service namespace maps the same exact directory entry and owns it too.
       const otherHistory = structuredClone(history);
+      const firstImport = history.records[0];
+      if (firstImport.service === 'radarr') throw new Error('Expected Sonarr fixture');
       otherHistory.records = [{
-        ...history.records[0],
+        ...firstImport,
         seriesId: 702,
         droppedPath: '/alias/1.mkv',
       }];

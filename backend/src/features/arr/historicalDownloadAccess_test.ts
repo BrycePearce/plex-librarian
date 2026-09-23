@@ -6,7 +6,7 @@ const { withTransaction } = await import('../../db/index.ts');
 const access = await import('./historicalDownloadAccess.ts');
 withTransaction((db) => {
   db.exec(
-    'CREATE TABLE servers(id INTEGER PRIMARY KEY); CREATE TABLE arr_instances(id INTEGER PRIMARY KEY, server_id INTEGER, type TEXT, url TEXT, api_key TEXT); CREATE TABLE arr_library_mappings(arr_instance_id INTEGER,server_id INTEGER,library_key TEXT); CREATE TABLE items(server_id INTEGER,library_key TEXT,tvdb_id INTEGER);',
+    'CREATE TABLE servers(id INTEGER PRIMARY KEY); CREATE TABLE arr_instances(id INTEGER PRIMARY KEY, server_id INTEGER, type TEXT, url TEXT, api_key TEXT); CREATE TABLE arr_library_mappings(arr_instance_id INTEGER,server_id INTEGER,library_key TEXT); CREATE TABLE items(server_id INTEGER,library_key TEXT,tvdb_id INTEGER,tmdb_id INTEGER);',
   );
   db.exec(
     "INSERT INTO servers VALUES(1),(2); INSERT INTO arr_instances VALUES(1,1,'sonarr','http://fixture.invalid','fixture'),(2,2,'sonarr','http://fixture.invalid','fixture');",
@@ -23,6 +23,50 @@ const config = {
   localRoot: '/cleanup-downloads',
   noRemainingClient: true,
 };
+
+Deno.test('Radarr access reuses only its authoritative translation, not Sonarr permission', async () => {
+  withTransaction((db) =>
+    db.exec("INSERT INTO arr_instances VALUES(3,1,'radarr','http://fixture.invalid','fixture')")
+  );
+  access.supplyHistoricalSample(1, 3, '/radarr-complete/Release/movie.mkv', [{
+    kind: 'download',
+    arrPath: '/sonarr-complete',
+    localPath: '/shared-mount',
+  }]);
+  const draft = access.listHistoricalAccess(1).find((s) => s.instanceId === 3)!;
+  assertEquals(draft.configuration.enabled, false);
+  assertEquals(draft.configuration.localRoot, '');
+  access.saveHistoricalAccess(1, 3, {
+    enabled: false,
+    remoteRoot: '/radarr-complete',
+    localRoot: '/shared-mount',
+    noRemainingClient: false,
+  }, draft.id);
+  assertEquals(
+    access.historicalTranslation(
+      '/radarr-complete/Release/movie.mkv',
+      access.listHistoricalAccess(1).find((s) => s.id === draft.id)!.configuration,
+    ),
+    '/shared-mount/Release/movie.mkv',
+  );
+  assertThrows(() => access.saveHistoricalAccess(2, 3, config));
+  withTransaction((db) =>
+    db.prepare('DELETE FROM historical_download_access WHERE arr_instance_id=3').run()
+  );
+  access.supplyHistoricalSample(1, 3, '/radarr-complete/Release/movie.mkv', [{
+    kind: 'download',
+    arrPath: '/radarr-complete',
+    localPath: '/shared-mount',
+  }]);
+  const reused = access.listHistoricalAccess(1).find((s) => s.instanceId === 3)!;
+  await access.checkHistoricalAccess(1, reused.id);
+  assertEquals(reused.configuration.enabled, true);
+  assertEquals(reused.configuration.localRoot, '/shared-mount');
+  assertEquals(reused.configuration.noRemainingClient, false);
+  withTransaction((db) =>
+    db.prepare('DELETE FROM historical_download_access WHERE arr_instance_id=3').run()
+  );
+});
 function sample(id: string) {
   withTransaction((db) =>
     db.prepare('UPDATE historical_download_access SET sample=? WHERE id=?').run(
@@ -31,6 +75,62 @@ function sample(id: string) {
     )
   );
 }
+
+Deno.test('Radarr access samples use TMDB and bounded movie history with no filesystem writes', async () => {
+  withTransaction((db) => {
+    db.exec(
+      "INSERT INTO arr_instances VALUES(4,1,'radarr','http://synthetic.invalid','fixture'); INSERT INTO arr_library_mappings VALUES(4,1,'movies'); INSERT INTO items VALUES(1,'movies',123,456)",
+    );
+  });
+  access.saveHistoricalAccess(1, 4, { ...config, enabled: false });
+  const status = access.listHistoricalAccess(1).find((s) => s.instanceId === 4)!;
+  withTransaction((db) =>
+    db.prepare(
+      "UPDATE historical_download_access SET configuration=json_set(configuration,'$.enabled',json('true')) WHERE id=?",
+    ).run(status.id)
+  );
+  const original = globalThis.fetch;
+  const paths: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request) => {
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+    paths.push(url.pathname + url.search);
+    return Promise.resolve(Response.json(
+      url.pathname === '/api/v3/movie' ? [{ id: 7 }] : [{
+        id: 11,
+        movieId: 7,
+        eventType: 'downloadFolderImported',
+        date: '2021-09-01',
+        data: {
+          fileId: '42',
+          droppedPath: '/downloads/release/movie.mkv',
+          importedPath: '/movies/movie.mkv',
+        },
+      }],
+    ));
+  }) as typeof fetch;
+  try {
+    let inspections = 0;
+    await access.checkHistoricalAccess(1, status.id, (root, file) => {
+      inspections++;
+      assertEquals([root, file], ['/cleanup-downloads', '/cleanup-downloads/release/movie.mkv']);
+      return Promise.resolve(null);
+    });
+    assertEquals(paths, [
+      '/api/v3/movie?tmdbId=456',
+      '/api/v3/history/movie?movieId=7&includeMovie=false',
+    ]);
+    assertEquals(inspections, 1);
+    assertEquals(
+      access.listHistoricalAccess(1).find((s) => s.id === status.id)!.status,
+      'available',
+    );
+  } finally {
+    globalThis.fetch = original;
+    withTransaction((db) =>
+      db.prepare('DELETE FROM historical_download_access WHERE id=?').run(status.id)
+    );
+  }
+});
 
 Deno.test('historical access coalesces checks, suppresses obsolete completions, scopes servers and invalidates client declarations', async () => {
   access.saveHistoricalAccess(1, 1, config);

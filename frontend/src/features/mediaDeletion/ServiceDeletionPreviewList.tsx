@@ -71,7 +71,8 @@ export function ServiceDeletionPreviewList(
             {(preview?.targets ?? selectionDetails.map((target) => ({ ...target, decisions: [] })))
               .map((target) => {
                 const includesHistorical = target.decisions.some((action) =>
-                  action.service === "sonarr" && action.requested &&
+                  (action.service === "sonarr" || action.service === "radarr") &&
+                  action.requested &&
                   historicalActions.has(action.actionId)
                 );
                 const context = [
@@ -120,9 +121,11 @@ export function ServiceDeletionPreviewList(
                           <ActiveServiceMark
                             key={service}
                             service={service === "qb" ? "qbittorrent" : service}
-                            historical={service === "sonarr" && includesHistorical}
-                            label={service === "sonarr" && includesHistorical
-                              ? "Sonarr + historical downloads"
+                            historical={(service === "sonarr" || service === "radarr") &&
+                              includesHistorical}
+                            label={(service === "sonarr" || service === "radarr") &&
+                                includesHistorical
+                              ? deletionServiceNames[service] + " + historical downloads"
                               : deletionServiceNames[service] + " deletion"}
                           />
                         ))}
@@ -217,6 +220,10 @@ export function ServiceDeletionFileTree({ preview, historical }: {
   preview: ServiceDeletionPreview;
   historical?: HistoricalDownloadPreview;
 }) {
+  const historicalService =
+    preview.targets.some((t) => t.decisions.some((a) => a.service === "radarr"))
+      ? "radarr"
+      : "sonarr";
   const downloadGroups = new Map<string, Array<{ path: string; size: number | null }>>();
   for (const file of historical?.candidates ?? []) {
     const separator = Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"));
@@ -297,7 +304,8 @@ export function ServiceDeletionFileTree({ preview, historical }: {
               </p>
             )}
             {target.linkedExtrasIncluded && target.decisions.some((action) =>
-              action.service === "sonarr" && action.requested && action.state === "delete_candidate"
+              (action.service === "sonarr" || action.service === "radarr") && action.requested &&
+              action.state === "delete_candidate"
             ) && (
               <p className="mt-1 text-xs text-base-content/50">
                 Sonarr also handles service-linked extras; they may not all be listed here.
@@ -313,14 +321,14 @@ export function ServiceDeletionFileTree({ preview, historical }: {
           source="Historical downloads"
           marks={
             <ActiveServiceMark
-              service="sonarr"
+              service={historicalService}
               historical
-              label="Sonarr + historical downloads"
+              label={deletionServiceNames[historicalService] + " + historical downloads"}
             />
           }
           files={files}
           totalFiles={files.length}
-          info="Intended leftover files linked by Sonarr history; eligibility is checked after confirmation."
+          info="Intended leftover files linked by import history; eligibility is checked after confirmation."
         />
       ))}
     </div>

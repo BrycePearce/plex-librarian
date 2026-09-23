@@ -300,7 +300,7 @@ function SelectionDialog({
               label: "Delete from " + arrNames,
               info: destinations.includes("sonarr")
                 ? "Delete current matched media through Sonarr, including eligible history-linked download files shown in the preview. Files needed by a service you keep are retained."
-                : "Delete current matched media through the selected service. Files needed by a service you keep are retained.",
+                : "Delete current matched media through Radarr, including eligible history-linked download files shown in the preview. Files needed by a service you keep are retained.",
               checked: arrSelected,
               disabled: loading || submissionLocked || !preview?.arrConfigured,
               warning: false,

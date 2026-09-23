@@ -61,6 +61,79 @@ const preview = {
   }],
 };
 
+Deno.test("Radarr checkbox automatically includes reviewed historical scope with one discovery", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const original = { ...api.serviceDeletions };
+  let reads = 0;
+  const requests: ServiceDeletionRequest[] = [];
+  let renderer: TestRenderer.ReactTestRenderer | undefined;
+  api.serviceDeletions.preview = () => {
+    reads++;
+    return Promise.resolve({
+      ...preview,
+      discovery: true,
+      consentToken: "movie-scope",
+      historical,
+      targets: [{
+        ...preview.targets[0],
+        ratingKey: "movie",
+        title: "Fixture movie",
+        files: preview.targets[0].files.map((f) => ({ ...f, service: "radarr" as const })),
+        decisions: preview.targets[0].decisions.map((d) => ({ ...d, service: "radarr" as const })),
+      }],
+    });
+  };
+  api.serviceDeletions.historicalPreview = () => {
+    throw new Error("Retired endpoint");
+  };
+  api.serviceDeletions.create = (request) => {
+    requests.push(request);
+    return Promise.resolve({ operationId: "movie", status: "queued", targetCount: 1 });
+  };
+  try {
+    await settleReact(() => {
+      renderer = TestRenderer.create(
+        <ServiceOwnedDeletionDialog
+          libraryKey="movies"
+          targets={[{ ratingKey: "movie" }]}
+          dialogRef={{ current: null }}
+          onCreated={() => {}}
+          onCancel={() => {}}
+          focusCancel={false}
+        />,
+      );
+    });
+    const option = () =>
+      renderer!.root.findByType(DestinationOptions).props.options.find((o: { id: string }) =>
+        o.id === "arr"
+      );
+    assertEquals(option().label, "Delete from Radarr");
+    await settleReact(() => option().onChange(true));
+    assertEquals(
+      renderer!.root.findAllByType(ActiveServiceMark).some((m) =>
+        m.props.label === "Radarr + historical downloads"
+      ),
+      true,
+    );
+    assertEquals(
+      renderer!.root.findByType(ServiceDeletionPreviewList).props.historical.candidates[0].id,
+      "one-exact-file",
+    );
+    await settleReact(() => option().onChange(false));
+    assertEquals(renderer!.root.findByType(ServiceDeletionPreviewList).props.historical, undefined);
+    await settleReact(() => option().onChange(true));
+    await settleReact(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());
+    assertEquals(requests[0].historicalCleanup?.candidateIds, ["one-exact-file"]);
+    assertEquals(reads, 1);
+  } finally {
+    await settleReact(() => renderer?.unmount());
+    Object.assign(api.serviceDeletions, original);
+    globals.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});
+
 Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection includes history and deselection excludes it", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previous = globals.IS_REACT_ACT_ENVIRONMENT;

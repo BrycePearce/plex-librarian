@@ -100,6 +100,43 @@ function fixture() {
   return { history, job, service, target, access, plan, resolve, reads: () => mappingReads };
 }
 
+Deno.test('Radarr current movie sources use exact selected QB coverage across namespaces', async () => {
+  const f = fixture();
+  f.service.instanceType = 'radarr';
+  const history = parseHistoricalImports(
+    [{
+      ...row(),
+      movieId: 7,
+      data: { ...row().data, fileId: '42' },
+    }],
+    7,
+    'radarr',
+  );
+  const resolve = () =>
+    historicalDownloadCoverage(
+      history,
+      new Set([7]),
+      f.service,
+      [f.plan],
+      [f.target],
+      f.access,
+      new Map(),
+    );
+  assertEquals(await resolve(), [{
+    source: row().data.droppedPath,
+    service: 'qb',
+    actionIds: ['action'],
+  }]);
+  f.plan.qbSelected = false;
+  assertEquals(await resolve(), []);
+  f.plan.qbSelected = true;
+  f.plan.actions[0].retainedOwnership = true;
+  assertEquals(await resolve(), []);
+  delete f.plan.actions[0].retainedOwnership;
+  f.job.filesTruncated = true;
+  assertEquals(await resolve(), []);
+});
+
 Deno.test('selected eligible QB covers exact paths despite missing history size; shared records count once', async () => {
   const f = fixture();
   assertEquals(f.history.records.length, 2);

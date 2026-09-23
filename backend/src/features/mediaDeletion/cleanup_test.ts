@@ -90,9 +90,14 @@ function arrTarget(historyMovieIds: number[] = [7]) {
         ]));
       }
       if (url.includes('/history?')) {
+        assertEquals(new URL(url).searchParams.get('downloadId'), hash.toUpperCase());
         return Promise.resolve(Response.json({
           totalRecords: historyMovieIds.length,
-          records: historyMovieIds.map((movieId) => ({ movieId })),
+          records: historyMovieIds.map((movieId, index) => ({
+            id: index + 1,
+            movieId,
+            downloadId: hash.toUpperCase(),
+          })),
         }));
       }
       return Promise.resolve(Response.json([{

@@ -1780,7 +1780,13 @@ globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
       }]));
     }
     if (url.pathname === '/api/v3/history') {
-      return Promise.resolve(Response.json({ totalRecords: 1, records: [{ movieId: 7 }] }));
+      assertEquals(url.searchParams.get('downloadId'), torrentHash.toUpperCase());
+      return Promise.resolve(
+        Response.json({
+          totalRecords: 1,
+          records: [{ id: 1, movieId: 7, downloadId: torrentHash.toUpperCase() }],
+        }),
+      );
     }
     if (url.pathname === '/api/v3/movie/7' && init?.method === 'DELETE') {
       destinationOrder.push('arr');

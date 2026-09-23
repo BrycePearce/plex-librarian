@@ -9,6 +9,11 @@ export interface HistoricalQbMapping {
   local: string;
   explicit?: boolean;
 }
+/** Shared only within one collection/checkpoint, never across fresh ownership checks. */
+export type HistoricalQbWitnessCache = Map<string, {
+  imports: Map<string, Promise<HistoricalImport[]>>;
+  recentIds?: Promise<Set<string>>;
+}>;
 /** Translation witnesses do not need filesystem/unlink eligibility. */
 export interface HistoricalTranslationContext {
   accessId: string;
@@ -24,7 +29,7 @@ const safe = (path: string) =>
   path.split('/').slice(1).every((p) => p !== '.' && p !== '..' && p !== '');
 
 /** Phase-local evidence only. Never turns inference into a user-confirmed mapping.
- * Endpoint identity + Sonarr's declared host-scoped translation is authoritative.
+ * Endpoint identity + Arr's declared host-scoped translation is authoritative.
  * Without that declaration, require a live matching hash and exact import path.
  */
 export async function historicalQbTranslations(
@@ -34,6 +39,7 @@ export async function historicalQbTranslations(
   candidates: readonly HistoricalTranslationContext[],
   summaries: readonly DownloadJobSummary[],
   manifests: Map<string, DownloadJob>,
+  witnesses: HistoricalQbWitnessCache = new Map(),
 ): Promise<HistoricalQbMapping[]> {
   const explicit = (target.pathMappings ?? []).map((m) => ({
     remote: m.qbittorrentPath,
@@ -61,7 +67,7 @@ export async function historicalQbTranslations(
         (c.contexts ?? [c]).some((o) => o.accessId === a.id && o.accessRevision === a.revision)
       )
     );
-    if (!roots.length || service.instanceType !== 'sonarr') continue;
+    if (!roots.length) continue;
     if (!(await service.client.qbittorrentEndpoints()).includes(endpoint.href.replace(/\/$/, ''))) {
       continue;
     }
@@ -74,8 +80,10 @@ export async function historicalQbTranslations(
     }));
     // Per service/QB pair and phase, shared across configured roots. We need one
     // positive live import witness, not a library scan or a surviving selected job.
-    const otherImports = new Map<string, HistoricalImport[]>();
-    let historyReads = 0;
+    const pair = `${service.instanceId}:${target.instanceKey}`;
+    const witness = witnesses.get(pair) ??
+      { imports: new Map<string, Promise<HistoricalImport[]>>() };
+    witnesses.set(pair, witness);
     let recentIds: Set<string> | undefined;
     for (const a of hints) {
       for (const b of hints) {
@@ -84,7 +92,7 @@ export async function historicalQbTranslations(
           a.localPath !== b.localPath + a.remotePath.slice(b.remotePath.length)
         ) {
           throw new Error(
-            'Conflicting Sonarr remote path mappings for the configured qBittorrent host',
+            'Conflicting Arr remote path mappings for the configured qBittorrent host',
           );
         }
       }
@@ -96,7 +104,7 @@ export async function historicalQbTranslations(
         const remote = hint.remotePath.replace(/\/+$/, '');
         const local = hint.localPath.replace(/\/+$/, '');
         if (!safe(remote) || !safe(local)) {
-          throw new Error('Sonarr download path mapping is unsafe');
+          throw new Error('Arr download path mapping is unsafe');
         }
         if (beneath(local, remoteRoot)) {
           inferred.push({ remote, local: localRoot + local.slice(remoteRoot.length) });
@@ -125,7 +133,7 @@ export async function historicalQbTranslations(
         group.push(record);
         byId.set(id, group);
       }
-      // Prefer known Sonarr imports so unrelated movie jobs cannot consume the
+      // Prefer known Arr imports so unrelated movie jobs cannot consume the
       // entire targeted-read budget. The recent page is only an ordering hint;
       // every candidate still needs fresh ID-filtered history and its manifest.
       if (
@@ -134,7 +142,12 @@ export async function historicalQbTranslations(
           /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(s.id) &&
           (beneath(s.savePath, remoteRoot) || beneath(s.contentPath, remoteRoot))
         )
-      ) recentIds ??= new Set(await service.client.recentImportedDownloadIds());
+      ) {
+        witness.recentIds ??= service.client.recentImportedDownloadIds().then((ids) =>
+          new Set(ids)
+        );
+        recentIds = await witness.recentIds;
+      }
       const priority = (s: DownloadJobSummary) =>
         byId.has(s.id.toLowerCase()) ? 0 : recentIds?.has(s.id.toLowerCase()) ? 1 : 2;
       for (const summary of [...summaries].sort((a, b) => priority(a) - priority(b))) {
@@ -145,11 +158,10 @@ export async function historicalQbTranslations(
           (beneath(summary.savePath, remoteRoot) || beneath(summary.contentPath, remoteRoot)) &&
           /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)
         ) {
-          if (!otherImports.has(hash) && historyReads < 20) {
-            historyReads++;
-            otherImports.set(hash, await service.client.historicalImportsForDownload(hash));
+          if (!witness.imports.has(hash) && witness.imports.size < 20) {
+            witness.imports.set(hash, service.client.historicalImportsForDownload(hash));
           }
-          records = otherImports.get(hash) ?? [];
+          records = await witness.imports.get(hash) ?? [];
         }
         records = records.filter((r) => beneath(r.droppedPath, remoteRoot));
         if (!records.length) continue;
@@ -188,7 +200,7 @@ export async function historicalQbTranslations(
     for (const b of derived) {
       if (beneath(a.remote, b.remote) && a.local !== b.local + a.remote.slice(b.remote.length)) {
         throw new Error(
-          'Conflicting Sonarr evidence for the qBittorrent download folder; review Media connections and Sonarr remote path mappings',
+          'Conflicting Arr evidence for the qBittorrent download folder; review Media connections and Arr remote path mappings',
         );
       }
     }

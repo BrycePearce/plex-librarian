@@ -1,5 +1,8 @@
 import { assertEquals, assertRejects } from '@std/assert';
-import { historicalQbTranslations } from './historicalQbTranslation.ts';
+import {
+  historicalQbTranslations,
+  type HistoricalQbWitnessCache,
+} from './historicalQbTranslation.ts';
 import type { HistoricalAccessStatus } from '../../../../shared/historicalDownloads.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 import type { AcceptedHistoricalDownload } from './historicalDownloadPlanning.ts';
@@ -209,6 +212,43 @@ Deno.test('explicit applicable QB mapping wins without additional reads', async 
   }];
   assertEquals(await f.resolve(), [{ remote: '/completed', local: '/explicit', explicit: true }]);
   assertEquals(f.counts(), { endpointReads: 0, mappingReads: 0, manifestReads: 0 });
+});
+
+Deno.test('movie contexts share the twenty-witness budget and failed reads within one phase', async () => {
+  const f = fixture();
+  f.arr[0].instanceType = 'radarr';
+  f.jobs.splice(
+    0,
+    1,
+    ...Array.from({ length: 30 }, (_, i) => ({
+      ...f.jobs[0],
+      id: i.toString(16).padStart(40, '0'),
+    })),
+  );
+  const witnesses: HistoricalQbWitnessCache = new Map();
+  const resolve = (cache = witnesses) =>
+    historicalQbTranslations(f.target, f.arr, f.access, f.candidates, f.jobs, new Map(), cache);
+  for (let i = 0; i < 5; i++) {
+    f.candidates[0].lineage.source = `/completed/Movie ${i}/Film.mkv`;
+    assertEquals(await resolve(), []);
+  }
+  assertEquals(f.historyReads(), 20);
+  assertEquals(f.recentReads(), 1);
+  await resolve(new Map());
+  assertEquals(f.historyReads(), 40, 'a fresh checkpoint must obtain fresh witnesses');
+  let failures = 0;
+  f.arr[0].client.historicalImportsForDownload = () => {
+    failures++;
+    return Promise.reject(new Error('synthetic unavailable history'));
+  };
+  const failed: HistoricalQbWitnessCache = new Map();
+  await assertRejects(() => resolve(failed));
+  await assertRejects(() => resolve(failed));
+  assertEquals(
+    failures,
+    1,
+    'failed relevant reads are shared too, never treated as empty evidence',
+  );
 });
 
 Deno.test('host-scoped Sonarr mapping bridges different namespaces without a surviving lineage job', async () => {

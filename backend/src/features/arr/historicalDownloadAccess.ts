@@ -96,7 +96,7 @@ export function saveHistoricalAccess(
     )
     : statuses.find((s) => s.id === recordId && s.instanceId === instanceId);
   if (recordId !== undefined && !existing) {
-    throw new Error('Access record not found for this Sonarr connection');
+    throw new Error('Access record not found for this media connection');
   }
   if (
     statuses.some((s) =>
@@ -104,7 +104,7 @@ export function saveHistoricalAccess(
       s.configuration.remoteRoot === raw.remoteRoot
     )
   ) {
-    throw new Error('This Sonarr download root already has an access record');
+    throw new Error('This service download root already has an access record');
   }
   // Record identity stays stable when a suggested root is corrected. Its revision
   // invalidates prior previews and any access check still in flight.
@@ -116,11 +116,13 @@ export function saveHistoricalAccess(
   }
   withTransaction((db) => {
     if (
-      !db.prepare("SELECT 1 FROM arr_instances WHERE id=? AND server_id=? AND type='sonarr'").value(
+      !db.prepare(
+        "SELECT 1 FROM arr_instances WHERE id=? AND server_id=? AND type IN ('sonarr','radarr')",
+      ).value(
         instanceId,
         serverId,
       )
-    ) throw new Error('Sonarr connection not found');
+    ) throw new Error('Media connection not found');
     db.prepare(
       `INSERT INTO historical_download_access(id,server_id,arr_instance_id,configuration,revision,status) VALUES(?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET configuration=excluded.configuration,revision=excluded.revision,status=excluded.status,reason=NULL,checked_at=NULL,succeeded_at=NULL,problem_revision=NULL,dismissed_revision=NULL`,
@@ -169,15 +171,17 @@ export function checkHistoricalAccess(
     try {
       if (!sample) {
         const row = withTransaction((db) =>
-          db.prepare(`SELECT a.url,a.api_key,i.tvdb_id FROM arr_instances a
+          db.prepare(
+            `SELECT a.url,a.api_key,CASE WHEN a.type='radarr' THEN i.tmdb_id ELSE i.tvdb_id END,a.type FROM arr_instances a
           JOIN arr_library_mappings m ON m.arr_instance_id=a.id AND m.server_id=a.server_id
           JOIN items i ON i.server_id=m.server_id AND i.library_key=m.library_key
-          WHERE a.server_id=? AND a.id=? AND i.tvdb_id IS NOT NULL LIMIT 1`).value<
-            [string, string, number]
+          WHERE a.server_id=? AND a.id=? AND (CASE WHEN a.type='radarr' THEN i.tmdb_id ELSE i.tvdb_id END) IS NOT NULL LIMIT 1`,
+          ).value<
+            [string, string, number, 'sonarr' | 'radarr']
           >(serverId, status.instanceId)
         );
         if (row) {
-          const client = new ArrClient('sonarr', row[0], row[1]);
+          const client = new ArrClient(row[3], row[0], row[1]);
           const series = await client.lookup(row[2]);
           if (series) {
             sample = (await client.historicalImports(series.id)).records.find((r) =>
@@ -272,7 +276,7 @@ export function supplyHistoricalSample(
         source,
         mapping
           ? null
-          : `Sonarr reports ${source}. No unambiguous translation exists; no Librarian path was attempted. Choose the corresponding completed-downloads host folder.`,
+          : `The service reports ${source}. No unambiguous translation exists; no Librarian path was attempted. Choose the corresponding completed-downloads host folder.`,
       )
     );
   }
@@ -347,24 +351,28 @@ export function checkActiveHistoricalAccess(force = false) {
 }
 
 const discovering = new Map<number, Promise<void>>();
-/** One bounded current title per connected Sonarr, never a startup walk of series histories. */
+/** One bounded current title per connected service, never a startup walk of series histories. */
 export function discoverHistoricalAccess(serverId: number): Promise<void> {
   if (discovering.has(serverId)) return discovering.get(serverId)!;
   const work = (async () => {
     const connections = withTransaction((db) =>
       db.prepare(
-        "SELECT id,url,api_key,updated_at FROM arr_instances WHERE server_id=? AND type='sonarr' ORDER BY id LIMIT 20",
-      ).values<[number, string, string, number]>(serverId)
+        "SELECT id,url,api_key,updated_at,type FROM arr_instances WHERE server_id=? AND type IN ('sonarr','radarr') ORDER BY id LIMIT 20",
+      ).values<[number, string, string, number, 'sonarr' | 'radarr']>(serverId)
     );
-    for (const [instanceId, url, apiKey, revision] of connections) {
+    for (const [instanceId, url, apiKey, revision, type] of connections) {
       try {
         const sample = withTransaction((db) =>
           db.prepare(
-            'SELECT i.tvdb_id FROM items i JOIN arr_library_mappings m ON m.server_id=i.server_id AND m.library_key=i.library_key WHERE m.server_id=? AND m.arr_instance_id=? AND i.tvdb_id IS NOT NULL LIMIT 1',
+            `SELECT i.${
+              type === 'radarr' ? 'tmdb_id' : 'tvdb_id'
+            } FROM items i JOIN arr_library_mappings m ON m.server_id=i.server_id AND m.library_key=i.library_key WHERE m.server_id=? AND m.arr_instance_id=? AND i.${
+              type === 'radarr' ? 'tmdb_id' : 'tvdb_id'
+            } IS NOT NULL LIMIT 1`,
           ).value<[number]>(serverId, instanceId)
         );
         if (!sample) continue;
-        const client = new ArrClient('sonarr', url, apiKey);
+        const client = new ArrClient(type, url, apiKey);
         const series = await client.lookup(sample[0]);
         if (!series) continue;
         const history = await client.historicalImports(series.id);

@@ -80,6 +80,7 @@ export interface ServiceOwnedPlanningInput {
    * repeating the first phase's paired stability observations. */
   boundaryCheck?: boolean;
   discoveryHistory?: Map<string, Promise<unknown>>;
+  radarrFiles?: Map<string, ReturnType<ArrDeleteTarget['client']['radarrManagedFile']>>;
   discoveredIdentity?: PlexMetadataIdentity;
   discoveredOwner?: PlexMetadataIdentity;
   discoveredSeasons?: Map<string, Awaited<ReturnType<PlexClient['seasonDeletionEpisodes']>>>;
@@ -630,7 +631,13 @@ export async function buildServiceOwnedPlan(
         extrasComplete = true;
       } else {
         // lookup verifies a unique external identity; the native file read verifies record ownership.
-        const file = await read(() => target.client.radarrManagedFile(record.id));
+        const fileKey = `${target.instanceId}:${record.id}`;
+        if (input.radarrFiles && !input.radarrFiles.has(fileKey)) {
+          input.radarrFiles.set(fileKey, read(() => target.client.radarrManagedFile(record.id)));
+        }
+        const file = await (input.radarrFiles?.get(fileKey) ?? read(() =>
+          target.client.radarrManagedFile(record.id)
+        ));
         ownedFileCount = file ? 1 : 0;
         if (file) {
           if (!file.path || !Number.isSafeInteger(file.size) || file.size! <= 0) {
