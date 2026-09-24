@@ -7,7 +7,11 @@ import type { ArrInstance, QbittorrentInstance, SeerrInstance } from "../../lib/
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { AnimatedSuccessCheck } from "./AnimatedSuccessCheck.tsx";
 import { ArrConnectionWizard } from "./ArrConnectionWizard.tsx";
-import { HistoricalDownloadAccess } from "./HistoricalDownloadAccess.tsx";
+import {
+  HistoricalCleanupShortcut,
+  HistoricalDownloadAccess,
+  type HistoricalDownloadAccessHandle,
+} from "./HistoricalDownloadAccess.tsx";
 import { QbittorrentConnections } from "../qbittorrent/QbittorrentConnections.tsx";
 import { QbittorrentConnectionWizard } from "../qbittorrent/QbittorrentConnectionWizard.tsx";
 import { SeerrConnections } from "../seerr/SeerrConnections.tsx";
@@ -43,6 +47,7 @@ export function ArrIntegrationDialog() {
     queryFn: api.qbittorrent.get,
   });
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const cleanupRef = useRef<HistoricalDownloadAccessHandle>(null);
   const [view, setView] = useState<
     | "manager"
     | "connection"
@@ -295,6 +300,10 @@ export function ArrIntegrationDialog() {
                     >
                       <Trash2 className="size-4" />
                     </button>
+                    <HistoricalCleanupShortcut
+                      instanceId={instance.id}
+                      onOpen={() => cleanupRef.current?.open(instance.id)}
+                    />
                   </div>
                 ))}
                 <div className="min-h-5">
@@ -302,7 +311,14 @@ export function ArrIntegrationDialog() {
                 </div>
               </div>
             )}
-            <HistoricalDownloadAccess instances={data?.instances ?? []} />
+            <HistoricalDownloadAccess
+              ref={cleanupRef}
+              instances={data?.instances ?? []}
+              onConnect={(type) => {
+                openWizard();
+                setInitialType(type);
+              }}
+            />
             <QbittorrentConnections
               onConfigure={openQbittorrentWizard}
               onRemove={(instance) => {

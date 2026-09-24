@@ -259,11 +259,22 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   historicalAccess: {
+    enable: (id: string, revision: string) =>
+      apiFetch("/historical-download-access/enable", {
+        method: "POST",
+        body: JSON.stringify({ id, revision }),
+      }),
+    discover: (instanceId: number) =>
+      apiFetch("/historical-download-access/discover", {
+        method: "POST",
+        body: JSON.stringify({ instanceId }),
+      }),
     get: () =>
       apiFetch<
         {
           serverId: number | null;
           statuses: import("../../../shared/historicalDownloads.ts").HistoricalAccessStatus[];
+          suggestedLocalFolders?: string[];
         }
       >("/historical-download-access"),
     save: (

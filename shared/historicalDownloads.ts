@@ -22,6 +22,7 @@ export interface HistoricalAccessStatus {
   configuration: HistoricalAccessConfiguration;
   revision: string;
   status:
+    | 'ready_to_enable'
     | 'not_enabled'
     | 'waiting_for_sample'
     | 'checking'

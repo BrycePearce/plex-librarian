@@ -1,7 +1,8 @@
 /// <reference lib="dom" />
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronRight, FolderClock, Plus, X } from "lucide-react";
+import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ArrowLeft, CircleCheck, FolderClock, Info, Plus, TriangleAlert, X } from "lucide-react";
+import { HoverPopover } from "../../components/HoverPopover.tsx";
 import type { HistoricalAccessStatus } from "../../../../shared/historicalDownloads.ts";
 import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
@@ -13,7 +14,66 @@ import {
 } from "./historicalAccessNotifications.ts";
 
 const accessKey = queryKeys.historicalDownloadAccess.all;
+function FolderPathHelp({ service }: { service?: string }) {
+  const title = service ? `Find the folder in ${service}` : "Find the folder in Librarian";
+  return (
+    <HoverPopover
+      openOnClick
+      content={
+        <div className="max-w-72 space-y-2 text-xs font-normal leading-relaxed">
+          <strong className="block text-base-content">{title}</strong>
+          {service
+            ? (
+              <>
+                <p>
+                  Use the completed-downloads path inside{" "}
+                  {service}, before files are imported into your library.
+                </p>
+                <p>
+                  <strong>Unraid:</strong> Docker → {service} → Edit. Check the download volume’s
+                  {" "}
+                  <strong>Container Path</strong>, including any completed-downloads subfolder.
+                </p>
+                <p>
+                  Example:{" "}
+                  <code>/data/.torrents/complete</code>. Use the parent download folder, not a movie
+                  or season folder.
+                </p>
+              </>
+            )
+            : (
+              <>
+                <p>
+                  <strong>Unraid:</strong>{" "}
+                  Docker → Plex Librarian → Edit → Completed downloads. Copy its{" "}
+                  <strong>Container Path</strong>.
+                </p>
+                <p>
+                  <strong>Docker Compose:</strong> use the volume’s <strong>target</strong> path.
+                </p>
+                <p>
+                  Example:{" "}
+                  <code>/downloads</code>. Both apps must point to the same files; their container
+                  paths can differ.
+                </p>
+              </>
+            )}
+        </div>
+      }
+    >
+      <button
+        type="button"
+        aria-label={title}
+        className="inline-flex text-base-content/45 hover:text-base-content/75 focus-visible:outline-2 focus-visible:outline-primary"
+        onClick={(event) => event.preventDefault()}
+      >
+        <Info className="size-3.5" />
+      </button>
+    </HoverPopover>
+  );
+}
 const accessLabels: Record<HistoricalAccessStatus["status"], string> = {
+  ready_to_enable: "Ready to enable",
   available: "Ready",
   checking: "Checking…",
   waiting_for_sample: "Waiting for history",
@@ -34,8 +94,94 @@ function AccessBadge({ status }: { status: HistoricalAccessStatus["status"] }) {
   );
 }
 
+export type HistoricalDownloadAccessHandle = { open: (instanceId?: number) => void };
+
+export function HistoricalCleanupShortcut({ instanceId, onOpen }: {
+  instanceId: number;
+  onOpen: () => void;
+}) {
+  const query = useQuery({ queryKey: accessKey, queryFn: api.historicalAccess.get });
+  const folders = query.data?.statuses.filter((s) => s.instanceId === instanceId) ?? [];
+  const qc = useQueryClient();
+  const proposal = folders.length === 1 && folders[0].status === "ready_to_enable"
+    ? folders[0]
+    : null;
+  const enable = useMutation({
+    mutationFn: () => api.historicalAccess.enable(proposal!.id, proposal!.revision),
+    onSettled: () => void qc.invalidateQueries({ queryKey: accessKey }),
+  });
+  const ready = folders.length > 0 &&
+    folders.every((s) => s.configuration.enabled && s.status === "available");
+  const status = query.isError
+    ? "Status unavailable"
+    : query.isPending
+    ? "Loading…"
+    : ready
+    ? "Ready"
+    : proposal
+    ? "Ready to enable"
+    : !folders.some((s) => s.configuration.localRoot)
+    ? "Not configured"
+    : folders.every((s) => !s.configuration.enabled)
+    ? "Disabled"
+    : folders.some((s) =>
+        s.configuration.enabled && (s.status === "access_lost" || s.status === "setup_needed")
+      )
+    ? "Needs attention"
+    : "Not ready";
+  return (
+    <div className="flex w-full flex-wrap items-center justify-between gap-2 border-t border-base-300/50 pt-2 text-xs">
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={`size-1.5 shrink-0 rounded-full ${
+            query.isError
+              ? "bg-warning"
+              : ready
+              ? "bg-success"
+              : status === "Needs attention"
+              ? "bg-warning"
+              : "bg-base-content/35"
+          }`}
+        />
+        <span className="text-base-content/60">Download cleanup</span>
+        <span className={ready ? "text-success" : "text-base-content/70"}>{status}</span>
+      </div>
+      <button
+        type="button"
+        className="btn btn-soft btn-xs min-w-20 px-4"
+        onClick={() => proposal && !enable.isError ? enable.mutate() : onOpen()}
+        title={proposal
+          ? "Include eligible leftover downloads when deleting from Sonarr/Radarr. No files are deleted now."
+          : undefined}
+        aria-label={`${
+          proposal && !enable.isError ? "Enable" : status === "Not configured" ? "Set up" : "Manage"
+        } download cleanup`}
+        disabled={query.isPending || enable.isPending}
+      >
+        {enable.isPending
+          ? "Enabling…"
+          : proposal && !enable.isError
+          ? "Enable"
+          : status === "Not configured"
+          ? "Set up"
+          : "Manage"}
+      </button>
+      {enable.isError && (
+        <p role="status" className="w-full text-warning">
+          Access changed. Open Manage to review setup.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function HistoricalDownloadAccess(
-  { instances }: { instances: Array<{ id: number; name: string; type: string }> },
+  { instances, ref, onConnect }: {
+    instances: Array<{ id: number; name: string; type: string }>;
+    ref?: Ref<HistoricalDownloadAccessHandle>;
+    onConnect?: (type: "sonarr" | "radarr") => void;
+  },
 ) {
   const query = useQuery({
     queryKey: accessKey,
@@ -50,7 +196,20 @@ export function HistoricalDownloadAccess(
   const [localRoot, setLocalRoot] = useState("/cleanup-downloads");
   const [noRemainingClient, setNoRemainingClient] = useState(false);
   const [host, setHost] = useState("");
-  const [message, setMessage] = useState("");
+  const [feedback, setFeedback] = useState<
+    {
+      text: string;
+      title: string;
+      tone: "info" | "success" | "warning";
+    } | null
+  >(null);
+  function setMessage(
+    text: string,
+    title = "Folder access",
+    tone: "info" | "success" | "warning" = "info",
+  ) {
+    setFeedback(text ? { text, title, tone } : null);
+  }
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const [setupOpen, setSetupOpen] = useState(false);
   const currentServer = useRef(query.data?.serverId);
@@ -76,7 +235,11 @@ export function HistoricalDownloadAccess(
         return await task();
       } catch (e) {
         if (currentServer.current === server) {
-          setMessage(e instanceof Error ? e.message : String(e));
+          setMessage(
+            e instanceof Error ? e.message : String(e),
+            "Folder access request failed",
+            "warning",
+          );
         }
         throw e;
       }
@@ -85,24 +248,29 @@ export function HistoricalDownloadAccess(
   });
   const services = instances.filter((i) => i.type === "sonarr" || i.type === "radarr");
   const statuses = query.data?.statuses ?? [];
-  const ready = statuses.filter((s) => s.configuration.enabled && s.status === "available").length;
-  const needsSetup = statuses.some((s) =>
-    s.status === "setup_needed" || s.status === "access_lost"
-  );
-  function edit(status?: HistoricalAccessStatus) {
+  function edit(status?: HistoricalAccessStatus, serviceId?: number) {
     const existingFolders = [
       ...new Set(
         statuses.filter((s) => s.configuration.enabled)
           .map((s) => s.configuration.localRoot).filter(Boolean),
       ),
     ];
-    const suggestedFolder = existingFolders.length === 1
-      ? existingFolders[0]
-      : existingFolders.length
+    const suggestions = existingFolders.length
+      ? existingFolders
+      : query.data?.suggestedLocalFolders ?? [];
+    const suggestedFolder = suggestions.length === 1
+      ? suggestions[0]
+      : suggestions.length
       ? ""
       : "/cleanup-downloads";
     setInstanceId(
-      status ? String(status.instanceId) : services.length === 1 ? String(services[0].id) : "",
+      status
+        ? String(status.instanceId)
+        : serviceId !== undefined
+        ? String(serviceId)
+        : services.length === 1
+        ? String(services[0].id)
+        : "",
     );
     setRemoteRoot(status?.configuration.remoteRoot ?? "");
     setLocalRoot(status?.configuration.localRoot || suggestedFolder);
@@ -111,51 +279,18 @@ export function HistoricalDownloadAccess(
     setSetupOpen(true);
     setMessage("");
   }
-  if (!services.length) return null;
+  useImperativeHandle(ref, () => ({
+    open(serviceId) {
+      setOpen(true);
+      setMessage("");
+      const folders = statuses.filter((s) => s.instanceId === serviceId);
+      if (serviceId !== undefined && !query.isError && folders.length <= 1) {
+        edit(folders[0], serviceId);
+      } else setSetupOpen(false);
+    },
+  }));
   return (
     <>
-      <section className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-base-300 bg-base-200/30 p-4">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-          <FolderClock className="size-5" />
-        </span>
-        <div className="min-w-0 flex-1 basis-48">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold">Historical download cleanup</h3>
-            <span className="badge badge-ghost badge-xs">Optional</span>
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-            Clean up download files left behind after a Sonarr/Radarr import.
-          </p>
-          <p className="mt-1 text-xs text-base-content/50">
-            {query.isError
-              ? "Folder status unavailable"
-              : query.isPending
-              ? "Loading folder status…"
-              : needsSetup
-              ? "Folder access needs setup"
-              : ready
-              ? `${ready} ${ready === 1 ? "folder" : "folders"} ready`
-              : statuses.some((s) => s.status === "checking")
-              ? "Checking folder access…"
-              : statuses.some((s) => s.status === "waiting_for_sample")
-              ? "Waiting for Sonarr/Radarr import history"
-              : statuses.length
-              ? "Folder cleanup is disabled"
-              : "Set up folder access to get started"}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost gap-1"
-          onClick={() => {
-            setMessage("");
-            setSetupOpen(false);
-            setOpen(true);
-          }}
-        >
-          Manage access <ChevronRight className="size-4" />
-        </button>
-      </section>
       {open && (
         <dialog
           ref={dialogRef}
@@ -180,7 +315,7 @@ export function HistoricalDownloadAccess(
                 </h2>
                 <p className="mt-1 text-sm leading-relaxed text-base-content/55">
                   {setupOpen
-                    ? "Match the same completed-downloads folder in Sonarr/Radarr and Librarian."
+                    ? "One download folder, as seen by each app."
                     : "Allow access to exact download files recorded in Sonarr/Radarr history."}
                 </p>
               </div>
@@ -193,10 +328,10 @@ export function HistoricalDownloadAccess(
                 <X className="size-4" />
               </button>
             </div>
-            <div className="mt-5 rounded-lg border border-base-300 bg-base-200/40 px-3 py-2.5 text-xs leading-relaxed text-base-content/65">
-              Native Linux / Docker / Unraid required. Folder access never deletes files on its own.
-              You choose whether to include cleanup in each deletion review.
-            </div>
+            <p className="mt-4 text-xs leading-relaxed text-base-content/60">
+              Include eligible leftover downloads when deleting from Sonarr/Radarr. Saving won’t
+              delete files.
+            </p>
             {query.isError && (
               <p role="alert" className="mt-4 text-sm text-error">
                 Folder status could not be loaded.{" "}
@@ -205,126 +340,247 @@ export function HistoricalDownloadAccess(
                 </button>
               </p>
             )}
-            {message && (
+            {feedback && (
               <div
                 role="status"
-                className="mt-4 rounded-lg border border-base-300 p-3 text-sm break-words"
+                aria-live="polite"
+                className={`mt-4 flex items-start gap-3 rounded-lg border p-4 text-sm ${
+                  feedback.tone === "success"
+                    ? "border-success/30 bg-success/10"
+                    : feedback.tone === "warning"
+                    ? "border-warning/30 bg-warning/10"
+                    : "border-info/30 bg-info/10"
+                }`}
               >
-                {message}
+                {feedback.tone === "success"
+                  ? <CircleCheck className="mt-0.5 size-5 shrink-0 text-success" />
+                  : feedback.tone === "warning"
+                  ? <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning" />
+                  : <Info className="mt-0.5 size-5 shrink-0 text-info" />}
+                <div className="min-w-0 flex-1 break-words">
+                  <p className="font-semibold">{feedback.title}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-base-content/75">
+                    {feedback.text}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs btn-square"
+                  aria-label="Dismiss access result"
+                  onClick={() => setMessage("")}
+                >
+                  <X className="size-4" />
+                </button>
               </div>
             )}
             {!setupOpen
               ? (
                 <>
                   <div className="mt-5 flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold">Download folders</h3>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm gap-1"
-                      disabled={mutation.isPending}
-                      onClick={() => edit()}
-                    >
-                      <Plus className="size-3.5" /> Add folder
-                    </button>
+                    <h3 className="text-sm font-semibold">Download cleanup by service</h3>
                   </div>
                   <div className="mt-2 space-y-3">
-                    {!statuses.length && (
-                      <div className="rounded-xl border border-dashed border-base-300 p-6 text-center text-sm text-base-content/55">
-                        No folders configured. Add the completed-downloads folder used by
-                        Sonarr/Radarr.
-                      </div>
-                    )}
-                    {statuses.map((s) => (
-                      <div key={s.id} className="min-w-0 rounded-xl border border-base-300 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <h4 className="text-sm font-semibold">
-                            {services.find((i) =>
-                              i.id === s.instanceId
-                            )?.name ?? "Sonarr/Radarr"}
-                          </h4>
-                          <AccessBadge status={s.status} />
-                        </div>
-                        <dl className="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
-                          <dt className="text-base-content/45">Sonarr/Radarr</dt>
-                          <dd className="truncate font-mono" title={s.configuration.remoteRoot}>
-                            {s.configuration.remoteRoot}
-                          </dd>
-                          <dt className="text-base-content/45">Librarian</dt>
-                          <dd className="truncate font-mono" title={s.configuration.localRoot}>
-                            {s.configuration.localRoot || "Not configured"}
-                          </dd>
-                        </dl>
-                        <p className="mt-3 text-xs text-base-content/55 break-words [overflow-wrap:anywhere]">
-                          {historicalAccessMessage(s)}
-                        </p>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            disabled={mutation.isPending}
-                            onClick={() => edit(s)}
-                          >
-                            Edit access
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-ghost"
-                            disabled={mutation.isPending || !s.configuration.localRoot}
-                            onClick={() =>
-                              mutation.mutate(async () => {
-                                const server = currentServer.current;
-                                const result = await api.historicalAccess.check(s.id);
-                                if (currentServer.current === server) {
-                                  setMessage(
-                                    historicalCheckMessage(result.statuses.filter((r) =>
-                                      r.id === s.id
-                                    )),
-                                  );
-                                }
-                              })}
-                          >
-                            Check access
-                          </button>
-                          {!!s.configuration.localRoot && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost text-base-content/55"
-                              disabled={mutation.isPending}
-                              onClick={() =>
-                                mutation.mutate(() =>
-                                  api.historicalAccess.save(s.instanceId, {
-                                    ...s.configuration,
-                                    enabled: !s.configuration.enabled,
-                                  }, s.id)
-                                )}
-                            >
-                              {s.configuration.enabled ? "Disable" : "Enable"}
-                            </button>
-                          )}
-                        </div>
-                        <details className="mt-3 text-xs text-base-content/55">
-                          <summary className="cursor-pointer hover:text-base-content">
-                            Access details
-                          </summary>
-                          <div className="mt-2 space-y-2 break-words [overflow-wrap:anywhere]">
-                            <p>Sonarr/Radarr: {s.configuration.remoteRoot}</p>
-                            {s.sample && <p>Example file: {s.sample}</p>}
-                            {s.reason && <p>{s.reason}</p>}
-                            {s.diagnostic?.details && <p>{s.diagnostic.details}</p>}
-                            <p>
-                              {s.checkedAt
-                                ? `Last checked: ${new Date(s.checkedAt).toLocaleString()}`
-                                : "Not checked yet."}
+                    {(["sonarr", "radarr"] as const).flatMap((type) => {
+                      const connections = services.filter((s) => s.type === type);
+                      if (!connections.length) {
+                        return [
+                          <div key={type} className="rounded-xl border border-base-300 p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <h4 className="text-sm font-semibold">
+                                {type === "sonarr" ? "Sonarr" : "Radarr"}
+                              </h4>
+                              <span className="badge badge-sm badge-ghost">Not connected</span>
+                            </div>
+                            <p className="mt-3 text-xs text-base-content/55">
+                              Connect this service to set up leftover download cleanup.
                             </p>
-                            {s.succeededAt && (
-                              <p>
-                                Last successful check: {new Date(s.succeededAt).toLocaleString()}
-                              </p>
+                            {onConnect && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost mt-3"
+                                onClick={() => {
+                                  setOpen(false);
+                                  onConnect(type);
+                                }}
+                              >
+                                Connect {type === "sonarr" ? "Sonarr" : "Radarr"}
+                              </button>
+                            )}
+                          </div>,
+                        ];
+                      }
+                      return connections.map((service) => {
+                        const folders = statuses.filter((s) => s.instanceId === service.id);
+                        return (
+                          <div
+                            key={service.id}
+                            className="min-w-0 rounded-xl border border-base-300 p-4"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <h4 className="text-sm font-semibold">{service.name}</h4>
+                              {!folders.length && (
+                                <span className="badge badge-sm badge-ghost">
+                                  {query.isError
+                                    ? "Status unavailable"
+                                    : query.isPending
+                                    ? "Loading…"
+                                    : "Not configured"}
+                                </span>
+                              )}
+                            </div>
+                            {!folders.length && (
+                              <>
+                                <p className="mt-3 text-xs text-base-content/55">
+                                  Downloaded copies may remain after deleting from{" "}
+                                  {service.name}. Set up folder access to include eligible
+                                  leftovers.
+                                </p>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-primary mt-3"
+                                  disabled={query.isPending || query.isError || mutation.isPending}
+                                  onClick={() => edit(undefined, service.id)}
+                                >
+                                  Set up download cleanup
+                                </button>
+                              </>
+                            )}
+                            {folders.map((s) => (
+                              <div key={s.id} className="mt-3 border-t border-base-300 pt-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <h4 className="text-sm font-semibold">
+                                    Download folder
+                                  </h4>
+                                  <AccessBadge status={s.status} />
+                                </div>
+                                <dl className="mt-3 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+                                  <dt className="text-base-content/45">Sonarr/Radarr</dt>
+                                  <dd
+                                    className="truncate font-mono"
+                                    title={s.configuration.remoteRoot}
+                                  >
+                                    {s.configuration.remoteRoot}
+                                  </dd>
+                                  <dt className="text-base-content/45">Librarian</dt>
+                                  <dd
+                                    className="truncate font-mono"
+                                    title={s.configuration.localRoot}
+                                  >
+                                    {s.configuration.localRoot || "Not configured"}
+                                  </dd>
+                                </dl>
+                                <p className="mt-3 text-xs text-base-content/55 break-words [overflow-wrap:anywhere]">
+                                  {historicalAccessMessage(s)}
+                                </p>
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-primary"
+                                    disabled={mutation.isPending}
+                                    onClick={() =>
+                                      edit(s)}
+                                  >
+                                    Edit access
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-ghost"
+                                    disabled={mutation.isPending || !s.configuration.localRoot}
+                                    onClick={() =>
+                                      mutation.mutate(async () => {
+                                        const server = currentServer.current;
+                                        setMessage(
+                                          "Checking the configured folder. No files will be deleted.",
+                                          `${service.name}: checking access`,
+                                        );
+                                        const result = await api.historicalAccess.check(s.id);
+                                        if (currentServer.current === server) {
+                                          const checked = result.statuses.filter((r) =>
+                                            r.id === s.id
+                                          );
+                                          const ready = checked.length > 0 && checked.every((r) =>
+                                            r.status === "available"
+                                          );
+                                          const waiting = checked.length > 0 && checked.every((r) =>
+                                            r.status === "checking" ||
+                                            r.status === "waiting_for_sample"
+                                          );
+                                          setMessage(
+                                            historicalCheckMessage(checked),
+                                            `${service.name}: ${
+                                              ready
+                                                ? "access check passed"
+                                                : waiting
+                                                ? "access check pending"
+                                                : "access check needs attention"
+                                            }`,
+                                            ready ? "success" : waiting ? "info" : "warning",
+                                          );
+                                        }
+                                      })}
+                                  >
+                                    Check access
+                                  </button>
+                                  {!!s.configuration.localRoot && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm btn-ghost text-base-content/55"
+                                      disabled={mutation.isPending}
+                                      onClick={() =>
+                                        mutation.mutate(() =>
+                                          s.status === "ready_to_enable"
+                                            ? api.historicalAccess.enable(s.id, s.revision)
+                                            : api.historicalAccess.save(s.instanceId, {
+                                              ...s.configuration,
+                                              enabled: !s.configuration.enabled,
+                                            }, s.id)
+                                        )}
+                                    >
+                                      {s.configuration.enabled ? "Disable" : "Enable"}
+                                    </button>
+                                  )}
+                                </div>
+                                <details className="mt-3 text-xs text-base-content/55">
+                                  <summary className="cursor-pointer hover:text-base-content">
+                                    Access details
+                                  </summary>
+                                  <div className="mt-2 space-y-2 break-words [overflow-wrap:anywhere]">
+                                    <p>Sonarr/Radarr: {s.configuration.remoteRoot}</p>
+                                    {s.sample && <p>Example file: {s.sample}</p>}
+                                    {s.reason && <p>{s.reason}</p>}
+                                    {s.diagnostic?.details && <p>{s.diagnostic.details}</p>}
+                                    <p>
+                                      {s.checkedAt
+                                        ? `Last checked: ${new Date(s.checkedAt).toLocaleString()}`
+                                        : "Not checked yet."}
+                                    </p>
+                                    {s.succeededAt && (
+                                      <p>
+                                        Last successful check:{" "}
+                                        {new Date(s.succeededAt).toLocaleString()}
+                                      </p>
+                                    )}
+                                  </div>
+                                </details>
+                              </div>
+                            ))}
+                            {!!folders.length && (
+                              <details className="mt-3 text-xs text-base-content/55">
+                                <summary className="cursor-pointer">More folders</summary>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-ghost mt-2"
+                                  disabled={mutation.isPending || query.isError}
+                                  onClick={() => edit(undefined, service.id)}
+                                >
+                                  <Plus className="size-3.5" /> Add another folder
+                                </button>
+                              </details>
                             )}
                           </div>
-                        </details>
-                      </div>
-                    ))}
+                        );
+                      });
+                    })}
                   </div>
                   <div className="modal-action">
                     <button
@@ -358,7 +614,7 @@ export function HistoricalDownloadAccess(
                 >
                   <fieldset disabled={mutation.isPending} className="mt-5 space-y-4">
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium">Sonarr/Radarr connection</span>
+                      <span className="text-xs font-medium">Media service</span>
                       <select
                         className="select select-bordered select-sm w-full"
                         value={instanceId}
@@ -371,7 +627,14 @@ export function HistoricalDownloadAccess(
                       </select>
                     </label>
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium">Sonarr/Radarr download folder</span>
+                      <span className="flex items-center gap-1.5 text-xs font-medium">
+                        Download folder in{" "}
+                        {services.find((s) => String(s.id) === instanceId)?.name ?? "Sonarr/Radarr"}
+                        <FolderPathHelp
+                          service={services.find((s) => String(s.id) === instanceId)?.name ??
+                            "Sonarr/Radarr"}
+                        />
+                      </span>
                       <input
                         className="input input-bordered input-sm w-full font-mono"
                         value={remoteRoot}
@@ -384,72 +647,98 @@ export function HistoricalDownloadAccess(
                       />
                     </label>
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium">Librarian folder</span>
+                      <span className="flex items-center gap-1.5 text-xs font-medium">
+                        Download folder in Librarian <FolderPathHelp />
+                      </span>
                       <input
                         className="input input-bordered input-sm w-full font-mono"
                         value={localRoot}
-                        list="historical-mounted-folders"
                         required
                         onChange={(e) => {
                           setLocalRoot(e.target.value);
                           setNoRemainingClient(false);
                         }}
                       />
-                      <datalist id="historical-mounted-folders">
-                        {[
-                          ...new Set(
-                            statuses.map((s) => s.configuration.localRoot).filter(Boolean),
-                          ),
-                        ].map((root) => <option key={root} value={root} />)}
-                      </datalist>
                     </label>
                     <p className="text-xs leading-relaxed text-base-content/55">
-                      Both paths must point to the same folder. If Sonarr/Radarr suggested a single
-                      release folder, change it to match the completed-downloads folder you mounted.
+                      Use the completed-downloads folder, not an individual movie or season folder.
                     </p>
-                    <label className="flex items-start gap-3 rounded-lg border border-base-300 p-3">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm mt-0.5"
-                        checked={noRemainingClient}
-                        onChange={(e) => setNoRemainingClient(e.target.checked)}
-                      />
-                      <span className="text-xs leading-relaxed">
-                        No download client manages this folder
-                        anymore.<span className="mt-1 block text-base-content/50">
-                          Only confirm if true. This cannot bypass an unavailable connected client.
-                        </span>
-                      </span>
-                    </label>
-                    <details className="rounded-lg border border-base-300 p-3 text-xs">
+                    <details
+                      className="rounded-lg border border-base-300 p-3 text-xs"
+                      open={noRemainingClient}
+                    >
                       <summary className="cursor-pointer font-medium">
-                        Need to mount a folder?
+                        Advanced{noRemainingClient ? " · No client declared" : ""}
                       </summary>
-                      <div className="mt-3 space-y-3 leading-relaxed text-base-content/65">
-                        <p>
-                          Add one writable completed-downloads mount. Keep the existing{" "}
-                          <code>/data</code> app-data volume.
-                        </p>
-                        <p>
-                          <strong>Unraid:</strong>{" "}
-                          Docker → Plex Librarian → Edit → Completed downloads folder. Choose the
-                          host folder and apply. If missing, add a Read/Write Path with container
-                          path <code>/cleanup-downloads</code>.
-                        </p>
-                        <label className="flex flex-col gap-1.5">
-                          Compose host folder<input
-                            className="input input-bordered input-sm w-full font-mono"
-                            value={host}
-                            placeholder="/mnt/user/downloads/complete"
-                            onChange={(e) => setHost(e.target.value)}
-                          />
-                        </label>
-                        <pre className="overflow-x-auto rounded-lg bg-base-300/50 p-3 text-xs">{`- type: bind\n  source: ${JSON.stringify(host || '/choose/your/completed-downloads')}\n  target: /cleanup-downloads\n  read_only: false\n  bind:\n    create_host_path: false`}</pre>
-                        <p>
-                          Add under service volumes, then recreate with{" "}
-                          <code>docker compose up -d</code>. Librarian cannot mount a folder itself.
-                        </p>
-                      </div>
+                      {(!editing ||
+                        statuses.some((s) => s.id === editing && !s.configuration.localRoot)) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs mt-3"
+                          disabled={!instanceId || mutation.isPending}
+                          onClick={() =>
+                            mutation.mutate(async () => {
+                              const server = currentServer.current;
+                              await api.historicalAccess.discover(Number(instanceId));
+                              if (currentServer.current === server) {
+                                setSetupOpen(false);
+                                setMessage(
+                                  "Detection finished. Verified folders show Ready to enable; otherwise use manual setup.",
+                                );
+                              }
+                            })}
+                        >
+                          Retry folder detection
+                        </button>
+                      )}
+                      <label className="mt-3 flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm mt-0.5"
+                          checked={noRemainingClient}
+                          onChange={(e) => setNoRemainingClient(e.target.checked)}
+                        />
+                        <span className="text-xs leading-relaxed">
+                          I no longer use a download client for these files.
+                          <span className="mt-1 block text-base-content/50">
+                            For leftover files whose client is no longer in use. This enables
+                            cleanup without a client; it does not turn cleanup off or bypass an
+                            unreachable connected client.
+                          </span>
+                        </span>
+                      </label>
+                      <details className="mt-4 border-t border-base-300 pt-3 text-xs">
+                        <summary className="cursor-pointer font-medium">
+                          Need to mount a folder?
+                        </summary>
+                        <div className="mt-3 space-y-3 leading-relaxed text-base-content/65">
+                          <p>Folder cleanup requires Linux, Docker or Unraid.</p>
+                          <p>
+                            Add one writable completed-downloads mount. Keep the existing{" "}
+                            <code>/data</code> app-data volume.
+                          </p>
+                          <p>
+                            <strong>Unraid:</strong>{" "}
+                            Docker → Plex Librarian → Edit → Completed downloads folder. Choose the
+                            host folder and apply. If missing, add a Read/Write Path with container
+                            path <code>/cleanup-downloads</code>.
+                          </p>
+                          <label className="flex flex-col gap-1.5">
+                            Compose host folder<input
+                              className="input input-bordered input-sm w-full font-mono"
+                              value={host}
+                              placeholder="/mnt/user/downloads/complete"
+                              onChange={(e) => setHost(e.target.value)}
+                            />
+                          </label>
+                          <pre className="overflow-x-auto rounded-lg bg-base-300/50 p-3 text-xs">{`- type: bind\n  source: ${JSON.stringify(host || '/choose/your/completed-downloads')}\n  target: /cleanup-downloads\n  read_only: false\n  bind:\n    create_host_path: false`}</pre>
+                          <p>
+                            Add under service volumes, then recreate with{" "}
+                            <code>docker compose up -d</code>. Librarian cannot mount a folder
+                            itself.
+                          </p>
+                        </div>
+                      </details>
                     </details>
                   </fieldset>
                   <div className="modal-action justify-between gap-3">

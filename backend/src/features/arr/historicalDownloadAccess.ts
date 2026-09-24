@@ -22,6 +22,7 @@ function accessReason(
   if (typeof value !== 'string') return { reason: null };
   try {
     const diagnostic = JSON.parse(value);
+    if (typeof diagnostic?.setupConnectionRevision === 'string') return { reason: null };
     if (
       diagnostic &&
       [

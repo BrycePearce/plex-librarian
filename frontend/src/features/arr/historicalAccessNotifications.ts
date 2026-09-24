@@ -10,6 +10,9 @@ export function historicalCheckMessage(statuses: readonly HistoricalAccessStatus
 }
 
 export function historicalAccessMessage(s: HistoricalAccessStatus): string {
+  if (s.status === "ready_to_enable") {
+    return "Folder relationship and access verified. Enable to include eligible leftover downloads in service deletions.";
+  }
   const folder = s.diagnostic?.folder || s.configuration.localRoot ||
     "the configured download folder";
   switch (s.diagnostic?.code) {
