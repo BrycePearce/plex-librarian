@@ -141,8 +141,8 @@ function DeletionOperationPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl w-full mx-auto">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
+        <div className="min-w-0 flex-1">
           <p className="text-xs uppercase tracking-[0.18em] text-base-content/45">
             Deletion operation
           </p>
@@ -159,9 +159,11 @@ function DeletionOperationPage() {
               ? deletionTargetProgress(current)
               : deletionOperationTitle(operation.status, current?.phase)}
           </h1>
-          <p className="text-sm text-base-content/55 mt-2">Operation {operation.id}</p>
+          <p className="text-sm text-base-content/55 mt-2 break-all">Operation {operation.id}</p>
         </div>
-        <span className={`badge badge-lg ${statusBadge(operation.status)}`}>
+        <span
+          className={`badge badge-lg shrink-0 whitespace-nowrap ${statusBadge(operation.status)}`}
+        >
           {operation.status.replace(/_/g, " ")}
         </span>
       </div>
@@ -192,7 +194,13 @@ function DeletionOperationPage() {
                 ).length,
               )}
             />
-            <Stat label="Warning" value={String(operation.warningCount)} />
+            <Stat label="Service warnings" value={String(operation.warningCount)} />
+            {!!operation.optionalWarningCount && (
+              <Stat
+                label="Download files needing review"
+                value={String(operation.optionalWarningCount)}
+              />
+            )}
             <Stat label="Removed" value={String(operation.removalConfirmedCount)} />
             <Stat
               label="Updating Plex"

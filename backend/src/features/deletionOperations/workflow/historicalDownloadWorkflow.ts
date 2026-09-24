@@ -31,6 +31,7 @@ import {
   radarrHistoricalDownloadLineage,
 } from '../../mediaDeletion/historicalDownloadLineage.ts';
 import { serviceOwnedFingerprint } from '../../mediaDeletion/serviceOwnedPlanning.ts';
+import { historicalDelegation } from './historicalDownloadDelegation.ts';
 
 export async function ensureHistoricalDownloadPhase(
   target: DeletionWorkTarget,
@@ -50,11 +51,12 @@ export async function ensureHistoricalDownloadPhase(
     ).values<[string, string, string]>(target.operationId)
   );
   if (!rows.length) return;
-  const snapshots = withTransaction((db) =>
-    db.prepare('SELECT snapshot FROM deletion_targets WHERE operation_id=? ORDER BY ordinal')
-      .values<[string]>(target.operationId)
+  const operationTargets = withTransaction((db) =>
+    db.prepare('SELECT id,snapshot FROM deletion_targets WHERE operation_id=? ORDER BY ordinal')
+      .values<[number, string]>(target.operationId)
   )
-    .map(([s]) => JSON.parse(s) as DurableTargetSnapshot);
+    .map(([id, s]) => ({ id, snapshot: JSON.parse(s) as DurableTargetSnapshot }));
+  const snapshots = operationTargets.map((t) => t.snapshot);
   const plans = snapshots.map((s) => s.serviceOwnedPlan!);
   const hasPriorServiceAttempt = snapshots.some((s) =>
     Object.keys(s.serviceOwnedAttempts ?? {}).length > 0
@@ -106,6 +108,37 @@ export async function ensureHistoricalDownloadPhase(
   // Lazy so cancelled, corrupt or interrupted entries never initiate inventory.
   let preparation: ReturnType<typeof prepareOperation> | undefined;
   const operation = () => preparation ??= prepareOperation();
+  const delegate = (
+    id: string,
+    evidence: HistoricalDiscovery | AcceptedHistoricalDownload,
+    checked: Awaited<ReturnType<typeof collectHistoricalDownloads>>,
+    freshPlans: typeof plans,
+  ) => {
+    if (hasPriorServiceAttempt || cancelled()) return false;
+    const discovery = 'discovery' in evidence;
+    const link = historicalDelegation(
+      evidence,
+      discovery ? evidence.path : evidence.filesystem.path,
+      discovery ? evidence.contexts ?? [evidence] : historicalOwnerContexts(evidence),
+      checked.preview.handled,
+      operationTargets,
+      freshPlans,
+    );
+    if (!link) return false;
+    withTransaction((db) => {
+      const changed = db.prepare(
+        "UPDATE historical_download_journal SET status='skipped',reason=?,validation=?,finished_at=? WHERE id=? AND status='pending'",
+      ).run(
+        'Covering qBittorrent removal is not confirmed. Check the selected job outcomes; local cleanup will not run as a fallback.',
+        JSON.stringify(link),
+        Date.now(),
+        id,
+      );
+      if (changed !== 1) throw new Error('Optional journal changed before delegation');
+      db.prepare('DELETE FROM historical_download_reservations WHERE journal_id=?').run(id);
+    });
+    return true;
+  };
   const checkpoint = new HistoricalDownloadCheckpoint(async () => {
     const { prepared, checked } = await operation();
     const claims = await historicalJobClaims(
@@ -133,16 +166,8 @@ export async function ensureHistoricalDownloadPhase(
           a.revision === discovery.accessRevision
         )
       ) throw new Error('Reviewed historical access changed; optional cleanup skipped');
-      const { checked } = await operation();
-      const coverage = checked.preview.handled?.find((c) =>
-        c.instanceId === discovery.instanceId && c.source === discovery.lineage.source
-      );
-      if (coverage) {
-        throw new Error(
-          'Handled only by selected qBittorrent action(s) ' + coverage.actionIds.join(', ') +
-            '; local unlink skipped. Completion or failure is reported in service outcomes; no local fallback.',
-        );
-      }
+      const { checked, prepared } = await operation();
+      if (delegate(id, discovery, checked, prepared.plans)) continue;
       const candidate = checked.accepted.find((c) =>
         c.filesystem.path === discovery.path &&
         historicalOwnerContexts(c).some((o) =>
@@ -224,6 +249,16 @@ export async function ensureHistoricalDownloadPhase(
           return config?.configuration.enabled && config.revision === owner.accessRevision;
         });
       };
+      // Older verified evidence can gain a link only while still pending and
+      // before service execution, with fresh coverage of its exact reviewed path.
+      // Interrupted unlink intents must proceed to the existing non-replay guard.
+      if (
+        accepted.filesystem.version === 2 && store.get().status === 'pending' &&
+        !hasPriorServiceAttempt && !cancelled()
+      ) {
+        const { checked, prepared } = await operation();
+        if (accessUnchanged() && delegate(id, accepted, checked, prepared.plans)) continue;
+      }
       await runHistoricalDownloadAttempt(store, id, {
         cancelled,
         validate: async () => {
@@ -236,31 +271,65 @@ export async function ensureHistoricalDownloadPhase(
             )
               .value(accepted.filesystem.entry, id)
           );
-          if (!reserved) return 'skipped';
+          if (!reserved) {
+            return {
+              status: 'skipped',
+              reason: 'The exact-file cleanup reservation is no longer held',
+            };
+          }
           if (
             accepted.version !== 1 || hasPriorServiceAttempt ||
             snapshots.some((s) => s.upgradeHold !== undefined)
-          ) return 'skipped';
+          ) {
+            return {
+              status: 'skipped',
+              reason: 'Service execution already began or an upgrade hold prevents local cleanup',
+            };
+          }
           const { active, prepared, checked, keys, acceptedIds } = await operation();
           if (
             historicalConnectionRevision(prepared.arrTargets, prepared.downloadTargets) !==
               accepted.connectionRevision
-          ) return 'changed';
+          ) {
+            return {
+              status: 'changed',
+              reason: 'Service connection configuration changed after verification',
+            };
+          }
           if (!accessUnchanged()) {
-            return 'changed';
+            return {
+              status: 'changed',
+              reason: 'Download folder access or mapping changed after verification',
+            };
           }
           if (!acceptedIds.has(accepted.id)) {
-            if (!await historicalRootUnchanged(accepted.filesystem)) return 'changed';
+            if (!await historicalRootUnchanged(accepted.filesystem)) {
+              return {
+                status: 'changed',
+                reason: 'Download root filesystem identity changed after verification',
+              };
+            }
             try {
               await lstatChain(accepted.filesystem.path);
             } catch (error) {
               if (error instanceof Deno.errors.NotFound) return 'already_absent';
               throw error;
             }
-            return 'changed';
+            return {
+              status: 'changed',
+              reason:
+                'The file still exists, but its identity, import lineage, or ownership eligibility could not be re-established',
+            };
           }
           const claims = await checkpoint.fresh();
-          if (claims.has(accepted.id)) return 'changed';
+          if (claims.has(accepted.id)) {
+            return {
+              status: 'changed',
+              reason: prepared.downloadTargets.length
+                ? 'Current download ownership could not be cleared; local cleanup was not attempted. Check the qBittorrent service outcomes for selected jobs.'
+                : 'Download ownership is not established; confirm folder ownership in Media connections',
+            };
+          }
           for (const owner of historicalOwnerContexts(accepted)) {
             const latestArr = prepared.arrTargets.find((a) => a.instanceId === owner.instanceId);
             if (
@@ -276,15 +345,27 @@ export async function ensureHistoricalDownloadPhase(
                   owner.seriesId,
                   owner.lineage,
                 ))
-            ) return 'changed';
+            ) {
+              return {
+                status: 'changed',
+                reason:
+                  'The current Sonarr or Radarr file no longer matches the approved import lineage',
+              };
+            }
           }
           if (activeWholeItemRatingKeys(keys, await active.client.activeSessions()).size) {
-            return 'skipped';
+            return { status: 'skipped', reason: 'Selected media is currently playing' };
           }
           if (
             !checkpoint.isFresh() || !accessUnchanged() ||
             !withTransaction((db) => activeServerMatches(db, target.serverId))
-          ) return 'skipped';
+          ) {
+            return {
+              status: 'skipped',
+              reason:
+                'Ownership verification expired, folder access changed, or the active server changed',
+            };
+          }
           // Separate mutable execution evidence preserves the accepted fingerprint.
           // This durable write must succeed before the journal can persist unlink intent.
           withTransaction((db) =>

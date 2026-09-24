@@ -1,5 +1,6 @@
 import { boundServiceOwnedConsent } from '../../mediaDeletion/serviceOwnedConsent.ts';
 import type { ServiceDeletionResponse } from '../../../../../shared/serviceStorage.ts';
+import { reconcileHistoricalDelegations } from './historicalDownloadDelegation.ts';
 import { withTransaction } from '../../../db/index.ts';
 import { getArrDeleteTargets } from '../../arr/delete.ts';
 import { getDownloadClientTargets } from '../../mediaDeletion/targets.ts';
@@ -452,12 +453,13 @@ export async function ensureServiceOwnedDeletion(
   function save() {
     snapshot.serviceOwnedAttempts = attempts;
     const next = JSON.stringify(snapshot);
-    const changed = withTransaction((client) =>
-      client.prepare(
+    withTransaction((client) => {
+      const changed = client.prepare(
         "UPDATE deletion_targets SET snapshot = ?, updated_at = ? WHERE id = ? AND status = 'running' AND snapshot = ?",
-      ).run(next, Math.floor(Date.now() / 1000), target.id, target.snapshot)
-    );
-    if (changed !== 1) throw new Error('Could not checkpoint service-owned action');
+      ).run(next, Math.floor(Date.now() / 1000), target.id, target.snapshot);
+      if (changed !== 1) throw new Error('Could not checkpoint service-owned action');
+      reconcileHistoricalDelegations(client, target.operationId);
+    });
     target.snapshot = next;
   }
   async function present(base: ServiceOwnedAction) {

@@ -4,6 +4,24 @@ import type { HistoricalDownloadPreview } from "../../../../shared/historicalDow
 import type { DeletionOperation } from "../../../../shared/types.ts";
 
 const PAGE_SIZE = 50;
+
+export function historicalOutcomeDescription(
+  outcome: NonNullable<DeletionOperation["historicalDownloads"]>[number],
+): string {
+  if (outcome.status === "handled_by_qb") {
+    return "Handled by qBittorrent — selected job removal confirmed";
+  }
+  if (outcome.status === "success") return "Deleted locally";
+  if (outcome.status === "already_absent") return "Already absent";
+  const status = ["changed", "skipped", "failed", "uncertain"].includes(outcome.status)
+    ? `Needs review (${outcome.status})`
+    : outcome.status.replaceAll("_", " ");
+  if (outcome.status === "changed" && (!outcome.reason || outcome.reason === "changed")) {
+    return "Local cleanup was not performed because verification no longer matched. This older result did not record which check failed; it does not establish whether the file remains. Check the service outcomes.";
+  }
+  return status +
+    (outcome.reason && outcome.reason !== outcome.status ? ` — ${outcome.reason}` : "");
+}
 /** Bound rendered rows without dropping any path from the review or consent scope. */
 export function HistoricalDownloadPaths(
   props:
@@ -32,13 +50,11 @@ export function HistoricalDownloadPaths(
         <div key={i} className="break-all">
           <p>
             {outcome
-              ? `${outcome.path}: ${outcome.status.replaceAll("_", " ")}${
-                outcome.reason ? ` — ${outcome.reason}` : ""
-              }`
+              ? `${outcome.path}: ${historicalOutcomeDescription(outcome)}`
               : candidate
               ? `${candidate.path} · ${candidate.ownerCount} episode owners`
               : handled
-              ? `${handled.source}: Handled by qBittorrent (selected eligible action)`
+              ? `${handled.source}: Covered by selected qBittorrent action; removal not yet confirmed`
               : `${skipped!.source}: ${skipped!.reason}`}
           </p>
           {skipped?.details && (

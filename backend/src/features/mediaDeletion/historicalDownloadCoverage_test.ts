@@ -124,6 +124,7 @@ Deno.test('Radarr current movie sources use exact selected QB coverage across na
     );
   assertEquals(await resolve(), [{
     source: row().data.droppedPath,
+    path: '/downloads/season/shared.mkv',
     service: 'qb',
     actionIds: ['action'],
   }]);
@@ -143,6 +144,7 @@ Deno.test('selected eligible QB covers exact paths despite missing history size;
   assertEquals(f.history.problems.length, 0);
   assertEquals(await f.resolve(), [{
     source: '/completed/season/shared.mkv',
+    path: '/downloads/season/shared.mkv',
     service: 'qb',
     actionIds: ['action'],
   }]);

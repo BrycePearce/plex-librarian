@@ -231,8 +231,16 @@ Deno.test({
       });
       const covered = await run();
       assertEquals(covered[0], 'skipped');
-      assertEquals(covered[1].includes('qb-owned'), true);
-      assertEquals(covered[1].includes('no local fallback'), true);
+      assertEquals(covered[1].includes('removal is not confirmed'), true);
+      assertEquals(covered[1].includes('will not run as a fallback'), true);
+      const delegation = withTransaction((db) =>
+        JSON.parse(
+          db.prepare('SELECT validation FROM historical_download_journal WHERE id=?')
+            .value<[string]>('radarr-' + sequence)![0],
+        )
+      );
+      assertEquals(delegation.actions.map((a: { actionId: string }) => a.actionId), ['qb-owned']);
+      assertEquals(delegation.path, downloads + '/Film.mkv');
       assertEquals(await Deno.readTextFile(downloads + '/Film.mkv'), 'fixture');
       // Equal remote strings in independent Arr namespaces are not the same entry.
       const otherDownloads = root + '/other-downloads';

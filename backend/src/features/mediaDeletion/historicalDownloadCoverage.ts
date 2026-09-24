@@ -22,7 +22,7 @@ export function exactHistoricalTranslation(path: string, mappings: readonly Hist
   return paths.size === 1 ? [...paths][0] : undefined;
 }
 
-/** Presentation evidence only. Never authorizes an unlink or makes a held job eligible.
+/** Exact delegation evidence. Never authorizes an unlink or makes a held job eligible.
  * Historical metadata failures do not erase an independently proven service effect.
  * Compare exact names through verified translations, not hashes, basenames or inodes.
  */
@@ -135,7 +135,8 @@ export async function historicalDownloadCoverage(
           })),
         );
         if (!local || !payload.has(local)) continue;
-        const row = handled.get(source) ?? { source, service: 'qb' as const, actionIds: [] };
+        const row = handled.get(source) ??
+          { source, path: local, service: 'qb' as const, actionIds: [] };
         row.actionIds.push(action.id);
         handled.set(source, row);
       }

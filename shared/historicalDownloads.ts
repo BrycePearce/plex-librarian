@@ -50,5 +50,7 @@ export interface HistoricalDownloadPreview {
   }>;
   skipped: Array<{ source: string; reason: string; details?: string }>;
   /** Covered by eligible selected service actions; never part of optional unlink consent. */
-  handled?: Array<{ source: string; service: 'qb'; actionIds: string[]; instanceId?: number }>;
+  handled?: Array<
+    { source: string; path?: string; service: 'qb'; actionIds: string[]; instanceId?: number }
+  >;
 }

@@ -82,6 +82,42 @@ Deno.test('completion persistence failure retains uncertain intent and cannot ad
   strictEqual(unlinks, 1);
 });
 
+Deno.test('specific verification reasons persist without unlinking or replaying', async () => {
+  for (const status of ['changed', 'skipped', 'already_absent'] as const) {
+    let row: HistoricalDownloadAttempt = {
+      version: 1,
+      id: 'one',
+      entry: 'parent:file',
+      status: 'pending',
+    };
+    let validations = 0;
+    let unlinks = 0;
+    const store = {
+      get: () => row,
+      save: (next: HistoricalDownloadAttempt) => {
+        row = next;
+      },
+    };
+    const hooks = {
+      cancelled: () => false,
+      validate: () => {
+        validations++;
+        return Promise.resolve({ status, reason: 'A current download job owns this file' });
+      },
+      unlink: () => {
+        unlinks++;
+        return Promise.resolve();
+      },
+    };
+    await runHistoricalDownloadAttempt(store, 'one', hooks);
+    await runHistoricalDownloadAttempt(store, 'one', hooks);
+    strictEqual(row.status, status);
+    strictEqual(row.reason, 'A current download job owns this file');
+    strictEqual(validations, 1);
+    strictEqual(unlinks, 0);
+  }
+});
+
 Deno.test('job inventories are shared for ten evaluations regardless of service latency', async () => {
   let reads = 0;
   let wall = 10000;

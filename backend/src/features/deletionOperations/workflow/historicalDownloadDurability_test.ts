@@ -142,9 +142,9 @@ Deno.test('SQLite optional results and reservations remain isolated from real se
   // In particular, an old/invalid envelope cannot block otherwise valid service work.
   withTransaction((db) => {
     db.exec(
-      'CREATE TABLE deletion_targets(operation_id TEXT, snapshot TEXT, ordinal INTEGER, status TEXT)',
+      'CREATE TABLE deletion_targets(operation_id TEXT, snapshot TEXT, ordinal INTEGER, status TEXT, id INTEGER PRIMARY KEY)',
     );
-    db.prepare('INSERT INTO deletion_targets VALUES(?,?,0,?)').run(
+    db.prepare('INSERT INTO deletion_targets VALUES(?,?,0,?,1)').run(
       'success',
       JSON.stringify({ serviceOwnedPlan: {} }),
       'running',

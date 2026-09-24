@@ -1267,6 +1267,23 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
   reset();
   addMovie('service-qb', [11], 10);
   configureRadarr(true);
+  withTransaction((db) => {
+    db.prepare(
+      "INSERT INTO historical_download_access(id,server_id,arr_instance_id,configuration,revision,status) VALUES('qb-history',1,1,?,'one','available')",
+    ).run(
+      JSON.stringify({
+        enabled: true,
+        remoteRoot: '/source',
+        localRoot: '/fixture-downloads',
+        noRemainingClient: false,
+      }),
+    );
+    db.exec(
+      `INSERT INTO qbittorrent_path_mappings (server_id,instance_key,qbittorrent_path,local_path,case_sensitive,revision,
+      validation_qbittorrent_path,validation_local_path,validation_size,validated_at,created_at,updated_at)
+      VALUES(1,'db:1','/qb','/fixture-downloads',1,1,'/qb/sample','/fixture-downloads/sample',1,1,1,1)`,
+    );
+  });
   arrPresent = true;
   arrManagedFileSize = 50_000;
   arrManagedPath = '/arr/movie.mkv';
@@ -1284,10 +1301,26 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
   const fixtureFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {
     const url = new URL(String(input));
+    if (
+      url.hostname === 'radarr' && (init?.method ?? 'GET') === 'GET' &&
+      ['/api/v3/movie/7', '/api/v3/moviefile'].includes(url.pathname)
+    ) {
+      return fixtureFetch(input, init).then(async (response) => {
+        if (!response.ok) return response;
+        const body = await response.json();
+        return Response.json(
+          Array.isArray(body)
+            ? body.map((file) => ({ ...file, movieId: 7 }))
+            : { ...body, movieFileId: arrManagedFilePresent ? arrManagedFileId : 0 },
+        );
+      });
+    }
     if (url.hostname === 'radarr' && url.pathname === '/api/v3/history/movie') {
       return Promise.resolve(
         Response.json([{
           id: 1,
+          movieId: 7,
+          date: '2026-01-01T00:00:00Z',
           eventType: 'downloadFolderImported',
           downloadId: torrentHash,
           data: {
@@ -1319,6 +1352,7 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
     });
     const preview = await response.json();
     assertEquals(response.status, 200, JSON.stringify(preview));
+    assertEquals(preview.historical.candidates.length, 1, JSON.stringify(preview.historical));
     assertEquals(
       preview.targets[0].decisions.find((d: { service: string }) => d.service === 'qb').state,
       'delete_candidate',
@@ -1332,12 +1366,22 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
         previewFingerprint: preview.fingerprint,
         consentToken: preview.consentToken,
         clientRequestId: crypto.randomUUID(),
+        historicalCleanup: {
+          fingerprint: preview.historical.fingerprint,
+          candidateIds: preview.historical.candidates.map((c: { id: string }) => c.id),
+        },
       }),
     });
     assertEquals(accepted.status, 202, await accepted.clone().text());
     const { operationId } = await accepted.json();
     await settle();
     assertEquals(getDeletionOperation(operationId, 1)!.status, 'waiting_retry');
+    assertEquals(
+      (getDeletionOperation(operationId, 1)!.historicalDownloads as Array<{ status: string }>)[0]
+        .status,
+      'skipped',
+    );
+    assertEquals(getDeletionOperation(operationId, 1)!.optionalWarningCount, 1);
     assertEquals(qbitDeleteCount, 1);
     assertEquals(arrManagedFilePresent, true);
     qbitJobsOverride = [];
@@ -1354,6 +1398,12 @@ Deno.test('service-owned current Radarr import associates QB and waits across re
       JSON.stringify(getDeletionOperation(operationId, 1)),
     );
     assertEquals(qbitDeleteCount, 1);
+    assertEquals(
+      (getDeletionOperation(operationId, 1)!.historicalDownloads as Array<{ status: string }>)[0]
+        .status,
+      'handled_by_qb',
+    );
+    assertEquals(getDeletionOperation(operationId, 1)!.optionalWarningCount, 0);
   } finally {
     globalThis.fetch = fixtureFetch;
     clearPlexClientCache();

@@ -3,6 +3,7 @@ import { HistoricalUnlinkNotAttempted } from '../../mediaDeletion/historicalDown
 export type HistoricalDownloadOutcome =
   | 'success'
   | 'already_absent'
+  | 'handled_by_qb'
   | 'changed'
   | 'skipped'
   | 'failed'
@@ -21,6 +22,13 @@ export interface HistoricalJournalStore {
   save(attempt: HistoricalDownloadAttempt): void;
 }
 
+export type HistoricalValidationResult =
+  | 'ready'
+  | 'already_absent'
+  | 'changed'
+  | 'skipped'
+  | { status: 'already_absent' | 'changed' | 'skipped'; reason: string };
+
 /** Injected boundary used by the disposable gate; the caller owns operation locks,
  * transactional reservations and service checks. Never resumes an uncertain intent. */
 export async function runHistoricalDownloadAttempt(
@@ -28,7 +36,7 @@ export async function runHistoricalDownloadAttempt(
   id: string,
   hooks: {
     cancelled(): boolean;
-    validate(): Promise<'ready' | 'already_absent' | 'changed' | 'skipped'>;
+    validate(): Promise<HistoricalValidationResult>;
     unlink(): Promise<void>;
   },
 ) {
@@ -59,10 +67,12 @@ export async function runHistoricalDownloadAttempt(
     return;
   }
   if (hooks.cancelled() || validation !== 'ready') {
+    const status = typeof validation === 'string' ? validation : validation.status;
+    const reason = typeof validation === 'string' ? validation : validation.reason;
     store.save({
       ...attempt,
-      status: hooks.cancelled() ? 'skipped' : validation as HistoricalDownloadOutcome,
-      reason: hooks.cancelled() ? 'Cancelled before optional cleanup' : validation,
+      status: hooks.cancelled() ? 'skipped' : status as HistoricalDownloadOutcome,
+      reason: hooks.cancelled() ? 'Cancelled before optional cleanup' : reason,
     });
     return;
   }

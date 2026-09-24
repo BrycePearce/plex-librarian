@@ -512,6 +512,19 @@ Deno.test({
           .values<[string, number]>()
       );
       deepStrictEqual(Object.fromEntries(outcomes), { changed: 4, success: 97 });
+      const claimedCandidate = preview.accepted.find((c) =>
+        c.lineage.source === '/downloads/100.mkv'
+      )!;
+      const claimOutcome = withTransaction((db) =>
+        db.prepare('SELECT status,reason FROM historical_download_journal WHERE id=?')
+          .value<[string, string]>(claimedCandidate.id)
+      );
+      strictEqual(claimOutcome?.[0], 'changed');
+      strictEqual(
+        claimOutcome?.[1].includes('Current download ownership could not be cleared'),
+        true,
+      );
+      strictEqual(await Deno.readTextFile(downloads + '/100.mkv'), 'fixture');
       const beforeRetry = { prepares, inventories, manifests };
       await ensureHistoricalDownloadPhase(work, runtime);
       deepStrictEqual({ prepares, inventories, manifests }, beforeRetry);

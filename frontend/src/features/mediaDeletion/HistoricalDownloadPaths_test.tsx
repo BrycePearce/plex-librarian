@@ -2,7 +2,51 @@
 /// <reference lib="dom" />
 import { assertEquals } from "@std/assert";
 import TestRenderer, { act } from "react-test-renderer";
-import { HistoricalDownloadPaths } from "./HistoricalDownloadPaths.tsx";
+import {
+  HistoricalDownloadPaths,
+  historicalOutcomeDescription,
+} from "./HistoricalDownloadPaths.tsx";
+
+Deno.test("legacy changed outcomes explain uncertainty without claiming files remain or were deleted", () => {
+  const outcome = {
+    path: "/download/file",
+    status: "changed" as const,
+    reason: "changed",
+    intentAt: null,
+    finishedAt: null,
+  };
+  assertEquals(
+    historicalOutcomeDescription(outcome),
+    "Local cleanup was not performed because verification no longer matched. This older result did not record which check failed; it does not establish whether the file remains. Check the service outcomes.",
+  );
+  assertEquals(
+    historicalOutcomeDescription({ ...outcome, reason: "Download ownership changed" }),
+    "Needs review (changed) — Download ownership changed",
+  );
+});
+
+Deno.test("confirmed delegated cleanup is distinct from local deletion, absence and unresolved work", () => {
+  const outcome = {
+    path: "/download/file",
+    status: "handled_by_qb",
+    reason: null,
+    intentAt: null,
+    finishedAt: 1,
+  };
+  assertEquals(
+    historicalOutcomeDescription(outcome),
+    "Handled by qBittorrent — selected job removal confirmed",
+  );
+  assertEquals(historicalOutcomeDescription({ ...outcome, status: "success" }), "Deleted locally");
+  assertEquals(
+    historicalOutcomeDescription({ ...outcome, status: "already_absent" }),
+    "Already absent",
+  );
+  assertEquals(
+    historicalOutcomeDescription({ ...outcome, status: "uncertain", reason: "Check job outcomes" }),
+    "Needs review (uncertain) — Check job outcomes",
+  );
+});
 
 Deno.test("historical review renders bounded pages and exposes every exact candidate and skip", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -43,7 +87,7 @@ Deno.test("historical review renders bounded pages and exposes every exact candi
       "Consent includes all 101 listed paths. 101–103 of 103 paths shown.",
       "/download/100 · 1 episode owners",
       "/kept: Retained owner",
-      "/tracked: Handled by qBittorrent (selected eligible action)",
+      "/tracked: Covered by selected qBittorrent action; removal not yet confirmed",
     ]);
     assertEquals(renderer.root.findAllByType("button")[1].props.disabled, true);
     const technical = renderer.root.findAllByType("details")[1];
@@ -85,7 +129,7 @@ Deno.test("historical operation outcomes render bounded pages with exact failure
     await act(async () => renderer.root.findAllByType("button")[1].props.onClick());
     assertEquals(renderer.root.findAllByType("p").map((p) => p.children.join("")), [
       "51–51 of 51 paths shown.",
-      "/download/50: changed — Owner changed",
+      "/download/50: Needs review (changed) — Owner changed",
     ]);
   } finally {
     await act(async () => renderer?.unmount());
