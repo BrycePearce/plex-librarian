@@ -337,7 +337,10 @@ export async function syncShowSizes(
   // inflation when the same show ratingKey appears elsewhere.
   await db.run(sql`
     UPDATE items
-    SET file_size = COALESCE(
+    SET view_count = COALESCE(
+      (SELECT SUM(view_count) FROM seasons WHERE server_id = ${serverId} AND show_rating_key = items.rating_key AND library_key = ${lib.key}),
+      view_count
+    ), file_size = COALESCE(
       (SELECT SUM(file_size) FROM seasons WHERE server_id = ${serverId} AND show_rating_key = items.rating_key AND library_key = ${lib.key}),
       file_size
     )
