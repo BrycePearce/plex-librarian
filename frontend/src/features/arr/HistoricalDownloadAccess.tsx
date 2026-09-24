@@ -90,11 +90,22 @@ export function HistoricalDownloadAccess(
     s.status === "setup_needed" || s.status === "access_lost"
   );
   function edit(status?: HistoricalAccessStatus) {
+    const existingFolders = [
+      ...new Set(
+        statuses.filter((s) => s.configuration.enabled)
+          .map((s) => s.configuration.localRoot).filter(Boolean),
+      ),
+    ];
+    const suggestedFolder = existingFolders.length === 1
+      ? existingFolders[0]
+      : existingFolders.length
+      ? ""
+      : "/cleanup-downloads";
     setInstanceId(
       status ? String(status.instanceId) : services.length === 1 ? String(services[0].id) : "",
     );
     setRemoteRoot(status?.configuration.remoteRoot ?? "");
-    setLocalRoot(status?.configuration.localRoot || "/cleanup-downloads");
+    setLocalRoot(status?.configuration.localRoot || suggestedFolder);
     setNoRemainingClient(status?.configuration.noRemainingClient ?? false);
     setEditing(status?.id);
     setSetupOpen(true);
