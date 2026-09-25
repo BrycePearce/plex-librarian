@@ -34,7 +34,7 @@ export function detectedDestinations(preview: ServiceDeletionPreview | undefined
     preview?.targets.some((target) =>
       target.decisions.some((action) =>
         action.service === service && action.presence === "current" &&
-        (service !== "qb" || action.matchedToSelection === true)
+        ((service !== "qb" && target.mediaId === undefined) || action.matchedToSelection === true)
       )
     )
   );

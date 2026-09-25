@@ -177,6 +177,25 @@ Deno.test("review lists a show once and only offers detected destinations, keepi
     assertEquals(renderer!.root.findAllByType("input").length, 2);
     assertEquals(text().includes("Radarr"), true);
     assertEquals(text().includes("Sonarr"), false);
+    for (const matched of [true, false, undefined]) {
+      result = {
+        ...result,
+        targets: [{
+          ratingKey: "movie",
+          mediaId: matched ? 1 : 2,
+          title: "Movie version",
+          decisions: [{
+            ...action("radarr", "current", "arr"),
+            matchedToSelection: matched,
+          }],
+        }],
+      };
+      await flushAct(() => {
+        renderer!.update(render(`version-${matched}`));
+      });
+      assertEquals(renderer!.root.findAllByType("input").length, matched === true ? 1 : 0);
+      assertEquals(text().includes("Delete from "), matched === true);
+    }
     result = {
       ...result,
       targets: [{
