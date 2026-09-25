@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { discoverHistoricalSetup } from './historicalSetup.ts';
+import type { HistoricalSetupMutation } from './historicalSetupMutation.ts';
 import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import { db, withTransaction } from '../../db/index.ts';
 import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '../../db/schema.ts';
@@ -24,7 +24,9 @@ import type {
   UpdateArrInstanceRequest,
 } from '@plex-librarian/shared/types.ts';
 
-const router = new Hono<{ Variables: ActiveServerVariables }>();
+const router = new Hono<{
+  Variables: ActiveServerVariables & { historicalSetupMutation?: HistoricalSetupMutation };
+}>();
 router.use('*', withActiveServerId);
 
 const validType = (value: unknown): value is ArrType => value === 'radarr' || value === 'sonarr';
@@ -304,7 +306,7 @@ router.post('/instances', async (c) => {
     return c.json({ error: 'this Sonarr or Radarr instance is already configured' }, 409);
   }
 
-  void discoverHistoricalSetup(serverId, createdId).catch(() => {});
+  c.set('historicalSetupMutation', { serverId, instanceIds: [createdId] });
 
   return c.json({
     id: createdId,
@@ -366,7 +368,7 @@ router.put('/instances/:id/path-mappings', async (c) => {
       .run(Math.max(Math.floor(Date.now() / 1000), instance[0] + 1), id, serverId);
     return true;
   });
-  if (saved) void discoverHistoricalSetup(serverId, id).catch(() => {});
+  if (saved) c.set('historicalSetupMutation', { serverId, instanceIds: [id] });
   return saved ? c.json({ ok: true }) : c.json({ error: 'instance not found' }, 404);
 });
 
@@ -449,7 +451,7 @@ router.patch('/instances/:id', async (c) => {
     replaceArrPathMappings(sqliteClient, id, pathMappings);
   });
 
-  void discoverHistoricalSetup(serverId, id).catch(() => {});
+  c.set('historicalSetupMutation', { serverId, instanceIds: [id] });
 
   return c.json({
     id,
@@ -517,6 +519,7 @@ router.put('/libraries/:key', async (c) => {
   withTransaction((client) =>
     replaceArrLibraryMappings(client, serverId, key, instanceIds, body.addImportExclusion)
   );
+  c.set('historicalSetupMutation', { serverId, instanceIds });
   return c.json({ ok: true as const });
 });
 

@@ -259,6 +259,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   historicalAccess: {
+    saveDraft: (
+      instanceId: number,
+      configuration: import("../../../shared/historicalDownloads.ts").HistoricalAccessConfiguration,
+      id?: string,
+    ) =>
+      apiFetch<{ id: string }>("/historical-download-access/draft", {
+        method: "POST",
+        body: JSON.stringify({ instanceId, configuration, id }),
+      }),
     enable: (id: string, revision: string) =>
       apiFetch("/historical-download-access/enable", {
         method: "POST",

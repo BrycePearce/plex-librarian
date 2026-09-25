@@ -49,6 +49,32 @@ router.post('/check', async (c) => {
   await checkHistoricalAccess(serverId, body.id);
   return c.json({ statuses: listHistoricalAccess(serverId) });
 });
+router.post('/draft', async (c) => {
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'Plex is not configured' }, 409);
+  try {
+    const body = await c.req.json();
+    if (
+      typeof body?.configuration !== 'object' || !body.configuration ||
+      !Number.isSafeInteger(body.instanceId) ||
+      body.id !== undefined && typeof body.id !== 'string'
+    ) throw new Error('Invalid folder draft');
+    const id = saveHistoricalAccess(
+      serverId,
+      body.instanceId,
+      {
+        ...body.configuration,
+        enabled: false,
+        noRemainingClient: false,
+      },
+      body.id,
+      true,
+    );
+    return c.json({ id, statuses: listHistoricalAccess(serverId) });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Could not save draft' }, 400);
+  }
+});
 router.post('/discover', async (c) => {
   const serverId = c.get('activeServerId');
   const body = await c.req.json().catch(() => null);

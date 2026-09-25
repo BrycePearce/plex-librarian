@@ -15,6 +15,101 @@ import { queryKeys } from "../../lib/queryKeys.ts";
 import type { HistoricalAccessStatus } from "../../../../shared/historicalDownloads.ts";
 import { historicalAccessMessage } from "./historicalAccessNotifications.ts";
 
+Deno.test("incomplete setup saves disabled and restores mount instructions after remount", async () => {
+  const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previous = globals.IS_REACT_ACT_ENVIRONMENT;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  const original = { ...api.historicalAccess };
+  const qc = new QueryClient({
+    defaultOptions: { queries: { staleTime: Infinity, gcTime: Infinity, retry: false } },
+  });
+  let data: {
+    serverId: number;
+    statuses: HistoricalAccessStatus[];
+    suggestedLocalFolders: string[];
+  } = { serverId: 1, statuses: [], suggestedLocalFolders: ["/downloads"] };
+  qc.setQueryData(queryKeys.historicalDownloadAccess.all, data);
+  api.historicalAccess.get = () => Promise.resolve(data);
+  let enables = 0;
+  api.historicalAccess.save = () => {
+    enables++;
+    return Promise.resolve(undefined);
+  };
+  api.historicalAccess.saveDraft = (_instance, configuration) => {
+    data = {
+      ...data,
+      statuses: [{
+        id: "draft",
+        instanceId: 1,
+        configuration,
+        status: "draft",
+        revision: "saved",
+        sample: null,
+        reason: null,
+        checkedAt: null,
+        succeededAt: null,
+        problemRevision: null,
+        dismissedRevision: null,
+      }],
+    };
+    qc.setQueryData(queryKeys.historicalDownloadAccess.all, data);
+    return Promise.resolve({ id: "draft" });
+  };
+  const ref = createRef<HistoricalDownloadAccessHandle>();
+  let renderer!: TestRenderer.ReactTestRenderer;
+  const render = () => (
+    <QueryClientProvider client={qc}>
+      <HistoricalDownloadAccess ref={ref} instances={[{ id: 1, name: "Sonarr", type: "sonarr" }]} />
+    </QueryClientProvider>
+  );
+  try {
+    await act(async () => {
+      renderer = TestRenderer.create(render());
+    });
+    await act(async () => {
+      ref.current!.open(1);
+    });
+    await act(async () => {
+      renderer.root.findAllByType("button").find((b) => b.children.includes("Docker Compose"))!
+        .props.onClick();
+      renderer.root.findAllByType("input").find((i) =>
+        i.props.placeholder === "/mnt/user/downloads/complete"
+      )!.props.onChange({ target: { value: "/mnt/complete" } });
+    });
+    await act(async () => {
+      renderer.root.findAllByType("button").find((b) => b.children.includes("Save draft"))!.props
+        .onClick();
+    });
+    assertEquals(data.statuses[0].configuration.enabled, false);
+    assertEquals(data.statuses[0].configuration.remoteRoot, "");
+    assertEquals(enables, 0);
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = TestRenderer.create(render());
+    });
+    await act(async () => {
+      ref.current!.open(1);
+    });
+    assertEquals(renderer.root.findAllByType("input")[1].props.value, "/downloads");
+    assertEquals(
+      renderer.root.findAllByType("input").find((i) =>
+        i.props.placeholder === "/mnt/user/downloads/complete"
+      )!.props.value,
+      "/mnt/complete",
+    );
+    assertEquals(
+      renderer.root.findAllByType("button").find((b) => b.children.includes("Docker Compose"))!
+        .props["aria-pressed"],
+      true,
+    );
+  } finally {
+    await act(async () => renderer?.unmount());
+    qc.clear();
+    Object.assign(api.historicalAccess, original);
+    globals.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});
+
 Deno.test("verified setup offers Enable without opening a form or enabling on render", async () => {
   const globals = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const previous = globals.IS_REACT_ACT_ENVIRONMENT;

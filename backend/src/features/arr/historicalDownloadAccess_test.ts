@@ -24,6 +24,102 @@ const config = {
   noRemainingClient: true,
 };
 
+Deno.test('unfinished setup persists without access checks or enabling and preserves manual ownership', () => {
+  const id = access.saveHistoricalAccess(
+    1,
+    1,
+    {
+      enabled: false,
+      noRemainingClient: false,
+      remoteRoot: '',
+      localRoot: '/downloads',
+      mountSetup: { hostFolder: '/mnt/complete', platform: 'compose' },
+    },
+    undefined,
+    true,
+  );
+  const saved = access.listHistoricalAccess(1).find((s) => s.id === id)!;
+  assertEquals(saved.status, 'draft');
+  assertEquals(saved.configuration.enabled, false);
+  assertEquals(saved.checkedAt, null);
+  assertEquals(saved.problemRevision, null);
+  assertEquals(saved.configuration.mountSetup, {
+    hostFolder: '/mnt/complete',
+    platform: 'compose',
+  });
+  access.supplyHistoricalSample(1, 1, '/download/new/sample.mkv');
+  assertEquals(access.listHistoricalAccess(1).find((s) => s.id === id)!.sample, null);
+  access.invalidateHistoricalAccessConfiguration(1);
+  assertEquals(access.listHistoricalAccess(1).find((s) => s.id === id)!.status, 'draft');
+  assertThrows(() => access.saveHistoricalAccess(2, 1, saved.configuration, id, true));
+  assertThrows(() =>
+    access.saveHistoricalAccess(1, 1, { ...saved.configuration, enabled: true }, id, true)
+  );
+  withTransaction((db) => db.prepare('DELETE FROM historical_download_access WHERE id=?').run(id));
+  const enabledId = access.saveHistoricalAccess(1, 1, config);
+  assertThrows(() =>
+    access.saveHistoricalAccess(
+      1,
+      1,
+      { ...config, enabled: false, noRemainingClient: false },
+      enabledId,
+      true,
+    )
+  );
+  withTransaction((db) =>
+    db.prepare('DELETE FROM historical_download_access WHERE id=?').run(enabledId)
+  );
+});
+
+Deno.test('unrelated configuration changes preserve the one deferred-sync marker', () => {
+  const id = access.saveHistoricalAccess(
+    1,
+    1,
+    { enabled: false, noRemainingClient: false, remoteRoot: '', localRoot: '' },
+    undefined,
+    true,
+  );
+  withTransaction((db) =>
+    db.prepare(
+      "UPDATE historical_download_access SET status='waiting_for_sync',reason=? WHERE id=?",
+    )
+      .run(JSON.stringify({ setupConnectionRevision: 'original' }), id)
+  );
+  access.invalidateHistoricalAccessConfiguration(1);
+  access.supplyHistoricalSample(1, 1, '/completed/Release/movie.mkv');
+  const saved = access.listHistoricalAccess(1).find((s) => s.id === id)!;
+  assertEquals(saved.status, 'waiting_for_sync');
+  assertEquals(saved.sample, null);
+  assertEquals(saved.configuration.enabled, false);
+  assertEquals(
+    withTransaction((db) =>
+      db.prepare('SELECT reason FROM historical_download_access WHERE id=?').value<[string]>(id)
+    )?.[0],
+    JSON.stringify({ setupConnectionRevision: 'original' }),
+  );
+  withTransaction((db) => db.prepare('DELETE FROM historical_download_access WHERE id=?').run(id));
+});
+
+Deno.test('connecting another service preserves a verified disabled folder offer', () => {
+  const id = access.saveHistoricalAccess(
+    1,
+    1,
+    { enabled: false, noRemainingClient: false, remoteRoot: '/remote', localRoot: '/downloads' },
+    undefined,
+    true,
+  );
+  withTransaction((db) =>
+    db.prepare(
+      "UPDATE historical_download_access SET status='ready_to_enable',reason=?,sample=? WHERE id=?",
+    )
+      .run(JSON.stringify({ setupConnectionRevision: 'sonarr-proof' }), '/remote/sample.mkv', id)
+  );
+  const before = access.listHistoricalAccess(1).find((s) => s.id === id)!;
+  access.invalidateHistoricalAccessConfiguration(1);
+  assertEquals(access.listHistoricalAccess(1).find((s) => s.id === id), before);
+  withTransaction((db) => db.prepare('DELETE FROM historical_download_access WHERE id=?').run(id));
+});
+
 Deno.test('Radarr access reuses only its authoritative translation, not Sonarr permission', async () => {
   withTransaction((db) =>
     db.exec("INSERT INTO arr_instances VALUES(3,1,'radarr','http://fixture.invalid','fixture')")

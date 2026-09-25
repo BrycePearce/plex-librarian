@@ -15,6 +15,7 @@ export interface HistoricalAccessConfiguration {
   remoteRoot: string;
   localRoot: string;
   noRemainingClient: boolean;
+  mountSetup?: { hostFolder: string; platform: 'unraid' | 'compose' };
 }
 export interface HistoricalAccessStatus {
   id: string;
@@ -22,6 +23,8 @@ export interface HistoricalAccessStatus {
   configuration: HistoricalAccessConfiguration;
   revision: string;
   status:
+    | 'draft'
+    | 'waiting_for_sync'
     | 'ready_to_enable'
     | 'not_enabled'
     | 'waiting_for_sample'

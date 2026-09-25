@@ -11,9 +11,9 @@ import deletionOperations from './features/deletionOperations/route.ts';
 import serviceOwnedDeletion from './features/deletionOperations/serviceOwnedRoute.ts';
 import historicalDownloadAccess from './features/arr/historicalDownloadRoute.ts';
 import {
-  discoverHistoricalAccess,
-  invalidateHistoricalAccessConfiguration,
-} from './features/arr/historicalDownloadAccess.ts';
+  completeHistoricalConfigurationChange,
+  type HistoricalSetupMutation,
+} from './features/arr/historicalSetupMutation.ts';
 import { withTransaction } from './db/index.ts';
 import events from './features/events/route.ts';
 import libraries from './features/libraries/route.ts';
@@ -28,8 +28,13 @@ import users from './features/users/route.ts';
 import webhook from './features/webhook/route.ts';
 import episodeGaps from './features/episodeGaps/route.ts';
 
-export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
-  const app = new Hono();
+type AppVariables = {
+  activeServerId?: number | null;
+  historicalSetupMutation?: HistoricalSetupMutation;
+};
+
+export function createApp(staticDir = Deno.env.get('STATIC_DIR')) {
+  const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', logger());
   app.use(
@@ -73,12 +78,14 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')): Hono {
         path.startsWith('/api/integrations/qbittorrent') ||
         path.startsWith('/api/settings/plex-path-mappings') || path === '/api/auth/plex/server')
     ) {
-      const serverId = withTransaction((db) =>
-        db.prepare('SELECT active_server_id FROM settings WHERE id=1').value<[number | null]>()?.[0]
-      );
+      const setup = c.get('historicalSetupMutation');
+      const serverId = setup?.serverId ?? c.get('activeServerId') ??
+        withTransaction((db) =>
+          db.prepare('SELECT active_server_id FROM settings WHERE id=1').value<[number | null]>()
+            ?.[0]
+        );
       if (serverId) {
-        invalidateHistoricalAccessConfiguration(serverId);
-        void discoverHistoricalAccess(serverId);
+        void completeHistoricalConfigurationChange(serverId, setup).catch(() => {});
       }
     }
   });

@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ArrowLeft, CircleCheck, FolderClock, Info, Plus, TriangleAlert, X } from "lucide-react";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
+import { DownloadMountHelp } from "./DownloadMountHelp.tsx";
+import type { MountPlatform } from "./downloadMountInstructions.ts";
 import type { HistoricalAccessStatus } from "../../../../shared/historicalDownloads.ts";
 import { api } from "../../lib/api.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
@@ -73,6 +75,8 @@ function FolderPathHelp({ service }: { service?: string }) {
   );
 }
 const accessLabels: Record<HistoricalAccessStatus["status"], string> = {
+  draft: "Setup saved",
+  waiting_for_sync: "Waiting for library sync",
   ready_to_enable: "Ready to enable",
   available: "Ready",
   checking: "Checking…",
@@ -120,6 +124,10 @@ export function HistoricalCleanupShortcut({ instanceId, onOpen }: {
     ? "Ready"
     : proposal
     ? "Ready to enable"
+    : folders.some((s) => s.status === "draft")
+    ? "Setup saved"
+    : folders.some((s) => s.status === "waiting_for_sync")
+    ? "Waiting for library sync"
     : !folders.some((s) => s.configuration.localRoot)
     ? "Not configured"
     : folders.every((s) => !s.configuration.enabled)
@@ -155,7 +163,13 @@ export function HistoricalCleanupShortcut({ instanceId, onOpen }: {
           ? "Include eligible leftover downloads when deleting from Sonarr/Radarr. No files are deleted now."
           : undefined}
         aria-label={`${
-          proposal && !enable.isError ? "Enable" : status === "Not configured" ? "Set up" : "Manage"
+          proposal && !enable.isError
+            ? "Enable"
+            : status === "Setup saved"
+            ? "Continue setup"
+            : status === "Not configured"
+            ? "Set up"
+            : "Manage"
         } download cleanup`}
         disabled={query.isPending || enable.isPending}
       >
@@ -163,6 +177,8 @@ export function HistoricalCleanupShortcut({ instanceId, onOpen }: {
           ? "Enabling…"
           : proposal && !enable.isError
           ? "Enable"
+          : status === "Setup saved"
+          ? "Continue setup"
           : status === "Not configured"
           ? "Set up"
           : "Manage"}
@@ -196,6 +212,7 @@ export function HistoricalDownloadAccess(
   const [localRoot, setLocalRoot] = useState("/cleanup-downloads");
   const [noRemainingClient, setNoRemainingClient] = useState(false);
   const [host, setHost] = useState("");
+  const [mountPlatform, setMountPlatform] = useState<MountPlatform>("unraid");
   const [feedback, setFeedback] = useState<
     {
       text: string;
@@ -227,6 +244,7 @@ export function HistoricalDownloadAccess(
     setSetupOpen(false);
     setOpen(false);
     setHost("");
+    setMountPlatform("unraid");
   }, [query.data?.serverId]);
   const mutation = useMutation({
     mutationFn: async (task: () => Promise<unknown>) => {
@@ -248,6 +266,29 @@ export function HistoricalDownloadAccess(
   });
   const services = instances.filter((i) => i.type === "sonarr" || i.type === "radarr");
   const statuses = query.data?.statuses ?? [];
+  const canSaveDraft = !!instanceId &&
+    !statuses.some((s) => s.id === editing && s.configuration.enabled);
+  function saveDraft() {
+    mutation.mutate(async () => {
+      const server = currentServer.current;
+      const result = await api.historicalAccess.saveDraft(Number(instanceId), {
+        enabled: false,
+        noRemainingClient: false,
+        remoteRoot,
+        localRoot,
+        mountSetup: { hostFolder: host, platform: mountPlatform },
+      }, editing);
+      if (currentServer.current === server) {
+        setEditing(result.id);
+        setNoRemainingClient(false);
+        setMessage(
+          "Your paths and mount instructions are saved. After restarting Docker, return to Download cleanup and choose Continue setup. Cleanup remains off.",
+          "Setup saved",
+          "success",
+        );
+      }
+    });
+  }
   function edit(status?: HistoricalAccessStatus, serviceId?: number) {
     const existingFolders = [
       ...new Set(
@@ -275,6 +316,8 @@ export function HistoricalDownloadAccess(
     setRemoteRoot(status?.configuration.remoteRoot ?? "");
     setLocalRoot(status?.configuration.localRoot || suggestedFolder);
     setNoRemainingClient(status?.configuration.noRemainingClient ?? false);
+    setHost(status?.configuration.mountSetup?.hostFolder ?? "");
+    setMountPlatform(status?.configuration.mountSetup?.platform ?? "unraid");
     setEditing(status?.id);
     setSetupOpen(true);
     setMessage("");
@@ -480,12 +523,13 @@ export function HistoricalDownloadAccess(
                                     onClick={() =>
                                       edit(s)}
                                   >
-                                    Edit access
+                                    {s.status === "draft" ? "Continue setup" : "Edit access"}
                                   </button>
                                   <button
                                     type="button"
                                     className="btn btn-sm btn-ghost"
-                                    disabled={mutation.isPending || !s.configuration.localRoot}
+                                    disabled={mutation.isPending || !s.configuration.enabled ||
+                                      !s.configuration.localRoot}
                                     onClick={() =>
                                       mutation.mutate(async () => {
                                         const server = currentServer.current;
@@ -521,7 +565,8 @@ export function HistoricalDownloadAccess(
                                   >
                                     Check access
                                   </button>
-                                  {!!s.configuration.localRoot && (
+                                  {!!s.configuration.localRoot && s.status !== "draft" &&
+                                    s.status !== "waiting_for_sync" && (
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-ghost text-base-content/55"
@@ -711,33 +756,15 @@ export function HistoricalDownloadAccess(
                         <summary className="cursor-pointer font-medium">
                           Need to mount a folder?
                         </summary>
-                        <div className="mt-3 space-y-3 leading-relaxed text-base-content/65">
-                          <p>Folder cleanup requires Linux, Docker or Unraid.</p>
-                          <p>
-                            Add one writable completed-downloads mount. Keep the existing{" "}
-                            <code>/data</code> app-data volume.
-                          </p>
-                          <p>
-                            <strong>Unraid:</strong>{" "}
-                            Docker → Plex Librarian → Edit → Completed downloads folder. Choose the
-                            host folder and apply. If missing, add a Read/Write Path with container
-                            path <code>/cleanup-downloads</code>.
-                          </p>
-                          <label className="flex flex-col gap-1.5">
-                            Compose host folder<input
-                              className="input input-bordered input-sm w-full font-mono"
-                              value={host}
-                              placeholder="/mnt/user/downloads/complete"
-                              onChange={(e) => setHost(e.target.value)}
-                            />
-                          </label>
-                          <pre className="overflow-x-auto rounded-lg bg-base-300/50 p-3 text-xs">{`- type: bind\n  source: ${JSON.stringify(host || '/choose/your/completed-downloads')}\n  target: /cleanup-downloads\n  read_only: false\n  bind:\n    create_host_path: false`}</pre>
-                          <p>
-                            Add under service volumes, then recreate with{" "}
-                            <code>docker compose up -d</code>. Librarian cannot mount a folder
-                            itself.
-                          </p>
-                        </div>
+                        <DownloadMountHelp
+                          platform={mountPlatform}
+                          onPlatform={setMountPlatform}
+                          host={host}
+                          onHost={setHost}
+                          localRoot={localRoot}
+                          saving={mutation.isPending}
+                          onSaveDraft={canSaveDraft ? saveDraft : undefined}
+                        />
                       </details>
                     </details>
                   </fieldset>
@@ -752,6 +779,16 @@ export function HistoricalDownloadAccess(
                     >
                       <ArrowLeft className="size-4" /> Back
                     </button>
+                    {canSaveDraft && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm ml-auto"
+                        disabled={mutation.isPending}
+                        onClick={saveDraft}
+                      >
+                        Save draft
+                      </button>
+                    )}
                     <button
                       type="submit"
                       className="btn btn-primary btn-sm"

@@ -79,16 +79,25 @@ export function saveHistoricalAccess(
   instanceId: number,
   raw: HistoricalAccessConfiguration,
   recordId?: string,
+  draft = false,
 ) {
   if (
+    (draft && (raw.enabled || raw.noRemainingClient)) ||
     typeof raw.enabled !== 'boolean' || typeof raw.noRemainingClient !== 'boolean' ||
     ![raw.remoteRoot, raw.localRoot].every((p) =>
-      typeof p === 'string' && p.startsWith('/') && p !== '/' &&
-      p === p.trim() && !p.endsWith('/') && !p.includes('//') && !p.includes('\\') &&
-      ![...p].some((c) => c.charCodeAt(0) < 32) &&
-      !p.split('/').some((s) => s === '.' || s === '..')
+      (draft && p === '') || typeof p === 'string' && p.startsWith('/') && p !== '/' &&
+        p === p.trim() && !p.endsWith('/') && !p.includes('//') && !p.includes('\\') &&
+        ![...p].some((c) => c.charCodeAt(0) < 32) &&
+        !p.split('/').some((s) => s === '.' || s === '..')
     )
   ) throw new Error('Provide exact absolute service and Librarian roots');
+  if (
+    raw.mountSetup && (!['unraid', 'compose'].includes(raw.mountSetup.platform) ||
+      typeof raw.mountSetup.hostFolder !== 'string' || raw.mountSetup.hostFolder.length > 4096 ||
+      [...raw.mountSetup.hostFolder].some((c) => c.charCodeAt(0) < 32))
+  ) {
+    throw new Error('Invalid mount setup details');
+  }
   const revision = crypto.randomUUID();
   const statuses = listHistoricalAccess(serverId);
   const existing = recordId === undefined
@@ -98,6 +107,9 @@ export function saveHistoricalAccess(
     : statuses.find((s) => s.id === recordId && s.instanceId === instanceId);
   if (recordId !== undefined && !existing) {
     throw new Error('Access record not found for this media connection');
+  }
+  if (draft && existing?.configuration.enabled) {
+    throw new Error('Disable this folder before saving it as an unfinished setup.');
   }
   if (
     statuses.some((s) =>
@@ -133,13 +145,14 @@ export function saveHistoricalAccess(
       instanceId,
       JSON.stringify(raw),
       revision,
-      raw.enabled ? 'waiting_for_sample' : 'not_enabled',
+      draft ? 'draft' : raw.enabled ? 'waiting_for_sample' : 'not_enabled',
     );
     if (existing?.sample && !existing.sample.startsWith(raw.remoteRoot + '/')) {
       db.prepare('UPDATE historical_download_access SET sample=NULL WHERE id=?').run(id);
     }
   });
-  void checkHistoricalAccess(serverId, id).catch(() => {});
+  if (!draft) void checkHistoricalAccess(serverId, id).catch(() => {});
+  return id;
 }
 
 const pending = new Map<string, Promise<void>>();
@@ -283,7 +296,8 @@ export function supplyHistoricalSample(
   }
   for (
     const status of listHistoricalAccess(serverId).filter((s) =>
-      s.instanceId === instanceId && source.startsWith(s.configuration.remoteRoot + '/')
+      s.instanceId === instanceId && s.status !== 'draft' && s.status !== 'waiting_for_sync' &&
+      source.startsWith(s.configuration.remoteRoot + '/')
     )
   ) {
     if (status.sample === null) {
@@ -318,11 +332,16 @@ export function scheduleHistoricalAccessChecks(serverId: number, force = false) 
 export function invalidateHistoricalAccessConfiguration(serverId: number) {
   withTransaction((db) => {
     for (
-      const [id, raw] of db.prepare(
-        'SELECT id,configuration FROM historical_download_access WHERE server_id=?',
-      ).values<[string, string]>(serverId)
+      const [id, raw, status] of db.prepare(
+        'SELECT id,configuration,status FROM historical_download_access WHERE server_id=?',
+      ).values<[string, string, string]>(serverId)
     ) {
       const configuration = JSON.parse(raw) as HistoricalAccessConfiguration;
+      // These records authorize no deletion. Preserve unrelated setup progress;
+      // targeted discovery and Enable validate the service revision themselves.
+      if (
+        !configuration.enabled && ['draft', 'waiting_for_sync', 'ready_to_enable'].includes(status)
+      ) continue;
       configuration.noRemainingClient = false;
       db.prepare(
         'UPDATE historical_download_access SET configuration=?,revision=?,sample=NULL,checked_at=NULL,status=?,problem_revision=NULL,dismissed_revision=NULL WHERE id=?',

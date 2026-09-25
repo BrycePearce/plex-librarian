@@ -10,6 +10,12 @@ export function historicalCheckMessage(statuses: readonly HistoricalAccessStatus
 }
 
 export function historicalAccessMessage(s: HistoricalAccessStatus): string {
+  if (s.status === "draft") {
+    return "Setup saved. Finish mounting the download folder, then continue setup. Cleanup is off.";
+  }
+  if (s.status === "waiting_for_sync") {
+    return "Folder detection will run once after a linked library finishes syncing. You can also set up the paths manually.";
+  }
   if (s.status === "ready_to_enable") {
     return "Folder relationship and access verified. Enable to include eligible leftover downloads in service deletions.";
   }

@@ -11,7 +11,7 @@ Deno.test('Unraid preserves app data, offers optional download access and has no
     '/cleanup-downloads',
   ]);
   const optional = paths.find((config) => config.includes('Target="/cleanup-downloads"'))!;
-  for (const attribute of ['Required="false"', 'Default=""', 'Mode="rw"', 'Display="advanced"']) {
+  for (const attribute of ['Required="false"', 'Default=""', 'Mode="rw"', 'Display="always"']) {
     ok(optional.includes(attribute), `Download access must preserve ${attribute}`);
   }
   ok(!app.includes('/discovery'));

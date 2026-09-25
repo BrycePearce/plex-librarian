@@ -155,5 +155,5 @@
     Display="advanced"
     Required="false"
     Mask="false">180</Config>
-  <Config Name="Completed downloads folder" Target="/cleanup-downloads" Default="" Mode="rw" Description="Optional: choose the actual host completed-downloads folder for history-linked cleanup. Keep /data unchanged. Configure its matching Sonarr root in Media connections. Ordinary service deletion needs no media mount." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Completed downloads folder" Target="/cleanup-downloads" Default="" Mode="rw" Description="Optional: select the same host folder Sonarr/Radarr uses for completed downloads. Librarian sees it at /cleanup-downloads. After applying, open Media connections to enable download cleanup. Keep the existing /data app-data mount unchanged." Type="Path" Display="always" Required="false" Mask="false"></Config>
 </Container>
