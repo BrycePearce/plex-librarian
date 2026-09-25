@@ -205,6 +205,30 @@ function fixture() {
 const decisions = (p: Awaited<ReturnType<typeof buildServiceOwnedPlan>>) =>
   Object.fromEntries(p.retention.decisions.map((d) => [d.service, d.state]));
 
+Deno.test('Radarr applicability follows the selected movie version, not the movie record', async () => {
+  for (const mediaId of [1, 2]) {
+    const f = fixture();
+    f.input.selection.mediaId = mediaId;
+    f.plex.mediaPathPreview = () =>
+      Promise.resolve({
+        paths: ['/plex/Movie.mkv', '/plex/Movie.mp4'],
+        truncated: false,
+        fileSizes: { '/plex/Movie.mkv': 100, '/plex/Movie.mp4': 50 },
+        versionFiles: [
+          { ratingKey: 'movie', mediaId: 1, path: '/plex/Movie.mkv', size: 100 },
+          { ratingKey: 'movie', mediaId: 2, path: '/plex/Movie.mp4', size: 50 },
+        ],
+      });
+    for (const discovery of [true, false]) {
+      const plan = await buildServiceOwnedPlan({ ...f.input, discovery });
+      const action = plan.actions.find((action) => action.service === 'radarr')!;
+      equal(action.presence, 'current');
+      equal(action.matchedToSelection, mediaId === 1);
+      if (mediaId === 2) equal(decisions(plan).radarr, 'held');
+    }
+  }
+});
+
 Deno.test('API collector associates movie under arbitrary roots without mappings', async () => {
   const f = fixture();
   const p = await buildServiceOwnedPlan(f.input);

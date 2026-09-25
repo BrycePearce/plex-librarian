@@ -792,6 +792,7 @@ export async function buildServiceOwnedPlan(
           })),
         ]);
         current.presence = 'current';
+        current.matchedToSelection = matched;
         current.effectsComplete = (matched || matchedRetained) && extrasComplete;
         if (matchedRetained) {
           current.retainedOwnership = true;
