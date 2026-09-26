@@ -36,10 +36,10 @@ export function ServiceIcon({
       className={`${colorClasses[service]} ${className ?? ""}`}
       fill="currentColor"
     >
-      {service === "sonarr" && historical
+      {(service === "sonarr" || service === "radarr") && historical
         ? (
           <>
-            <path d={paths.sonarr} transform="scale(.78)" />
+            <path d={paths[service]} transform="scale(.78)" />
             <circle cx="18" cy="18" r="6" className="fill-base-100" />
             <path
               d="M18 14.5v7M14.5 18h7"

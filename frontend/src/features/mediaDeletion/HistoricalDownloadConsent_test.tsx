@@ -11,6 +11,7 @@ import {
 import { ActiveServiceMark, PathTreeRoot } from "./DeletionTree.tsx";
 import { BasicDeletionRow, DeletionPreview } from "./DeletionDialog.tsx";
 import { DestinationOptions } from "./DeletionPlanSummary.tsx";
+import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import type { HistoricalDownloadPreview } from "../../../../shared/historicalDownloads.ts";
 import type { ServiceDeletionRequest } from "../../../../shared/serviceOwnedDeletion.ts";
 
@@ -110,6 +111,10 @@ Deno.test("Radarr checkbox automatically includes reviewed historical scope with
         o.id === "arr"
       );
     assertEquals(option().label, "Delete from Radarr");
+    const checkboxIcon = () =>
+      renderer!.root.findByType(DestinationOptions).findByType(ServiceIcon);
+    assertEquals(checkboxIcon().props.historical, true);
+    assertEquals(checkboxIcon().findAllByType("circle").length, 1);
     await settleReact(() => option().onChange(true));
     assertEquals(
       renderer!.root.findAllByType(ActiveServiceMark).some((m) =>
@@ -122,6 +127,7 @@ Deno.test("Radarr checkbox automatically includes reviewed historical scope with
       "one-exact-file",
     );
     await settleReact(() => option().onChange(false));
+    assertEquals(checkboxIcon().props.historical, true);
     assertEquals(renderer!.root.findByType(ServiceDeletionPreviewList).props.historical, undefined);
     await settleReact(() => option().onChange(true));
     await settleReact(() => renderer!.root.findByType(DeletionDialogFooter).props.onConfirm());
@@ -182,6 +188,10 @@ Deno.test("one discovery supplies Basic and Advanced paths; Sonarr selection inc
       renderer = TestRenderer.create(render("opt-out"));
     });
     assertEquals(historyReads, 0);
+    const checkboxIcon = renderer!.root.findByType(DestinationOptions).findByType(ServiceIcon);
+    assertEquals(checkboxIcon.props.service, "sonarr");
+    assertEquals(checkboxIcon.props.historical, true);
+    assertEquals(checkboxIcon.findAllByType("circle").length, 1);
     await settleReact(() => {
       renderer!.root.findByType(DeletionDialogFooter).props.onConfirm();
     });

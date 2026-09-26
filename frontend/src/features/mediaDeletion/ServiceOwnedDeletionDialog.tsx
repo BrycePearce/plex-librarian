@@ -253,6 +253,16 @@ function SelectionDialog({
     : formatKilobytes(knownSize);
   const arrNames = destinations.filter((service) => service !== "qb")
     .map((service) => deletionServiceNames[service]).join(" / ");
+  const arrService = destinations.includes("sonarr") ? "sonarr" : "radarr";
+  const historicalActions = new Set(
+    inventory?.historical?.candidates.flatMap((file) => file.actionIds ?? []),
+  );
+  const arrHasHistorical =
+    inventory?.targets.some((target) =>
+      target.decisions.some((action) =>
+        action.service === arrService && historicalActions.has(action.actionId)
+      )
+    ) ?? false;
 
   return (
     <DeletionModalShell
@@ -296,7 +306,8 @@ function SelectionDialog({
           ...(arrNames
             ? [{
               id: "arr" as const,
-              service: destinations.includes("sonarr") ? "sonarr" as const : "radarr" as const,
+              service: arrService as "sonarr" | "radarr",
+              historical: arrHasHistorical,
               label: "Delete from " + arrNames,
               info: destinations.includes("sonarr")
                 ? "Delete current matched media through Sonarr, including eligible history-linked download files shown in the preview. Files needed by a service you keep are retained."

@@ -10,6 +10,7 @@ import { InfoTip } from "./InfoTip.tsx";
 export interface DeletionDestinationOption {
   id: "arr" | "arr-path-override" | "arr-break-glass" | "cleanup";
   service?: ServiceIconName;
+  historical?: boolean;
   label: string;
   info: string;
   checked: boolean;
@@ -20,6 +21,7 @@ export interface DeletionDestinationOption {
 
 function DestinationOption({
   service,
+  historical,
   label,
   info,
   checked,
@@ -28,6 +30,7 @@ function DestinationOption({
   onChange,
 }: {
   service?: ServiceIconName;
+  historical?: boolean;
   label: string;
   info: string;
   checked: boolean;
@@ -49,7 +52,7 @@ function DestinationOption({
         onChange={(event) => onChange(event.target.checked)}
       />
       {service
-        ? <ServiceIcon service={service} className="size-4 shrink-0" />
+        ? <ServiceIcon service={service} historical={historical} className="size-4 shrink-0" />
         : <Folder className="size-4 shrink-0" />}
       <span className="whitespace-nowrap font-medium">{label}</span>
       <InfoTip text={info} />
@@ -91,6 +94,7 @@ export function DestinationOptions({
         <DestinationOption
           key={option.id}
           service={option.service}
+          historical={option.historical}
           label={option.label}
           info={option.info}
           checked={option.checked}
