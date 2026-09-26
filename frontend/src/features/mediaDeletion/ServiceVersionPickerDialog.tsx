@@ -280,9 +280,9 @@ export function ServiceVersionPickerDialog(
                 return (
                   <div
                     key={profile.id}
-                    className={`season-profile-card ${active ? "is-selected" : ""} ${
-                      unsafe ? "is-disabled" : ""
-                    }`}
+                    className={`season-profile-card season-profile-card-selectable ${
+                      active ? "is-selected" : ""
+                    } ${pending || unsafe ? "is-disabled" : ""}`}
                   >
                     <button
                       type="button"

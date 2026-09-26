@@ -456,6 +456,35 @@
   opacity: 0.55;
 }
 
+/* Extend the native toggle's hit area across the card, keeping path controls independent. */
+.season-profile-card-selectable {
+  position: relative;
+  isolation: isolate;
+}
+
+.season-profile-card-selectable .season-profile-toggle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 0.85rem;
+}
+
+.season-profile-card-selectable .season-profile-toggle:focus-visible::after {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.season-profile-card-selectable .season-profile-actions {
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.season-profile-card-selectable .season-profile-actions > * {
+  pointer-events: auto;
+}
+
 .season-profile-card.is-selected .season-profile-radio {
   border-color: var(--color-primary);
   background: var(--color-primary);
