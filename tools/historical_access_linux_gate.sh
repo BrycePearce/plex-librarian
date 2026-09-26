@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Private disposable mount namespace only. Requires root, setpriv and pinned Deno 2.9.5.
+# Private disposable mount namespace only. Requires root, setpriv and pinned Deno 2.9.7.
 set -euo pipefail
 runtime=$(realpath "$1")
-[[ $(id -u) == 0 && $("$runtime" --version | head -n1) == 'deno 2.9.5 '* ]]
+[[ $(id -u) == 0 && $("$runtime" --version | head -n1) == 'deno 2.9.7 '* ]]
 fixture=$(mktemp -d /tmp/plex-access-XXXXXXXX)
 case "$fixture" in /tmp/plex-access-*) ;; *) exit 2;; esac
 mounted=0

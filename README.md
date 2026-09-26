@@ -27,8 +27,6 @@
   <a href="assets/screenshots/activity.png">Activity</a>
 </p>
 
-<p align="center"><sub>Screenshots use fictional demo data; no Plex account or user information is shown.</sub></p>
-
 Plex Librarian is a tool for managing and maintaining Plex servers. It's
 intended as a simpler alternative to heavier tools with similar functionality,
 while offering some unique cleanup tools of its own. The goal is to reclaim
@@ -36,14 +34,14 @@ terabytes of storage in as few clicks as possible, using sensible defaults.
 
 ## What it does
 
-|     | Capability                       | What you get                                                                                                                                                                                             |
-| --- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, TV seasons, and music; filter and sort by age, size, play count, and more.                                                                               |
-| 💾  | **Duplicate detection**          | Surface duplicate movie and episode versions and see how much space each copy consumes.                                                                                                                  |
-| 🔎  | **Episode & Season Gaps**        | Find internal episode or season-number gaps bounded by content already present in Plex, with irregular metadata called out separately.                                                                  |
-| 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing, including a historical risk trend for each user.                                                              |
-| 🔗  | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported.                                                                                   |
-| 🌱 | **Current-location deletion** | Remove selected Plex/Arr media and optionally verified current qBittorrent jobs and payloads. Unselected media and shared downloads stay protected. |
+|     | Capability                       | What you get                                                                                                                                        |
+| --- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🧹  | **Stale media discovery**        | Find unwatched or long-unwatched movies, shows, TV seasons, and music; filter and sort by age, size, play count, and more.                          |
+| 💾  | **Duplicate detection**          | Surface duplicate movie and episode versions and see how much space each copy consumes.                                                             |
+| 🔎  | **Episode & Season Gaps**        | Find internal episode or season-number gaps bounded by content already present in Plex, with irregular metadata called out separately.              |
+| 👥  | **User insights**                | Review viewing activity, inactive accounts, and signals that may indicate account sharing, including a historical risk trend for each user.         |
+| 🔗  | **Sonarr & Radarr coordination** | Remove a title through the app that manages it, preventing an immediate re-download. Multiple instances are supported.                              |
+| 🌱  | **Current-location deletion**    | Remove selected Plex/Arr media and optionally verified current qBittorrent jobs and payloads. Unselected media and shared downloads stay protected. |
 
 ## Installation
 
@@ -303,7 +301,7 @@ deno task fmt       # apply the repository formatting rules
 deno task verify    # formatting, lint, type-checking, tests, and production build
 ```
 
-The project uses Deno `2.9.5`, matching the Docker image and CI. To catch
+The project uses Deno `2.9.7`, matching the Docker image and CI. To catch
 problems automatically before commits and pushes, install the repository's Git
 hooks once after cloning:
 

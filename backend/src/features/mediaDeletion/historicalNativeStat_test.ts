@@ -134,7 +134,7 @@ Deno.test({
         const bigint = await lstat(file, { bigint: true });
         strictEqual(Number.isSafeInteger(numeric.ino), false);
         // Pin the actual runtime defect, not an assumption about bigint support.
-        strictEqual(Deno.version.deno, '2.9.5');
+        strictEqual(Deno.version.deno, '2.9.7');
         notStrictEqual(String(bigint.ino), native.ino);
         console.log(
           JSON.stringify({

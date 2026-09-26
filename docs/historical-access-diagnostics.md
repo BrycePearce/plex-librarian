@@ -26,7 +26,7 @@ From the repository root on a Linux test machine with root permission:
 
     bash tools/run_historical_access_gate.sh
 
-The wrapper uses ordinary UID 1000 to obtain pinned Deno 2.9.5, then enters a
+The wrapper uses ordinary UID 1000 to obtain pinned Deno 2.9.7, then enters a
 private mount namespace. Requires curl, Python, coreutils, util-linux (`unshare`,
 `setpriv`, `mount`) and an existing UID 1000 user. All fixture permissions,
 ownership and mounts are confined to a generated `/tmp/plex-access-*` directory.
