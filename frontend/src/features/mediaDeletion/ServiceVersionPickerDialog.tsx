@@ -415,6 +415,7 @@ export function ServiceVersionPickerDialog(
           <ServiceOwnedDeletionDialog
             dialogRef={dialogRef}
             embedded
+            previewCollapsible={!!season}
             hideIntro
             libraryKey={first.libraryKey}
             targets={targets}

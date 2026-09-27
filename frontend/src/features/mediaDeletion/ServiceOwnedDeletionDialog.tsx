@@ -35,6 +35,7 @@ export interface ServiceOwnedDeletionDialogProps {
   onCreated: (operationId: string) => void;
   onCancel: () => void;
   embedded?: boolean;
+  previewCollapsible?: boolean;
   hideIntro?: boolean;
   title?: string;
   quickCleanupThresholdDays?: number;
@@ -67,6 +68,7 @@ function SelectionDialog({
   onCreated,
   onCancel,
   embedded,
+  previewCollapsible = !embedded,
   hideIntro,
   title,
   quickCleanupThresholdDays,
@@ -294,7 +296,7 @@ function SelectionDialog({
             selectionDetails={details}
             loading={loading}
             historical={loading || !arrSelected ? undefined : historical}
-            collapsible={!embedded}
+            collapsible={previewCollapsible}
             showWarnings={false}
           />
         ))}

@@ -222,13 +222,13 @@ Deno.test("season episode selection preserves the picker and expansion across to
         </QueryClientProvider>,
       );
     });
-    const row = renderer!.root.findByType("details");
+    const row = renderer!.root.findByProps({ className: "version-picker-episode" });
     assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
     assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
     assertEquals(row.findByType("strong").children.join(""), "E01 \u2014 Pilot");
     const inputs = renderer!.root.findAllByType("input");
     await act(() => inputs[0].props.onChange());
-    assertEquals(renderer!.root.findByType("details"), row);
+    assertEquals(renderer!.root.findByProps({ className: "version-picker-episode" }), row);
     const review = renderer!.root.findByType(DeletionPreview);
     assertEquals(
       review.findAllByType("span").some((span) => span.props.title === "Example · S01E01 · Pilot"),
