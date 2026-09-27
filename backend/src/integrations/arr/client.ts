@@ -12,13 +12,6 @@ export interface ArrMediaRecord {
   monitored?: boolean | null;
 }
 
-export interface RadarrImportExclusion {
-  id: number;
-  tmdbId: number;
-  movieTitle: string;
-  movieYear: number;
-}
-
 export interface ArrSeasonSummary {
   seasonNumber: number;
   episodeFileCount: number | null;
@@ -46,11 +39,6 @@ export interface ArrExtraFile {
   movieFileId: number | null;
 }
 
-export interface RadarrMovieRecord {
-  id: number;
-  path: string;
-}
-
 export interface RadarrMovieSnapshot {
   movieId: number;
   movieFileId: number;
@@ -60,76 +48,18 @@ export interface RadarrMovieSnapshot {
 export const RADARR_PATH_ADOPTION_MIN_VERSION = '6.3.0.10514';
 export const RADARR_CATALOG_MAX_BYTES = 16 * 1024 * 1024;
 export const RADARR_CATALOG_MAX_RECORDS = 50_000;
-export const RADARR_FILESYSTEM_MAX_BYTES = 2 * 1024 * 1024;
-export const RADARR_FILESYSTEM_MAX_ENTRIES = 2_000;
 export const ARR_ROOT_FOLDERS_MAX_BYTES = 2 * 1024 * 1024;
 export const ARR_ROOT_FOLDERS_MAX_RECORDS = 1_000;
 export const SONARR_SEASON_COORDINATION_MIN_VERSION = '4.0.19.2979';
 export const SONARR_SERIES_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 export const SONARR_SERIES_SNAPSHOT_MAX_RECORDS = 50_000;
-export const SONARR_ACTIVITY_MAX_RECORDS = 1_000;
-export const SONARR_MANUAL_IMPORT_MAX_RECORDS = 500;
 
 const ARR_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
 const ARR_HISTORY_MAX_RECORDS = 50_000;
 
-export interface RadarrFilesystemEntry {
-  path: string;
-  name: string;
-  type: 'file' | 'folder';
-}
-
-export interface RadarrRootFolder {
-  id: number;
-  path: string;
-}
-
 export interface ArrRootFolder {
   id: number;
   path: string;
-}
-
-export interface RadarrCatalogMoviePath {
-  id: number;
-  tmdbId: number;
-  path: string;
-}
-
-export interface RadarrActivityEvidence {
-  quiet: boolean;
-  blocking: Array<{ source: 'queue' | 'command'; id: number; name: string }>;
-}
-
-export interface RadarrPathAdoptionCapabilities {
-  available: boolean;
-  version: string | null;
-  minimumVersion: typeof RADARR_PATH_ADOPTION_MIN_VERSION;
-  behaviorFingerprint: string | null;
-  behavior: {
-    autoUnmonitorPreviouslyDownloadedMovies: boolean;
-    deleteEmptyFolders: boolean;
-    fileDate: string;
-    rescanAfterRefresh: string;
-    metadataConsumerCount: number;
-    notificationConsumerCount: number;
-  } | null;
-  reason?: string;
-}
-
-export interface RadarrMoviePathUpdateResult {
-  before: Record<string, unknown> & {
-    id: number;
-    tmdbId: number;
-    path: string;
-    monitored: boolean;
-  };
-  after: Record<string, unknown> & {
-    id: number;
-    tmdbId: number;
-    path: string;
-    monitored: boolean;
-  };
-  changed: boolean;
 }
 
 export interface ArrManagedFile {
@@ -163,12 +93,6 @@ export interface RadarrMovieMonitorIdentity {
   movieId: number;
   tmdbId: number;
   path: string;
-}
-
-export interface ArrEpisodeManagedFile {
-  episodeId: number;
-  file: ArrManagedVersionFile | null;
-  shared?: boolean;
 }
 
 export interface SonarrSeriesEpisode {
@@ -224,13 +148,6 @@ export interface SonarrUntrackedImportCandidate {
   size: number;
   episodeIds: number[];
   rejectionReasons: string[];
-}
-
-export interface SonarrSeasonCoordinationCapabilities {
-  available: boolean;
-  version: string | null;
-  minimumVersion: typeof SONARR_SEASON_COORDINATION_MIN_VERSION;
-  reason?: string;
 }
 
 export class ArrApiError extends Error {

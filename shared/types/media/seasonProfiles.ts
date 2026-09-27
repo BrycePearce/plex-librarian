@@ -77,11 +77,6 @@ export interface SeasonDeletionIntent {
   cleanupDownloads: boolean;
 }
 
-export interface SeasonCleanupRequest extends SeasonDeletionIntent {
-  clientRequestId: string;
-  previewFingerprint: string;
-}
-
 export interface SeasonCleanupResponse {
   operationId: string;
   status: DeletionOperationStatus;

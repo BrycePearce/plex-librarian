@@ -31,11 +31,6 @@ export interface MediaVersion {
   fileSize: number | null;
 }
 
-export interface DeleteMediaVersionResponse {
-  fileSizeFreed: number;
-  removedByApp: boolean;
-}
-
 // Returned by the on-demand technical-detail refresh used by duplicate review.
 export interface MediaVersionsRefreshResponse {
   versions: MediaVersion[];

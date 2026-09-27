@@ -107,8 +107,6 @@ export interface DeletionOperation {
   targets: DeletionOperationTarget[];
 }
 
-export type DeletionTargetResolutionState = 'management_hold';
-
 export interface FinishRelocationResponse {
   operation: DeletionOperation;
   sync: { syncId: number } | { conflict: number } | { deferred: true } | { completed: true };

@@ -6,7 +6,6 @@ const roots = {
   libraries: "libraries",
   sync: "sync",
   stale: "stale",
-  staleQuickCleanup: "stale-quick-cleanup",
   show: "show",
   movie: "movie",
   duplicates: "duplicates",
@@ -18,8 +17,6 @@ const roots = {
   qbittorrentIntegrations: "qbittorrent-integrations",
   seerrIntegrations: "seerr-integrations",
   integrationCompatibility: "integration-compatibility",
-  downloadCleanupPreview: "download-cleanup-preview",
-  versionDeletionPreview: "version-deletion-preview",
   deletionOperations: "deletion-operations",
   episodeGaps: "episode-gaps",
 } as const;
@@ -46,16 +43,6 @@ export const queryKeys = {
     list: <TParams>(libraryKey: string, params: TParams) =>
       [roots.stale, libraryKey, params] as const,
   },
-  staleQuickCleanup: {
-    all: [roots.staleQuickCleanup] as const,
-    library: (libraryKey: string) => [roots.staleQuickCleanup, libraryKey] as const,
-    analysis: (
-      libraryKey: string,
-      days: number,
-      sort: "inactiveSince" | "fileSize" = "fileSize",
-      order: "asc" | "desc" = "desc",
-    ) => [roots.staleQuickCleanup, libraryKey, days, sort, order] as const,
-  },
   show: {
     all: [roots.show] as const,
     detail: (libraryKey: string, ratingKey: string) => [roots.show, libraryKey, ratingKey] as const,
@@ -71,8 +58,13 @@ export const queryKeys = {
     list: <TParams>(params: TParams) => [roots.duplicates, "list", params] as const,
     technicalRefresh: (mediaType: "movie" | "episode", ratingKey: string) =>
       [roots.duplicates, "technical-refresh", mediaType, ratingKey] as const,
-    seasonAnalysis: (seasonRatingKey: string, episodeRatingKeys: readonly string[]) =>
-      [roots.duplicates, "season-analysis", seasonRatingKey, episodeRatingKeys] as const,
+    // Selection-only analysis omits service evidence and must never share cached
+    // results with the full review, even for the same season and episode keys.
+    seasonSelectionAnalysis: (
+      seasonRatingKey: string | undefined,
+      episodeRatingKeys: readonly string[],
+    ) =>
+      [roots.duplicates, "season-selection-analysis", seasonRatingKey, episodeRatingKeys] as const,
   },
   users: {
     all: [roots.users] as const,
@@ -102,27 +94,6 @@ export const queryKeys = {
   },
   seerrIntegrations: { all: [roots.seerrIntegrations] as const },
   integrationCompatibility: { all: [roots.integrationCompatibility] as const },
-  downloadCleanupPreview: {
-    all: [roots.downloadCleanupPreview] as const,
-    forItems: (libraryKey: string, ratingKeys: readonly string[]) =>
-      [roots.downloadCleanupPreview, libraryKey, ratingKeys] as const,
-  },
-  versionDeletionPreview: {
-    all: [roots.versionDeletionPreview] as const,
-    forVersions: (
-      mediaType: "movie" | "episode" | undefined,
-      ratingKey: string,
-      mediaIds: readonly number[],
-      inspectDownloadCleanup = false,
-    ) =>
-      [
-        roots.versionDeletionPreview,
-        mediaType,
-        ratingKey,
-        mediaIds,
-        inspectDownloadCleanup,
-      ] as const,
-  },
   deletionOperations: {
     all: [roots.deletionOperations] as const,
     lists: [roots.deletionOperations, "list"] as const,
@@ -151,7 +122,6 @@ const rootPolicies = {
   libraries: { serverScoped: true, syncDerived: true },
   sync: { serverScoped: true, syncDerived: true },
   stale: { serverScoped: true, syncDerived: true },
-  staleQuickCleanup: { serverScoped: true, syncDerived: true },
   show: { serverScoped: true, syncDerived: true },
   movie: { serverScoped: true, syncDerived: true },
   duplicates: { serverScoped: true, syncDerived: true },
@@ -163,8 +133,6 @@ const rootPolicies = {
   qbittorrentIntegrations: { serverScoped: true, syncDerived: false },
   seerrIntegrations: { serverScoped: true, syncDerived: false },
   integrationCompatibility: { serverScoped: true, syncDerived: false },
-  downloadCleanupPreview: { serverScoped: true, syncDerived: true },
-  versionDeletionPreview: { serverScoped: true, syncDerived: true },
   deletionOperations: { serverScoped: true, syncDerived: false },
   episodeGaps: { serverScoped: true, syncDerived: true },
 } satisfies Record<QueryRootName, QueryRootPolicy>;

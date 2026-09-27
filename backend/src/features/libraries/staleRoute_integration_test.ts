@@ -198,6 +198,67 @@ Deno.test('stale route excludes suspicious persisted Plex timestamps', async () 
   }
 });
 
+Deno.test('library pagination keeps server-scoped totals and per-library statistics', async () => {
+  const firstResponse = await app.request('/api/libraries?limit=1');
+  assertEquals(firstResponse.status, 200);
+  const first = await firstResponse.json() as LibrariesResponse;
+  assertEquals(first.total, 2);
+  assertEquals(
+    first.libraries.map(({ key, itemCount, totalFileSize }) => ({
+      key,
+      itemCount,
+      totalFileSize,
+    })),
+    [{ key: 'movies', itemCount: 3, totalFileSize: 600 }],
+  );
+
+  const second = await (await app.request('/api/libraries?limit=1&offset=1'))
+    .json() as LibrariesResponse;
+  assertEquals(second.total, 2);
+  assertEquals(
+    second.libraries.map(({ key, itemCount, totalFileSize }) => ({
+      key,
+      itemCount,
+      totalFileSize,
+    })),
+    [{ key: 'shows', itemCount: 1, totalFileSize: 1000 }],
+  );
+
+  const pastEnd = await (await app.request('/api/libraries?limit=1&offset=2'))
+    .json() as LibrariesResponse;
+  assertEquals(pastEnd, { limit: 1, offset: 2, total: 2, libraries: [] });
+});
+
+Deno.test('library statistics retain empty libraries and large file-size totals', async () => {
+  withTransaction((client) => {
+    client.prepare(
+      `INSERT INTO libraries (server_id, key, title, type, synced_at)
+       VALUES (1, 'empty', 'Empty', 'movie', 1)`,
+    ).run();
+    client.prepare(
+      "UPDATE items SET file_size = 3000000000 WHERE server_id = 1 AND rating_key = 'one'",
+    )
+      .run();
+  });
+  try {
+    const empty = await (await app.request('/api/libraries?limit=1')).json() as LibrariesResponse;
+    assertEquals(empty.total, 3);
+    assertEquals(empty.libraries[0]?.key, 'empty');
+    assertEquals(empty.libraries[0]?.itemCount, 0);
+    assertEquals(empty.libraries[0]?.totalFileSize, 0);
+    const movies = await (await app.request('/api/libraries?limit=1&offset=1'))
+      .json() as LibrariesResponse;
+    assertEquals(movies.libraries[0]?.key, 'movies');
+    assertEquals(movies.libraries[0]?.totalFileSize, 3_000_000_300);
+  } finally {
+    withTransaction((client) => {
+      client.prepare("DELETE FROM libraries WHERE server_id = 1 AND key = 'empty'").run();
+      client.prepare("UPDATE items SET file_size = 300 WHERE server_id = 1 AND rating_key = 'one'")
+        .run();
+    });
+  }
+});
+
 Deno.test('ignored content API adds, searches, filters, and restores synced items', async () => {
   const added = await app.request('/api/settings/ignored-content', {
     method: 'POST',

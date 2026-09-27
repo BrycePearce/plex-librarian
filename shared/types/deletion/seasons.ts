@@ -31,13 +31,6 @@ export interface SeasonRemovalPreviewResponse {
   sonarrHistoricalPaths?: SonarrHistoricalPathPreview[];
 }
 
-export interface SeasonRemovalRequest {
-  clientRequestId: string;
-  previewFingerprint: string;
-  coordinated: boolean;
-  cleanupDownloads: boolean;
-}
-
 export interface SeasonRemovalCreated extends DeletionOperationCreated {
   targetCount: 1;
 }

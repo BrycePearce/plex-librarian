@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api.ts";
-import { invalidateSyncDerivedQueries } from "../../lib/queryCache.ts";
+import { invalidateGlobalSyncQueries } from "./syncCacheInvalidation.ts";
 import { queryKeys } from "../../lib/queryKeys.ts";
 import { useSyncStream } from "../../lib/useSyncStream.ts";
 import {
@@ -33,8 +33,8 @@ export function SyncCacheCoordinator() {
       latestGlobalSync,
     );
     lifecycle.current = transition.state;
-    if (transition.shouldInvalidate) {
-      void invalidateSyncDerivedQueries(queryClient);
+    if (transition.shouldInvalidate && latestGlobalSync) {
+      void invalidateGlobalSyncQueries(queryClient, latestGlobalSync.id, true);
     }
   }, [latestGlobalSync, queryClient]);
 
@@ -46,8 +46,8 @@ export function SyncCacheCoordinator() {
       error,
     );
     lifecycle.current = transition.state;
-    if (transition.shouldInvalidate) {
-      void invalidateSyncDerivedQueries(queryClient);
+    if (transition.shouldInvalidate && syncId !== null) {
+      void invalidateGlobalSyncQueries(queryClient, syncId, isDone);
     }
   }, [syncId, isDone, error, queryClient]);
 

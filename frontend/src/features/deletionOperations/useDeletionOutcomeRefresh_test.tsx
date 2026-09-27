@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import TestRenderer, { act } from "react-test-renderer";
 import type { DeletionOperation, DeletionOperationTarget } from "@shared/types";
 import { useDeletionOutcomeRefresh } from "./useDeletionOutcomeRefresh.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 
 const target: DeletionOperationTarget = {
   relocationGuidanceState: "none",
@@ -59,7 +60,12 @@ for (
     globals.IS_REACT_ACT_ENVIRONMENT = true;
     const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
     const listKeys = [["stale", "movies"], ["duplicates"]];
-    for (const key of listKeys) client.setQueryData(key, ["selected version"]);
+    const cachedKeys = [
+      ...listKeys,
+      queryKeys.duplicates.seasonSelectionAnalysis("season", ["episode"]),
+      queryKeys.duplicates.technicalRefresh("movie", "movie"),
+    ];
+    for (const key of cachedKeys) client.setQueryData(key, ["selected version"]);
     const invalidations: unknown[] = [];
     const unsubscribe = client.getQueryCache().subscribe((event) => {
       if (event.type === "updated" && event.action.type === "invalidate") {
@@ -85,13 +91,13 @@ for (
       await act(() => {
         renderer = TestRenderer.create(render(initial));
       });
-      assertEquals(invalidations, listKeys);
+      assertEquals(invalidations, cachedKeys);
       // Simulate the lists finishing their first refresh, then an identical later poll.
-      for (const key of listKeys) client.setQueryData(key, ["selected version"]);
+      for (const key of cachedKeys) client.setQueryData(key, ["selected version"]);
       await act(() => {
         renderer!.update(render({ ...initial, updatedAt: 3 }));
       });
-      assertEquals(invalidations.length, 2);
+      assertEquals(invalidations.length, cachedKeys.length);
       const completed: DeletionOperation = {
         ...initial,
         status: "completed",
@@ -111,12 +117,12 @@ for (
       await act(() => {
         renderer!.update(render(completed));
       });
-      assertEquals(invalidations, [...listKeys, ...listKeys]);
-      for (const key of listKeys) client.setQueryData(key, []);
+      assertEquals(invalidations, [...cachedKeys, ...cachedKeys]);
+      for (const key of cachedKeys) client.setQueryData(key, []);
       await act(() => {
         renderer!.update(render({ ...completed, updatedAt: 5 }));
       });
-      assertEquals(invalidations.length, 4);
+      assertEquals(invalidations.length, cachedKeys.length * 2);
     } finally {
       if (renderer) await act(() => renderer!.unmount());
       unsubscribe();

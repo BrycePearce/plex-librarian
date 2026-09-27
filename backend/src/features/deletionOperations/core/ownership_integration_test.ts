@@ -396,6 +396,33 @@ Deno.test('season duplicate payloads are capped to one server-side review pass',
     assertEquals(data.groups[0].duplicateGroupCount, 501);
     assertEquals(data.groups[0].reclaimableFileSize, 50_100);
     assertEquals(data.groups[0].episodes.length, 20);
+
+    // Put the only known difference beyond the 500-episode read boundary. The
+    // comparison pass must retain that preview key while still computing full totals.
+    withTransaction((client) => {
+      client.prepare(
+        `UPDATE episode_media_versions
+         SET width = CASE WHEN media_id % 2 = 0 THEN 1920 ELSE 3840 END,
+             height = CASE WHEN media_id % 2 = 0 THEN 1080 ELSE 2160 END
+         WHERE server_id = 1 AND episode_rating_key = 'bounded-episode-501'`,
+      ).run();
+    });
+    const different = await (await app.request(
+      '/api/duplicates?type=tv&search=Bounded&comparison=different',
+    )).json();
+    assertEquals(different.total, 1);
+    assertEquals(different.duplicateGroupTotal, 1);
+    assertEquals(different.groups[0].combinedFileSize, 300);
+    assertEquals(different.groups[0].reclaimableFileSize, 100);
+    assertEquals(duplicateRatingKeys(different.groups), ['bounded-episode-501']);
+
+    const unknown = await (await app.request(
+      '/api/duplicates?type=tv&search=Bounded&comparison=unknown',
+    )).json();
+    assertEquals(unknown.duplicateGroupTotal, 500);
+    assertEquals(unknown.groups[0].combinedFileSize, 150_000);
+    assertEquals(unknown.groups[0].episodes.length, 20);
+    assertEquals(duplicateRatingKeys(unknown.groups).includes('bounded-episode-501'), false);
     const analysis = await app.request(`/api/duplicates/seasons/${seasonKey}/analysis`, {
       method: 'POST',
     });

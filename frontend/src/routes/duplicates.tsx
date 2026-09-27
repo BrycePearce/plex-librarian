@@ -136,7 +136,6 @@ function DuplicatesPage() {
       queryKeys.libraries.all,
       queryKeys.events.all,
       queryKeys.mediaRemovals.all,
-      queryKeys.versionDeletionPreview.all,
     ]);
     versionDialogRef.current?.close();
     seasonDialogRef.current?.close();

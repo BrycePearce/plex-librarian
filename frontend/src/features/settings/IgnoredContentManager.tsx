@@ -10,14 +10,11 @@ import { queryKeys } from "../../lib/queryKeys.ts";
 const affectedQueryKeys = [
   queryKeys.libraries.all,
   queryKeys.stale.all,
-  queryKeys.staleQuickCleanup.all,
   queryKeys.show.all,
   queryKeys.movie.all,
   queryKeys.duplicates.all,
   queryKeys.users.all,
   queryKeys.episodeGaps.all,
-  queryKeys.downloadCleanupPreview.all,
-  queryKeys.versionDeletionPreview.all,
 ] as const;
 
 export function IgnoredContentManager() {

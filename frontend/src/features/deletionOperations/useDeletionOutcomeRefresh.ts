@@ -44,7 +44,6 @@ export function deletionInsightQueryKeys(extra: QueryKey[]): QueryKey[] {
   const keys = [
     queryKeys.stale.all,
     queryKeys.duplicates.all,
-    queryKeys.staleQuickCleanup.all,
     queryKeys.show.all,
     queryKeys.movie.all,
     queryKeys.libraries.all,

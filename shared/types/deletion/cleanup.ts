@@ -1,12 +1,5 @@
 import type { ArrType } from '../integrations/arr.ts';
 
-export interface DeleteItemsRequest {
-  ratingKeys: string[];
-  coordinatedRatingKeys: string[];
-  cleanupDownloadRatingKeys: string[];
-  cleanupPreviewFingerprints: Record<string, string>;
-}
-
 export interface DownloadCleanupJob {
   provider: string;
   instanceKey: string;
@@ -159,12 +152,4 @@ export interface DeletionStageOutcome {
 export interface DeleteItemOutcome {
   ratingKey: string;
   stages: DeletionStageOutcome[];
-}
-
-export interface DeleteMediaVersionsResponse {
-  deletedMediaIds: number[];
-  removedByAppMediaIds: number[];
-  failed: Array<{ mediaId: number; error: string }>;
-  fileSizeFreed: number;
-  outcomes: DeletionStageOutcome[];
 }

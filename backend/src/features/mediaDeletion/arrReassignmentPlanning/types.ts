@@ -1,26 +1,7 @@
-import type { ArrDeleteTarget } from '../../arr/delete.ts';
 import type {
   PersistedPathNamespaceEvidence,
   PersistedPhysicalIdentityEvidence,
 } from '../pathNamespace.ts';
-
-export interface EligibleArrReassignment {
-  target: ArrDeleteTarget;
-  recordId: number;
-  recordPath: string;
-  episodeId: number | null;
-  managedFileId: number | null;
-  managedFileSize: number | null;
-  managedPath: string | null;
-  managedMediaId: number | null;
-  monitored: boolean;
-  candidatePaths: Map<number, string>;
-  candidateRecordPaths: Map<number, string>;
-  candidateFileSizes: Map<number, number | null>;
-  alreadyReassigned: boolean;
-  radarrPathPlan?: PersistedRadarrPathPlan;
-  radarrPathPlans?: Map<number, PersistedRadarrPathPlan>;
-}
 
 export interface PersistedRadarrPathPlan {
   mode: 'existing_path' | 'adopt_safe_path' | 'adopt_path_with_consent';

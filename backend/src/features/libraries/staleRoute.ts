@@ -1,0 +1,463 @@
+import { Hono } from 'hono';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  not,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
+import { db } from '../../db/index.ts';
+import {
+  episodeMediaVersions,
+  itemMediaVersions,
+  items,
+  libraries,
+  seasons,
+  settings,
+} from '../../db/schema.ts';
+import {
+  contentIsNotIgnored,
+  episodeVersionsByLibrary,
+  HAS_DUPLICATE_VERSIONS,
+  itemsByLibrary,
+  libraryByKey,
+  mediaVersionsByLibrary,
+  seasonsByLibrary,
+} from '../../db/scope.ts';
+import { parseSearchQuery } from '../../http/searchQuery.ts';
+import { EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP } from '../../integrations/plex/timestamps.ts';
+import type { ActiveServerVariables } from '../../middleware/activeServer.ts';
+import type { MediaVersion, StaleResponse } from '@plex-librarian/shared/types.ts';
+import { mediaVersionFromRow } from '../duplicates/mediaVersion.ts';
+import {
+  movieRootIsWorkflowOwned,
+  seasonRootIsWorkflowOwned,
+  showRootIsWorkflowOwned,
+} from '../deletionOperations/core/ownership.ts';
+import { automaticStaleThresholdDays } from './automaticStaleThreshold.ts';
+import { staleCutoffs } from './staleFilters.ts';
+
+const router = new Hono<{ Variables: ActiveServerVariables }>();
+
+const SORT_COLUMNS = {
+  fileSize: items.fileSize,
+  lastViewedAt: items.lastViewedAt,
+  addedAt: items.addedAt,
+  title: items.title,
+  year: items.year,
+  viewCount: items.viewCount,
+} as const;
+
+const SEASON_SORT_COLUMNS = {
+  fileSize: seasons.fileSize,
+  lastViewedAt: seasons.lastViewedAt,
+  addedAt: seasons.addedAt,
+  title: items.title,
+  year: items.year,
+  viewCount: seasons.viewCount,
+} as const;
+
+type SortKey = keyof typeof SORT_COLUMNS;
+
+router.get('/:key/stale', async (c) => {
+  const key = c.req.param('key');
+
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json({ error: 'library not found' }, 404);
+
+  const [library] = await db.select({
+    key: libraries.key,
+    type: libraries.type,
+    staleMinAgeDays: libraries.staleMinAgeDays,
+    historySyncedAt: libraries.historySyncedAt,
+    oldestItemAddedAt: libraries.oldestItemAddedAt,
+  })
+    .from(libraries)
+    .where(libraryByKey(serverId, key))
+    .limit(1);
+  if (!library) return c.json({ error: 'library not found' }, 404);
+  // Search params are bookmarkable and can outlive a library switch. Treat a stale
+  // season scope on a non-TV library as the ordinary item scope instead of turning an
+  // otherwise valid page into a 400 response.
+  const scope = c.req.query('scope') === 'season' && library.type === 'show' ? 'season' : 'show';
+
+  const now = Math.floor(Date.now() / 1000);
+  const automaticStaleDays = automaticStaleThresholdDays(library.oldestItemAddedAt, now);
+
+  // Minimum inactivity: time since last view for watched items, or time since added for
+  // never-watched items. An explicit query remains bookmarkable; a bare request uses
+  // the inexpensive library-age recommendation.
+  const rawDays = Number(c.req.query('days') ?? automaticStaleDays);
+  if (!Number.isInteger(rawDays) || rawDays < 0) {
+    return c.json({
+      error: 'days must be a non-negative integer',
+    }, 400);
+  }
+  const days = rawDays;
+
+  // Maximum staleness: upper bound for range-bucket queries (e.g. days=365&maxDays=730 → 1-2 yr).
+  // Must be greater than days; otherwise the time window is inverted and matches nothing.
+  const rawMaxDays = c.req.query('maxDays');
+  const parsedMaxDays = rawMaxDays !== undefined ? Number(rawMaxDays) : null;
+  if (parsedMaxDays !== null && (!Number.isInteger(parsedMaxDays) || parsedMaxDays < 1)) {
+    return c.json({ error: 'maxDays must be a positive integer' }, 400);
+  }
+  const maxDays = parsedMaxDays;
+  if (maxDays !== null && maxDays <= days) {
+    return c.json({ error: 'maxDays must be greater than days' }, 400);
+  }
+
+  // Additional minimum-age safety floor for never-watched items.
+  // Resolution order: explicit query param > library override > global default > 90.
+  const rawMinAgeDays = c.req.query('minAgeDays');
+  let minAgeDays: number;
+  if (rawMinAgeDays !== undefined) {
+    const parsed = Number(rawMinAgeDays);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return c.json({ error: 'minAgeDays must be a non-negative integer' }, 400);
+    }
+    minAgeDays = parsed;
+  } else if (library.staleMinAgeDays !== null) {
+    minAgeDays = library.staleMinAgeDays;
+  } else {
+    const [settingsRow] = await db.select({ staleMinAgeDays: settings.staleMinAgeDays })
+      .from(settings)
+      .where(eq(settings.id, 1))
+      .limit(1);
+    minAgeDays = settingsRow?.staleMinAgeDays ?? 90;
+  }
+
+  // filter=all (default): watched-stale + unwatched
+  // filter=watched: only items with a lastViewedAt in the stale range
+  // filter=unwatched: only items never watched (respects minAgeDays)
+  const rawFilter = c.req.query('filter') ?? 'all';
+  const filter = ['all', 'watched', 'unwatched'].includes(rawFilter) ? rawFilter : 'all';
+
+  // sort=fileSize (default) | lastViewedAt | addedAt | title | year | viewCount
+  // order=desc (default) | asc
+  const rawSort = c.req.query('sort') ?? 'fileSize';
+  const sort: SortKey = rawSort in SORT_COLUMNS ? rawSort as SortKey : 'fileSize';
+  const orderStr = c.req.query('order') === 'asc' ? 'asc' : 'desc';
+  const order = orderStr === 'asc' ? asc : desc;
+
+  const rawLimit = parseInt(c.req.query('limit') ?? '500', 10);
+  const limit = Number.isNaN(rawLimit) || rawLimit <= 0 ? 500 : Math.min(rawLimit, 1000);
+  const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
+  const offset = Number.isNaN(rawOffset) || rawOffset < 0 ? 0 : rawOffset;
+  // Exact counting remains the default API contract. Only the literal value `false`
+  // disables it, so existing and malformed requests retain the safer counted response.
+  const includeTotal = c.req.query('count') !== 'false';
+
+  // Literal substring search across the full filtered result set. `instr` deliberately
+  // avoids treating user-entered `%` and `_` as LIKE wildcards. SQLite's built-in lower()
+  // supplies ASCII case folding; non-ASCII text still matches exactly.
+  const parsedSearch = parseSearchQuery(c.req.query('search'));
+  if ('error' in parsedSearch) return c.json({ error: parsedSearch.error }, 400);
+  const { search } = parsedSearch;
+  const titleSearchCond = search.length >= 2
+    ? sql`instr(lower(${items.title}), lower(${search})) > 0`
+    : undefined;
+
+  const {
+    viewedBefore,
+    viewedOnOrAfter,
+    unwatchedAddedBefore,
+    unwatchedAddedOnOrAfter,
+  } = staleCutoffs(
+    now,
+    days,
+    maxDays,
+    minAgeDays,
+  );
+
+  if (scope === 'season') {
+    const showEverything = days === 0 && maxDays === null;
+    const watchedStaleCond = and(
+      isNotNull(seasons.lastViewedAt),
+      gte(seasons.lastViewedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+      showEverything
+        ? undefined
+        : viewedOnOrAfter !== null
+        ? and(lt(seasons.lastViewedAt, viewedBefore), gte(seasons.lastViewedAt, viewedOnOrAfter))
+        : lt(seasons.lastViewedAt, viewedBefore),
+    );
+    const unwatchedCond = showEverything ? isNull(seasons.lastViewedAt) : and(
+      isNull(seasons.lastViewedAt),
+      isNotNull(seasons.addedAt),
+      gte(seasons.addedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+      unwatchedAddedOnOrAfter !== null
+        ? and(
+          lt(seasons.addedAt, unwatchedAddedBefore),
+          gte(
+            seasons.addedAt,
+            unwatchedAddedOnOrAfter,
+          ),
+        )
+        : lt(seasons.addedAt, unwatchedAddedBefore),
+    );
+    const staleCond = filter === 'unwatched'
+      ? unwatchedCond
+      : filter === 'watched'
+      ? watchedStaleCond
+      : or(unwatchedCond, watchedStaleCond);
+    const requestedDuplicatesOnly = c.req.query('duplicatesOnly') === 'true';
+    const duplicatesCond = requestedDuplicatesOnly
+      ? sql`exists (
+          select 1 from ${episodeMediaVersions}
+          where ${episodeMediaVersions.serverId} = ${serverId}
+            and ${episodeMediaVersions.libraryKey} = ${key}
+            and ${episodeMediaVersions.seasonRatingKey} = ${seasons.ratingKey}
+        )`
+      : undefined;
+    const seasonSearchCond = search.length >= 2
+      ? sql`instr(lower(${items.title} || ' ' || ${seasons.title}), lower(${search})) > 0`
+      : undefined;
+    const staleWhere = and(
+      seasonsByLibrary(serverId, key),
+      eq(items.serverId, serverId),
+      eq(items.ratingKey, seasons.showRatingKey),
+      contentIsNotIgnored(serverId, items.ratingKey),
+      not(seasonRootIsWorkflowOwned(
+        serverId,
+        key,
+        sql`${seasons.ratingKey}`,
+        sql`${seasons.showRatingKey}`,
+      )),
+      staleCond,
+      duplicatesCond,
+      seasonSearchCond,
+    );
+    const rowSelection = {
+      ratingKey: seasons.ratingKey,
+      libraryKey: seasons.libraryKey,
+      title: items.title,
+      type: sql<string>`'season'`,
+      thumb: items.thumb,
+      addedAt: seasons.addedAt,
+      lastViewedAt: seasons.lastViewedAt,
+      viewCount: seasons.viewCount,
+      fileSize: seasons.fileSize,
+      duration: seasons.duration,
+      year: items.year,
+      updatedAt: seasons.updatedAt,
+      showRatingKey: seasons.showRatingKey,
+      seasonIndex: seasons.seasonIndex,
+      leafCount: seasons.leafCount,
+    };
+    const [countRows, pageRows] = await Promise.all([
+      includeTotal
+        ? db.select({ total: count() }).from(seasons).innerJoin(
+          items,
+          and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
+        ).where(staleWhere)
+        : null,
+      db.select(rowSelection).from(seasons).innerJoin(
+        items,
+        and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
+      ).where(staleWhere).orderBy(
+        order(SEASON_SORT_COLUMNS[sort]),
+        asc(seasons.seasonIndex),
+      ).limit(limit + 1).offset(offset),
+    ]);
+    const total = countRows?.[0]?.total ?? null;
+    const hasMore = pageRows.length > limit;
+    const staleSeasons = hasMore ? pageRows.slice(0, limit) : pageRows;
+    const seasonKeys = staleSeasons.map((season) => season.ratingKey);
+    const duplicateRows = seasonKeys.length === 0 ? [] : await db.selectDistinct({
+      seasonRatingKey: episodeMediaVersions.seasonRatingKey,
+    }).from(episodeMediaVersions).where(and(
+      eq(episodeMediaVersions.serverId, serverId),
+      eq(episodeMediaVersions.libraryKey, key),
+      inArray(episodeMediaVersions.seasonRatingKey, seasonKeys),
+    ));
+    const duplicateSeasonKeys = new Set(duplicateRows.map((row) => row.seasonRatingKey));
+    return c.json(
+      {
+        scope,
+        days,
+        maxDays,
+        minAgeDays,
+        libraryStaleMinAgeDays: library.staleMinAgeDays,
+        automaticStaleDays,
+        historySyncedAt: library.historySyncedAt,
+        search,
+        filter,
+        sort,
+        order: orderStr,
+        duplicatesOnly: requestedDuplicatesOnly,
+        limit,
+        offset,
+        total,
+        hasMore,
+        items: staleSeasons.map((season) => ({
+          ...season,
+          ...(duplicateSeasonKeys.has(season.ratingKey)
+            ? { hasDuplicateEpisodes: true as const }
+            : {}),
+        })),
+      } satisfies StaleResponse,
+    );
+  }
+
+  // Watched but stale: viewed before the minimum boundary and, for range queries,
+  // on or after the maximum boundary.
+  const showEverything = days === 0 && maxDays === null;
+  const watchedStaleCond = and(
+    isNotNull(items.lastViewedAt),
+    gte(items.lastViewedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+    showEverything
+      ? undefined
+      : viewedOnOrAfter !== null
+      ? and(lt(items.lastViewedAt, viewedBefore), gte(items.lastViewedAt, viewedOnOrAfter))
+      : lt(items.lastViewedAt, viewedBefore),
+  );
+
+  // Unwatched: null lastViewedAt AND old enough for both the selected inactivity
+  // duration and the minimum-item-age safety floor (the stricter boundary wins).
+  // Unknown add dates are excluded: they cannot prove that the item has met the selected
+  // threshold, which matters when this list informs destructive cleanup decisions.
+  const unwatchedCond = showEverything ? isNull(items.lastViewedAt) : and(
+    isNull(items.lastViewedAt),
+    isNotNull(items.addedAt),
+    gte(items.addedAt, EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP),
+    unwatchedAddedOnOrAfter !== null
+      ? and(lt(items.addedAt, unwatchedAddedBefore), gte(items.addedAt, unwatchedAddedOnOrAfter))
+      : lt(items.addedAt, unwatchedAddedBefore),
+  );
+
+  const staleCond = filter === 'unwatched'
+    ? unwatchedCond
+    : filter === 'watched'
+    ? watchedStaleCond
+    : or(unwatchedCond, watchedStaleCond);
+
+  // Semantics deliberately differ by library type — see Duplicate detection in
+  // CLAUDE.md. Movie: this item itself has 2+ synced versions (same grouping as the
+  // global duplicates endpoint). Show: at least one of this show's episodes has 2+
+  // synced versions (existence only — episode_media_versions only ever holds genuine
+  // duplicates, see its write-time filtering). Artist/other: no-op, ignored.
+  const requestedDuplicatesOnly = c.req.query('duplicatesOnly') === 'true';
+  let duplicatesCond: SQL | undefined;
+  if (requestedDuplicatesOnly && library.type === 'movie') {
+    duplicatesCond = sql`${items.ratingKey} in (
+      select ${itemMediaVersions.itemRatingKey} from ${itemMediaVersions}
+      where ${itemMediaVersions.serverId} = ${serverId} and ${itemMediaVersions.libraryKey} = ${key}
+      group by ${itemMediaVersions.itemRatingKey} having ${HAS_DUPLICATE_VERSIONS}
+    )`;
+  } else if (requestedDuplicatesOnly && library.type === 'show') {
+    duplicatesCond = sql`exists (
+      select 1 from ${episodeMediaVersions}
+      where ${episodeMediaVersions.serverId} = ${serverId}
+        and ${episodeMediaVersions.libraryKey} = ${key}
+        and ${episodeMediaVersions.showRatingKey} = ${items.ratingKey}
+    )`;
+  }
+  // Reflects whether filtering was actually applied, not just what was requested —
+  // library types other than movie/show (e.g. artist) have no duplicate-detection
+  // support, so a request for them is silently a no-op and must not claim otherwise.
+  const duplicatesOnly = duplicatesCond !== undefined;
+
+  const workflowOwnedCond = library.type === 'show'
+    ? showRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`)
+    : movieRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`);
+
+  const staleWhere = and(
+    itemsByLibrary(serverId, key),
+    contentIsNotIgnored(serverId, items.ratingKey),
+    not(workflowOwnedCond),
+    staleCond,
+    duplicatesCond,
+    titleSearchCond,
+  );
+
+  const [countRows, pageRows] = await Promise.all([
+    includeTotal ? db.select({ total: count() }).from(items).where(staleWhere) : null,
+    // One bounded look-ahead row makes `hasMore` available without an exact count. It is
+    // trimmed before page enrichment, so the existing <= limit memory/work bound remains.
+    db.select().from(items).where(staleWhere).orderBy(order(SORT_COLUMNS[sort])).limit(limit + 1)
+      .offset(offset),
+  ]);
+  const total = countRows?.[0]?.total ?? null;
+  const hasMore = pageRows.length > limit;
+  const staleItems = hasMore ? pageRows.slice(0, limit) : pageRows;
+
+  // Attaches the full per-version breakdown to items whose fileSize is a combined
+  // total across multiple synced Plex Media versions (see Duplicate detection in
+  // CLAUDE.md) — deleting such an item from this page's bulk-delete flow removes every
+  // version, not just a redundant one, so the frontend renders the breakdown rather
+  // than letting that be a silent surprise. Scoped to just this page's rows (≤ limit,
+  // capped at 1000), backed by the existing (serverId, itemRatingKey) index — cheap
+  // regardless of library size, and duplicate-having movies are a small subset besides.
+  const pageRatingKeys = staleItems.map((i) => i.ratingKey);
+  const pageVersionRows = pageRatingKeys.length === 0 ? [] : await db
+    .select()
+    .from(itemMediaVersions)
+    .where(
+      and(
+        mediaVersionsByLibrary(serverId, key),
+        inArray(itemMediaVersions.itemRatingKey, pageRatingKeys),
+      ),
+    );
+  const versionsByKey = new Map<string, MediaVersion[]>();
+  for (const v of pageVersionRows) {
+    const list = versionsByKey.get(v.itemRatingKey) ?? [];
+    list.push(mediaVersionFromRow(v));
+    versionsByKey.set(v.itemRatingKey, list);
+  }
+
+  // Existence-only badge for shows with a duplicate episode somewhere underneath —
+  // runs unconditionally the same way pageVersionRows does above (naturally empty for
+  // non-show libraries, one less branch to maintain), not gated behind duplicatesOnly.
+  const pageEpisodeVersionRows = pageRatingKeys.length === 0 ? [] : await db
+    .selectDistinct({ showRatingKey: episodeMediaVersions.showRatingKey })
+    .from(episodeMediaVersions)
+    .where(
+      and(
+        episodeVersionsByLibrary(serverId, key),
+        inArray(episodeMediaVersions.showRatingKey, pageRatingKeys),
+      ),
+    );
+  const showsWithDuplicateEpisodes = new Set(pageEpisodeVersionRows.map((r) => r.showRatingKey));
+
+  return c.json(
+    {
+      scope,
+      days,
+      maxDays,
+      minAgeDays,
+      libraryStaleMinAgeDays: library.staleMinAgeDays,
+      automaticStaleDays,
+      historySyncedAt: library.historySyncedAt,
+      search,
+      filter,
+      sort,
+      order: orderStr,
+      duplicatesOnly,
+      limit,
+      offset,
+      total,
+      hasMore,
+      items: staleItems.map((item) => {
+        const versions = versionsByKey.get(item.ratingKey);
+        return {
+          ...item,
+          ...(versions && versions.length >= 2 ? { versions } : {}),
+          ...(showsWithDuplicateEpisodes.has(item.ratingKey)
+            ? { hasDuplicateEpisodes: true as const }
+            : {}),
+        };
+      }),
+    } satisfies StaleResponse,
+  );
+});
+
+export default router;

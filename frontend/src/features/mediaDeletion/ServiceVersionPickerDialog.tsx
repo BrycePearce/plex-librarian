@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Layers3 } from "lucide-react";
 import { api } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
 import type { DuplicateGroup, DuplicateSeasonGroup } from "../../lib/api.ts";
 import type { ServiceDeletionSelection } from "../../../../shared/serviceOwnedDeletion.ts";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
@@ -11,11 +12,8 @@ import {
   comparisonToneClass,
 } from "../../routes/-duplicates/duplicatePresentation.ts";
 import { defaultVersionSelection } from "../../routes/-duplicates/versionDeletionState.ts";
-import {
-  episodeCoverageLabel,
-  LanePathsPopover,
-  seasonLaneMatchBasisLabel,
-} from "../../routes/-duplicates/SeasonDuplicateDialog.tsx";
+import { episodeCoverageLabel, seasonLaneMatchBasisLabel } from "./seasonVersionPresentation.ts";
+import { LanePathsPopover } from "./LanePathsPopover.tsx";
 import { BasicDeletionList, BasicDeletionRow, DeletionModalShell } from "./DeletionDialog.tsx";
 import { ServiceOwnedDeletionDialog } from "./ServiceOwnedDeletionDialog.tsx";
 import { VersionTechnicalInfo } from "./VersionTechnicalInfo.tsx";
@@ -83,11 +81,10 @@ export function ServiceVersionPickerDialog(
     if (!dialogRef.current?.open) dialogRef.current?.showModal();
   }, [dialogRef]);
   const analysis = useQuery({
-    queryKey: [
-      "service-version-season-analysis",
+    queryKey: queryKeys.duplicates.seasonSelectionAnalysis(
       season?.seasonRatingKey,
       groups.map((g) => g.mediaType === "episode" ? g.episodeRatingKey : g.ratingKey),
-    ],
+    ),
     queryFn: () =>
       api.duplicates.analyzeSeasonVersions(
         season!.seasonRatingKey,
@@ -104,7 +101,7 @@ export function ServiceVersionPickerDialog(
   const first = groups[0];
   const firstKey = first.mediaType === "movie" ? first.ratingKey : first.episodeRatingKey;
   const technical = useQuery({
-    queryKey: ["service-version-technical", first.mediaType, firstKey],
+    queryKey: queryKeys.duplicates.technicalRefresh(first.mediaType, firstKey),
     queryFn: () => api.duplicates.refreshTechnicalDetails(first.mediaType, firstKey),
     enabled: !season && needsTechnicalDetailRefresh(first.versions),
     retry: false,

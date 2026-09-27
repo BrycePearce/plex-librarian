@@ -1,16 +1,3 @@
-/** A user-confirmed service-to-storage relationship, never a Librarian mount. */
-export interface ServicePathRoot {
-  id: number;
-  serverId: number;
-  serviceKey: string;
-  configurationIdentity: string;
-  serviceRoot: string;
-  storageRoot: string;
-  caseSensitive: boolean;
-  hasAliases: boolean;
-  revision: number;
-}
-
 export interface ServiceStorageEndpoint {
   key: string;
   name: string;
@@ -24,61 +11,6 @@ export interface ServiceStorageEndpoint {
   connectionPort?: number;
   connectionPath?: string;
   remotePathHints?: { host: string; remotePath: string; localPath: string }[];
-}
-
-export interface DockerStoragePreview {
-  invalidatedServices?: Array<{ serviceKey: string; name: string }>;
-  status: 'ready' | 'confirmation_required' | 'unavailable';
-  fingerprint?: string;
-  replacementRequired: boolean;
-  reason?: string;
-  services: Array<{
-    serviceKey: string;
-    name: string;
-    containerName?: string;
-    evidenceIdentity?: string;
-    candidates?: Array<{ id: string; name: string }>;
-    matchedBy?: 'address' | 'selection';
-    roots: Array<{ serviceRoot: string; storageRoot: string; hostPath?: string }>;
-    reason?: string;
-  }>;
-}
-
-export type ProposedServiceRoot = Omit<ServicePathRoot, 'id' | 'serverId' | 'revision'>;
-
-export interface ServiceStorageAutomation {
-  unavailableServices?: Array<{ serviceKey: string; name: string; reason: string }>;
-  status: 'ready' | 'confirmation_required' | 'unavailable';
-  reason?: string;
-  proposal?: {
-    fingerprint: string;
-    sharedRoot: string;
-    serviceNames: string[];
-    relationships: ProposedServiceRoot[];
-  };
-}
-
-export interface ServiceStorageSettings {
-  endpoints: ServiceStorageEndpoint[];
-  relationships: ServicePathRoot[];
-  automation?: ServiceStorageAutomation;
-  discovery?: HostDiscoveryStatus;
-}
-
-export interface HostDiscoveryStatus {
-  enabled: boolean;
-  checking: boolean;
-  stale?: boolean;
-  reason?: string;
-  services: Array<
-    {
-      serviceKey: string;
-      name: string;
-      connected: boolean;
-      state: 'ready' | 'needs_attention';
-      reason?: string;
-    }
-  >;
 }
 
 export interface ServiceDeletionResponse {
@@ -107,35 +39,4 @@ export function storageContains(root: string, path: string, caseSensitive = true
   const a = caseSensitive ? storagePath(root) : storagePath(root).toLowerCase();
   const b = caseSensitive ? storagePath(path) : storagePath(path).toLowerCase();
   return a === b || b.startsWith(a.endsWith('/') ? a : `${a}/`);
-}
-
-export function configuredStoragePath(
-  roots: readonly ServicePathRoot[],
-  serviceKey: string,
-  path: string,
-): string {
-  const normalized = storagePath(path);
-  const matches = roots.filter((root) =>
-    root.serviceKey === serviceKey &&
-    storageContains(root.serviceRoot, normalized, root.caseSensitive)
-  );
-  if (matches.length === 0) {
-    throw new Error(
-      `No storage relationship covers the selected files for ${serviceKey}. In Media connections, enable or retry host discovery to identify this service's media root.`,
-    );
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `Overlapping storage relationships cover the selected files for ${serviceKey}. Check Discovery details in Media connections and resolve overlapping saved mappings before retrying discovery.`,
-    );
-  }
-  if (matches[0].hasAliases) {
-    throw new Error(
-      `The storage relationship for ${serviceKey} declares aliases. Check Discovery details in Media connections; deletion is unavailable while its paths have unresolved aliases.`,
-    );
-  }
-  const root = matches[0];
-  const suffix = normalized.slice(storagePath(root.serviceRoot).length).replace(/^\//, '');
-  const resolved = storagePath(`${root.storageRoot.replace(/\/$/, '')}/${suffix}`);
-  return root.caseSensitive ? resolved : resolved.toLowerCase();
 }

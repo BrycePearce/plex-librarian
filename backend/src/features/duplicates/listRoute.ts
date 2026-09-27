@@ -129,15 +129,6 @@ router.get('/', async (c) => {
       )`,
     )
     : undefined;
-  // `episode_media_versions` is populated only for genuine duplicates during sync, but a
-  // durable version deletion can temporarily leave the retained singleton projection
-  // behind until the next full sync. Keep that residual row out of every listing path.
-  const episodeStillHasDuplicates = sql`(
-    select count(*) from episode_media_versions as duplicate_versions
-    where duplicate_versions.server_id = ${episodeMediaVersions.serverId}
-      and duplicate_versions.episode_rating_key = ${episodeMediaVersions.episodeRatingKey}
-  ) >= 2`;
-
   const serverId = c.get('activeServerId');
   if (serverId === null) {
     return c.json(
@@ -154,7 +145,9 @@ router.get('/', async (c) => {
 
   // Aggregate once per episode before rolling up to a season. The second grouping makes
   // `sum(all versions) - sum(largest version per episode)` exact without loading every
-  // episode's version rows into application memory.
+  // episode's version rows into application memory. Both episode queries use HAVING to
+  // exclude retained singleton projections left by deletion until the next sync; an
+  // additional correlated version count for each input row would repeat that work.
   const eligibleEpisodeRows = db.select({
     libraryKey: episodeMediaVersions.libraryKey,
     showRatingKey: episodeMediaVersions.showRatingKey,
@@ -182,7 +175,6 @@ router.get('/', async (c) => {
       sql`${episodeMediaVersions.seasonRatingKey}`,
     )),
     episodeSearchCond,
-    episodeStillHasDuplicates,
   )).groupBy(
     episodeMediaVersions.libraryKey,
     episodeMediaVersions.showRatingKey,
@@ -300,7 +292,6 @@ router.get('/', async (c) => {
         sql`${episodeMediaVersions.seasonRatingKey}`,
       )),
       episodeSearchCond,
-      episodeStillHasDuplicates,
     )).groupBy(
       episodeMediaVersions.episodeRatingKey,
       episodeMediaVersions.episodeIndex,
@@ -324,34 +315,10 @@ router.get('/', async (c) => {
     return pages.flat();
   };
 
-  const loadSeasonPassEpisodeKeys = async (season: SeasonStub): Promise<string[]> => {
-    if (comparison === 'all') {
-      return loadEligibleSeasonEpisodeKeys(season, 0, SEASON_LIST_EPISODE_SAMPLE_LIMIT);
-    }
-    const matchingKeys: string[] = [];
-    let offset = 0;
-    while (matchingKeys.length < SEASON_LIST_EPISODE_SAMPLE_LIMIT) {
-      const episodeKeys = await loadEligibleSeasonEpisodeKeys(season, offset);
-      if (episodeKeys.length === 0) break;
-      const versionRows = await loadEpisodeVersionRows(episodeKeys);
-      const versionsByEpisode = groupVersions(versionRows, (row) => row.episodeRatingKey);
-      for (const episode of episodeStubsFromRows(versionRows)) {
-        if (
-          compareDuplicateVersions(versionsByEpisode.get(episode.ratingKey) ?? []).kind ===
-            comparison
-        ) {
-          matchingKeys.push(episode.ratingKey);
-          if (matchingKeys.length === SEASON_LIST_EPISODE_SAMPLE_LIMIT) break;
-        }
-      }
-      offset += episodeKeys.length;
-      if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
-    }
-    return matchingKeys;
-  };
-
   let preloadedMovieVersionRows: Array<typeof itemMediaVersions.$inferSelect> | null = null;
-  let preloadedEpisodeVersionRows: Array<typeof episodeMediaVersions.$inferSelect> | null = null;
+  // Keep only preview keys while computing comparison totals. The page can hydrate its
+  // bounded sample directly instead of walking and comparing each visible season twice.
+  const previewKeysBySeason = new Map<string, string[]>();
   let filteredMovieStubs = movieStubs;
   let filteredSeasonStubs = seasonStubs;
   if (comparison !== 'all') {
@@ -369,6 +336,7 @@ router.get('/', async (c) => {
         SEASON_READ_CONCURRENCY,
         async (season) => {
           let offset = 0;
+          const previewKeys: string[] = [];
           let duplicateGroupCount = 0;
           let combinedFileSize: number | null = 0;
           let reclaimableFileSize: number | null = 0;
@@ -380,6 +348,9 @@ router.get('/', async (c) => {
             for (const episode of episodeStubsFromRows(versionRows)) {
               const versions = versionsByEpisode.get(episode.ratingKey) ?? [];
               if (compareDuplicateVersions(versions).kind !== comparison) continue;
+              if (previewKeys.length < SEASON_LIST_EPISODE_SAMPLE_LIMIT) {
+                previewKeys.push(episode.ratingKey);
+              }
               duplicateGroupCount++;
               combinedFileSize = combinedFileSize === null || episode.combinedFileSize === null
                 ? null
@@ -395,13 +366,21 @@ router.get('/', async (c) => {
             offset += episodeKeys.length;
             if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
           }
-          return { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize };
+          return {
+            season,
+            duplicateGroupCount,
+            combinedFileSize,
+            reclaimableFileSize,
+            previewKeys,
+          };
         },
       );
       for (
-        const { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize } of summaries
+        const { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize, previewKeys }
+          of summaries
       ) {
         if (duplicateGroupCount === 0) continue;
+        previewKeysBySeason.set(season.seasonRatingKey, previewKeys);
         filteredSeasonStubs.push({
           ...season,
           episodes: [],
@@ -425,9 +404,12 @@ router.get('/', async (c) => {
   const pageSeasonEpisodeKeys = await mapWithConcurrency(
     pageSeasons,
     SEASON_READ_CONCURRENCY,
-    (season) => loadSeasonPassEpisodeKeys(season),
+    (season) =>
+      comparison === 'all'
+        ? loadEligibleSeasonEpisodeKeys(season, 0, SEASON_LIST_EPISODE_SAMPLE_LIMIT)
+        : Promise.resolve(previewKeysBySeason.get(season.seasonRatingKey) ?? []),
   );
-  preloadedEpisodeVersionRows = await loadEpisodeVersionRows(pageSeasonEpisodeKeys.flat());
+  const preloadedEpisodeVersionRows = await loadEpisodeVersionRows(pageSeasonEpisodeKeys.flat());
   const pageEpisodeVersions = groupVersions(
     preloadedEpisodeVersionRows,
     (row) => row.episodeRatingKey,
@@ -450,8 +432,10 @@ router.get('/', async (c) => {
   const pageEpisodeKeys = page.flatMap((stub) =>
     stub.mediaType === 'season' ? stub.episodes.map((episode) => episode.ratingKey) : []
   );
+  const pageMovieKeySet = new Set(pageMovieKeys);
+  const pageEpisodeKeySet = new Set(pageEpisodeKeys);
 
-  const [movieItemRows, movieVersionRows, episodeVersionRows] = await Promise.all([
+  const [movieItemRows, movieVersionRows] = await Promise.all([
     pageMovieKeys.length === 0 ? [] : db.select({
       ratingKey: items.ratingKey,
       libraryKey: items.libraryKey,
@@ -464,7 +448,7 @@ router.get('/', async (c) => {
     pageMovieKeys.length === 0
       ? []
       : preloadedMovieVersionRows !== null
-      ? preloadedMovieVersionRows.filter((row) => pageMovieKeys.includes(row.itemRatingKey))
+      ? preloadedMovieVersionRows.filter((row) => pageMovieKeySet.has(row.itemRatingKey))
       : db.select().from(itemMediaVersions)
         .where(
           and(
@@ -472,18 +456,10 @@ router.get('/', async (c) => {
             inArray(itemMediaVersions.itemRatingKey, pageMovieKeys),
           ),
         ),
-    pageEpisodeKeys.length === 0
-      ? []
-      : preloadedEpisodeVersionRows !== null
-      ? preloadedEpisodeVersionRows.filter((row) => pageEpisodeKeys.includes(row.episodeRatingKey))
-      : db.select().from(episodeMediaVersions)
-        .where(
-          and(
-            eq(episodeMediaVersions.serverId, serverId),
-            inArray(episodeMediaVersions.episodeRatingKey, pageEpisodeKeys),
-          ),
-        ),
   ]);
+  const episodeVersionRows = preloadedEpisodeVersionRows.filter((row) =>
+    pageEpisodeKeySet.has(row.episodeRatingKey)
+  );
 
   const movieItemByKey = new Map(movieItemRows.map((r) => [r.ratingKey, r]));
   const movieVersionsByKey = groupVersions(movieVersionRows, (v) => v.itemRatingKey);
