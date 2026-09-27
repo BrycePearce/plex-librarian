@@ -63,7 +63,7 @@ export function SharingRiskDetailsDialog({ dialogRef, user, monitorStatus, onClo
 
   return (
     <dialog ref={dialogRef} className="modal" onClose={onClose}>
-      <div className="modal-box polished-modal flex max-h-[90vh] max-w-3xl flex-col p-0">
+      <div className="modal-box polished-modal flex h-[min(44rem,90dvh)] max-h-[90dvh] max-w-3xl flex-col overflow-hidden p-0">
         <header className="shrink-0 border-b border-base-300 px-6 pt-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-base-content/45">
             Sharing risk assessment
@@ -97,7 +97,9 @@ export function SharingRiskDetailsDialog({ dialogRef, user, monitorStatus, onClo
                     <motion.span
                       layoutId="sharing-risk-tab"
                       className="absolute inset-0 -z-10 rounded-md bg-base-100 shadow-sm"
-                      transition={{ type: "spring", stiffness: 420, damping: 34 }}
+                      transition={reduceMotion
+                        ? { duration: 0 }
+                        : { type: "spring", stiffness: 420, damping: 34 }}
                     />
                   )}
                   {value}
@@ -106,15 +108,15 @@ export function SharingRiskDetailsDialog({ dialogRef, user, monitorStatus, onClo
             </div>
           </div>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={tab}
               role="tabpanel"
-              initial={reduceMotion ? false : { opacity: 0, x: tab === "trend" ? 18 : -18 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: reduceMotion ? 0 : tab === "trend" ? -12 : 12 }}
-              transition={{ duration: reduceMotion ? 0 : 0.18 }}
+              initial={reduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.14, ease: "easeOut" }}
             >
               {tab === "current" && user && (
                 <Current assessment={user.sharingRisk} monitorStatus={monitorStatus} />
