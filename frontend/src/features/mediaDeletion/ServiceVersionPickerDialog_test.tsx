@@ -223,6 +223,8 @@ Deno.test("season episode selection preserves the picker and expansion across to
       );
     });
     const row = renderer!.root.findByType("details");
+    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
     assertEquals(row.findByType("strong").children.join(""), "E01 \u2014 Pilot");
     const inputs = renderer!.root.findAllByType("input");
     await act(() => inputs[0].props.onChange());
@@ -237,6 +239,8 @@ Deno.test("season episode selection preserves the picker and expansion across to
     assertEquals(requests, 0);
     await act(() => renderer!.root.findAllByType("input")[0].props.onChange());
     assertEquals(renderer!.root.findAllByType("input")[1].props.disabled, false);
+    assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
+    assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
   } finally {
     await act(() => renderer?.unmount());
     client.clear();

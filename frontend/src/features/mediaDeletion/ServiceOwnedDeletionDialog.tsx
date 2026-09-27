@@ -282,7 +282,7 @@ function SelectionDialog({
       }
       onClose={cancel}
     >
-      {renderPreview
+      {selection.length > 0 && (renderPreview
         ? renderPreview(displayPreview, {
           loading,
           error,
@@ -297,7 +297,7 @@ function SelectionDialog({
             collapsible={!embedded}
             showWarnings={false}
           />
-        )}
+        ))}
       {displayPreview && <ServiceDeletionWarnings preview={displayPreview} />}
       <DestinationOptions
         loading={loading}
