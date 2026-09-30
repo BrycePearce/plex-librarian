@@ -113,6 +113,39 @@ any steps needing attention on the Activity page.
 Upgrading from the retired host-discovery helper? Follow the
 [upgrade guide](deploy/discovery/UPGRADING.md) to retire the separate helper.
 
+### Sonarr/Radarr download source cleanup
+
+Librarian uses Sonarr/Radarr import history to find the original downloaded files
+associated with the media being removed, including copies or hardlinks still in
+the download folder. It verifies ownership and file identity before cleanup.
+To enable this optional cleanup, mount the
+**same host download folder that Sonarr/Radarr uses** into Plex Librarian with
+read/write access. This is optional; ordinary service API cleanup does not need
+this mount. Keep the existing `/data` app-data mount unchanged.
+
+**Unraid:** open **Docker → Plex Librarian → Edit**, set **Completed downloads
+folder** to your host folder (for example, `/mnt/user/downloads/complete`), use
+`/cleanup-downloads` as the container path with **Read/Write** access, and Apply.
+
+**Docker Compose:** add this entry under Librarian's existing `volumes:` list,
+replacing `source` with your host's completed-downloads folder:
+
+```yaml
+      - type: bind
+        source: /mnt/user/downloads/complete
+        target: /cleanup-downloads
+        read_only: false
+        bind:
+          create_host_path: false
+```
+
+Run `docker compose up -d` again. Then open **Settings → Media connections →
+Download cleanup**, finish setup, and enable cleanup after the access check.
+For manual setup, enter the download folder **as Sonarr/Radarr sees it** and
+`/cleanup-downloads` as the folder **in Librarian**. The container paths can differ,
+but must refer to the same host files. Choose the completed-downloads folder,
+rather than an individual movie or season folder.
+
 ## Configuration
 
 Most settings live in the web UI: daily sync scheduling with your time zone,
