@@ -228,7 +228,7 @@ function DashboardInner() {
             librariesData.libraries.length > 0 && (
             <StatsStrip
               libraries={librariesData.libraries}
-              mediaSizeRemoved={mediaRemovalSummary?.mediaSizeRemoved ?? 0}
+              mediaSizeRemoved={mediaRemovalSummary?.mediaSizeRemoved}
             />
           )}
 

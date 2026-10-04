@@ -70,10 +70,7 @@ export function useDashboard() {
     queryKey: queryKeys.qbittorrentIntegrations.all,
     queryFn: api.qbittorrent.get,
   });
-  const {
-    data: mediaRemovalSummary,
-    isLoading: isMediaRemovalSummaryLoading,
-  } = useQuery({
+  const { data: mediaRemovalSummary } = useQuery({
     queryKey: queryKeys.mediaRemovals.summary,
     queryFn: api.mediaRemovals.summary,
   });
@@ -113,7 +110,7 @@ export function useDashboard() {
   // back here. `history` is always freshly fetched on mount, so fall back to it to
   // catch syncs still pending from elsewhere (avoids a 409 + flicker on "Sync all").
   const anyPendingSync = history?.some((h) => h.status === "pending") ?? false;
-  const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync;
+  const isAnySyncing = isSyncing || anyLibrarySyncing || anyPendingSync || isHistoryLoading;
   const lastSyncedAt = librariesData?.libraries.reduce(
     (latest, library) => Math.max(latest, library.syncedAt),
     0,
@@ -156,12 +153,9 @@ export function useDashboard() {
 
   // Library data is the only unconditional blocker. Once an empty library response has
   // established that this might be a first run, let the dedicated checking/first-run
-  // states render instead of flashing the populated-dashboard skeleton. Ancillary stats
-  // such as media removed are not used by FirstRunHero and must not hold it up.
-  const isDashboardLoading = libsLoading ||
-    (!isCheckingFirstRun &&
-      !isFirstRun &&
-      (isHistoryLoading || isMediaRemovalSummaryLoading));
+  // states render instead of flashing the populated-dashboard skeleton. History and
+  // removal stats load independently; they must not hold up a populated library grid.
+  const isDashboardLoading = libsLoading;
 
   const showArrOnboarding = !arrOnboardingDismissed &&
     arrSettings !== undefined &&

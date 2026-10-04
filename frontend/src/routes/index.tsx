@@ -4,9 +4,10 @@ import { queryKeys } from "../lib/queryKeys.ts";
 
 export const Route = createFileRoute("/")({
   beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: queryKeys.auth.status,
-      queryFn: api.auth.status,
+    const status = await context.queryClient.fetchQuery({
+      queryKey: queryKeys.auth.configuration,
+      queryFn: api.auth.configuration,
+      staleTime: 60_000,
     });
     throw redirect({ to: status.configured ? "/dashboard" : "/setup" });
   },

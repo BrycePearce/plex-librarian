@@ -46,6 +46,10 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
         configured: false,
         source: null,
       });
+      qc.setQueryData<AuthStatus>(queryKeys.auth.configuration, {
+        configured: false,
+        source: null,
+      });
       try {
         await navigate({ to: "/setup", replace: true });
         await clearServerScopedQueries(qc);
@@ -79,9 +83,8 @@ export function UserMenu({ sidebar = false }: { sidebar?: boolean }) {
     }).catch(() => navigate({ to: "/arcade" }));
   };
 
-  // Same footprint as the real button below — this query resolves after first paint (it
-  // races the same queryKey the route's beforeLoad already kicked off), so without a
-  // same-size placeholder here the avatar pops in and shifts ThemeSwitcher beside it.
+  // Keep the menu's footprint while account validation/profile fetching completes
+  // after first paint, so its arrival does not shift the sidebar controls.
   if (isPending) {
     return (
       <div

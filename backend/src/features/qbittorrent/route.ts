@@ -18,6 +18,7 @@ import type {
 } from '@plex-librarian/shared/types.ts';
 import { qbitMappingsOverlap, validateQbittorrentPathMapping } from './pathMappings.ts';
 import { assessQbittorrent } from '../integrationCompatibility/assessment.ts';
+import { compatibilityCache } from '../integrationCompatibility/cache.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -280,6 +281,8 @@ router.post('/instances/:id/test', async (c) => {
       { error: error instanceof Error ? error.message : 'connection test failed' },
       502,
     );
+  } finally {
+    compatibilityCache.invalidate(serverId, `qbittorrent:${instance.id}`);
   }
 });
 

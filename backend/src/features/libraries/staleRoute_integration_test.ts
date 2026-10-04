@@ -1,4 +1,5 @@
 import { assertEquals } from '@std/assert';
+import { Database } from '@db/sqlite';
 import { resolve } from '@std/path';
 import type {
   IgnoredContentResponse,
@@ -14,7 +15,7 @@ Deno.env.delete('PLEX_TOKEN');
 
 const { runMigrations } = await import('../../db/migrate.ts');
 await runMigrations(testDbPath, resolve(import.meta.dirname!, '../../../drizzle'));
-const { withTransaction } = await import('../../db/index.ts');
+const { withTransaction, readDatabaseRevision } = await import('../../db/index.ts');
 
 withTransaction((client) => {
   const insertServer = client.prepare(
@@ -259,6 +260,38 @@ Deno.test('library statistics retain empty libraries and large file-size totals'
   }
 });
 
+Deno.test('cached library stats refresh after raw local writes and external commits', async () => {
+  const readSize = async () => {
+    const response = await app.request('/api/libraries?limit=1');
+    const result = await response.json() as LibrariesResponse;
+    return result.libraries[0]?.totalFileSize;
+  };
+  assertEquals(await readSize(), 600);
+  const revision = readDatabaseRevision();
+  withTransaction((client) => {
+    client.prepare("UPDATE items SET file_size = 400 WHERE server_id = 1 AND rating_key = 'one'")
+      .run();
+  });
+  assertEquals(readDatabaseRevision() === revision, false);
+  assertEquals(await readSize(), 700);
+  const external = new Database(testDbPath);
+  try {
+    const localRevision = readDatabaseRevision();
+    external.prepare(
+      "UPDATE items SET file_size = 500 WHERE server_id = 1 AND rating_key = 'one'",
+    ).run();
+    assertEquals(readDatabaseRevision() === localRevision, false);
+    assertEquals(await readSize(), 800);
+  } finally {
+    external.close();
+    withTransaction((client) => {
+      client.prepare("UPDATE items SET file_size = 300 WHERE server_id = 1 AND rating_key = 'one'")
+        .run();
+    });
+  }
+  assertEquals(await readSize(), 600);
+});
+
 Deno.test('ignored content API adds, searches, filters, and restores synced items', async () => {
   const added = await app.request('/api/settings/ignored-content', {
     method: 'POST',
@@ -289,4 +322,7 @@ Deno.test('ignored content API adds, searches, filters, and restores synced item
     204,
   );
   assertEquals((await stale('limit=10')).total, 3);
+  const restored = await (await app.request('/api/libraries')).json() as LibrariesResponse;
+  assertEquals(restored.libraries[0]?.itemCount, 3);
+  assertEquals(restored.libraries[0]?.totalFileSize, 600);
 });

@@ -23,9 +23,8 @@ const router = createRouter({
   // immediate without eagerly downloading every page during initial startup.
   defaultPreload: "intent",
   defaultPreloadDelay: 25,
-  // Every route's `beforeLoad` awaits a network round-trip (the auth-status check) before
-  // anything renders. Without this, that wait shows a blank page — most visible on a hard
-  // refresh or a session's first navigation, since the check is cached for 60s afterward.
+  // A fresh route awaits local configuration and its component chunk. Show feedback
+  // if either takes time on a hard refresh or a session's first navigation.
   // `flex-1` (not `min-h-screen`) so it fills whatever space `<main>` actually has below the
   // navbar — `min-h-screen` here centered against a box starting below the nav, not the
   // true viewport, landing the indicator well below true center.

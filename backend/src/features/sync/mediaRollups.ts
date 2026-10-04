@@ -9,6 +9,7 @@ import type {
   PlexLibrary,
 } from '../../integrations/plex/index.ts';
 import { auditSeasonIndexes, EpisodeRangeSet } from './episodeRanges.ts';
+import { createSyncYield } from './cooperativeYield.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 
@@ -35,6 +36,7 @@ export async function syncShowSizes(
   suppressAllProjectionPruning = preserveDeletionProjections &&
     protectedShowRatingKeys.length === 0,
 ): Promise<{ pruneCompleted: boolean }> {
+  const yieldIfNeeded = createSyncYield();
   type SeasonAgg = {
     showRatingKey: string;
     seasonIndex: number;
@@ -100,6 +102,7 @@ export async function syncShowSizes(
       }
     }
     episodeVersions.push(...page.episodeMediaVersions);
+    await yieldIfNeeded();
   }
 
   // No episodes fetched — transient empty response or all filtered. Skip prune and
@@ -165,6 +168,7 @@ export async function syncShowSizes(
           updatedAt: excl(seasons.updatedAt),
         },
       });
+    await yieldIfNeeded();
   }
 
   const seasonIndexesByShow = new Map<string, number[]>();
@@ -213,6 +217,7 @@ export async function syncShowSizes(
       }
     });
     afterRatingKey = currentShows.at(-1)!.ratingKey;
+    await yieldIfNeeded();
   }
 
   // Only reached once the parent season rows above are guaranteed to exist (this
@@ -300,6 +305,7 @@ export async function syncShowSizes(
           updatedAt: excl(episodeMediaVersions.updatedAt),
         },
       });
+    await yieldIfNeeded();
   }
 
   // Needs-attention deletion recovery owns its affected show/episode roots until manual
@@ -315,6 +321,7 @@ export async function syncShowSizes(
           ? [notInArray(seasons.showRatingKey, [...protectedShowRatingKeys])]
           : []),
       ));
+    await yieldIfNeeded();
 
     // Runs after the seasons prune (not before) purely to avoid redundant work: any
     // episode-version row belonging to a show/season pruned above is already
@@ -329,6 +336,7 @@ export async function syncShowSizes(
         ? [notInArray(episodeMediaVersions.showRatingKey, [...protectedShowRatingKeys])]
         : []),
     ));
+    await yieldIfNeeded();
   }
 
   // Roll season sizes up to the show row so the stale list can display total size.
@@ -357,6 +365,7 @@ export async function syncArtistSizes(
   lib: PlexLibrary,
   serverId: number,
 ): Promise<void> {
+  const yieldIfNeeded = createSyncYield();
   const artistTotals = new Map<string, number>();
 
   for await (const page of plex.libraryTracks(lib.key)) {
@@ -367,6 +376,7 @@ export async function syncArtistSizes(
         (artistTotals.get(track.artistRatingKey) ?? 0) + track.fileSize,
       );
     }
+    await yieldIfNeeded();
   }
 
   if (artistTotals.size === 0) return;

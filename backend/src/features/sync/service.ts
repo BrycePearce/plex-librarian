@@ -13,6 +13,7 @@ import type { PlexClient, PlexLibrary } from '../../integrations/plex/index.ts';
 import { syncLibraryHistory } from './historySync.ts';
 import { syncArtistSizes, syncShowSizes } from './mediaRollups.ts';
 import { syncUsers } from './userSync.ts';
+import { createSyncYield } from './cooperativeYield.ts';
 import { withLibraryOperation } from '../../services/libraryOperations.ts';
 import { syncSeerrRequests } from '../seerr/sync.ts';
 import type { LibraryPhase } from '@plex-librarian/shared/types.ts';
@@ -112,6 +113,7 @@ async function syncLibrary(
   serverId: number,
   callbacks?: LibraryCallbacks,
 ): Promise<LibrarySyncResult> {
+  const yieldIfNeeded = createSyncYield();
   callbacks?.onPhase('items');
 
   // historySyncedAt is reset to null here — it's only set back once syncLibraryHistory
@@ -199,6 +201,7 @@ async function syncLibrary(
             updatedAt: excl(items.updatedAt),
           },
         });
+      await yieldIfNeeded();
     }
     itemCount += page.items.length;
     callbacks?.onCount(page.items.length);
@@ -278,6 +281,7 @@ async function syncLibrary(
             updatedAt: excl(itemMediaVersions.updatedAt),
           },
         });
+      await yieldIfNeeded();
     }
   }
 
@@ -341,6 +345,7 @@ async function syncLibrary(
       lt(items.updatedAt, now),
       ...(protectedRoots.length > 0 ? [notInArray(items.ratingKey, protectedRoots)] : []),
     ));
+    await yieldIfNeeded();
     // Cascade-deletes media-version rows for any item pruned above. This explicit prune
     // additionally catches the case where the parent item still exists but one specific
     // version disappeared from Plex between syncs (e.g. deleted directly in Plex).
@@ -351,6 +356,7 @@ async function syncLibrary(
         ? [notInArray(itemMediaVersions.itemRatingKey, protectedRoots)]
         : []),
     ));
+    await yieldIfNeeded();
   }
   const itemProjectionPruneCompleted = itemPruneCanRun && !recoveryProjection.required;
   const pruneCompleted = completeProjectionPrune(

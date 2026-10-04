@@ -5,7 +5,6 @@ import { settings } from '../../db/schema.ts';
 import {
   buildPlexHeaders,
   clearPlexClientCache,
-  disconnectActiveServer,
   findOrCreateServer,
   getActiveServer,
   PLEX_CLIENT_PRODUCT,
@@ -250,6 +249,9 @@ router.delete('/plex', (c) => {
 // Returns whether Plex is configured (used by the client for first-run detection).
 // Also validates the stored token against Plex so a revoked token shows as unconfigured.
 router.get('/status', async (c) => {
+  // Setup detection is local, not API authentication. Validate the Plex account
+  // after rendering so its five-second timeout cannot block a page refresh.
+  const configurationOnly = c.req.query('validate') === 'false';
   // Env vars count as configured — skip live validation for simplicity.
   // Use || so a partial env-var set (one var missing) surfaces as misconfigured
   // rather than falling through to DB credentials that createPlexClient() would ignore.
@@ -258,6 +260,7 @@ router.get('/status', async (c) => {
     if (!configured) {
       return c.json({ configured, source: 'env', reason: 'env_incomplete' });
     }
+    if (configurationOnly) return c.json({ configured, source: 'env' });
     const clientId = await getOrCreateClientId();
     const user = await fetchPlexAccount(clientId, Deno.env.get('PLEX_TOKEN')!);
     return c.json({ configured, source: 'env', user: user ?? undefined });
@@ -267,6 +270,7 @@ router.get('/status', async (c) => {
   if (!active) {
     return c.json({ configured: false, source: null });
   }
+  if (configurationOnly) return c.json({ configured: true, source: 'db' });
 
   // Validate the token is still accepted by Plex.
   try {
@@ -279,7 +283,22 @@ router.get('/status', async (c) => {
       res.body?.cancel();
       // Token revoked — disconnect so the client redirects to setup. The server row
       // itself is left alone; reconnecting later refreshes its token.
-      await disconnectActiveServer();
+      // A background check may finish after reconnecting or switching servers.
+      // Only disconnect the exact credentials we just validated.
+      const disconnected = withTransaction((client) => {
+        const current = client.prepare(`
+          SELECT s.active_server_id, v.access_token FROM settings s
+          JOIN servers v ON v.id = s.active_server_id WHERE s.id = 1
+        `).value<[number, string]>();
+        if (current?.[0] !== active.serverId || current[1] !== active.accessToken) return false;
+        client.exec('UPDATE settings SET active_server_id = NULL WHERE id = 1');
+        return true;
+      });
+      if (!disconnected) {
+        const current = await getActiveServer();
+        return c.json({ configured: current !== null, source: current ? 'db' : null });
+      }
+      clearPlexClientCache();
       return c.json({ configured: false, source: null, reason: 'token_revoked' });
     }
     if (!res.ok) {

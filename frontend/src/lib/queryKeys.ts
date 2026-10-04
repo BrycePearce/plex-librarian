@@ -26,6 +26,7 @@ export const queryKeys = {
   auth: {
     all: [roots.auth] as const,
     status: [roots.auth, "status"] as const,
+    configuration: [roots.auth, "configuration"] as const,
     pin: (pinId: number | null) => [roots.auth, "pin", pinId] as const,
   },
   libraries: {

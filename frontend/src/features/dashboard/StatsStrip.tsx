@@ -11,7 +11,7 @@ export function StatsStrip({
   mediaSizeRemoved,
 }: {
   libraries: Library[];
-  mediaSizeRemoved: number;
+  mediaSizeRemoved?: number;
 }) {
   const totals = libraries.reduce(
     (acc, lib) => {
@@ -25,7 +25,7 @@ export function StatsStrip({
 
   const animatedItems = useCountUp(totals.items, 900);
   const animatedSize = useCountUp(totals.size, 900);
-  const animatedRemovedSize = useCountUp(mediaSizeRemoved, 900);
+  const animatedRemovedSize = useCountUp(mediaSizeRemoved ?? 0, 900);
 
   return (
     <motion.div
@@ -51,7 +51,7 @@ export function StatsStrip({
         iconClass="bg-primary/20 text-primary"
         tone="primary"
         label="Media removed"
-        value={formatKilobytes(animatedRemovedSize)}
+        value={mediaSizeRemoved === undefined ? "—" : formatKilobytes(animatedRemovedSize)}
         title="Logical media size from completed deletion workflows. Ordinary deletions use service-reported success or acceptance; disk space recovered is not measured."
       />
       <StatTile

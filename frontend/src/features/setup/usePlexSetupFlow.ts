@@ -118,6 +118,7 @@ export function usePlexSetupFlow() {
       // the resolution reads before opening Media connections; the cache work below
       // runs concurrently, so this rarely adds real wait.
       const finaleBeat = new Promise((resolve) => setTimeout(resolve, 900));
+      await queryClient.invalidateQueries({ queryKey: queryKeys.auth.configuration });
       await queryClient.refetchQueries({ queryKey: queryKeys.auth.status });
       await resetServerScopedQueries(queryClient);
       // Cache warming is an optimization, not part of connecting the server. A failed

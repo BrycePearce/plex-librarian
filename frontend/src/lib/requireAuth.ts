@@ -3,12 +3,11 @@ import { redirect } from "@tanstack/react-router";
 import { api } from "./api.ts";
 import { queryKeys } from "./queryKeys.ts";
 
-/** Shared protected-route guard. The query cache keeps normal navigations local while
- * still validating a hard refresh or an expired auth-status entry. */
+/** Keep setup detection local; the root checks the Plex account after rendering. */
 export async function requireAuth(queryClient: QueryClient): Promise<void> {
-  const status = await queryClient.ensureQueryData({
-    queryKey: queryKeys.auth.status,
-    queryFn: api.auth.status,
+  const status = await queryClient.fetchQuery({
+    queryKey: queryKeys.auth.configuration,
+    queryFn: api.auth.configuration,
     staleTime: 60_000,
   });
 

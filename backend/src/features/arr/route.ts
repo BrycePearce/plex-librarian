@@ -6,6 +6,7 @@ import { arrInstances, arrLibraryMappings, arrPathMappings, libraries } from '..
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { ArrClient, normalizeArrUrl } from '../../integrations/arr/client.ts';
 import { assessArr } from '../integrationCompatibility/assessment.ts';
+import { compatibilityCache } from '../integrationCompatibility/cache.ts';
 import { items } from '../../db/schema.ts';
 import { verifyArrStorage } from './storageVerification.ts';
 import {
@@ -342,6 +343,8 @@ router.post('/instances/:id/test', async (c) => {
       { error: error instanceof Error ? error.message : 'connection test failed' },
       502,
     );
+  } finally {
+    compatibilityCache.invalidate(serverId, `${instance.type}:${instance.id}`);
   }
 });
 

@@ -15,6 +15,15 @@ export function withTransaction<T>(fn: (client: SqliteClient) => T): T {
 
 const stmtCache = new StatementCache(sqlite);
 
+// Local writes (including raw transactions) and commits by other connections must
+// invalidate derived reads. Rollbacks can advance total_changes too: conservative
+// invalidation is safe. Read the counter as text to avoid 32-bit native conversion.
+export function readDatabaseRevision(): string {
+  const changes = stmtCache.execute('SELECT CAST(total_changes() AS TEXT)', (stmt) => stmt.value());
+  const external = stmtCache.execute('PRAGMA data_version', (stmt) => stmt.value());
+  return `${changes}:${external}`;
+}
+
 export const db = drizzle(
   (sql, params, method) => {
     const bindParams = params as BindValue[];

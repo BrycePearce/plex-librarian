@@ -10,9 +10,10 @@ import "./setup.css";
 
 export const Route = createFileRoute("/setup")({
   beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.ensureQueryData({
-      queryKey: queryKeys.auth.status,
-      queryFn: api.auth.status,
+    const status = await context.queryClient.fetchQuery({
+      queryKey: queryKeys.auth.configuration,
+      queryFn: api.auth.configuration,
+      staleTime: 60_000,
     });
     if (status.configured) throw redirect({ to: "/settings/sonarr-radarr" });
   },

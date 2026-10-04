@@ -24,6 +24,7 @@ import type {
 import type { UsersParams } from "./types.ts";
 
 export const authApi = {
+  configuration: () => apiFetch<AuthStatus>("/auth/status?validate=false"),
   status: () => apiFetch<AuthStatus>("/auth/status"),
   createPin: () => apiFetch<PlexPin>("/auth/plex/pin", { method: "POST" }),
   pollPin: (id: number) => apiFetch<PinPollResult>(`/auth/plex/pin/${id}`),

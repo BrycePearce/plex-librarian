@@ -2,6 +2,7 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 import { db, type SqliteClient, withTransaction } from '../../db/index.ts';
 import { users } from '../../db/schema.ts';
 import { HistoryCounts } from './historyCounts.ts';
+import { createSyncYield } from './cooperativeYield.ts';
 import type { PlexClient, PlexHistoryEntry, PlexLibrary } from '../../integrations/plex/index.ts';
 
 function nonNegativeInteger(value: unknown): number | null {
@@ -58,6 +59,7 @@ export async function syncLibraryHistory(
   serverId: number,
 ): Promise<void> {
   if (lib.type === 'artist') return;
+  const yieldIfNeeded = createSyncYield();
 
   const roster = await db.select({
     accountId: users.accountId,
@@ -276,6 +278,7 @@ export async function syncLibraryHistory(
           mappingStmt.finalize();
         });
       }
+      await yieldIfNeeded();
     }
 
     // Item maxima were already applied page-by-page; finish the roster-level aggregate.

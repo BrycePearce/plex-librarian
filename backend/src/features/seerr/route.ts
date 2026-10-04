@@ -10,6 +10,7 @@ import type {
   UpdateSeerrInstanceRequest,
 } from '@plex-librarian/shared/types.ts';
 import { compatibleSeerr } from '../integrationCompatibility/assessment.ts';
+import { compatibilityCache } from '../integrationCompatibility/cache.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -140,6 +141,8 @@ router.post('/instances/:id/test', async (c) => {
       },
       502,
     );
+  } finally {
+    compatibilityCache.invalidate(serverId, `seerr:${instance.id}`);
   }
 });
 

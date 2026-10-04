@@ -7,6 +7,7 @@ import { AppSidebar } from "../components/AppSidebar.tsx";
 import { SyncCacheCoordinator } from "../features/sync/SyncCacheCoordinator.tsx";
 import { DeletionOperationCoordinator } from "../features/deletionOperations/DeletionOperationCoordinator.tsx";
 import { DisconnectTransitionProvider } from "../features/auth/DisconnectTransition.tsx";
+import { AuthStatusCoordinator } from "../features/auth/AuthStatusCoordinator.tsx";
 import { IntegrationCompatibilityBanner } from "../features/integrationCompatibility/IntegrationCompatibilityBanner.tsx";
 import "./__root.css";
 
@@ -49,6 +50,7 @@ function RootLayout() {
     <DeletionOperationCoordinator>
       <div className="app-shell bg-base-100 text-base-content">
         <SyncCacheCoordinator />
+        <AuthStatusCoordinator />
         <AppSidebar />
         <main className="scroll-area app-main overflow-y-auto">
           <div className="flex flex-col min-h-full container mx-auto px-4 py-8 max-w-6xl">

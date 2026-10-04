@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
-import { db } from '../../db/index.ts';
+import { db, readDatabaseRevision } from '../../db/index.ts';
 import { items, libraries } from '../../db/schema.ts';
 import { contentIsNotIgnored, libraryByKey } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
@@ -12,6 +12,11 @@ import {
 import detailRoute from './detailRoute.ts';
 import quickCleanupRoute from './quickCleanupRoute.ts';
 import staleRoute from './staleRoute.ts';
+import { LibraryStatsCache } from './statsCache.ts';
+
+const statsCache = new LibraryStatsCache<
+  { libraryKey: string; itemCount: number; totalFileSize: string | null }[]
+>(readDatabaseRevision);
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -40,15 +45,20 @@ router.get('/', async (c) => {
   // Aggregate only the returned libraries: a small page or past-end request must not
   // scan every item on the server. Keep aggregation in SQLite and preserve the text
   // cast, which avoids the driver's 32-bit integer read path for large size totals.
-  const statsRows = rows.length === 0 ? [] : await db.select({
-    libraryKey: items.libraryKey,
-    itemCount: count(),
-    totalFileSize: sql<string | null>`cast(sum(${items.fileSize}) as text)`,
-  }).from(items).where(and(
-    eq(items.serverId, serverId),
-    inArray(items.libraryKey, rows.map((library) => library.key)),
-    contentIsNotIgnored(serverId, items.ratingKey),
-  )).groupBy(items.libraryKey);
+  const statsRows = rows.length === 0 ? [] : await statsCache.get(
+    serverId,
+    rows.map((library) => library.key),
+    async () =>
+      await db.select({
+        libraryKey: items.libraryKey,
+        itemCount: count(),
+        totalFileSize: sql<string | null>`cast(sum(${items.fileSize}) as text)`,
+      }).from(items).where(and(
+        eq(items.serverId, serverId),
+        inArray(items.libraryKey, rows.map((library) => library.key)),
+        contentIsNotIgnored(serverId, items.ratingKey),
+      )).groupBy(items.libraryKey),
+  );
 
   const statsByKey = new Map(statsRows.map((r) => [r.libraryKey, r]));
   const now = Math.floor(Date.now() / 1000);
