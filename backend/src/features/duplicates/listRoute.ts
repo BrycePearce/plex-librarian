@@ -277,40 +277,6 @@ router.get('/', async (c) => {
     episodes: [],
   }));
 
-  const loadEligibleSeasonEpisodeKeys = async (
-    season: SeasonStub,
-    offset = 0,
-    limit = SEASON_EPISODE_READ_PAGE_SIZE,
-  ): Promise<string[]> => {
-    // GROUP BY otherwise makes SQLite prefer the episode index's server-only
-    // prefix, scanning every duplicate episode once for each candidate season.
-    // This lookup has an exact season identity; keep the read scoped to that season.
-    const rows = await db.select({
-      ratingKey: sql<string>`${episodeMediaVersions.episodeRatingKey}`,
-      episodeIndex: sql<number>`${episodeMediaVersions.episodeIndex}`,
-    }).from(sql`${episodeMediaVersions} indexed by episode_media_versions_season_idx`).where(and(
-      eq(episodeMediaVersions.serverId, serverId),
-      eq(episodeMediaVersions.libraryKey, season.libraryKey),
-      eq(episodeMediaVersions.showRatingKey, season.showRatingKey),
-      eq(episodeMediaVersions.seasonRatingKey, season.seasonRatingKey),
-      not(episodeRootIsWorkflowOwnedForRead(
-        serverId,
-        season.libraryKey,
-        sql`${episodeMediaVersions.episodeRatingKey}`,
-        sql`${episodeMediaVersions.showRatingKey}`,
-        sql`${episodeMediaVersions.seasonRatingKey}`,
-      )),
-      episodeSearchCond,
-    )).groupBy(
-      episodeMediaVersions.episodeRatingKey,
-      episodeMediaVersions.episodeIndex,
-    ).having(HAS_DUPLICATE_VERSIONS).orderBy(
-      episodeMediaVersions.episodeIndex,
-      episodeMediaVersions.episodeRatingKey,
-    ).limit(limit).offset(offset);
-    return rows.map((row) => row.ratingKey);
-  };
-
   const loadEpisodeVersionRows = async (episodeKeys: string[]) => {
     const pages = await mapWithConcurrency(
       keyBatches(episodeKeys),
@@ -322,6 +288,54 @@ router.get('/', async (c) => {
         )),
     );
     return pages.flat();
+  };
+
+  const loadSeasonPreviewEpisodeKeys = async (batch: SeasonStub[]) => {
+    // Rank grouped episodes within each season in SQLite, returning only the bounded
+    // preview. Batch the seasons so ownership sets are built once per batch rather
+    // than once for every visible row; the native adapter executes synchronously.
+    const ranked = db.select({
+      ratingKey: sql<string>`${episodeMediaVersions.episodeRatingKey}`.as('preview_rating_key'),
+      seasonRatingKey: sql<string>`${episodeMediaVersions.seasonRatingKey}`.as(
+        'preview_season_key',
+      ),
+      episodeIndex: sql<number>`${episodeMediaVersions.episodeIndex}`.as('preview_episode_index'),
+      position: sql<number>`row_number() over (
+        partition by ${episodeMediaVersions.seasonRatingKey}
+        order by ${episodeMediaVersions.episodeIndex}, ${episodeMediaVersions.episodeRatingKey}
+      )`.as('preview_position'),
+    }).from(sql`${episodeMediaVersions} indexed by episode_media_versions_season_idx`).where(and(
+      eq(episodeMediaVersions.serverId, serverId),
+      inArray(episodeMediaVersions.seasonRatingKey, batch.map((season) => season.seasonRatingKey)),
+      or(...batch.map((season) =>
+        and(
+          eq(episodeMediaVersions.libraryKey, season.libraryKey),
+          eq(episodeMediaVersions.showRatingKey, season.showRatingKey),
+          eq(episodeMediaVersions.seasonRatingKey, season.seasonRatingKey),
+        )
+      )),
+      not(episodeRootIsWorkflowOwnedForRead(
+        serverId,
+        sql`${episodeMediaVersions.libraryKey}`,
+        sql`${episodeMediaVersions.episodeRatingKey}`,
+        sql`${episodeMediaVersions.showRatingKey}`,
+        sql`${episodeMediaVersions.seasonRatingKey}`,
+      )),
+      episodeSearchCond,
+    )).groupBy(
+      episodeMediaVersions.seasonRatingKey,
+      episodeMediaVersions.episodeRatingKey,
+      episodeMediaVersions.episodeIndex,
+    ).having(HAS_DUPLICATE_VERSIONS).as('ranked_preview_episodes');
+    return await db.select({
+      ratingKey: ranked.ratingKey,
+      seasonRatingKey: ranked.seasonRatingKey,
+    }).from(ranked).where(sql`${ranked.position} <= ${SEASON_LIST_EPISODE_SAMPLE_LIMIT}`)
+      .orderBy(
+        sql`${ranked.seasonRatingKey}`,
+        sql`${ranked.episodeIndex}`,
+        sql`${ranked.ratingKey}`,
+      );
   };
 
   const loadSeasonBatchEpisodeKeys = async (
@@ -457,14 +471,13 @@ router.get('/', async (c) => {
   const page = listStubs.slice(offset, offset + limit);
   const pageMovieKeys = page.filter((s) => s.mediaType === 'movie').map((s) => s.ratingKey);
   const pageSeasons = page.filter((stub): stub is SeasonStub => stub.mediaType === 'season');
-  const pageSeasonEpisodeKeys = await mapWithConcurrency(
-    pageSeasons,
-    SEASON_READ_CONCURRENCY,
-    (season) =>
-      comparison === 'all'
-        ? loadEligibleSeasonEpisodeKeys(season, 0, SEASON_LIST_EPISODE_SAMPLE_LIMIT)
-        : Promise.resolve(previewKeysBySeason.get(season.seasonRatingKey) ?? []),
-  );
+  const pageSeasonEpisodeKeys = comparison === 'all'
+    ? (await mapWithConcurrency(
+      arrayBatches(pageSeasons, SEASON_FILTER_BATCH_SIZE),
+      SEASON_READ_CONCURRENCY,
+      loadSeasonPreviewEpisodeKeys,
+    )).map((rows) => rows.map((row) => row.ratingKey))
+    : pageSeasons.map((season) => previewKeysBySeason.get(season.seasonRatingKey) ?? []);
   const preloadedEpisodeVersionRows = await loadEpisodeVersionRows(pageSeasonEpisodeKeys.flat());
   const pageEpisodeVersions = groupVersions(
     preloadedEpisodeVersionRows,
@@ -519,7 +532,9 @@ router.get('/', async (c) => {
 
   const movieItemByKey = new Map(movieItemRows.map((r) => [r.ratingKey, r]));
   const movieVersionsByKey = groupVersions(movieVersionRows, (v) => v.itemRatingKey);
-  const episodeVersionsByKey = groupVersions(episodeVersionRows, (v) => v.episodeRatingKey);
+  // The preview pass already decoded these media/stream rows. Reuse it rather than
+  // parsing every audio/subtitle JSON array a second time for the response.
+  const episodeVersionsByKey = pageEpisodeVersions;
 
   const showKeys = [...new Set(episodeVersionRows.map((v) => v.showRatingKey))];
   const showRows = showKeys.length === 0 ? [] : await db.select({

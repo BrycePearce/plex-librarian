@@ -1,6 +1,8 @@
 import { assertEquals, assertExists } from '@std/assert';
 import { resolve } from '@std/path';
 import { Hono } from 'hono';
+import type { Statement } from '@db/sqlite';
+import { StatementCache } from '../../db/statementCache.ts';
 import type { DuplicateSeasonGroup, DuplicatesResponse } from '@plex-librarian/shared/types.ts';
 
 const directory = await Deno.makeTempDir({ prefix: 'duplicate-list-test-' });
@@ -140,6 +142,45 @@ Deno.test('technical duplicate search applies throughout a season longer than on
   assertEquals(season.combinedFileSize, 619 * 300);
   assertEquals(season.reclaimableFileSize, 619 * 100);
   assertEquals(season.episodes.length, 20);
+});
+
+Deno.test('unfiltered season previews batch reads and preserve bounded samples, filters and pagination', async () => {
+  const original = StatementCache.prototype.execute;
+  const queries: string[] = [];
+  StatementCache.prototype.execute = function <T>(
+    query: string,
+    run: (statement: Statement) => T,
+  ): T {
+    queries.push(query);
+    return original.call(this, query, run) as T;
+  };
+  try {
+    for (
+      const query of [
+        'limit=200',
+        'limit=10&offset=26',
+        'limit=200&search=Needle',
+        'limit=200&search=Show B',
+        'limit=10&offset=100',
+      ]
+    ) {
+      const expected = await read(query);
+      queries.length = 0;
+      const response = await app.request(`/duplicates?type=tv&${query}`);
+      assertEquals(response.status, 200);
+      const actual = await response.json() as DuplicatesResponse;
+      assertEquals(actual, expected);
+      assertEquals(
+        queries.filter((sql) => sql.includes('row_number() over')).length,
+        Math.ceil(actual.groups.length / 25),
+      );
+      for (const group of actual.groups as DuplicateSeasonGroup[]) {
+        assertEquals(group.episodes.length, Math.min(20, group.duplicateGroupCount));
+      }
+    }
+  } finally {
+    StatementCache.prototype.execute = original;
+  }
 });
 
 Deno.test('technical duplicate samples deduplicate inconsistent episode-index groups', async () => {
