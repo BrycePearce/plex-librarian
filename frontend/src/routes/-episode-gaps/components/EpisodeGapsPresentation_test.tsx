@@ -51,3 +51,11 @@ Deno.test("irregular season rows explain season-numbering metadata", () => {
   assertStringIncludes(html, "Plex returned an invalid season index.");
   assertStringIncludes(html, "Irregular show metadata");
 });
+
+Deno.test("summary-only responses expose counts while pending and mismatched summaries stay unknown", () => {
+  const summaryOnly = { scope: "season" as const, summary: seasonGapFixture.summary };
+  assertEquals(episodeGapsSummaryPresentation(summaryOnly, "season").missingCount, 1);
+  assertEquals(episodeGapsSummaryPresentation(undefined, "episode").irregularCount, undefined);
+  assertEquals(episodeGapsSummaryPresentation(summaryOnly, "episode").missingCount, undefined);
+  assertEquals(episodeGapsSummaryPresentation(summaryOnly, "episode").irregularCount, undefined);
+});

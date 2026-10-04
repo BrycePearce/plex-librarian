@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, or, type SQL, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
 import {
   arrInstances,
@@ -12,10 +12,14 @@ import {
 import { ArrClient } from '../../integrations/arr/client.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
+  EpisodeGapsEpisodeResponse,
+  EpisodeGapsPageResponse,
   EpisodeGapsResponse,
   EpisodeGapsScope,
+  EpisodeGapsSeasonResponse,
   EpisodeGapsSort,
   EpisodeGapsStatusFilter,
+  EpisodeGapsSummaryResponse,
 } from '@plex-librarian/shared/types.ts';
 import { decodeEpisodeGapProjection, decodeSeasonGapProjection } from './projection.ts';
 import { contentIsNotIgnored } from '../../db/scope.ts';
@@ -177,6 +181,34 @@ const unexpectedSeasonStatus = sql`(
   and ${items.seasonAuditStatus} not in ('ok', 'gaps', 'irregular', 'excluded')
 )`;
 
+router.get('/summary', async (c) => {
+  const rawScope = c.req.query('scope') ?? 'episode';
+  if (rawScope !== 'episode' && rawScope !== 'season') {
+    return c.json({ error: 'invalid scope' }, 400);
+  }
+  const gapScope = rawScope as EpisodeGapsScope;
+  const libraryKey = c.req.query('libraryKey')?.trim() || undefined;
+  const search = (c.req.query('search') ?? '').trim();
+  if (search.length > 200) return c.json({ error: 'search must be 200 characters or fewer' }, 400);
+  const serverId = c.get('activeServerId');
+  if (serverId === null) return c.json(emptySummary(gapScope));
+  const audits = await readLibraryAudits(serverId, libraryKey);
+  const checked = audits.filter((audit) => audit.episodeAuditSyncedAt !== null).length;
+  return gapScope === 'episode'
+    ? c.json(
+      {
+        scope: 'episode',
+        summary: await episodeSummary(serverId, libraryKey, search, checked),
+      } satisfies EpisodeGapsSummaryResponse,
+    )
+    : c.json(
+      {
+        scope: 'season',
+        summary: await seasonSummary(serverId, libraryKey, search, checked),
+      } satisfies EpisodeGapsSummaryResponse,
+    );
+});
+
 router.get('/', async (c) => {
   const rawScope = c.req.query('scope') ?? 'episode';
   if (rawScope !== 'episode' && rawScope !== 'season') {
@@ -211,20 +243,30 @@ router.get('/', async (c) => {
   }
   const limit = Math.min(limitValue, 100);
   const offset = offsetValue;
+  const includeSummary = c.req.query('includeSummary') !== 'false';
   const serverId = c.get('activeServerId');
-  if (serverId === null) return c.json(emptyResponse(gapScope, limit, offset));
+  if (serverId === null) {
+    return c.json(
+      includeSummary ? emptyResponse(gapScope, limit, offset) : emptyPage(gapScope, limit, offset),
+    );
+  }
   if (gapScope === 'season') {
     return c.json(
-      await seasonResponse(serverId, libraryKey, search, status, sort, rawOrder, limit, offset),
+      await seasonResponse(
+        serverId,
+        libraryKey,
+        search,
+        status,
+        sort,
+        rawOrder,
+        limit,
+        offset,
+        includeSummary,
+      ),
     );
   }
 
-  const scope = [
-    eq(seasons.serverId, serverId),
-    contentIsNotIgnored(serverId, seasons.showRatingKey),
-  ];
-  if (libraryKey) scope.push(eq(seasons.libraryKey, libraryKey));
-  if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
+  const scope = episodeScope(serverId, libraryKey, search);
   const statusCondition = status === 'gaps'
     ? and(eq(seasons.episodeAuditStatus, 'gaps'), validNormal)
     : status === 'irregular'
@@ -280,7 +322,52 @@ router.get('/', async (c) => {
     )
     .where(where);
 
-  const summaryScope = and(...scope);
+  const libraryAudits = await readLibraryAudits(serverId, libraryKey);
+  const page = {
+    scope: 'episode' as const,
+    total: total ?? 0,
+    limit,
+    offset,
+    libraryAudits,
+    rows: rows.map(decodeEpisodeGapProjection),
+  } satisfies EpisodeGapsPageResponse;
+  if (!includeSummary) return c.json(page);
+  const checked = libraryAudits.filter((audit) => audit.episodeAuditSyncedAt !== null).length;
+  return c.json(
+    {
+      ...page,
+      summary: await episodeSummary(serverId, libraryKey, search, checked),
+    } satisfies EpisodeGapsResponse,
+  );
+});
+
+function episodeScope(serverId: number, libraryKey: string | undefined, search: string): SQL[] {
+  const scope = [
+    eq(seasons.serverId, serverId),
+    contentIsNotIgnored(serverId, seasons.showRatingKey),
+  ];
+  if (libraryKey) scope.push(eq(seasons.libraryKey, libraryKey));
+  if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
+  return scope;
+}
+
+function seasonScope(serverId: number, libraryKey: string | undefined, search: string): SQL[] {
+  const scope = [
+    eq(items.serverId, serverId),
+    eq(items.type, 'show'),
+    contentIsNotIgnored(serverId, items.ratingKey),
+  ];
+  if (libraryKey) scope.push(eq(items.libraryKey, libraryKey));
+  if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
+  return scope;
+}
+
+async function episodeSummary(
+  serverId: number,
+  libraryKey: string | undefined,
+  search: string,
+  checkedLibraryCount: number,
+): Promise<EpisodeGapsEpisodeResponse['summary']> {
   const [summary] = await db.select({
     gapSeasonCount: sql<
       number
@@ -298,38 +385,27 @@ router.get('/', async (c) => {
       items,
       and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
     )
-    .where(summaryScope);
+    .where(and(...episodeScope(serverId, libraryKey, search)));
+  return {
+    gapSeasonCount: summary?.gapSeasonCount ?? 0,
+    missingEpisodeCount: Number(summary?.missingEpisodeCount ?? 0),
+    checkedLibraryCount,
+    irregularSeasonCount: summary?.irregularSeasonCount ?? 0,
+  };
+}
+
+function readLibraryAudits(serverId: number, libraryKey: string | undefined) {
   const libraryScope = and(
     eq(libraries.serverId, serverId),
     eq(libraries.type, 'show'),
     libraryKey ? eq(libraries.key, libraryKey) : undefined,
   );
-  const libraryAudits = await db.select({
+  return db.select({
     libraryKey: libraries.key,
     libraryTitle: libraries.title,
     episodeAuditSyncedAt: libraries.episodeAuditSyncedAt,
   }).from(libraries).where(libraryScope).orderBy(asc(libraries.title));
-  const checkedLibraryCount = libraryAudits.filter((library) =>
-    library.episodeAuditSyncedAt !== null
-  ).length;
-
-  return c.json(
-    {
-      scope: 'episode',
-      summary: {
-        gapSeasonCount: summary?.gapSeasonCount ?? 0,
-        missingEpisodeCount: Number(summary?.missingEpisodeCount ?? 0),
-        checkedLibraryCount,
-        irregularSeasonCount: summary?.irregularSeasonCount ?? 0,
-      },
-      total: total ?? 0,
-      limit,
-      offset,
-      libraryAudits,
-      rows: rows.map(decodeEpisodeGapProjection),
-    } satisfies EpisodeGapsResponse,
-  );
-});
+}
 
 async function seasonResponse(
   serverId: number,
@@ -340,14 +416,9 @@ async function seasonResponse(
   rawOrder: string,
   limit: number,
   offset: number,
-): Promise<EpisodeGapsResponse> {
-  const scope = [
-    eq(items.serverId, serverId),
-    eq(items.type, 'show'),
-    contentIsNotIgnored(serverId, items.ratingKey),
-  ];
-  if (libraryKey) scope.push(eq(items.libraryKey, libraryKey));
-  if (search) scope.push(sql`instr(lower(${items.title}), lower(${search})) > 0`);
+  includeSummary: boolean,
+): Promise<EpisodeGapsResponse | EpisodeGapsPageResponse> {
+  const scope = seasonScope(serverId, libraryKey, search);
   const statusCondition = status === 'gaps'
     ? and(eq(items.seasonAuditStatus, 'gaps'), validSeasonNormal)
     : status === 'irregular'
@@ -387,6 +458,29 @@ async function seasonResponse(
     libraries,
     and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
   ).where(where);
+  const libraryAudits = await readLibraryAudits(serverId, libraryKey);
+  const page = {
+    scope: 'season' as const,
+    total: total ?? 0,
+    limit,
+    offset,
+    libraryAudits,
+    rows: rows.map(decodeSeasonGapProjection),
+  } satisfies EpisodeGapsPageResponse;
+  if (!includeSummary) return page;
+  const checked = libraryAudits.filter((audit) => audit.episodeAuditSyncedAt !== null).length;
+  return {
+    ...page,
+    summary: await seasonSummary(serverId, libraryKey, search, checked),
+  };
+}
+
+async function seasonSummary(
+  serverId: number,
+  libraryKey: string | undefined,
+  search: string,
+  checkedLibraryCount: number,
+): Promise<EpisodeGapsSeasonResponse['summary']> {
   const [summary] = await db.select({
     gapShowCount: sql<
       number
@@ -397,31 +491,29 @@ async function seasonResponse(
     irregularShowCount: sql<
       number
     >`sum(case when ${items.seasonAuditStatus} = 'irregular' or ${invalidSeasonNormal} or ${unexpectedSeasonStatus} then 1 else 0 end)`,
-  }).from(items).where(and(...scope));
-  const libraryAudits = await db.select({
-    libraryKey: libraries.key,
-    libraryTitle: libraries.title,
-    episodeAuditSyncedAt: libraries.episodeAuditSyncedAt,
-  }).from(libraries).where(and(
-    eq(libraries.serverId, serverId),
-    eq(libraries.type, 'show'),
-    libraryKey ? eq(libraries.key, libraryKey) : undefined,
-  )).orderBy(asc(libraries.title));
+  }).from(items).where(and(...seasonScope(serverId, libraryKey, search)));
   return {
-    scope: 'season',
-    summary: {
-      gapShowCount: summary?.gapShowCount ?? 0,
-      missingSeasonCount: Number(summary?.missingSeasonCount ?? 0),
-      checkedLibraryCount:
-        libraryAudits.filter((audit) => audit.episodeAuditSyncedAt !== null).length,
-      irregularShowCount: summary?.irregularShowCount ?? 0,
-    },
-    total: total ?? 0,
-    limit,
-    offset,
-    libraryAudits,
-    rows: rows.map(decodeSeasonGapProjection),
+    gapShowCount: summary?.gapShowCount ?? 0,
+    missingSeasonCount: Number(summary?.missingSeasonCount ?? 0),
+    checkedLibraryCount,
+    irregularShowCount: summary?.irregularShowCount ?? 0,
   };
+}
+
+function emptyPage(
+  scope: EpisodeGapsScope,
+  limit: number,
+  offset: number,
+): EpisodeGapsPageResponse {
+  const common = { total: 0, limit, offset, libraryAudits: [], rows: [] };
+  return scope === 'episode' ? { scope: 'episode', ...common } : { scope: 'season', ...common };
+}
+
+function emptySummary(scope: EpisodeGapsScope): EpisodeGapsSummaryResponse {
+  const response = emptyResponse(scope, 0, 0);
+  return response.scope === 'episode'
+    ? { scope: 'episode', summary: response.summary }
+    : { scope: 'season', summary: response.summary };
 }
 
 function emptyResponse(

@@ -1,13 +1,16 @@
 import { AlertTriangle, CheckCircle2, Library, ScanLine } from "lucide-react";
-import type { EpisodeGapsResponse } from "@shared/types";
+import type { EpisodeGapsSummaryResponse } from "@shared/types";
 import { DataSurface } from "../../../components/Workspace.tsx";
+import { ErrorAlert } from "../../../components/ErrorAlert.tsx";
 import { episodeGapsSummaryPresentation } from "../utils/summaryPresentation.ts";
 
 export function EpisodeGapsSummary(
-  { data, loading, scope }: {
-    data: EpisodeGapsResponse | undefined;
+  { data, loading, scope, error, onRetry }: {
+    data: EpisodeGapsSummaryResponse | undefined;
     loading: boolean;
     scope: "episode" | "season";
+    error?: string;
+    onRetry?: () => void;
   },
 ) {
   const presentation = episodeGapsSummaryPresentation(data, scope);
@@ -39,28 +42,44 @@ export function EpisodeGapsSummary(
             <Library />
             <div>
               <span>Coverage</span>
-              {loading
-                ? <span className="skeleton h-6 w-10" />
-                : <strong>{data?.summary.checkedLibraryCount.toLocaleString() ?? "—"}</strong>}
+              {loading ? <span className="skeleton h-6 w-10" /> : (
+                <strong>
+                  {data?.scope === scope ? data.summary.checkedLibraryCount.toLocaleString() : "—"}
+                </strong>
+              )}
               <small>TV libraries checked</small>
             </div>
           </div>
           <div className={`episode-gap-stat is-irregular ${auditClean ? "is-clear" : ""}`}>
             {auditClean ? <CheckCircle2 /> : <AlertTriangle />}
             <div>
-              <span>{auditClean ? "Audit clean" : "Needs review"}</span>
+              <span>
+                {auditClean
+                  ? "Audit clean"
+                  : irregularCount === undefined
+                  ? "Audit status"
+                  : "Needs review"}
+              </span>
               {loading
                 ? <span className="skeleton h-6 w-10" />
                 : <strong>{irregularCount?.toLocaleString() ?? "—"}</strong>}
               <small>
                 {auditClean
                   ? `No irregular ${presentation.irregularNoun}`
+                  : irregularCount === undefined
+                  ? loading ? "Loading audit totals" : "Audit totals unavailable"
                   : `Irregular ${presentation.irregularNoun}`}
               </small>
             </div>
           </div>
         </div>
       </DataSurface>
+      {error && (
+        <ErrorAlert
+          message={`Audit summary could not be loaded. Findings remain available below. ${error}`}
+          onRetry={() => onRetry?.()}
+        />
+      )}
     </section>
   );
 }

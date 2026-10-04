@@ -25,6 +25,7 @@ import {
 import {
   hasRetainedEpisodeAuditFindings,
   isEpisodeAuditUninitialized,
+  needsEpisodeAuditSummary,
 } from "./-episode-gaps/utils/auditState.ts";
 import "./episode-gaps.css";
 
@@ -54,7 +55,15 @@ function EpisodeGapsPage() {
   const navigate = Route.useNavigate();
   const { isSyncing: liveSyncing } = useAnySyncStatus();
   const isSyncing = liveSyncing || search.fixture === "syncing";
-  const { data, isLoading, query, sonarrTargetsByLibrary } = useEpisodeGapsData(
+  const {
+    data,
+    isLoading,
+    query,
+    summaryData,
+    isSummaryLoading,
+    summaryQuery,
+    sonarrTargetsByLibrary,
+  } = useEpisodeGapsData(
     search,
     isSyncing,
   );
@@ -71,8 +80,10 @@ function EpisodeGapsPage() {
     null,
   );
   const noTvLibraries = data?.libraryAudits.length === 0;
-  const unaudited = data ? isEpisodeAuditUninitialized(data) : false;
-  const hasRetainedAudit = data ? hasRetainedEpisodeAuditFindings(data) : false;
+  const unaudited = data ? isEpisodeAuditUninitialized(data, summaryData) : false;
+  const hasRetainedAudit = data ? hasRetainedEpisodeAuditFindings(data, summaryData) : false;
+  const awaitingAuditSummary = data && isSummaryLoading &&
+    needsEpisodeAuditSummary(data, summaryData);
   const filtered = Boolean(search.search || search.libraryKey || search.status !== "gaps");
   const seasonScope = search.scope === "season";
   const switchScope = (scope: "episode" | "season") =>
@@ -125,6 +136,8 @@ function EpisodeGapsPage() {
                 ? `Audited ${formatEpisodeAuditTime(maxAudit)}`
                 : hasRetainedAudit
                 ? "Retained audit · refresh incomplete"
+                : data && needsEpisodeAuditSummary(data, summaryData)
+                ? isSummaryLoading ? "Checking audit status" : "Audit status unavailable"
                 : "Awaiting first audit"}
             </span>
           </div>
@@ -138,10 +151,17 @@ function EpisodeGapsPage() {
         </SyncDataNotice>
       )}
 
-      <EpisodeGapsSummary data={data} loading={isLoading} scope={search.scope} />
-      {data?.libraryAudits.some((audit) =>
-        audit.episodeAuditSyncedAt === null
-      ) && !unaudited && (
+      <EpisodeGapsSummary
+        data={summaryData}
+        loading={isSummaryLoading}
+        scope={search.scope}
+        error={summaryQuery.isError
+          ? summaryQuery.error instanceof Error ? summaryQuery.error.message : "Please retry."
+          : undefined}
+        onRetry={() =>
+          void summaryQuery.refetch()}
+      />
+      {data?.libraryAudits.some((audit) => audit.episodeAuditSyncedAt === null) && !unaudited && (
         <div className="episode-gaps-stale">
           <AlertTriangle />{" "}
           Some TV libraries have stale or unfinished audits. Their retained findings may change
@@ -176,7 +196,7 @@ function EpisodeGapsPage() {
             onRetry={() => void query.refetch()}
           />
         )
-        : isLoading
+        : isLoading || awaitingAuditSummary
         ? <EpisodeGapsSkeleton />
         : noTvLibraries
         ? (
@@ -224,15 +244,17 @@ function EpisodeGapsPage() {
           : (
             <EpisodeGapsEmpty
               icon={CheckCircle2}
-              title="No internal gaps found"
-              description={seasonScope
-                ? data.scope === "season" && data.summary.irregularShowCount > 0
+              title={summaryData ? "No internal gaps found" : "No gap findings to display"}
+              description={!summaryData
+                ? "The selected view has no saved gap findings. Audit totals are not available yet."
+                : seasonScope
+                ? summaryData.scope === "season" && summaryData.summary.irregularShowCount > 0
                   ? "No trustworthy internal season gaps were found. Irregular show or season-numbering metadata still needs review."
                   : "No internal gaps were found between the first and last numbered season in each audited show. This does not claim each series is complete."
-                : data.scope === "episode" && data.summary.irregularSeasonCount > 0
+                : summaryData.scope === "episode" && summaryData.summary.irregularSeasonCount > 0
                 ? "No trustworthy internal episode gaps were found. Irregular seasons still need review."
                 : "No internal gaps were found between the first and last episode in each audited season. This does not claim the seasons are complete."}
-              celebrate
+              celebrate={Boolean(summaryData)}
             />
           )
         : (

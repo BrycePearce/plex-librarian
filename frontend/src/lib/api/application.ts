@@ -3,8 +3,11 @@ import type {
   ActivityEventsResponse,
   AuthStatus,
   CancelPendingInvitationResponse,
+  EpisodeGapsPageResponse,
   EpisodeGapsParams,
   EpisodeGapsResponse,
+  EpisodeGapsSummaryParams,
+  EpisodeGapsSummaryResponse,
   IgnoredContentItem,
   IgnoredContentResponse,
   MediaRemovalSummary,
@@ -47,12 +50,28 @@ export const authApi = {
 };
 
 export const toolsApi = {
-  episodeGaps: (params: EpisodeGapsParams = {}) => {
+  episodeGaps: (params: Omit<EpisodeGapsParams, "includeSummary"> = {}) => {
     const q = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== "") q.set(key, String(value));
     }
     return apiFetch<EpisodeGapsResponse>(`/tools/episode-gaps?${q}`);
+  },
+  episodeGapsPage: (params: EpisodeGapsParams = {}) => {
+    const q = new URLSearchParams({ includeSummary: "false" });
+    for (const [key, value] of Object.entries(params)) {
+      if (key !== "includeSummary" && value !== undefined && value !== "") {
+        q.set(key, String(value));
+      }
+    }
+    return apiFetch<EpisodeGapsPageResponse>(`/tools/episode-gaps?${q}`);
+  },
+  episodeGapsSummary: (params: EpisodeGapsSummaryParams) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") q.set(key, String(value));
+    }
+    return apiFetch<EpisodeGapsSummaryResponse>(`/tools/episode-gaps/summary?${q}`);
   },
 };
 

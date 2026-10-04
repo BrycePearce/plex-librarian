@@ -1,6 +1,10 @@
 import { assertEquals } from '@std/assert';
 import { resolve } from '@std/path';
-import type { EpisodeGapsResponse } from '@plex-librarian/shared/types.ts';
+import type {
+  EpisodeGapsPageResponse,
+  EpisodeGapsResponse,
+  EpisodeGapsSummaryResponse,
+} from '@plex-librarian/shared/types.ts';
 import type {
   PlexClient,
   PlexEpisodeMediaVersion,
@@ -70,6 +74,104 @@ async function request(query = '') {
   assertEquals(response.status, 200);
   return await response.json() as EpisodeGapsResponse;
 }
+
+Deno.test('split episode gaps endpoints preserve combined results and separate expensive work', async () => {
+  const client = withTransaction((client) => client);
+  const originalPrepare = client.prepare;
+  const executed: string[] = [];
+  let observing = true;
+  client.prepare = function (query: string) {
+    const statement = originalPrepare.call(client, query);
+    const values = statement.values.bind(statement);
+    statement.values = (...params) => {
+      if (observing) executed.push(query);
+      return values(...params);
+    };
+    return statement;
+  };
+  try {
+    for (const scope of ['episode', 'season']) {
+      for (
+        const filter of [
+          '',
+          'libraryKey=tv',
+          'libraryKey=anime',
+          'libraryKey=missing',
+          'search=Alpha',
+          'search=Broken',
+          'search=no-match',
+          'status=irregular&limit=1&offset=1',
+          'status=all&sort=title&order=asc&limit=2&offset=1',
+          'limit=1&offset=100',
+        ]
+      ) {
+        const query = `scope=${scope}&${filter}`;
+        // Start with the lean request so its prepared statements are observed too.
+        executed.length = 0;
+        const leanResponse = await app.request(
+          `/api/tools/episode-gaps?${query}&includeSummary=false`,
+        );
+        assertEquals(leanResponse.status, 200);
+        const page = await leanResponse.json() as EpisodeGapsPageResponse;
+        assertEquals('summary' in page, false);
+        assertEquals(executed.some((sql) => sql.startsWith('select sum(case when')), false);
+
+        const combined = await request(query);
+        const { summary, ...expectedPage } = combined;
+        assertEquals(page, expectedPage);
+        executed.length = 0;
+        const summaryResponse = await app.request(`/api/tools/episode-gaps/summary?${query}`);
+        assertEquals(summaryResponse.status, 200);
+        assertEquals(await summaryResponse.json() as EpisodeGapsSummaryResponse, {
+          scope,
+          summary,
+        });
+        assertEquals(executed.some((sql) => sql.startsWith('select count(*)')), false);
+        assertEquals(executed.some((sql) => sql.includes('"items"."thumb"')), false);
+      }
+    }
+  } finally {
+    observing = false;
+    client.prepare = originalPrepare;
+  }
+});
+
+Deno.test('split episode gaps endpoints return empty responses without an active server', async () => {
+  const { clearPlexClientCache } = await import('../../integrations/plex/index.ts');
+  withTransaction((client) => {
+    client.exec('UPDATE settings SET active_server_id=NULL WHERE id=1');
+  });
+  clearPlexClientCache();
+  try {
+    for (const scope of ['episode', 'season']) {
+      const combined = await request(`scope=${scope}&limit=7&offset=2`);
+      const { summary, ...expectedPage } = combined;
+      const lean = await app.request(
+        `/api/tools/episode-gaps?scope=${scope}&limit=7&offset=2&includeSummary=false`,
+      );
+      assertEquals(lean.status, 200);
+      assertEquals(await lean.json(), expectedPage);
+      const split = await app.request(`/api/tools/episode-gaps/summary?scope=${scope}`);
+      assertEquals(split.status, 200);
+      assertEquals(await split.json(), { scope, summary });
+    }
+  } finally {
+    withTransaction((client) => client.exec('UPDATE settings SET active_server_id=1 WHERE id=1'));
+    clearPlexClientCache();
+  }
+});
+
+Deno.test('episode gaps summary validates scope and search independently of pagination', async () => {
+  assertEquals((await app.request('/api/tools/episode-gaps/summary?scope=invalid')).status, 400);
+  assertEquals(
+    (await app.request(`/api/tools/episode-gaps/summary?search=${'a'.repeat(201)}`)).status,
+    400,
+  );
+  assertEquals(
+    (await app.request('/api/tools/episode-gaps/summary?limit=invalid&status=invalid')).status,
+    200,
+  );
+});
 
 Deno.test('empty-range fast path preserves corrupted and unknown clean projections in both scopes', async () => {
   withTransaction((client) => {
@@ -215,6 +317,15 @@ Deno.test('episode gaps exclude ignored parent shows from rows and summaries', a
     if (seasonGaps.scope !== 'season') throw new Error('expected season response');
     assertEquals(seasonGaps.summary.gapShowCount, 0);
     assertEquals(seasonGaps.summary.missingSeasonCount, 0);
+    for (const combined of [gaps, seasonGaps]) {
+      const { summary, ...page } = combined;
+      const lean = await app.request(
+        `/api/tools/episode-gaps?scope=${combined.scope}&includeSummary=false`,
+      );
+      assertEquals(await lean.json(), page);
+      const split = await app.request(`/api/tools/episode-gaps/summary?scope=${combined.scope}`);
+      assertEquals(await split.json(), { scope: combined.scope, summary });
+    }
   } finally {
     withTransaction((client) => {
       client.prepare('DELETE FROM ignored_content WHERE server_id = 1 AND rating_key = ?').run(

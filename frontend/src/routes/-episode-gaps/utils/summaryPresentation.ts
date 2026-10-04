@@ -1,9 +1,10 @@
-import type { EpisodeGapsResponse, EpisodeGapsScope } from "@shared/types";
+import type { EpisodeGapsScope, EpisodeGapsSummaryResponse } from "@shared/types";
 
 export function episodeGapsSummaryPresentation(
-  data: EpisodeGapsResponse | undefined,
+  data: EpisodeGapsSummaryResponse | undefined,
   scope: EpisodeGapsScope,
 ) {
+  if (data?.scope !== scope) data = undefined;
   const seasonScope = scope === "season";
   return {
     missingCount: data

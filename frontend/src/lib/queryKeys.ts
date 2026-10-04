@@ -105,6 +105,8 @@ export const queryKeys = {
   episodeGaps: {
     all: [roots.episodeGaps] as const,
     list: <TParams>(params: TParams) => [roots.episodeGaps, params] as const,
+    page: <TParams>(params: TParams) => [roots.episodeGaps, "page", params] as const,
+    summary: <TParams>(params: TParams) => [roots.episodeGaps, "summary", params] as const,
   },
 } as const;
 

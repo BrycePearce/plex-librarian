@@ -81,6 +81,14 @@ export interface EpisodeGapsSeasonResponse {
 
 export type EpisodeGapsResponse = EpisodeGapsEpisodeResponse | EpisodeGapsSeasonResponse;
 
+export type EpisodeGapsPageResponse =
+  | Omit<EpisodeGapsEpisodeResponse, 'summary'>
+  | Omit<EpisodeGapsSeasonResponse, 'summary'>;
+
+export type EpisodeGapsSummaryResponse =
+  | Pick<EpisodeGapsEpisodeResponse, 'scope' | 'summary'>
+  | Pick<EpisodeGapsSeasonResponse, 'scope' | 'summary'>;
+
 export interface EpisodeGapsParams {
   scope?: EpisodeGapsScope;
   libraryKey?: string;
@@ -90,4 +98,7 @@ export interface EpisodeGapsParams {
   order?: SortOrder;
   limit?: number;
   offset?: number;
+  includeSummary?: boolean;
 }
+
+export type EpisodeGapsSummaryParams = Pick<EpisodeGapsParams, 'scope' | 'libraryKey' | 'search'>;
