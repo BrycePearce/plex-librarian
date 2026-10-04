@@ -9,12 +9,14 @@ export function PosterThumb({
   height,
   className,
   hoverScope,
+  loading,
 }: {
   thumb: string | null;
   width: number;
   height: number;
   className: string;
   hoverScope?: "poster" | "row";
+  loading?: "eager" | "lazy";
 }) {
   const url = thumb
     ? `/api/proxy/thumb?path=${encodeURIComponent(thumb)}&width=${width}&height=${height}`
@@ -26,6 +28,8 @@ export function PosterThumb({
         <img
           src={url}
           alt=""
+          loading={loading}
+          decoding="async"
           className={`${className} object-cover rounded bg-base-300 shrink-0`}
         />
       )
@@ -42,7 +46,8 @@ export function PosterThumb({
           src={url}
           alt=""
           className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
-          loading="lazy"
+          loading={loading ?? "lazy"}
+          decoding="async"
         />
       )}
     </div>

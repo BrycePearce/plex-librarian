@@ -104,6 +104,8 @@ router.get('/open/sonarr/:instanceId/:showRatingKey', async (c) => {
   }
 });
 
+// A validated empty array cannot contain range errors. Skip both json_each walks
+// for that common clean case; NULL/nonempty arrays keep the original validation.
 const validNormal = sql`(
   ${seasons.episodeAuditStatus} in ('ok', 'gaps')
   and ${seasons.seasonIndex} between 1 and 10000
@@ -116,22 +118,25 @@ const validNormal = sql`(
   and json_valid(${seasons.episodeGapRangesJson})
   and json_type(${seasons.episodeGapRangesJson}) = 'array'
   and json_array_length(${seasons.episodeGapRangesJson}) <= 256
-  and not exists (
-    select 1 from json_each(${seasons.episodeGapRangesJson}) r
-    where json_type(r.value) <> 'object'
-      or json_type(r.value, '$.start') <> 'integer'
-      or json_type(r.value, '$.end') <> 'integer'
-      or json_extract(r.value, '$.start') <= ${seasons.episodeFirstIndex}
-      or json_extract(r.value, '$.end') >= ${seasons.episodeLastIndex}
-      or json_extract(r.value, '$.end') < json_extract(r.value, '$.start')
-      or (cast(r.key as integer) > 0 and json_extract(r.value, '$.start') <=
-          json_extract(${seasons.episodeGapRangesJson}, '$[' || (cast(r.key as integer) - 1) || '].end'))
-  )
-  and coalesce((select sum(json_extract(r.value, '$.end') - json_extract(r.value, '$.start') + 1)
-                from json_each(${seasons.episodeGapRangesJson}) r), 0) = ${seasons.episodeGapCount}
-  and ((${seasons.episodeAuditStatus} = 'gaps' and ${seasons.episodeGapCount} > 0)
-    or (${seasons.episodeAuditStatus} = 'ok' and ${seasons.episodeGapCount} = 0
-        and json_array_length(${seasons.episodeGapRangesJson}) = 0))
+  and case when json_array_length(${seasons.episodeGapRangesJson}) = 0
+    then ${seasons.episodeAuditStatus} = 'ok' and ${seasons.episodeGapCount} = 0
+    else (not exists (
+        select 1 from json_each(${seasons.episodeGapRangesJson}) r
+        where json_type(r.value) <> 'object'
+          or json_type(r.value, '$.start') <> 'integer'
+          or json_type(r.value, '$.end') <> 'integer'
+          or json_extract(r.value, '$.start') <= ${seasons.episodeFirstIndex}
+          or json_extract(r.value, '$.end') >= ${seasons.episodeLastIndex}
+          or json_extract(r.value, '$.end') < json_extract(r.value, '$.start')
+          or (cast(r.key as integer) > 0 and json_extract(r.value, '$.start') <=
+              json_extract(${seasons.episodeGapRangesJson}, '$[' || (cast(r.key as integer) - 1) || '].end'))
+      )
+      and coalesce((select sum(json_extract(r.value, '$.end') - json_extract(r.value, '$.start') + 1)
+                    from json_each(${seasons.episodeGapRangesJson}) r), 0) = ${seasons.episodeGapCount}
+      and ((${seasons.episodeAuditStatus} = 'gaps' and ${seasons.episodeGapCount} > 0)
+        or (${seasons.episodeAuditStatus} = 'ok' and ${seasons.episodeGapCount} = 0
+            and json_array_length(${seasons.episodeGapRangesJson}) = 0))
+    ) end
 )`;
 const invalidNormal = sql`(${seasons.episodeAuditStatus} in ('ok', 'gaps') and not ${validNormal})`;
 const validSeasonNormal = sql`(
@@ -145,22 +150,25 @@ const validSeasonNormal = sql`(
   and json_valid(${items.seasonGapRangesJson})
   and json_type(${items.seasonGapRangesJson}) = 'array'
   and json_array_length(${items.seasonGapRangesJson}) <= 256
-  and not exists (
-    select 1 from json_each(${items.seasonGapRangesJson}) r
-    where json_type(r.value) <> 'object'
-      or json_type(r.value, '$.start') <> 'integer'
-      or json_type(r.value, '$.end') <> 'integer'
-      or json_extract(r.value, '$.start') <= ${items.seasonFirstIndex}
-      or json_extract(r.value, '$.end') >= ${items.seasonLastIndex}
-      or json_extract(r.value, '$.end') < json_extract(r.value, '$.start')
-      or (cast(r.key as integer) > 0 and json_extract(r.value, '$.start') <=
-          json_extract(${items.seasonGapRangesJson}, '$[' || (cast(r.key as integer) - 1) || '].end'))
-  )
-  and coalesce((select sum(json_extract(r.value, '$.end') - json_extract(r.value, '$.start') + 1)
-                from json_each(${items.seasonGapRangesJson}) r), 0) = ${items.seasonGapCount}
-  and ((${items.seasonAuditStatus} = 'gaps' and ${items.seasonGapCount} > 0)
-    or (${items.seasonAuditStatus} = 'ok' and ${items.seasonGapCount} = 0
-        and json_array_length(${items.seasonGapRangesJson}) = 0))
+  and case when json_array_length(${items.seasonGapRangesJson}) = 0
+    then ${items.seasonAuditStatus} = 'ok' and ${items.seasonGapCount} = 0
+    else (not exists (
+        select 1 from json_each(${items.seasonGapRangesJson}) r
+        where json_type(r.value) <> 'object'
+          or json_type(r.value, '$.start') <> 'integer'
+          or json_type(r.value, '$.end') <> 'integer'
+          or json_extract(r.value, '$.start') <= ${items.seasonFirstIndex}
+          or json_extract(r.value, '$.end') >= ${items.seasonLastIndex}
+          or json_extract(r.value, '$.end') < json_extract(r.value, '$.start')
+          or (cast(r.key as integer) > 0 and json_extract(r.value, '$.start') <=
+              json_extract(${items.seasonGapRangesJson}, '$[' || (cast(r.key as integer) - 1) || '].end'))
+      )
+      and coalesce((select sum(json_extract(r.value, '$.end') - json_extract(r.value, '$.start') + 1)
+                    from json_each(${items.seasonGapRangesJson}) r), 0) = ${items.seasonGapCount}
+      and ((${items.seasonAuditStatus} = 'gaps' and ${items.seasonGapCount} > 0)
+        or (${items.seasonAuditStatus} = 'ok' and ${items.seasonGapCount} = 0
+            and json_array_length(${items.seasonGapRangesJson}) = 0))
+    ) end
 )`;
 const invalidSeasonNormal =
   sql`(${items.seasonAuditStatus} in ('ok', 'gaps') and not ${validSeasonNormal})`;

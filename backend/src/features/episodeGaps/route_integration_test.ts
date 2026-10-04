@@ -71,6 +71,75 @@ async function request(query = '') {
   return await response.json() as EpisodeGapsResponse;
 }
 
+Deno.test('empty-range fast path preserves corrupted and unknown clean projections in both scopes', async () => {
+  withTransaction((client) => {
+    client.exec(`
+      INSERT INTO libraries (server_id, key, title, type, synced_at, episode_audit_synced_at)
+        VALUES (1, 'validation', 'Validation', 'show', 1, 1);
+      INSERT INTO items (server_id, rating_key, library_key, title, type, updated_at)
+        VALUES (1, 'validation-show', 'validation', 'Validation Show', 'show', 1);
+      INSERT INTO seasons (server_id, rating_key, show_rating_key, library_key,
+        season_index, title, updated_at)
+        VALUES (1, 'validation-season', 'validation-show', 'validation', 1, 'Season', 1);
+    `);
+  });
+  const cases = [
+    { name: 'clean', json: '[]', status: 'ok', present: 3, gap: 0, irregular: 0, decoded: 'ok' },
+    { name: 'malformed JSON', json: 'broken', status: 'ok', present: 3, gap: 0, irregular: 1 },
+    { name: 'object JSON', json: '{}', status: 'ok', present: 3, gap: 0, irregular: 1 },
+    {
+      name: 'nonempty clean ranges',
+      json: '[{"start":2,"end":2}]',
+      status: 'ok',
+      present: 3,
+      gap: 0,
+      irregular: 1,
+    },
+    { name: 'null JSON', json: null, status: 'ok', present: 3, gap: 0, irregular: 0 },
+    { name: 'null scalar', json: '[]', status: 'ok', present: null, gap: 0, irregular: 0 },
+    { name: 'scalar mismatch', json: '[]', status: 'ok', present: 2, gap: 0, irregular: 1 },
+    { name: 'empty gaps', json: '[]', status: 'gaps', present: 2, gap: 1, irregular: 1 },
+  ];
+  try {
+    for (const testCase of cases) {
+      withTransaction((client) => {
+        client.prepare(`UPDATE seasons SET episode_first_index=1, episode_last_index=3,
+          episode_present_count=?, episode_gap_count=?, episode_gap_ranges_json=?,
+          episode_audit_status=? WHERE server_id=1 AND rating_key='validation-season'`)
+          .run(testCase.present, testCase.gap, testCase.json, testCase.status);
+        client.prepare(`UPDATE items SET season_first_index=1, season_last_index=3,
+          season_present_count=?, season_gap_count=?, season_gap_ranges_json=?,
+          season_audit_status=? WHERE server_id=1 AND rating_key='validation-show'`)
+          .run(testCase.present, testCase.gap, testCase.json, testCase.status);
+      });
+      for (const scope of ['episode', 'season'] as const) {
+        const label = `${scope}: ${testCase.name}`;
+        const all = await request(`scope=${scope}&libraryKey=validation&status=all`);
+        assertEquals(all.total, 1, label);
+        assertEquals(all.rows[0]?.status, testCase.decoded ?? 'irregular', label);
+        const irregularCount = all.scope === 'episode'
+          ? all.summary.irregularSeasonCount
+          : all.summary.irregularShowCount;
+        assertEquals(irregularCount, testCase.irregular, label);
+        assertEquals(
+          (await request(`scope=${scope}&libraryKey=validation&status=irregular`)).total,
+          testCase.irregular,
+          label,
+        );
+        assertEquals(
+          (await request(`scope=${scope}&libraryKey=validation&status=gaps`)).total,
+          0,
+          label,
+        );
+      }
+    }
+  } finally {
+    withTransaction((client) => {
+      client.exec("DELETE FROM libraries WHERE server_id=1 AND key='validation'");
+    });
+  }
+});
+
 Deno.test('episode gaps API is server scoped, paginated, and classifies malformed projections', async () => {
   const gaps = await request();
   if (gaps.scope !== 'episode') throw new Error('expected episode response');

@@ -44,6 +44,7 @@ export function EpisodeGapRow(
           width={96}
           height={144}
           className="episode-gap-poster"
+          loading="lazy"
         />
         <div>
           <span className="episode-gap-library">{row.libraryTitle}</span>
