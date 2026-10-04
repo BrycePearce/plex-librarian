@@ -77,6 +77,7 @@ withTransaction((client) => {
 });
 
 const { createApp } = await import('../../app.ts');
+const { readLibraryStatistics } = await import('./statistics.ts');
 const app = createApp();
 
 async function stale(query: string): Promise<StaleResponse> {
@@ -290,6 +291,125 @@ Deno.test('cached library stats refresh after raw local writes and external comm
     });
   }
   assertEquals(await readSize(), 600);
+});
+
+Deno.test('library sums subtract only matching exclusions and retain zero and null-size totals', async () => {
+  withTransaction((client) => {
+    client.exec(`
+      INSERT INTO libraries (server_id, key, title, type, synced_at)
+        VALUES (1, 'stat-edge', 'Edge', 'movie', 1),
+          (1, 'stat-elsewhere', 'Elsewhere', 'movie', 1);
+      INSERT INTO items (server_id, rating_key, library_key, title, type, file_size, updated_at)
+        VALUES (1, 'stat-big', 'stat-edge', 'Big', 'movie', 3000000000, 1),
+          (1, 'stat-null', 'stat-edge', 'Null', 'movie', null, 1),
+          (1, 'stat-else', 'stat-elsewhere', 'Elsewhere', 'movie', 123, 1),
+          (2, 'stat-null', 'movies', 'Other server', 'movie', 999, 1);
+      INSERT INTO ignored_content (server_id, rating_key, created_at)
+        VALUES (1, 'stat-big', 1), (1, 'stat-else', 1), (2, 'stat-null', 1);
+    `);
+  });
+  try {
+    assertEquals(await readLibraryStatistics(1, []), []);
+    assertEquals(await readLibraryStatistics(1, ['stat-edge']), [{
+      libraryKey: 'stat-edge',
+      itemCount: 1,
+      totalFileSize: '0',
+    }]);
+    withTransaction((client) => {
+      client.prepare(
+        "INSERT INTO ignored_content (server_id, rating_key, created_at) VALUES (1, 'stat-null', 1)",
+      ).run();
+    });
+    assertEquals(await readLibraryStatistics(1, ['stat-edge']), [{
+      libraryKey: 'stat-edge',
+      itemCount: 0,
+      totalFileSize: '0',
+    }]);
+    assertEquals(await readLibraryStatistics(1, ['stat-elsewhere']), [{
+      libraryKey: 'stat-elsewhere',
+      itemCount: 0,
+      totalFileSize: '0',
+    }]);
+    assertEquals(await readLibraryStatistics(2, ['movies']), [{
+      libraryKey: 'movies',
+      itemCount: 1,
+      totalFileSize: '1000',
+    }]);
+  } finally {
+    withTransaction((client) => {
+      client.exec(`DELETE FROM items WHERE rating_key IN ('stat-big','stat-null','stat-else');
+        DELETE FROM libraries WHERE server_id=1 AND key IN ('stat-edge','stat-elsewhere')`);
+    });
+  }
+});
+
+Deno.test('library sum falls back when excluded sizes overflow the intermediate total', async () => {
+  withTransaction((client) => {
+    client.exec(`
+      INSERT INTO items (server_id, rating_key, library_key, title, type, file_size, updated_at)
+        VALUES (1, 'stat-wide-one', 'movies', 'One', 'movie', 4000000000000000000, 1),
+          (1, 'stat-wide-two', 'movies', 'Two', 'movie', 4000000000000000000, 1),
+          (1, 'stat-wide-three', 'movies', 'Three', 'movie', 4000000000000000000, 1);
+      INSERT INTO ignored_content (server_id, rating_key, created_at)
+        VALUES (1, 'stat-wide-two', 1), (1, 'stat-wide-three', 1);
+    `);
+  });
+  try {
+    assertEquals(await readLibraryStatistics(1, ['movies']), [{
+      libraryKey: 'movies',
+      itemCount: 4,
+      totalFileSize: '4000000000000000600',
+    }]);
+  } finally {
+    withTransaction((client) => {
+      client.exec("DELETE FROM items WHERE rating_key LIKE 'stat-wide-%'");
+    });
+  }
+});
+
+Deno.test('library statistics agree on both sides of the local exclusion threshold', async () => {
+  let expectedCount = 0;
+  let expectedSize = 0;
+  withTransaction((client) => {
+    client.exec(`INSERT INTO libraries (server_id, key, title, type, synced_at)
+      VALUES (1, 'stat-threshold', 'Threshold', 'movie', 1)`);
+    const item = client.prepare(`INSERT INTO items
+      (server_id, rating_key, library_key, title, type, file_size, updated_at)
+      VALUES (1, ?, 'stat-threshold', 'Threshold item', 'movie', ?, 1)`);
+    const ignored = client.prepare(`INSERT INTO ignored_content
+      (server_id, rating_key, created_at) VALUES (1, ?, 1)`);
+    for (let index = 1; index <= 1024; index++) {
+      const key = `stat-threshold-${index}`;
+      const size = index % 3 === 0 ? null : 3_000_000_000;
+      item.run(key, size);
+      if (index % 2 === 0) ignored.run(key);
+      else {
+        expectedCount++;
+        expectedSize += size ?? 0;
+      }
+    }
+  });
+  try {
+    assertEquals(await readLibraryStatistics(1, ['stat-threshold']), [{
+      libraryKey: 'stat-threshold',
+      itemCount: expectedCount,
+      totalFileSize: String(expectedSize),
+    }]);
+    withTransaction((client) => {
+      client.exec(`INSERT INTO items
+        (server_id, rating_key, library_key, title, type, file_size, updated_at)
+        VALUES (1, 'stat-threshold-1025', 'stat-threshold', 'Extra', 'movie', 3000000000, 1)`);
+    });
+    assertEquals(await readLibraryStatistics(1, ['stat-threshold']), [{
+      libraryKey: 'stat-threshold',
+      itemCount: expectedCount + 1,
+      totalFileSize: String(expectedSize + 3_000_000_000),
+    }]);
+  } finally {
+    withTransaction((client) => {
+      client.exec("DELETE FROM libraries WHERE server_id=1 AND key='stat-threshold'");
+    });
+  }
 });
 
 Deno.test('ignored content API adds, searches, filters, and restores synced items', async () => {

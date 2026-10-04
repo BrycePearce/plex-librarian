@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { asc, count, eq } from 'drizzle-orm';
 import { db, readDatabaseRevision } from '../../db/index.ts';
-import { items, libraries } from '../../db/schema.ts';
-import { contentIsNotIgnored, libraryByKey } from '../../db/scope.ts';
+import { libraries } from '../../db/schema.ts';
+import { libraryByKey } from '../../db/scope.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type { LibrariesResponse } from '@plex-librarian/shared/types.ts';
 import {
@@ -13,10 +13,9 @@ import detailRoute from './detailRoute.ts';
 import quickCleanupRoute from './quickCleanupRoute.ts';
 import staleRoute from './staleRoute.ts';
 import { LibraryStatsCache } from './statsCache.ts';
+import { type LibraryStatistics, readLibraryStatistics } from './statistics.ts';
 
-const statsCache = new LibraryStatsCache<
-  { libraryKey: string; itemCount: number; totalFileSize: string | null }[]
->(readDatabaseRevision);
+const statsCache = new LibraryStatsCache<LibraryStatistics[]>(readDatabaseRevision);
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
 router.use('*', withActiveServerId);
@@ -48,16 +47,7 @@ router.get('/', async (c) => {
   const statsRows = rows.length === 0 ? [] : await statsCache.get(
     serverId,
     rows.map((library) => library.key),
-    async () =>
-      await db.select({
-        libraryKey: items.libraryKey,
-        itemCount: count(),
-        totalFileSize: sql<string | null>`cast(sum(${items.fileSize}) as text)`,
-      }).from(items).where(and(
-        eq(items.serverId, serverId),
-        inArray(items.libraryKey, rows.map((library) => library.key)),
-        contentIsNotIgnored(serverId, items.ratingKey),
-      )).groupBy(items.libraryKey),
+    () => readLibraryStatistics(serverId, rows.map((library) => library.key)),
   );
 
   const statsByKey = new Map(statsRows.map((r) => [r.libraryKey, r]));

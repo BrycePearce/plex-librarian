@@ -10,6 +10,7 @@ import type {
 } from '../../integrations/plex/index.ts';
 import { auditSeasonIndexes, EpisodeRangeSet } from './episodeRanges.ts';
 import { createSyncYield } from './cooperativeYield.ts';
+import { rollupShowSizes } from './showSizeRollup.ts';
 
 const excl = (column: { name: string }) => sql.raw(`excluded.${column.name}`);
 
@@ -343,17 +344,7 @@ export async function syncShowSizes(
   // COALESCE preserves the existing value when SUM returns NULL (all season sizes unknown).
   // The server_id + library_key filter on the subquery prevents cross-library/cross-server
   // inflation when the same show ratingKey appears elsewhere.
-  await db.run(sql`
-    UPDATE items
-    SET view_count = COALESCE(
-      (SELECT SUM(view_count) FROM seasons WHERE server_id = ${serverId} AND show_rating_key = items.rating_key AND library_key = ${lib.key}),
-      view_count
-    ), file_size = COALESCE(
-      (SELECT SUM(file_size) FROM seasons WHERE server_id = ${serverId} AND show_rating_key = items.rating_key AND library_key = ${lib.key}),
-      file_size
-    )
-    WHERE server_id = ${serverId} AND library_key = ${lib.key} AND type = 'show'
-  `);
+  withTransaction((client) => rollupShowSizes(client, serverId, lib.key));
   return { pruneCompleted: !preserveDeletionProjections };
 }
 

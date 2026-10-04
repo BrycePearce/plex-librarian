@@ -60,3 +60,59 @@ Deno.test('history counts include all users across pages without inflating on re
     client.close();
   }
 });
+
+Deno.test('history publication normalizes unknown counts and skips unchanged metadata and replays', () => {
+  const client = new Database(':memory:');
+  client.exec(`
+    CREATE TABLE items (server_id, library_key, rating_key, view_count);
+    CREATE TABLE seasons (server_id, library_key, show_rating_key, season_index, view_count);
+    INSERT INTO items VALUES (1, 'tv', 'null', NULL), (1, 'tv', 'negative', -2),
+      (1, 'tv', 'zero', 0), (1, 'tv', 'metadata', 9), (1, 'tv', '100', 0),
+      (1, 'other', 'null', NULL), (2, 'tv', 'negative', -2);
+    INSERT INTO seasons VALUES (1, 'tv', 'null', 1, NULL), (1, 'tv', 'negative', 1, -2),
+      (1, 'tv', 'zero', 1, 0), (1, 'tv', 'metadata', 1, 9), (1, 'tv', '100', 1, 0),
+      (1, 'other', 'null', 1, NULL), (2, 'tv', 'negative', 1, -2);
+    CREATE TABLE writes (kind);
+    CREATE TRIGGER item_write AFTER UPDATE ON items
+      BEGIN INSERT INTO writes VALUES ('item'); END;
+    CREATE TRIGGER season_write AFTER UPDATE ON seasons
+      BEGIN INSERT INTO writes VALUES ('season'); END;
+  `);
+  const counts = new HistoryCounts(client);
+  try {
+    counts.addPage([
+      { ratingKey: 'metadata', viewedAt: 123 },
+      {
+        ratingKey: 'episode',
+        grandparentKey: '/library/metadata/100',
+        parentIndex: 1,
+        viewedAt: 123,
+      },
+    ]);
+    client.transaction(() => counts.publish(1, 'tv'))();
+    assertEquals(client.prepare('SELECT view_count FROM items').values(), [
+      [0],
+      [0],
+      [0],
+      [9],
+      [1],
+      [null],
+      [-2],
+    ]);
+    assertEquals(client.prepare('SELECT view_count FROM seasons').values(), [
+      [0],
+      [0],
+      [0],
+      [9],
+      [1],
+      [null],
+      [-2],
+    ]);
+    assertEquals(client.prepare('SELECT COUNT(*) FROM writes').value(), [6]);
+    client.transaction(() => counts.publish(1, 'tv'))();
+    assertEquals(client.prepare('SELECT COUNT(*) FROM writes').value(), [6]);
+  } finally {
+    counts.dispose();
+    client.close();
+  }
+});

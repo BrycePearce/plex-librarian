@@ -49,7 +49,11 @@ export class HistoryCounts {
           SELECT plays FROM ${this.table} h
           WHERE h.rating_key = ${table}.${key} AND h.season_number = ${season}
         ), 0))
-        WHERE server_id = ? AND library_key = ?`);
+        WHERE server_id = ? AND library_key = ?
+          AND (view_count IS NULL OR view_count < 0 OR view_count < coalesce((
+            SELECT plays FROM ${this.table} h
+            WHERE h.rating_key = ${table}.${key} AND h.season_number = ${season}
+          ), 0))`);
       try {
         stmt.run(serverId, libraryKey);
       } finally {
