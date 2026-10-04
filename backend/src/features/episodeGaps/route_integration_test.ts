@@ -69,6 +69,19 @@ withTransaction((client) => {
 
 const { createApp } = await import('../../app.ts');
 const app = createApp();
+let observedQueries: string[] | null = null;
+withTransaction((client) => {
+  const prepare = client.prepare.bind(client);
+  client.prepare = (query: string) => {
+    const statement = prepare(query);
+    const values = statement.values.bind(statement);
+    statement.values = (...params) => {
+      observedQueries?.push(query);
+      return values(...params);
+    };
+    return statement;
+  };
+});
 async function request(query = '') {
   const response = await app.request(`/api/tools/episode-gaps${query ? `?${query}` : ''}`);
   assertEquals(response.status, 200);
@@ -76,19 +89,8 @@ async function request(query = '') {
 }
 
 Deno.test('split episode gaps endpoints preserve combined results and separate expensive work', async () => {
-  const client = withTransaction((client) => client);
-  const originalPrepare = client.prepare;
   const executed: string[] = [];
-  let observing = true;
-  client.prepare = function (query: string) {
-    const statement = originalPrepare.call(client, query);
-    const values = statement.values.bind(statement);
-    statement.values = (...params) => {
-      if (observing) executed.push(query);
-      return values(...params);
-    };
-    return statement;
-  };
+  observedQueries = executed;
   try {
     for (const scope of ['episode', 'season']) {
       for (
@@ -106,7 +108,6 @@ Deno.test('split episode gaps endpoints preserve combined results and separate e
         ]
       ) {
         const query = `scope=${scope}&${filter}`;
-        // Start with the lean request so its prepared statements are observed too.
         executed.length = 0;
         const leanResponse = await app.request(
           `/api/tools/episode-gaps?${query}&includeSummary=false`,
@@ -131,8 +132,51 @@ Deno.test('split episode gaps endpoints preserve combined results and separate e
       }
     }
   } finally {
-    observing = false;
-    client.prepare = originalPrepare;
+    observedQueries = null;
+  }
+});
+
+Deno.test('irregular pagination counts once and skips repeated scans for empty and past-end pages', async () => {
+  const queries: string[] = [];
+  observedQueries = queries;
+  const queryKinds = () =>
+    queries.flatMap((query) => {
+      if (query.startsWith('select count(*)')) return ['count'];
+      if (query.includes('"items"."thumb"')) return ['page'];
+      return [];
+    });
+  try {
+    for (const scope of ['episode', 'season']) {
+      const expectedTotal = scope === 'episode' ? 2 : 3;
+      for (const filter of ['search=Alpha', 'libraryKey=anime']) {
+        queries.length = 0;
+        const result = await request(`scope=${scope}&status=irregular&${filter}`);
+        assertEquals(result.total, 0);
+        assertEquals(result.rows, []);
+        assertEquals(queryKinds(), ['count']);
+      }
+      for (const offset of [expectedTotal, 100]) {
+        queries.length = 0;
+        const result = await request(`scope=${scope}&status=irregular&offset=${offset}`);
+        assertEquals(result.total, expectedTotal);
+        assertEquals(result.rows, []);
+        assertEquals(queryKinds(), ['count']);
+      }
+      queries.length = 0;
+      const irregular = await request(`scope=${scope}&status=irregular&limit=1`);
+      assertEquals(irregular.total, expectedTotal);
+      assertEquals(irregular.rows.length, 1);
+      assertEquals(irregular.rows[0]?.status, 'irregular');
+      assertEquals(queryKinds(), ['count', 'page']);
+
+      queries.length = 0;
+      const gaps = await request(`scope=${scope}&search=Alpha`);
+      assertEquals(gaps.total, 1);
+      assertEquals(gaps.rows[0]?.status, 'gaps');
+      assertEquals(queryKinds(), ['page', 'count']);
+    }
+  } finally {
+    observedQueries = null;
   }
 });
 

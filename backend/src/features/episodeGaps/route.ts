@@ -308,10 +308,10 @@ router.get('/', async (c) => {
     : sort === 'auditSyncedAt'
     ? libraries.episodeAuditSyncedAt
     : seasons.episodeGapCount;
-  const rows = await baseJoin.where(where)
+  const pageQuery = baseJoin.where(where)
     .orderBy(direction(primary), asc(items.title), asc(seasons.seasonIndex))
     .limit(limit).offset(offset);
-  const [{ total }] = await db.select({ total: sql<number>`count(*)` }).from(seasons)
+  const countQuery = db.select({ total: sql<number>`count(*)` }).from(seasons)
     .innerJoin(
       libraries,
       and(eq(libraries.serverId, seasons.serverId), eq(libraries.key, seasons.libraryKey)),
@@ -321,6 +321,7 @@ router.get('/', async (c) => {
       and(eq(items.serverId, seasons.serverId), eq(items.ratingKey, seasons.showRatingKey)),
     )
     .where(where);
+  const { rows, total } = await readPageAndCount(pageQuery, countQuery, status, offset);
 
   const libraryAudits = await readLibraryAudits(serverId, libraryKey);
   const page = {
@@ -340,6 +341,23 @@ router.get('/', async (c) => {
     } satisfies EpisodeGapsResponse,
   );
 });
+
+async function readPageAndCount<T>(
+  pageQuery: PromiseLike<T[]>,
+  countQuery: PromiseLike<{ total: number }[]>,
+  status: EpisodeGapsStatusFilter,
+  offset: number,
+): Promise<{ rows: T[]; total: number }> {
+  if (status === 'irregular') {
+    // Irregular filters must validate normal projections to find corrupted rows.
+    // Count first so an empty or past-end result avoids repeating that full scan.
+    const [{ total }] = await countQuery;
+    return { total, rows: offset >= total ? [] : await pageQuery };
+  }
+  const rows = await pageQuery;
+  const [{ total }] = await countQuery;
+  return { rows, total };
+}
 
 function episodeScope(serverId: number, libraryKey: string | undefined, search: string): SQL[] {
   const scope = [
@@ -452,12 +470,13 @@ async function seasonResponse(
     libraries,
     and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
   );
-  const rows = await base.where(where).orderBy(direction(primary), asc(items.title)).limit(limit)
+  const pageQuery = base.where(where).orderBy(direction(primary), asc(items.title)).limit(limit)
     .offset(offset);
-  const [{ total }] = await db.select({ total: sql<number>`count(*)` }).from(items).innerJoin(
+  const countQuery = db.select({ total: sql<number>`count(*)` }).from(items).innerJoin(
     libraries,
     and(eq(libraries.serverId, items.serverId), eq(libraries.key, items.libraryKey)),
   ).where(where);
+  const { rows, total } = await readPageAndCount(pageQuery, countQuery, status, offset);
   const libraryAudits = await readLibraryAudits(serverId, libraryKey);
   const page = {
     scope: 'season' as const,

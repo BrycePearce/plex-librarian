@@ -19,8 +19,8 @@ import {
 } from '@plex-librarian/shared/mediaComparison.ts';
 import { mediaVersionFromRow } from './mediaVersion.ts';
 import {
-  episodeRootIsWorkflowOwned,
-  movieRootIsWorkflowOwned,
+  episodeRootIsWorkflowOwnedForRead,
+  movieRootIsWorkflowOwnedForRead,
 } from '../deletionOperations/core/ownership.ts';
 
 const router = new Hono<{ Variables: ActiveServerVariables }>();
@@ -79,6 +79,12 @@ type SeasonStub = {
 };
 
 type ListStub = MovieStub | SeasonStub;
+
+type SeasonEpisodeKey = {
+  ratingKey: string;
+  seasonRatingKey: string;
+  episodeIndex: number;
+};
 
 // Movies with 2+ synced Media versions — Plex's own multi-version grouping. TV episodes
 // with 2+ synced versions the same way, but see episodeMediaVersions in db/schema.ts:
@@ -167,7 +173,7 @@ router.get('/', async (c) => {
   }).from(episodeMediaVersions).where(and(
     eq(episodeMediaVersions.serverId, serverId),
     contentIsNotIgnored(serverId, episodeMediaVersions.showRatingKey),
-    not(episodeRootIsWorkflowOwned(
+    not(episodeRootIsWorkflowOwnedForRead(
       serverId,
       sql`${episodeMediaVersions.libraryKey}`,
       sql`${episodeMediaVersions.episodeRatingKey}`,
@@ -198,7 +204,7 @@ router.get('/', async (c) => {
         .where(and(
           eq(itemMediaVersions.serverId, serverId),
           contentIsNotIgnored(serverId, itemMediaVersions.itemRatingKey),
-          not(movieRootIsWorkflowOwned(
+          not(movieRootIsWorkflowOwnedForRead(
             serverId,
             sql`${itemMediaVersions.libraryKey}`,
             sql`${itemMediaVersions.itemRatingKey}`,
@@ -276,17 +282,20 @@ router.get('/', async (c) => {
     offset = 0,
     limit = SEASON_EPISODE_READ_PAGE_SIZE,
   ): Promise<string[]> => {
+    // GROUP BY otherwise makes SQLite prefer the episode index's server-only
+    // prefix, scanning every duplicate episode once for each candidate season.
+    // This lookup has an exact season identity; keep the read scoped to that season.
     const rows = await db.select({
-      ratingKey: episodeMediaVersions.episodeRatingKey,
-      episodeIndex: episodeMediaVersions.episodeIndex,
-    }).from(episodeMediaVersions).where(and(
+      ratingKey: sql<string>`${episodeMediaVersions.episodeRatingKey}`,
+      episodeIndex: sql<number>`${episodeMediaVersions.episodeIndex}`,
+    }).from(sql`${episodeMediaVersions} indexed by episode_media_versions_season_idx`).where(and(
       eq(episodeMediaVersions.serverId, serverId),
       eq(episodeMediaVersions.libraryKey, season.libraryKey),
       eq(episodeMediaVersions.showRatingKey, season.showRatingKey),
       eq(episodeMediaVersions.seasonRatingKey, season.seasonRatingKey),
-      not(episodeRootIsWorkflowOwned(
+      not(episodeRootIsWorkflowOwnedForRead(
         serverId,
-        sql`${episodeMediaVersions.libraryKey}`,
+        season.libraryKey,
         sql`${episodeMediaVersions.episodeRatingKey}`,
         sql`${episodeMediaVersions.showRatingKey}`,
         sql`${episodeMediaVersions.seasonRatingKey}`,
@@ -315,6 +324,50 @@ router.get('/', async (c) => {
     return pages.flat();
   };
 
+  const loadSeasonBatchEpisodeKeys = async (
+    batch: SeasonStub[],
+    cursor?: SeasonEpisodeKey,
+  ): Promise<SeasonEpisodeKey[]> => {
+    // Stream one bounded key page across the season batch. Each statement evaluates
+    // current workflow ownership once, instead of rebuilding its root sets per season.
+    return await db.select({
+      ratingKey: sql<string>`${episodeMediaVersions.episodeRatingKey}`,
+      seasonRatingKey: sql<string>`${episodeMediaVersions.seasonRatingKey}`,
+      episodeIndex: sql<number>`${episodeMediaVersions.episodeIndex}`,
+    }).from(sql`${episodeMediaVersions} indexed by episode_media_versions_season_idx`).where(and(
+      eq(episodeMediaVersions.serverId, serverId),
+      inArray(episodeMediaVersions.seasonRatingKey, batch.map((season) => season.seasonRatingKey)),
+      or(...batch.map((season) =>
+        and(
+          eq(episodeMediaVersions.libraryKey, season.libraryKey),
+          eq(episodeMediaVersions.showRatingKey, season.showRatingKey),
+          eq(episodeMediaVersions.seasonRatingKey, season.seasonRatingKey),
+        )
+      )),
+      not(episodeRootIsWorkflowOwnedForRead(
+        serverId,
+        sql`${episodeMediaVersions.libraryKey}`,
+        sql`${episodeMediaVersions.episodeRatingKey}`,
+        sql`${episodeMediaVersions.showRatingKey}`,
+        sql`${episodeMediaVersions.seasonRatingKey}`,
+      )),
+      episodeSearchCond,
+      cursor
+        ? sql`(${episodeMediaVersions.seasonRatingKey}, ${episodeMediaVersions.episodeIndex},
+            ${episodeMediaVersions.episodeRatingKey}) >
+          (${cursor.seasonRatingKey}, ${cursor.episodeIndex}, ${cursor.ratingKey})`
+        : undefined,
+    )).groupBy(
+      episodeMediaVersions.seasonRatingKey,
+      episodeMediaVersions.episodeRatingKey,
+      episodeMediaVersions.episodeIndex,
+    ).having(HAS_DUPLICATE_VERSIONS).orderBy(
+      episodeMediaVersions.seasonRatingKey,
+      episodeMediaVersions.episodeIndex,
+      episodeMediaVersions.episodeRatingKey,
+    ).limit(SEASON_EPISODE_READ_PAGE_SIZE);
+  };
+
   let preloadedMovieVersionRows: Array<typeof itemMediaVersions.$inferSelect> | null = null;
   // Keep only preview keys while computing comparison totals. The page can hydrate its
   // bounded sample directly instead of walking and comparing each visible season twice.
@@ -331,53 +384,56 @@ router.get('/', async (c) => {
     });
     filteredSeasonStubs = [];
     for (const seasonBatch of arrayBatches(seasonStubs, SEASON_FILTER_BATCH_SIZE)) {
-      const summaries = await mapWithConcurrency(
-        seasonBatch,
-        SEASON_READ_CONCURRENCY,
-        async (season) => {
-          let offset = 0;
-          const previewKeys: string[] = [];
-          let duplicateGroupCount = 0;
-          let combinedFileSize: number | null = 0;
-          let reclaimableFileSize: number | null = 0;
-          while (true) {
-            const episodeKeys = await loadEligibleSeasonEpisodeKeys(season, offset);
-            if (episodeKeys.length === 0) break;
-            const versionRows = await loadEpisodeVersionRows(episodeKeys);
-            const versionsByEpisode = groupVersions(versionRows, (row) => row.episodeRatingKey);
-            for (const episode of episodeStubsFromRows(versionRows)) {
-              const versions = versionsByEpisode.get(episode.ratingKey) ?? [];
-              if (compareDuplicateVersions(versions).kind !== comparison) continue;
-              if (previewKeys.length < SEASON_LIST_EPISODE_SAMPLE_LIMIT) {
-                previewKeys.push(episode.ratingKey);
-              }
-              duplicateGroupCount++;
-              combinedFileSize = combinedFileSize === null || episode.combinedFileSize === null
-                ? null
-                : combinedFileSize + episode.combinedFileSize;
-              const sizes = versions.map((version) => version.fileSize);
-              reclaimableFileSize = reclaimableFileSize === null ||
-                  sizes.some((size) => size === null)
-                ? null
-                : reclaimableFileSize +
-                  sizes.reduce<number>((total, size) => total + (size ?? 0), 0) -
-                  Math.max(...sizes.map((size) => size ?? 0));
-            }
-            offset += episodeKeys.length;
-            if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
+      const summaries = new Map(seasonBatch.map((season) => [season.seasonRatingKey, {
+        season,
+        duplicateGroupCount: 0,
+        combinedFileSize: 0 as number | null,
+        reclaimableFileSize: 0 as number | null,
+        previewKeys: [] as string[],
+      }]));
+      let cursor: SeasonEpisodeKey | undefined;
+      while (true) {
+        const episodeKeys = await loadSeasonBatchEpisodeKeys(seasonBatch, cursor);
+        if (episodeKeys.length === 0) break;
+        const versionRows = await loadEpisodeVersionRows(
+          episodeKeys.map((episode) => episode.ratingKey),
+        );
+        const versionsByEpisode = groupVersions(versionRows, (row) => row.episodeRatingKey);
+        const episodesByKey = new Map(
+          episodeStubsFromRows(versionRows).map((episode) => [episode.ratingKey, episode]),
+        );
+        const seenKeys = new Set<string>();
+        // Keep the key page's numeric episode order when choosing the bounded preview.
+        for (const key of episodeKeys) {
+          if (seenKeys.has(key.ratingKey)) continue;
+          seenKeys.add(key.ratingKey);
+          const episode = episodesByKey.get(key.ratingKey);
+          if (!episode || episode.seasonRatingKey !== key.seasonRatingKey) continue;
+          const versions = versionsByEpisode.get(episode.ratingKey) ?? [];
+          if (compareDuplicateVersions(versions).kind !== comparison) continue;
+          const summary = summaries.get(key.seasonRatingKey)!;
+          if (summary.previewKeys.length < SEASON_LIST_EPISODE_SAMPLE_LIMIT) {
+            summary.previewKeys.push(episode.ratingKey);
           }
-          return {
-            season,
-            duplicateGroupCount,
-            combinedFileSize,
-            reclaimableFileSize,
-            previewKeys,
-          };
-        },
-      );
+          summary.duplicateGroupCount++;
+          summary.combinedFileSize =
+            summary.combinedFileSize === null || episode.combinedFileSize === null
+              ? null
+              : summary.combinedFileSize + episode.combinedFileSize;
+          const sizes = versions.map((version) => version.fileSize);
+          summary.reclaimableFileSize = summary.reclaimableFileSize === null ||
+              sizes.some((size) => size === null)
+            ? null
+            : summary.reclaimableFileSize +
+              sizes.reduce<number>((total, size) => total + (size ?? 0), 0) -
+              Math.max(...sizes.map((size) => size ?? 0));
+        }
+        cursor = episodeKeys.at(-1);
+        if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
+      }
       for (
         const { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize, previewKeys }
-          of summaries
+          of summaries.values()
       ) {
         if (duplicateGroupCount === 0) continue;
         previewKeysBySeason.set(season.seasonRatingKey, previewKeys);

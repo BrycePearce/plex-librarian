@@ -39,9 +39,9 @@ import type { ActiveServerVariables } from '../../middleware/activeServer.ts';
 import type { MediaVersion, StaleResponse } from '@plex-librarian/shared/types.ts';
 import { mediaVersionFromRow } from '../duplicates/mediaVersion.ts';
 import {
-  movieRootIsWorkflowOwned,
-  seasonRootIsWorkflowOwned,
-  showRootIsWorkflowOwned,
+  movieRootIsWorkflowOwnedForRead,
+  seasonRootIsWorkflowOwnedForRead,
+  showRootIsWorkflowOwnedForRead,
 } from '../deletionOperations/core/ownership.ts';
 import { automaticStaleThresholdDays } from './automaticStaleThreshold.ts';
 import { staleCutoffs } from './staleFilters.ts';
@@ -226,7 +226,7 @@ router.get('/:key/stale', async (c) => {
       eq(items.serverId, serverId),
       eq(items.ratingKey, seasons.showRatingKey),
       contentIsNotIgnored(serverId, items.ratingKey),
-      not(seasonRootIsWorkflowOwned(
+      not(seasonRootIsWorkflowOwnedForRead(
         serverId,
         key,
         sql`${seasons.ratingKey}`,
@@ -367,8 +367,8 @@ router.get('/:key/stale', async (c) => {
   const duplicatesOnly = duplicatesCond !== undefined;
 
   const workflowOwnedCond = library.type === 'show'
-    ? showRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`)
-    : movieRootIsWorkflowOwned(serverId, key, sql`${items.ratingKey}`);
+    ? showRootIsWorkflowOwnedForRead(serverId, key, sql`${items.ratingKey}`)
+    : movieRootIsWorkflowOwnedForRead(serverId, key, sql`${items.ratingKey}`);
 
   const staleWhere = and(
     itemsByLibrary(serverId, key),

@@ -117,6 +117,140 @@ export function seasonRootIsWorkflowOwned(
   );
 }
 
+// List reads should evaluate lifecycle and JSON identity facts once per server,
+// rather than repeating the deletion-history scan for every candidate media row.
+// The tuple retains each operation's library when a list spans several libraries.
+// A fixed numeric server ID keeps these root sets independent of candidate rows.
+function ownedRootKeys(
+  serverId: number,
+  libraryKey: string | SQL,
+  kinds: SQL,
+  rootKey: SQL,
+): SQL {
+  return sql`select ${deletionOperations.libraryKey}, ${rootKey}
+    from ${deletionTargets}
+    inner join ${deletionOperations}
+      on ${deletionOperations.id} = ${deletionTargets.operationId}
+    where ${deletionOperations.serverId} = ${serverId}
+      ${
+    typeof libraryKey === 'string'
+      ? sql`and ${deletionOperations.libraryKey} = ${libraryKey}`
+      : sql``
+  }
+      and ${ownedTargetState} and ${kinds} and ${rootKey} is not null`;
+}
+
+function rootInOwnedKeys(libraryKey: string | SQL, rootKey: SQL, keys: SQL): SQL {
+  // Missing candidate identity never satisfied the original equality-based EXISTS.
+  // COALESCE also prevents a nullable tuple from becoming an unknown NOT IN result.
+  return sql`coalesce((${libraryKey}, ${rootKey}) in (${keys}), false)`;
+}
+
+export function movieRootIsWorkflowOwnedForRead(
+  serverId: number,
+  libraryKey: string | SQL,
+  ratingKey: SQL,
+): SQL {
+  return rootInOwnedKeys(
+    libraryKey,
+    ratingKey,
+    ownedRootKeys(
+      serverId,
+      libraryKey,
+      sql`${deletionTargets.targetKind} in ('whole_item', 'movie_version')`,
+      sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+    ),
+  );
+}
+
+export function showRootIsWorkflowOwnedForRead(
+  serverId: number,
+  libraryKey: string | SQL,
+  showRatingKey: SQL,
+): SQL {
+  const directKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'whole_item'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  const ancestorKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`(${deletionTargets.targetKind} = 'episode_version'
+      or (${deletionTargets.targetKind} = 'whole_item'
+        and json_extract(${deletionTargets.snapshot}, '$.type') = 'season'))`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.showRatingKey')`,
+  );
+  return rootInOwnedKeys(libraryKey, showRatingKey, sql`${directKeys} union all ${ancestorKeys}`);
+}
+
+export function seasonRootIsWorkflowOwnedForRead(
+  serverId: number,
+  libraryKey: string | SQL,
+  seasonRatingKey: SQL,
+  showRatingKey: SQL,
+): SQL {
+  const wholeShowKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'whole_item'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  const wholeSeasonKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'whole_item'
+      and json_extract(${deletionTargets.snapshot}, '$.type') = 'season'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  const episodeSeasonKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'episode_version'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.seasonRatingKey')`,
+  );
+  return sql`(${rootInOwnedKeys(libraryKey, showRatingKey, wholeShowKeys)}
+    or ${
+    rootInOwnedKeys(
+      libraryKey,
+      seasonRatingKey,
+      sql`${wholeSeasonKeys} union all ${episodeSeasonKeys}`,
+    )
+  })`;
+}
+
+export function episodeRootIsWorkflowOwnedForRead(
+  serverId: number,
+  libraryKey: string | SQL,
+  episodeRatingKey: SQL,
+  showRatingKey: SQL,
+  seasonRatingKey: SQL,
+): SQL {
+  const episodeKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'episode_version'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  const wholeShowKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'whole_item'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  const wholeSeasonKeys = ownedRootKeys(
+    serverId,
+    libraryKey,
+    sql`${deletionTargets.targetKind} = 'whole_item'
+      and json_extract(${deletionTargets.snapshot}, '$.type') = 'season'`,
+    sql`json_extract(${deletionTargets.snapshot}, '$.ratingKey')`,
+  );
+  return sql`(${rootInOwnedKeys(libraryKey, episodeRatingKey, episodeKeys)}
+    or ${rootInOwnedKeys(libraryKey, showRatingKey, wholeShowKeys)}
+    or ${rootInOwnedKeys(libraryKey, seasonRatingKey, wholeSeasonKeys)})`;
+}
+
 // Raw-SQL counterpart for the bounded stale quick-cleanup queries, whose item alias is
 // intentionally fixed as `i`. It shares the lifecycle fragment above instead of
 // inventing a second status list.
