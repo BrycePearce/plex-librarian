@@ -1,4 +1,8 @@
-import type { DuplicateSeasonGroup } from "../../lib/api.ts";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api, type DuplicateSeasonGroup, type DuplicateSeasonSummaryGroup } from "../../lib/api.ts";
+import { queryKeys } from "../../lib/queryKeys.ts";
+import type { DuplicateComparisonFilter } from "@shared/mediaComparison";
 import { analyzeSeasonVersionProfiles } from "../../../../shared/seasonVersionProfiles.ts";
 import { formatKilobytes } from "../../lib/format.ts";
 import { PosterThumb } from "../../components/PosterThumb.tsx";
@@ -15,31 +19,73 @@ export function DuplicateSeasonRows({
   season,
   disabled,
   onReviewSeason,
+  comparison = "all",
+  search = "",
 }: {
-  season: DuplicateSeasonGroup;
+  season: DuplicateSeasonGroup | DuplicateSeasonSummaryGroup;
   disabled: boolean;
   onReviewSeason: (season: DuplicateSeasonGroup) => void;
+  comparison?: DuplicateComparisonFilter;
+  search?: string;
 }) {
-  const partialPass = season.episodes.length < season.duplicateGroupCount;
+  const [loadDetails, setLoadDetails] = useState(false);
+  const [reviewRequested, setReviewRequested] = useState(false);
+  const preview = useQuery({
+    queryKey: queryKeys.duplicates.seasonPreview(season.seasonRatingKey, comparison, search),
+    queryFn: () => api.duplicates.seasonPreview(season.seasonRatingKey, comparison, search),
+    enabled: loadDetails && !disabled && !("episodes" in season),
+    staleTime: 30_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const details = "episodes" in season ? season : preview.data;
+  useEffect(() => {
+    if (disabled) {
+      setReviewRequested(false);
+      return;
+    }
+    if (reviewRequested && details) {
+      setReviewRequested(false);
+      onReviewSeason(details);
+    }
+  }, [disabled, reviewRequested, details, onReviewSeason]);
+  function requestReview() {
+    if (disabled) return;
+    if (details) {
+      onReviewSeason(details);
+      return;
+    }
+    setLoadDetails(true);
+    setReviewRequested(true);
+    if (preview.isError) void preview.refetch();
+  }
+  const partialPass = details ? details.episodes.length < season.duplicateGroupCount : false;
   const reclaimablePercent = season.reclaimableFileSize !== null && season.combinedFileSize
     ? Math.min(100, Math.max(0, (season.reclaimableFileSize / season.combinedFileSize) * 100))
     : 0;
   const label = `${season.showTitle}, season ${season.seasonIndex}`;
-  const summary = season.comparisonSummary;
+  const summary = details?.comparisonSummary;
   const versionCountLabel = seasonVersionCountLabel(season);
   const affectedEpisodeLabel = seasonAffectedEpisodeLabel(season);
   const partialSeason = seasonIsPartial(season);
-  const maximumVersionCount = Math.max(
-    0,
-    ...season.episodes.map((episode) => episode.versions.length),
-  );
+  const maximumVersionCount = "maximumVersionCount" in season
+    ? season.maximumVersionCount
+    : Math.max(
+      0,
+      ...season.episodes.map((episode) => episode.versions.length),
+    );
   const quality = versionQualityLabels(
-    season.episodes.flatMap((episode) => episode.versions),
+    details?.episodes.flatMap((episode) => episode.versions) ?? [],
   );
-  const versionProfiles = maximumVersionCount <= 11
-    ? analyzeSeasonVersionProfiles(season.episodes).profiles
-    : [];
-  const differenceLabels = summary.differences.map((difference) =>
+  const versionProfiles = useMemo(
+    () =>
+      details && maximumVersionCount <= 11
+        ? analyzeSeasonVersionProfiles(details.episodes).profiles
+        : [],
+    [details, maximumVersionCount],
+  );
+  const differenceLabels = (summary?.differences ?? []).map((difference) =>
     difference.code.replaceAll("-", " ")
   );
 
@@ -54,13 +100,13 @@ export function DuplicateSeasonRows({
         ? `Duplicate episodes for ${label}; review unavailable during sync`
         : `Review duplicate episodes for ${label}`}
       onClick={() => {
-        if (!disabled) onReviewSeason(season);
+        requestReview();
       }}
       onKeyDown={(event) => {
         if (disabled || event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onReviewSeason(season);
+          requestReview();
         }
       }}
     >
@@ -87,12 +133,15 @@ export function DuplicateSeasonRows({
       <td className="text-sm">
         <HoverPopover
           openOnClick
+          onOpen={() => {
+            if (!disabled) setLoadDetails(true);
+          }}
           content={
             <div className="duplicates-season-popover">
               <div className="font-semibold">{affectedEpisodeLabel}</div>
               <p className="mt-0.5 text-base-content/60">
                 Up to {versionCountLabel} per affected episode
-                {partialPass ? ` · details sampled from the first ${season.episodes.length}` : ""}
+                {partialPass ? ` · details sampled from the first ${details!.episodes.length}` : ""}
               </p>
               {versionProfiles.length > 0
                 ? (
@@ -103,7 +152,7 @@ export function DuplicateSeasonRows({
                         <span>
                           <strong>{profile.label}</strong>
                           <small>
-                            {profile.coverageCount} of {season.episodes.length} sampled episodes
+                            {profile.coverageCount} of {details!.episodes.length} sampled episodes
                             {profile.technicalVariantCount > 1
                               ? ` · ${profile.technicalVariantCount} technical variants`
                               : ""}
@@ -125,15 +174,26 @@ export function DuplicateSeasonRows({
                     )}
                   </div>
                 )}
-              <div className="duplicates-season-popover-outcome">
-                <span>{summary.differentEpisodeCount} sampled episodes differ</span>
-                {summary.sameProfileEpisodeCount > 0 && (
-                  <span>{summary.sameProfileEpisodeCount} match technically</span>
-                )}
-                {summary.needsReviewEpisodeCount > 0 && (
-                  <span>{summary.needsReviewEpisodeCount} need review</span>
-                )}
-              </div>
+              {summary && (
+                <div className="duplicates-season-popover-outcome">
+                  <span>{summary.differentEpisodeCount} sampled episodes differ</span>
+                  {summary.sameProfileEpisodeCount > 0 && (
+                    <span>{summary.sameProfileEpisodeCount} match technically</span>
+                  )}
+                  {summary.needsReviewEpisodeCount > 0 && (
+                    <span>{summary.needsReviewEpisodeCount} need review</span>
+                  )}
+                </div>
+              )}
+              {!details && (
+                <p>
+                  {disabled
+                    ? "Version details are paused during sync."
+                    : preview.isError
+                    ? "Could not load version details. Open the season to retry."
+                    : "Loading version details…"}
+                </p>
+              )}
               {differenceLabels.length > 0 && (
                 <p>Differences include {differenceLabels.join(", ")}.</p>
               )}
@@ -145,7 +205,7 @@ export function DuplicateSeasonRows({
             type="button"
             className="duplicates-version-summary"
             aria-label={`${affectedEpisodeLabel} in ${label}; ${versionCountLabel} per affected episode. ${
-              seasonSummaryAccessibleText(summary)
+              summary ? seasonSummaryAccessibleText(summary) : "Open to load version details."
             }`}
           >
             <span className="duplicates-version-stack" aria-hidden="true">
@@ -156,6 +216,12 @@ export function DuplicateSeasonRows({
             <div>
               <div className="duplicates-version-count">{affectedEpisodeLabel}</div>
               <div className="duplicates-version-detail">{versionCountLabel}</div>
+              {reviewRequested && preview.isFetching && (
+                <small role="status">Loading version details…</small>
+              )}
+              {reviewRequested && preview.isError && (
+                <small role="alert">Could not load details. Click to retry.</small>
+              )}
               {quality.labels.length > 0 && (
                 <div className="duplicates-quality" aria-hidden="true">
                   {quality.labels.map((qualityLabel) => (

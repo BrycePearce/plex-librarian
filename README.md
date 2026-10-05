@@ -33,14 +33,14 @@ Unraid, with optional Sonarr, Radarr, Seerr, and qBittorrent connections.
 
 ## What it does
 
-| Feature | What you get |
-| --- | --- |
-| **Stale media discovery** | Find unwatched or long-unwatched movies, shows, seasons, and music. Sort by age, size, and play count to choose what to remove. |
-| **Duplicate cleanup** | Compare movie and episode versions, see their sizes, and review suggested copies to keep or remove. |
-| **Episode & season gaps** | Spot missing episode or season numbers between content already in Plex. |
-| **User insights** | Review inactive users, pending invitations, viewing activity, and possible account-sharing signals. |
-| **Request follow-through** | Connect Seerr to see whether users watch the movies and seasons they request. |
-| **Coordinated cleanup** | Review deletions across Plex, Sonarr/Radarr, and optional qBittorrent downloads, with checks to protect retained media and shared downloads. |
+| Feature                    | What you get                                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stale media discovery**  | Find unwatched or long-unwatched movies, shows, seasons, and music. Sort by age, size, and play count to choose what to remove.              |
+| **Duplicate cleanup**      | Compare movie and episode versions, see their sizes, and review suggested copies to keep or remove.                                          |
+| **Episode & season gaps**  | Spot missing episode or season numbers between content already in Plex.                                                                      |
+| **User insights**          | Review inactive users, pending invitations, viewing activity, and possible account-sharing signals.                                          |
+| **Request follow-through** | Connect Seerr to see whether users watch the movies and seasons they request.                                                                |
+| **Coordinated cleanup**    | Review deletions across Plex, Sonarr/Radarr, and optional qBittorrent downloads, with checks to protect retained media and shared downloads. |
 
 ## Installation
 
@@ -131,12 +131,12 @@ folder** to your host folder (for example, `/mnt/user/downloads/complete`), use
 replacing `source` with your host's completed-downloads folder:
 
 ```yaml
-      - type: bind
-        source: /mnt/user/downloads/complete
-        target: /cleanup-downloads
-        read_only: false
-        bind:
-          create_host_path: false
+- type: bind
+  source: /mnt/user/downloads/complete
+  target: /cleanup-downloads
+  read_only: false
+  bind:
+    create_host_path: false
 ```
 
 Run `docker compose up -d` again. Then open **Settings → Media connections →

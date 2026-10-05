@@ -6,9 +6,11 @@ import {
   type DuplicateSeasonComparisonSummary,
 } from "@shared/mediaComparison";
 import type {
+  DuplicateDirectoryGroup,
   DuplicateGroup,
   DuplicateListGroup,
   DuplicateSeasonGroup,
+  DuplicateSeasonSummaryGroup,
   MediaVersion,
 } from "../../lib/api.ts";
 
@@ -50,10 +52,13 @@ export function reclaimableKilobytes(
   return sizes.reduce((total, size) => total + size, 0) - Math.max(...sizes);
 }
 
-export function duplicatePageSummary(groups: readonly DuplicateListGroup[]) {
+export function duplicatePageSummary(
+  groups: readonly (DuplicateListGroup | DuplicateDirectoryGroup)[],
+) {
   const atomicGroups = groups.reduce<DuplicateGroup[]>((all, group) => {
-    if (group.mediaType === "season") all.push(...group.episodes);
-    else all.push(group);
+    if (group.mediaType === "season") {
+      if ("episodes" in group) all.push(...group.episodes);
+    } else all.push(group);
     return all;
   }, []);
   // Season rows carry an exact aggregate for every eligible episode, while their nested
@@ -67,7 +72,8 @@ export function duplicatePageSummary(groups: readonly DuplicateListGroup[]) {
     versionCount: atomicGroups.reduce(
       (total, group) => total + group.versions.length,
       0,
-    ),
+    ) + groups.reduce((total, group) =>
+      total + (group.mediaType === "season" && !("episodes" in group) ? group.versionCount : 0), 0),
     storageKilobytes: storageValues.every((size) => size != null)
       ? storageValues.reduce((total, size) => total + (size ?? 0), 0)
       : null,
@@ -95,14 +101,19 @@ export function versionQualityLabels(
   };
 }
 
-export function seasonVersionCountLabel(season: DuplicateSeasonGroup): string {
+export function seasonVersionCountLabel(
+  season: DuplicateSeasonGroup | DuplicateSeasonSummaryGroup,
+): string {
+  if (!("episodes" in season)) return `${season.maximumVersionCount} versions`;
   const counts = season.episodes.map((episode) => episode.versions.length);
   if (counts.length === 0) return "Versions unavailable";
   const maximum = Math.max(...counts);
   return `${maximum} versions`;
 }
 
-export function seasonAffectedEpisodeLabel(season: DuplicateSeasonGroup): string {
+export function seasonAffectedEpisodeLabel(
+  season: DuplicateSeasonGroup | DuplicateSeasonSummaryGroup,
+): string {
   const count = season.duplicateGroupCount;
   if (season.totalEpisodeCount !== null) {
     return `${count} of ${season.totalEpisodeCount} episodes affected`;
@@ -110,7 +121,9 @@ export function seasonAffectedEpisodeLabel(season: DuplicateSeasonGroup): string
   return `${count} duplicate ${count === 1 ? "episode" : "episodes"}`;
 }
 
-export function seasonIsPartial(season: DuplicateSeasonGroup): boolean {
+export function seasonIsPartial(
+  season: DuplicateSeasonGroup | DuplicateSeasonSummaryGroup,
+): boolean {
   return season.totalEpisodeCount !== null &&
     season.duplicateGroupCount < season.totalEpisodeCount;
 }

@@ -97,14 +97,14 @@ function DuplicatesPage() {
     });
   }
 
-  const duplicatesQueryKey = queryKeys.duplicates.list({ type, comparison, search, offset });
+  const duplicatesQueryKey = queryKeys.duplicates.directory({ type, comparison, search, offset });
   // Keep an already-rendered, settled snapshot from being replaced by intermediate
   // version rows as individual libraries complete. A first visit may still fetch the
   // directory, but review and deletion remain gated for the entire active sync.
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: duplicatesQueryKey,
     queryFn: () =>
-      api.duplicates.list({
+      api.duplicates.directory({
         type,
         comparison,
         search,
@@ -244,7 +244,7 @@ function DuplicatesPage() {
                     <Layers3 className="size-4" />
                   </span>
                   <span className="duplicates-summary-copy">
-                    <span>Versions in this review pass</span>
+                    <span>Versions on this page</span>
                     <strong>{summary.versionCount.toLocaleString()}</strong>
                   </span>
                 </div>
@@ -314,10 +314,12 @@ function DuplicatesPage() {
                           )
                           : (
                             <DuplicateSeasonRows
-                              key={`${item.showRatingKey}:${item.seasonRatingKey}`}
+                              key={`${item.showRatingKey}:${item.seasonRatingKey}:${comparison}:${search}`}
                               season={item}
                               disabled={isSyncing}
                               onReviewSeason={openSeasonReview}
+                              comparison={comparison}
+                              search={search}
                             />
                           )
                       )}

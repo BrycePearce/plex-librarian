@@ -1,5 +1,10 @@
 import { assertEquals } from "@std/assert";
-import type { DuplicateGroup, DuplicateSeasonGroup, MediaVersion } from "../../lib/api.ts";
+import type {
+  DuplicateGroup,
+  DuplicateSeasonGroup,
+  DuplicateSeasonSummaryGroup,
+  MediaVersion,
+} from "../../lib/api.ts";
 import {
   duplicatePageSummary,
   reclaimableKilobytes,
@@ -40,6 +45,40 @@ function version(
     fileSize,
   };
 }
+
+Deno.test("season directory summaries display exact totals without episode previews", () => {
+  const season: DuplicateSeasonSummaryGroup = {
+    mediaType: "season",
+    libraryKey: "tv",
+    showRatingKey: "show",
+    seasonRatingKey: "season",
+    showTitle: "Show",
+    showThumb: null,
+    seasonIndex: 1,
+    totalEpisodeCount: 100,
+    duplicateGroupCount: 90,
+    combinedFileSize: 1000,
+    reclaimableFileSize: 400,
+    versionCount: 190,
+    maximumVersionCount: 3,
+  };
+  assertEquals(duplicatePageSummary([season]), {
+    versionCount: 190,
+    storageKilobytes: 1000,
+    reclaimableKilobytes: 400,
+  });
+  assertEquals(seasonVersionCountLabel(season), "3 versions");
+  assertEquals(seasonAffectedEpisodeLabel(season), "90 of 100 episodes affected");
+  assertEquals(seasonIsPartial(season), true);
+  assertEquals(
+    duplicatePageSummary([{ ...season, combinedFileSize: null, reclaimableFileSize: null }]),
+    {
+      versionCount: 190,
+      storageKilobytes: null,
+      reclaimableKilobytes: null,
+    },
+  );
+});
 
 function detailedVersion(
   mediaId: number,

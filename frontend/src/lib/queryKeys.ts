@@ -57,6 +57,10 @@ export const queryKeys = {
     all: [roots.duplicates] as const,
     lists: [roots.duplicates, "list"] as const,
     list: <TParams>(params: TParams) => [roots.duplicates, "list", params] as const,
+    directory: <TParams>(params: TParams) =>
+      [roots.duplicates, "list", "directory", params] as const,
+    seasonPreview: (seasonRatingKey: string, comparison: string, search: string) =>
+      [roots.duplicates, "season-preview", seasonRatingKey, comparison, search] as const,
     technicalRefresh: (mediaType: "movie" | "episode", ratingKey: string) =>
       [roots.duplicates, "technical-refresh", mediaType, ratingKey] as const,
     // Selection-only analysis omits service evidence and must never share cached

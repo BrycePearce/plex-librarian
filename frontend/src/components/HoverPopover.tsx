@@ -41,6 +41,7 @@ export function HoverPopover({
   anchorTabIndex,
   popoverAriaLabel,
   popoverClassName,
+  onOpen,
 }: {
   content: ReactNode;
   children: ReactNode;
@@ -50,6 +51,7 @@ export function HoverPopover({
   anchorTabIndex?: number;
   popoverAriaLabel?: string;
   popoverClassName?: string;
+  onOpen?: () => void;
 }) {
   const id = useId();
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -102,17 +104,24 @@ export function HoverPopover({
         className={anchorClassName ?? "inline-flex shrink-0"}
         tabIndex={anchorTabIndex}
         aria-describedby={open ? id : undefined}
-        onPointerEnter={() => setOpen(true)}
+        onPointerEnter={() => {
+          onOpen?.();
+          setOpen(true);
+        }}
         onPointerLeave={() => {
           if (!pinned) setOpen(false);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          onOpen?.();
+          setOpen(true);
+        }}
         onBlur={() => {
           if (!pinned) setOpen(false);
         }}
         onClick={openOnClick
           ? (event) => {
             event.stopPropagation();
+            onOpen?.();
             setPinned((current) => {
               setOpen(!current);
               return !current;

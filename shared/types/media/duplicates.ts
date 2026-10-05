@@ -50,6 +50,20 @@ export interface DuplicateSeasonGroup {
 
 export type DuplicateListGroup = DuplicateMovieGroup | DuplicateSeasonGroup;
 
+/** Season directory entry; episode and stream previews are loaded on demand. */
+export type DuplicateSeasonSummaryGroup =
+  & Omit<DuplicateSeasonGroup, 'episodes' | 'comparisonSummary'>
+  & {
+    versionCount: number;
+    maximumVersionCount: number;
+  };
+
+export type DuplicateDirectoryGroup = DuplicateMovieGroup | DuplicateSeasonSummaryGroup;
+
+export type DuplicateDirectoryResponse = Omit<DuplicatesResponse, 'groups'> & {
+  groups: DuplicateDirectoryGroup[];
+};
+
 export interface DuplicatesResponse {
   search: string;
   limit: number;

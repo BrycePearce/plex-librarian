@@ -3,7 +3,11 @@ import { resolve } from '@std/path';
 import { Hono } from 'hono';
 import type { Statement } from '@db/sqlite';
 import { StatementCache } from '../../db/statementCache.ts';
-import type { DuplicateSeasonGroup, DuplicatesResponse } from '@plex-librarian/shared/types.ts';
+import type {
+  DuplicateDirectoryResponse,
+  DuplicateSeasonGroup,
+  DuplicatesResponse,
+} from '@plex-librarian/shared/types.ts';
 
 const directory = await Deno.makeTempDir({ prefix: 'duplicate-list-test-' });
 const dbPath = resolve(directory, 'duplicates.db');
@@ -201,4 +205,125 @@ Deno.test('technical duplicate samples deduplicate inconsistent episode-index gr
   assertEquals(season.reclaimableFileSize, 700);
   assertEquals(season.episodes.length, 4);
   assertEquals(new Set(season.episodes.map((episode) => episode.episodeRatingKey)).size, 4);
+});
+
+Deno.test('duplicate directory skips season hydration and keeps exact counts and storage', async () => {
+  const original = StatementCache.prototype.execute;
+  const queries: string[] = [];
+  StatementCache.prototype.execute = function <T>(
+    query: string,
+    run: (statement: Statement) => T,
+  ): T {
+    queries.push(query);
+    return original.call(this, query, run) as T;
+  };
+  try {
+    for (
+      const filter of [
+        '',
+        '&search=Needle',
+        '&comparison=unknown',
+        '&offset=26&limit=10',
+        '&offset=100',
+      ]
+    ) {
+      const query = filter.includes('limit=') ? filter : `&limit=200${filter}`;
+      const full = await app.request(`/duplicates?type=tv${query}`);
+      const expected = await full.json() as DuplicatesResponse;
+      queries.length = 0;
+      const response = await app.request(
+        `/duplicates?type=tv&includeSeasonDetails=false${query}`,
+      );
+      assertEquals(response.status, 200);
+      const actual = await response.json() as DuplicateDirectoryResponse;
+      assertEquals(actual.total, expected.total);
+      assertEquals(actual.duplicateGroupTotal, expected.duplicateGroupTotal);
+      assertEquals(actual.groups.length, expected.groups.length);
+      for (let index = 0; index < actual.groups.length; index++) {
+        const row = actual.groups[index];
+        const detail = expected.groups[index] as DuplicateSeasonGroup;
+        assertEquals(row.mediaType, 'season');
+        if (row.mediaType !== 'season') throw new Error('Expected season');
+        assertEquals('episodes' in row, false);
+        assertEquals('comparisonSummary' in row, false);
+        assertEquals(row.seasonRatingKey, detail.seasonRatingKey);
+        assertEquals(row.showTitle, detail.showTitle);
+        assertEquals(row.duplicateGroupCount, detail.duplicateGroupCount);
+        assertEquals(row.combinedFileSize, detail.combinedFileSize);
+        assertEquals(row.reclaimableFileSize, detail.reclaimableFileSize);
+        assertEquals(row.maximumVersionCount, row.seasonRatingKey === 'season-40' ? 4 : 2);
+        assertEquals(
+          row.versionCount,
+          row.duplicateGroupCount * (row.seasonRatingKey === 'season-40' ? 2.5 : 2),
+        );
+      }
+      assertEquals(queries.some((sql) => sql.includes('row_number() over')), false);
+      if (!filter.includes('comparison')) {
+        assertEquals(
+          queries.some((sql) => sql.startsWith('select "server_id", "media_id"')),
+          false,
+        );
+      }
+    }
+  } finally {
+    StatementCache.prototype.execute = original;
+  }
+});
+
+Deno.test('on-demand season preview remains scoped and applies filters and ownership', async () => {
+  const all = await app.request('/duplicates?type=tv&limit=200');
+  const expected = await all.json() as DuplicatesResponse;
+  for (const seasonRatingKey of ['season-01', 'season-40', 'absent']) {
+    const response = await app.request(
+      `/duplicates?type=tv&seasonRatingKey=${seasonRatingKey}&limit=1`,
+    );
+    const actual = await response.json() as DuplicatesResponse;
+    assertEquals(
+      actual.groups,
+      expected.groups.filter((group) =>
+        group.mediaType === 'season' && group.seasonRatingKey === seasonRatingKey
+      ),
+    );
+    assertEquals(actual.total, seasonRatingKey === 'absent' ? 0 : 1);
+  }
+  const missing = await app.request('/duplicates?type=tv&seasonRatingKey=season-02&search=Needle');
+  assertEquals((await missing.json() as DuplicatesResponse).groups, []);
+});
+
+Deno.test('directory retains movie details and workflow ownership and unknown season storage', async () => {
+  withTransaction((db) =>
+    db.exec(`
+    INSERT INTO libraries(server_id,key,title,type,synced_at) VALUES(1,'m','Movies','movie',1);
+    INSERT INTO items(server_id,rating_key,library_key,title,type,updated_at)
+      VALUES(1,'movie-visible','m','Visible movie','movie',1),(1,'movie-owned','m','Owned movie','movie',1);
+    INSERT INTO item_media_versions(server_id,media_id,item_rating_key,library_key,file_size,updated_at)
+      VALUES(1,90001,'movie-visible','m',100,1),(1,90002,'movie-visible','m',200,1),
+            (1,90003,'movie-owned','m',100,1),(1,90004,'movie-owned','m',200,1);
+    INSERT INTO deletion_operations
+      (id,client_request_id,request_hash,server_id,library_key,kind,status,target_count,created_at,updated_at)
+      VALUES('owned-movie','owned-movie','hash',1,'m','movie_version','needs_attention',1,1,1);
+    INSERT INTO deletion_targets
+      (operation_id,ordinal,target_kind,target_key,title,snapshot,status,phase,created_at,updated_at)
+      VALUES('owned-movie',0,'movie_version','owned-movie','Owned','{"ratingKey":"movie-owned"}',
+        'needs_attention','plex_reconciliation',1,1);
+    UPDATE episode_media_versions SET file_size=NULL WHERE server_id=1 AND episode_rating_key='season-01-episode-0001';
+  `)
+  );
+  const full = await app.request('/duplicates?type=movie');
+  const expected = await full.json() as DuplicatesResponse;
+  const lean = await app.request('/duplicates?type=movie&includeSeasonDetails=false');
+  assertEquals(await lean.json(), expected);
+  assertEquals(expected.groups.length, 1);
+  assertEquals(expected.groups[0].mediaType, 'movie');
+  const mixed = await app.request('/duplicates?type=all&includeSeasonDetails=false');
+  const directory = await mixed.json() as DuplicateDirectoryResponse;
+  assertEquals(directory.total, 41);
+  const season = directory.groups.find((group) =>
+    group.mediaType === 'season' && group.seasonRatingKey === 'season-01'
+  );
+  assertExists(season);
+  if (season.mediaType !== 'season') throw new Error('Expected season');
+  assertEquals(season.combinedFileSize, null);
+  assertEquals(season.reclaimableFileSize, null);
+  assertEquals(season.versionCount, 619 * 2);
 });

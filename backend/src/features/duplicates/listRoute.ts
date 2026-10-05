@@ -6,6 +6,8 @@ import { contentIsNotIgnored, HAS_DUPLICATE_VERSIONS } from '../../db/scope.ts';
 import { parseSearchQuery } from '../../http/searchQuery.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import type {
+  DuplicateDirectoryGroup,
+  DuplicateDirectoryResponse,
   DuplicateEpisodeGroup,
   DuplicateListGroup,
   DuplicateMovieGroup,
@@ -75,6 +77,8 @@ type SeasonStub = {
   combinedFileSize: number | null;
   reclaimableFileSize: number | null;
   duplicateGroupCount: number;
+  versionCount: number;
+  maximumVersionCount: number;
   episodes: EpisodeStub[];
 };
 
@@ -99,6 +103,8 @@ router.get('/', async (c) => {
   const type = rawType === 'movie' || rawType === 'tv' ? rawType : 'all';
   const wantMovies = type !== 'tv';
   const wantTv = type !== 'movie';
+  const includeSeasonDetails = c.req.query('includeSeasonDetails') !== 'false';
+  const seasonRatingKey = c.req.query('seasonRatingKey');
   const rawComparison = c.req.query('comparison');
   const comparison: DuplicateComparisonFilter =
     rawComparison === 'same-profile' || rawComparison === 'different' ||
@@ -181,6 +187,7 @@ router.get('/', async (c) => {
       sql`${episodeMediaVersions.seasonRatingKey}`,
     )),
     episodeSearchCond,
+    seasonRatingKey ? eq(episodeMediaVersions.seasonRatingKey, seasonRatingKey) : undefined,
   )).groupBy(
     episodeMediaVersions.libraryKey,
     episodeMediaVersions.showRatingKey,
@@ -238,6 +245,8 @@ router.get('/', async (c) => {
           end as text
         )`,
         duplicateGroupCount: sql<number>`count(*)`,
+        versionCount: sql<string>`cast(sum(${eligibleEpisodeRows.versionCount}) as text)`,
+        maximumVersionCount: sql<number>`max(${eligibleEpisodeRows.versionCount})`,
       })
         .from(eligibleEpisodeRows)
         .leftJoin(
@@ -274,6 +283,8 @@ router.get('/', async (c) => {
     combinedFileSize: s.combinedFileSize != null ? Number(s.combinedFileSize) : null,
     reclaimableFileSize: s.reclaimableFileSize != null ? Number(s.reclaimableFileSize) : null,
     duplicateGroupCount: s.duplicateGroupCount,
+    versionCount: Number(s.versionCount),
+    maximumVersionCount: s.maximumVersionCount,
     episodes: [],
   }));
 
@@ -401,6 +412,8 @@ router.get('/', async (c) => {
       const summaries = new Map(seasonBatch.map((season) => [season.seasonRatingKey, {
         season,
         duplicateGroupCount: 0,
+        versionCount: 0,
+        maximumVersionCount: 0,
         combinedFileSize: 0 as number | null,
         reclaimableFileSize: 0 as number | null,
         previewKeys: [] as string[],
@@ -430,6 +443,8 @@ router.get('/', async (c) => {
             summary.previewKeys.push(episode.ratingKey);
           }
           summary.duplicateGroupCount++;
+          summary.versionCount += versions.length;
+          summary.maximumVersionCount = Math.max(summary.maximumVersionCount, versions.length);
           summary.combinedFileSize =
             summary.combinedFileSize === null || episode.combinedFileSize === null
               ? null
@@ -446,8 +461,15 @@ router.get('/', async (c) => {
         if (episodeKeys.length < SEASON_EPISODE_READ_PAGE_SIZE) break;
       }
       for (
-        const { season, duplicateGroupCount, combinedFileSize, reclaimableFileSize, previewKeys }
-          of summaries.values()
+        const {
+          season,
+          duplicateGroupCount,
+          versionCount,
+          maximumVersionCount,
+          combinedFileSize,
+          reclaimableFileSize,
+          previewKeys,
+        } of summaries.values()
       ) {
         if (duplicateGroupCount === 0) continue;
         previewKeysBySeason.set(season.seasonRatingKey, previewKeys);
@@ -455,6 +477,8 @@ router.get('/', async (c) => {
           ...season,
           episodes: [],
           duplicateGroupCount,
+          versionCount,
+          maximumVersionCount,
           combinedFileSize,
           reclaimableFileSize,
         });
@@ -471,7 +495,9 @@ router.get('/', async (c) => {
   const page = listStubs.slice(offset, offset + limit);
   const pageMovieKeys = page.filter((s) => s.mediaType === 'movie').map((s) => s.ratingKey);
   const pageSeasons = page.filter((stub): stub is SeasonStub => stub.mediaType === 'season');
-  const pageSeasonEpisodeKeys = comparison === 'all'
+  const pageSeasonEpisodeKeys = !includeSeasonDetails
+    ? []
+    : comparison === 'all'
     ? (await mapWithConcurrency(
       arrayBatches(pageSeasons, SEASON_FILTER_BATCH_SIZE),
       SEASON_READ_CONCURRENCY,
@@ -498,11 +524,7 @@ router.get('/', async (c) => {
       stub.episodes = episodesBySeason.get(stub.seasonRatingKey) ?? [];
     }
   }
-  const pageEpisodeKeys = page.flatMap((stub) =>
-    stub.mediaType === 'season' ? stub.episodes.map((episode) => episode.ratingKey) : []
-  );
   const pageMovieKeySet = new Set(pageMovieKeys);
-  const pageEpisodeKeySet = new Set(pageEpisodeKeys);
 
   const [movieItemRows, movieVersionRows] = await Promise.all([
     pageMovieKeys.length === 0 ? [] : db.select({
@@ -526,17 +548,13 @@ router.get('/', async (c) => {
           ),
         ),
   ]);
-  const episodeVersionRows = preloadedEpisodeVersionRows.filter((row) =>
-    pageEpisodeKeySet.has(row.episodeRatingKey)
-  );
-
   const movieItemByKey = new Map(movieItemRows.map((r) => [r.ratingKey, r]));
   const movieVersionsByKey = groupVersions(movieVersionRows, (v) => v.itemRatingKey);
   // The preview pass already decoded these media/stream rows. Reuse it rather than
   // parsing every audio/subtitle JSON array a second time for the response.
   const episodeVersionsByKey = pageEpisodeVersions;
 
-  const showKeys = [...new Set(episodeVersionRows.map((v) => v.showRatingKey))];
+  const showKeys = [...new Set(pageSeasons.map((season) => season.showRatingKey))];
   const showRows = showKeys.length === 0 ? [] : await db.select({
     ratingKey: items.ratingKey,
     title: items.title,
@@ -547,7 +565,7 @@ router.get('/', async (c) => {
   const showByKey = new Map(showRows.map((r) => [r.ratingKey, r]));
 
   const groups = page
-    .map((stub): DuplicateListGroup | null => {
+    .map((stub): DuplicateListGroup | DuplicateDirectoryGroup | null => {
       if (stub.mediaType === 'movie') {
         const item = movieItemByKey.get(stub.ratingKey);
         if (!item) return null;
@@ -563,6 +581,23 @@ router.get('/', async (c) => {
         } satisfies DuplicateMovieGroup;
       }
       const show = showByKey.get(stub.showRatingKey);
+      if (!includeSeasonDetails) {
+        return {
+          mediaType: 'season',
+          libraryKey: stub.libraryKey,
+          showRatingKey: stub.showRatingKey,
+          seasonRatingKey: stub.seasonRatingKey,
+          showTitle: show?.title ?? 'Unknown show',
+          showThumb: show?.thumb ?? null,
+          seasonIndex: stub.seasonIndex,
+          totalEpisodeCount: stub.totalEpisodeCount,
+          duplicateGroupCount: stub.duplicateGroupCount,
+          combinedFileSize: stub.combinedFileSize,
+          reclaimableFileSize: stub.reclaimableFileSize,
+          versionCount: stub.versionCount,
+          maximumVersionCount: stub.maximumVersionCount,
+        };
+      }
       const episodes = stub.episodes.map((episode): DuplicateEpisodeGroup | null => {
         const versions = episodeVersionsByKey.get(episode.ratingKey) ?? [];
         if (versions.length < 2) return null;
@@ -601,7 +636,7 @@ router.get('/', async (c) => {
         episodes,
       } satisfies DuplicateSeasonGroup;
     })
-    .filter((g): g is DuplicateListGroup => g !== null);
+    .filter((g) => g !== null);
 
   return c.json(
     {
@@ -611,7 +646,9 @@ router.get('/', async (c) => {
       total,
       duplicateGroupTotal,
       groups,
-    } satisfies DuplicatesResponse,
+    } satisfies Omit<DuplicatesResponse | DuplicateDirectoryResponse, 'groups'> & {
+      groups: Array<DuplicateListGroup | DuplicateDirectoryGroup>;
+    },
   );
 });
 

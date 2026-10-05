@@ -2,6 +2,42 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { api, ApiError } from "./api.ts";
 import type { ServiceDeletionRequest } from "../../../shared/serviceOwnedDeletion.ts";
 
+Deno.test("duplicate directory and on-demand previews use separate reads and preserve filters", async () => {
+  const original = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (url) => {
+    requests.push(String(url));
+    return Promise.resolve(
+      Response.json({ groups: [{ mediaType: "season", seasonRatingKey: "season/1" }] }),
+    );
+  };
+  try {
+    await api.duplicates.directory({
+      type: "tv",
+      comparison: "different",
+      search: "A & B",
+      offset: 50,
+    });
+    await api.duplicates.seasonPreview("season/1", "different", "A & B");
+    const directory = new URL(requests[0], "http://fixture").searchParams;
+    assertEquals(directory.get("includeSeasonDetails"), "false");
+    assertEquals(directory.get("offset"), "50");
+    const detail = new URL(requests[1], "http://fixture").searchParams;
+    assertEquals(detail.get("seasonRatingKey"), "season/1");
+    assertEquals(detail.get("comparison"), "different");
+    assertEquals(detail.get("search"), "A & B");
+    assertEquals(detail.get("includeSeasonDetails"), null);
+    globalThis.fetch = () => Promise.resolve(Response.json({ groups: [] }));
+    await assertRejects(
+      () => api.duplicates.seasonPreview("gone", "all", ""),
+      Error,
+      "no longer matches",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 Deno.test("service-owned requests preserve reviewed identity and independent destinations", async () => {
   const originalFetch = globalThis.fetch;
   const request: ServiceDeletionRequest = {
