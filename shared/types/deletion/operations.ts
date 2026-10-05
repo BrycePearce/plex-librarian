@@ -9,11 +9,6 @@ export type DeletionOperationStatus =
   | 'needs_attention'
   | 'cancelled';
 
-export interface DeletionOperationCreated {
-  operationId: string;
-  status: DeletionOperationStatus;
-}
-
 /** Bounded Activity projection; never includes execution snapshots or per-file evidence. */
 export interface DeletionActivityItem {
   id: string;

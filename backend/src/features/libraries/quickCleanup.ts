@@ -8,10 +8,7 @@ import type {
 import { STALE_QUICK_CLEANUP_LIMIT } from './quickCleanupRules.ts';
 import { workflowOwnedItemSql } from '../deletionOperations/core/ownership.ts';
 import { EARLIEST_PLAUSIBLE_PLEX_TIMESTAMP } from '../../integrations/plex/timestamps.ts';
-export {
-  parseStaleQuickCleanupDays,
-  STALE_QUICK_CLEANUP_DEFAULT_DAYS,
-} from './quickCleanupRules.ts';
+export { parseStaleQuickCleanupDays } from './quickCleanupRules.ts';
 
 const DAY_SECONDS = 86_400;
 

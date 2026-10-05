@@ -124,22 +124,6 @@ export interface DownloadCleanupPreviewResponse {
   items: DownloadCleanupPreviewItem[];
 }
 
-export interface DeleteItemsResponse {
-  deleted: string[];
-  removedByAppRatingKeys: string[];
-  partial: Array<{
-    ratingKey: string;
-    deletedInstances: Array<
-      { instanceId: number; instanceName: string; alreadyAbsent: boolean }
-    >;
-    failedInstances: Array<
-      { instanceId: number; instanceName: string; error: string }
-    >;
-  }>;
-  failed: { ratingKey: string; error: string }[];
-  outcomes: DeleteItemOutcome[];
-}
-
 export type DeletionStageStatus = 'deleted' | 'already-absent' | 'failed';
 
 export interface DeletionStageOutcome {

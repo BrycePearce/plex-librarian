@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Folder, X } from "lucide-react";
+import { Folder, X } from "lucide-react";
 import type { ArrCleanupTarget } from "@shared/types";
 import { HoverPopover } from "../../components/HoverPopover.tsx";
 import { ServiceIcon } from "../../components/ServiceIcons.tsx";
 import type { ServiceIconName } from "../../components/ServiceIcons.tsx";
-import { formatKilobytes } from "../../lib/format.ts";
 import { InfoTip } from "./InfoTip.tsx";
 
 export interface DeletionDestinationOption {
@@ -144,56 +143,6 @@ export function arrCleanupTargetImpact(target: ArrCleanupTarget): ArrDeletionImp
       ? sizes.reduce((total, size) => total + size!, 0)
       : null,
   };
-}
-
-export function ArrDeletionWarning({
-  service,
-  impacts,
-}: {
-  service: "sonarr" | "radarr";
-  impacts: ArrDeletionImpact[];
-}) {
-  if (impacts.length === 0) return null;
-  const label = service === "sonarr" ? "Sonarr" : "Radarr";
-  const uniqueImpacts = [...new Map(impacts.map((impact) => [impact.key, impact])).values()];
-  const counts = uniqueImpacts.map((impact) => impact.fileCount);
-  const sizes = uniqueImpacts.map((impact) => impact.sizeBytes);
-  const fileCount = counts.every((count) => count !== null && count !== undefined)
-    ? counts.reduce((total, count) => total + count!, 0)
-    : null;
-  const sizeBytes = sizes.every((size) => size !== null && size !== undefined)
-    ? sizes.reduce((total, size) => total + size!, 0)
-    : null;
-
-  return (
-    <div className="alert alert-error mt-3 items-start text-sm" role="alert">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-      <div className="min-w-0">
-        <div className="font-semibold">
-          {label} will permanently delete the managed files below
-        </div>
-        <div className="mt-1 space-y-1 text-error-content/85">
-          {uniqueImpacts.map((impact) => (
-            <div key={impact.key}>
-              <span>{impact.title}</span>
-              {impact.path && <span className="break-all font-semibold">— {impact.path}</span>}
-            </div>
-          ))}
-        </div>
-        {fileCount !== null && fileCount > 0 && (
-          <div className="mt-1 font-semibold text-error-content">
-            {fileCount} managed file{fileCount === 1 ? "" : "s"}
-            {sizeBytes !== null && sizeBytes > 0
-              ? ` totaling ${formatKilobytes(sizeBytes / 1000)}`
-              : ""}
-          </div>
-        )}
-        <div className="mt-1 text-xs text-error-content/75">
-          Plex Librarian cannot undo this {label} action.
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function ServiceMark({

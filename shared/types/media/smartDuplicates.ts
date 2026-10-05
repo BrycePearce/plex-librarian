@@ -37,8 +37,3 @@ export interface SmartDuplicateAnalysisResponse {
   protectedGroups: number;
   candidates: SmartDuplicateCandidate[];
 }
-
-export interface SmartDuplicateCleanupResponse {
-  operationIds: string[];
-  targetCount: number;
-}

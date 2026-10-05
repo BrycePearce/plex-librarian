@@ -1368,16 +1368,6 @@ export function clearPlexClientCache(): void {
   _cachedServerId = null;
 }
 
-// Clears settings.activeServerId (leaving the `servers` row and everything scoped to it
-// untouched — reconnecting later restores it as-is) and drops the cached client so the
-// next request re-resolves. Shared by every place that disconnects the active server —
-// explicit DELETE /api/auth/plex and GET /api/auth/status's revoked-token handling — so
-// a future third step in "disconnect" only needs to be added once.
-export async function disconnectActiveServer(): Promise<void> {
-  await db.update(settings).set({ activeServerId: null }).where(eq(settings.id, 1));
-  clearPlexClientCache();
-}
-
 // Upserts a server row by its stable machineIdentifier so reconnecting to a
 // previously-known server reuses its id — and everything scoped to that id
 // (libraries/items/seasons/sync history) — instead of colliding with or losing

@@ -17,11 +17,7 @@ import {
   workflowKeyPresent,
 } from './relocationModel.ts';
 
-export {
-  canonicalJson,
-  relocationSupersededPredicateSql,
-  workflowKeyPresent,
-} from './relocationModel.ts';
+export { canonicalJson, relocationSupersededPredicateSql } from './relocationModel.ts';
 
 export class RelocationConflictError extends Error {
   constructor(message: string, readonly status = 409) {

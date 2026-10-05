@@ -1,24 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ReactNode, RefObject } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, ChevronDown, Trash2 } from "lucide-react";
 
 export type DeletionPreviewMode = "basic" | "advanced";
-
-export function useDelayedFlag(active: boolean, delayMs: number): boolean {
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (!active) {
-      setVisible(false);
-      return;
-    }
-    const timeout = setTimeout(() => setVisible(true), delayMs);
-    return () => clearTimeout(timeout);
-  }, [active, delayMs]);
-
-  return active && visible;
-}
 
 export function useDeletionDialogCancelFocus(
   dialogRef: RefObject<HTMLDialogElement | null>,
@@ -89,27 +74,6 @@ export function DeletionModalShell({
         <button type="submit" disabled={pending}>close</button>
       </form>
     </dialog>
-  );
-}
-
-export function DeletionDialogLayout({
-  status,
-  review,
-  destinations,
-  footer,
-}: {
-  status?: ReactNode;
-  review: ReactNode;
-  destinations?: ReactNode;
-  footer: ReactNode;
-}) {
-  return (
-    <>
-      {status}
-      {review}
-      {destinations}
-      {footer}
-    </>
   );
 }
 

@@ -15,15 +15,7 @@ import {
 import { downloadJobOwnsPath, downloadPayloadIsExclusivelyOwned } from './ownership.ts';
 
 import type { ResolvedCleanupItem, ResolvedDownloadJob } from './cleanup/types.ts';
-export type {
-  CleanupItemWithoutPlexPaths,
-  DirectPlexPathEvidence,
-  DirectRetainedPathEvidence,
-  PersistedResolvedCleanupItem,
-  PersistedResolvedDownloadJob,
-  ResolvedCleanupItem,
-  ResolvedDownloadJob,
-} from './cleanup/types.ts';
+export type { PersistedResolvedCleanupItem, ResolvedCleanupItem } from './cleanup/types.ts';
 
 function canonicalAuthorizationValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -39,27 +31,6 @@ function canonicalAuthorizationValue(value: unknown): unknown {
     );
   }
   return value;
-}
-
-export interface DownloadedFileCleanupResult {
-  deletedJobs: Array<{ provider: string; instanceName: string; jobId: string; name: string }>;
-  alreadyRemovedJobs: Array<
-    { provider: string; instanceName: string; jobId: string; name: string }
-  >;
-  deletedOrphanFiles: string[];
-  alreadyRemovedOrphanFiles: string[];
-}
-
-export class DownloadedFileCleanupError extends Error {
-  constructor(
-    message: string,
-    readonly result: DownloadedFileCleanupResult,
-    readonly system: string,
-    readonly target: string,
-  ) {
-    super(message);
-    this.name = 'DownloadedFileCleanupError';
-  }
 }
 
 function externalId(item: CoordinatedDeleteItem): number | null {
