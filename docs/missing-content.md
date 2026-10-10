@@ -208,8 +208,9 @@ user's production database.
 ### Setup guidance
 
 The results page provides connection setup actions for Plex, Radarr, and unmapped Radarr libraries.
-The requirements disclosure lists the credentials or library selection needed. File comparison
-requires trusted Arr/Plex path mappings; this build does not expose a mapping setup screen.
-Identity-matched version records without a comparable path are treated as a page-level limitation
-and excluded before result counts and pagination. Other findings remain visible, including stale
-evidence from failed audits.
+The setup notice appears only for missing connections or library selections. Its requirements
+disclosure lists the credentials or library selection needed. File-comparison limitations appear
+inside Audit coverage. File comparison requires trusted Arr/Plex path mappings; this build does not
+expose a mapping setup screen. Identity-matched version records without a comparable path are
+treated as a page-level limitation and excluded before result counts and pagination. Other findings
+remain visible, including stale evidence from failed audits.

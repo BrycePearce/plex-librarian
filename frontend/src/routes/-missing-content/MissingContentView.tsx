@@ -122,14 +122,11 @@ export function MissingContentView(
   const needsConnection = !data.setup.plexConnected || !data.instances.length ||
     data.setup.unmappedInstances.length > 0;
   const limitedComparison = data.setup.fileComparisonUnavailable.length > 0;
-  const needsSetup = needsConnection || limitedComparison;
   const setupTitle = !data.setup.plexConnected
     ? "Connect Plex to get started"
     : !data.instances.length
     ? "Connect Radarr to check for missing movies"
-    : data.setup.unmappedInstances.length
-    ? "Choose which libraries to compare"
-    : "File comparison is limited";
+    : "Choose which libraries to compare";
   const setupAction = !data.setup.plexConnected
     ? "Connect Plex"
     : !data.instances.length
@@ -138,16 +135,12 @@ export function MissingContentView(
   const filtered = !!(filters.type || filters.library || filters.instance || filters.dismissed);
   return (
     <>
-      {needsSetup && (
+      {needsConnection && (
         <section className="missing-setup" aria-label="Audit setup">
           <div className="missing-setup-heading">
             <div>
               <h2>{setupTitle}</h2>
-              <p>
-                {needsConnection
-                  ? "Finish connection setup to enable these checks."
-                  : "Movie matching is available. Exact-copy checks need trusted file paths."}
-              </p>
+              <p>Finish connection setup to enable these checks.</p>
             </div>
             {needsConnection && (
               <a
@@ -186,25 +179,6 @@ export function MissingContentView(
               )}
               {needsConnection && (
                 <p>After saving, run a sync from the dashboard to populate the audit.</p>
-              )}
-              {limitedComparison && (
-                <>
-                  <p>
-                    <strong>File comparison:</strong>{" "}
-                    Radarr and Plex paths must map to the same verified storage location. Matching
-                    path text alone is not enough.
-                  </p>
-                  <p>
-                    This build has no setup screen for those mappings yet. No movie repair is
-                    indicated; syncing again won’t enable this check.
-                  </p>
-                  <p className="missing-footnote">
-                    Affected:{" "}
-                    {data.setup.fileComparisonUnavailable.map((s) =>
-                      `${instanceName(s.instanceId)} / ${libraryName(s.libraryKey)}`
-                    ).join(" · ")}
-                  </p>
-                </>
               )}
             </div>
           </details>
@@ -252,6 +226,23 @@ export function MissingContentView(
                 </span>
               </div>
             ))}
+            {limitedComparison && (
+              <div className="missing-comparison-note">
+                <p>
+                  <strong>Movie matching is available.</strong>{" "}
+                  Exact-copy comparison is not available for every library.
+                </p>
+                <p>
+                  It requires trusted file-path mappings, which this build cannot configure in the
+                  UI. This does not indicate a missing movie or require a repair.
+                </p>
+                <p className="missing-footnote">
+                  Applies to: {data.setup.fileComparisonUnavailable.map((scope) =>
+                    `${instanceName(scope.instanceId)} / ${libraryName(scope.libraryKey)}`
+                  ).join(" · ")}
+                </p>
+              </div>
+            )}
             <p className="missing-footnote">
               Updated by normal syncs. Failed reads retain previous findings as stale.
             </p>
@@ -388,7 +379,7 @@ export function MissingContentView(
               <h2>
                 {filtered
                   ? "No matches"
-                  : needsSetup
+                  : needsConnection
                   ? "No findings from available checks"
                   : incomplete || !data.scopes.length
                   ? "Your audit is still incomplete"
@@ -397,7 +388,7 @@ export function MissingContentView(
               <p>
                 {filtered
                   ? "Try another filter or include hidden findings."
-                  : needsSetup
+                  : needsConnection
                   ? "See the setup notice above for checks that aren’t available yet."
                   : incomplete || !data.scopes.length
                   ? "Run a sync to get a complete picture."
