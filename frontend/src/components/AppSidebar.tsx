@@ -40,7 +40,7 @@ const navGroups = [
       to: "/tools/episode-gaps",
       icon: ScanLine,
       search: { status: "gaps", sort: "missingCount", order: "desc", offset: 0 },
-    }],
+    }, { label: "Missing Content", to: "/tools/missing-content", icon: ScanLine }],
   },
   {
     label: "Manage",

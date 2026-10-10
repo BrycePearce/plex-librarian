@@ -313,3 +313,6 @@ html[data-theme="nord"] .app-shell {
 @media (prefers-reduced-motion: reduce) {
   .app-sidebar, .sidebar-link, .sidebar-collapse { transition: none; }
 }
+
+.app-shell:has(.workspace-page.workspace-tone-coral) { --ambient-primary-color: var(--color-workspace-coral); }
+.sidebar-link[href="/tools/missing-content"] { --color-primary: var(--color-workspace-coral); }

@@ -26,6 +26,7 @@ import settings from './features/settings/route.ts';
 import sync from './features/sync/route.ts';
 import users from './features/users/route.ts';
 import webhook from './features/webhook/route.ts';
+import missingContent from './features/missingContent/route.ts';
 import episodeGaps from './features/episodeGaps/route.ts';
 
 type AppVariables = {
@@ -114,6 +115,7 @@ export function createApp(staticDir = Deno.env.get('STATIC_DIR')) {
   app.route('/api/users', users);
   app.route('/api/webhook', webhook);
   app.route('/api/tools/episode-gaps', episodeGaps);
+  app.route('/api/tools/missing-content', missingContent);
 
   if (staticDir) {
     // Vite fingerprints every production asset filename, so these responses can be

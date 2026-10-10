@@ -5,6 +5,14 @@ import { HistoryCounts } from './historyCounts.ts';
 import { createSyncYield } from './cooperativeYield.ts';
 import type { PlexClient, PlexHistoryEntry, PlexLibrary } from '../../integrations/plex/index.ts';
 
+// Without planner statistics SQLite can prefer a library-wide index here,
+// scanning every season for each history entry. Always probe this show's small
+// season set, while retaining the library and season predicates for exact scope.
+export const SEASON_HISTORY_MAXIMUM_SQL = `UPDATE seasons INDEXED BY seasons_show_idx
+  SET last_viewed_at = ?
+  WHERE server_id = ? AND show_rating_key = ? AND season_index = ? AND library_key = ?
+    AND (last_viewed_at IS NULL OR last_viewed_at < ?)`;
+
 function nonNegativeInteger(value: unknown): number | null {
   const number = typeof value === 'string' && value.trim() ? Number(value) : value;
   return typeof number === 'number' && Number.isInteger(number) && number >= 0 ? number : null;
@@ -217,11 +225,7 @@ export async function syncLibraryHistory(
           }
           itemViewStmt.finalize();
 
-          const seasonViewStmt = client.prepare(
-            `UPDATE seasons SET last_viewed_at = ?
-           WHERE server_id = ? AND show_rating_key = ? AND season_index = ? AND library_key = ?
-             AND (last_viewed_at IS NULL OR last_viewed_at < ?)`,
-          );
+          const seasonViewStmt = client.prepare(SEASON_HISTORY_MAXIMUM_SQL);
           for (const activity of pageSeasonMaxViewedAt.values()) {
             seasonViewStmt.run(
               activity.viewedAt,

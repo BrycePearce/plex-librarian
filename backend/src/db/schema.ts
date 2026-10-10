@@ -1225,3 +1225,116 @@ export const mediaRemovals = sqliteTable(
     ),
   }),
 );
+
+// Saved Missing Content audits and bounded per-sync staging.
+export const missingAuditScopes = sqliteTable(
+  'missing_audit_scopes',
+  {
+    serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+    instanceId: integer('instance_id').notNull().references(() => arrInstances.id, {
+      onDelete: 'cascade',
+    }),
+    libraryKey: text('library_key').notNull(),
+    syncId: integer('sync_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    attemptedAt: integer('attempted_at').notNull(),
+    completedAt: integer('completed_at'),
+    status: text('status').notNull(),
+    reason: text('reason'),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.serverId, table.instanceId, table.libraryKey] }),
+  }),
+);
+export const missingFindings = sqliteTable('missing_findings', {
+  serverId: integer('server_id').notNull().references(() => servers.id, { onDelete: 'cascade' }),
+  instanceId: integer('instance_id').notNull().references(() => arrInstances.id, {
+    onDelete: 'cascade',
+  }),
+  libraryKey: text('library_key').notNull(),
+  movieId: integer('movie_id').notNull(),
+  type: text('type').notNull(),
+  title: text('title').notNull(),
+  evidence: text('evidence').notNull(),
+  firstSeen: integer('first_seen').notNull(),
+  lastSeen: integer('last_seen').notNull(),
+  resolvedAt: integer('resolved_at'),
+  dismissed: integer('dismissed').notNull().default(0),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.serverId, table.instanceId, table.libraryKey, table.movieId] }),
+  titlePage: index('missing_findings_title_page').on(
+    table.serverId,
+    table.resolvedAt,
+    table.title,
+    table.instanceId,
+    table.libraryKey,
+    table.movieId,
+    table.type,
+    table.dismissed,
+  ),
+  page: index('missing_findings_page').on(
+    table.serverId,
+    table.resolvedAt,
+    table.type,
+    table.instanceId,
+    table.libraryKey,
+    table.title,
+    table.movieId,
+  ),
+}));
+export const missingStagePlex = sqliteTable('missing_stage_plex', {
+  syncId: integer('sync_id').notNull(),
+  libraryKey: text('library_key').notNull(),
+  ratingKey: text('rating_key').notNull(),
+  evidence: text('evidence').notNull(),
+  completePaths: integer('complete_paths').notNull(),
+}, (table) => ({ pk: primaryKey({ columns: [table.syncId, table.libraryKey, table.ratingKey] }) }));
+export const missingStageKeys = sqliteTable(
+  'missing_stage_keys',
+  {
+    syncId: integer('sync_id').notNull(),
+    libraryKey: text('library_key').notNull(),
+    kind: text('kind').notNull(),
+    value: text('value').notNull(),
+    ratingKey: text('rating_key').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.syncId, table.libraryKey, table.kind, table.value, table.ratingKey],
+    }),
+  }),
+);
+export const missingStageMovies = sqliteTable('missing_stage_movies', {
+  syncId: integer('sync_id').notNull(),
+  instanceId: integer('instance_id').notNull(),
+  movieId: integer('movie_id').notNull(),
+  evidence: text('evidence'),
+}, (table) => ({ pk: primaryKey({ columns: [table.syncId, table.instanceId, table.movieId] }) }));
+export const missingStageQueue = sqliteTable(
+  'missing_stage_queue',
+  {
+    syncId: integer('sync_id').notNull(),
+    instanceId: integer('instance_id').notNull(),
+    queueId: integer('queue_id').notNull(),
+    movieId: integer('movie_id').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.syncId, table.instanceId, table.queueId] }),
+    movie: index('missing_queue_movie').on(table.syncId, table.instanceId, table.movieId),
+  }),
+);
+export const missingStageFindings = sqliteTable(
+  'missing_stage_findings',
+  {
+    syncId: integer('sync_id').notNull(),
+    instanceId: integer('instance_id').notNull(),
+    libraryKey: text('library_key').notNull(),
+    movieId: integer('movie_id').notNull(),
+    type: text('type').notNull(),
+    title: text('title').notNull(),
+    evidence: text('evidence').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.syncId, table.instanceId, table.libraryKey, table.movieId] }),
+  }),
+);

@@ -10,6 +10,7 @@ export const WORKSPACE_TONE_CLASS = {
   accent: "workspace-tone-accent",
   info: "workspace-tone-info",
   success: "workspace-tone-success",
+  coral: "workspace-tone-coral",
 } as const;
 
 export type WorkspaceTone = keyof typeof WORKSPACE_TONE_CLASS;

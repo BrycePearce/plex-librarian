@@ -1,4 +1,7 @@
+:root { --color-workspace-coral: oklch(76% 0.14 35); }
+:root[data-theme="light"], :root[data-theme="nord"] { --color-workspace-coral: oklch(53% 0.16 35); }
 .workspace-page { --workspace-color: var(--color-primary); position: relative; isolation: isolate; padding-bottom: 3rem; }
+.workspace-tone-coral { --workspace-color: var(--color-workspace-coral); }
 .workspace-tone-primary { --workspace-color: var(--color-primary); }
 .workspace-tone-secondary { --workspace-color: var(--color-secondary); }
 .workspace-tone-accent { --workspace-color: var(--color-accent); }

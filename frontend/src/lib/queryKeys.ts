@@ -19,6 +19,7 @@ const roots = {
   integrationCompatibility: "integration-compatibility",
   deletionOperations: "deletion-operations",
   episodeGaps: "episode-gaps",
+  missingContent: "missing-content",
 } as const;
 
 export const queryKeys = {
@@ -106,6 +107,7 @@ export const queryKeys = {
     detail: (id: string) => [roots.deletionOperations, id] as const,
     arrLinks: (id: string) => [roots.deletionOperations, id, "arr-links"] as const,
   },
+  missingContent: { all: [roots.missingContent] as const },
   episodeGaps: {
     all: [roots.episodeGaps] as const,
     list: <TParams>(params: TParams) => [roots.episodeGaps, params] as const,
@@ -142,6 +144,7 @@ const rootPolicies = {
   integrationCompatibility: { serverScoped: true, syncDerived: false },
   deletionOperations: { serverScoped: true, syncDerived: false },
   episodeGaps: { serverScoped: true, syncDerived: true },
+  missingContent: { serverScoped: true, syncDerived: true },
 } satisfies Record<QueryRootName, QueryRootPolicy>;
 
 const rootNames = Object.keys(roots) as QueryRootName[];

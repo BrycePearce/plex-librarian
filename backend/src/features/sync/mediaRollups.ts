@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, lt, notInArray, sql } from 'drizzle-orm';
 import { SQLITE_WRITE_BATCH_ROWS, sqliteWriteBatches } from '../../db/batch.ts';
-import { db, withTransaction } from '../../db/index.ts';
+import { db, type SqliteClient, withTransaction } from '../../db/index.ts';
 import { episodeMediaVersions, items, seasons } from '../../db/schema.ts';
 import { episodeVersionsByLibrary, seasonsByLibrary } from '../../db/scope.ts';
 import type {
@@ -197,24 +197,28 @@ export async function syncShowSizes(
           season_audit_reason = ?
         WHERE server_id = ? AND library_key = ? AND rating_key = ? AND type = 'show'
       `);
-      for (const show of currentShows) {
-        if (suppressAllProjectionPruning || protectedShows.has(show.ratingKey)) continue;
-        const audit = auditSeasonIndexes(
-          seasonIndexesByShow.get(show.ratingKey) ?? [],
-          conflictingShowRatingKeys.has(show.ratingKey),
-        );
-        statement.run(
-          audit.firstIndex,
-          audit.lastIndex,
-          audit.presentCount,
-          audit.gapCount,
-          audit.gapRanges ? JSON.stringify(audit.gapRanges) : null,
-          audit.status,
-          audit.reason,
-          serverId,
-          lib.key,
-          show.ratingKey,
-        );
+      try {
+        for (const show of currentShows) {
+          if (suppressAllProjectionPruning || protectedShows.has(show.ratingKey)) continue;
+          const audit = auditSeasonIndexes(
+            seasonIndexesByShow.get(show.ratingKey) ?? [],
+            conflictingShowRatingKeys.has(show.ratingKey),
+          );
+          statement.run(
+            audit.firstIndex,
+            audit.lastIndex,
+            audit.presentCount,
+            audit.gapCount,
+            audit.gapRanges ? JSON.stringify(audit.gapRanges) : null,
+            audit.status,
+            audit.reason,
+            serverId,
+            lib.key,
+            show.ratingKey,
+          );
+        }
+      } finally {
+        statement.finalize();
       }
     });
     afterRatingKey = currentShows.at(-1)!.ratingKey;
@@ -372,12 +376,36 @@ export async function syncArtistSizes(
 
   if (artistTotals.size === 0) return;
 
-  withTransaction((client) => {
-    const stmt = client.prepare(
-      `UPDATE items SET file_size = ? WHERE server_id = ? AND rating_key = ? AND library_key = ? AND type = 'artist'`,
-    );
-    for (const [ratingKey, fileSize] of artistTotals) {
-      stmt.run(fileSize, serverId, ratingKey, lib.key);
+  let batch: [string, number][] = [];
+  for (const entry of artistTotals) {
+    batch.push(entry);
+    if (batch.length < SQLITE_WRITE_BATCH_ROWS) continue;
+    withTransaction((client) => applyArtistSizeBatch(client, serverId, lib.key, batch));
+    await yieldIfNeeded();
+    batch = [];
+  }
+  if (batch.length > 0) {
+    withTransaction((client) => applyArtistSizeBatch(client, serverId, lib.key, batch));
+    await yieldIfNeeded();
+  }
+}
+
+export function applyArtistSizeBatch(
+  client: SqliteClient,
+  serverId: number,
+  libraryKey: string,
+  totals: readonly (readonly [string, number])[],
+): void {
+  const stmt = client.prepare(
+    `UPDATE items SET file_size = ?
+      WHERE server_id = ? AND rating_key = ? AND library_key = ? AND type = 'artist'
+        AND file_size IS NOT ?`,
+  );
+  try {
+    for (const [ratingKey, fileSize] of totals) {
+      stmt.run(fileSize, serverId, ratingKey, libraryKey, fileSize);
     }
-  });
+  } finally {
+    stmt.finalize();
+  }
 }

@@ -1,0 +1,187 @@
+{
+  "method": "Serial isolated temporary file-backed SQLite databases; count plus 50-row first page plus JSON parse; three samples per case; no provider network or HTTP routing; no concurrent project benchmarks.",
+  "fixture": "One Plex match per finding; four finding types; every 37th finding dismissed; 0 or 100 ignored content rows; count is saved findings, not total library movies.",
+  "reproduce": "deno run -A backend/src/features/missingContent/queryPerformance.ts <finding-count> 3",
+  "results": [
+    {
+      "mode": "before",
+      "findings": 3000,
+      "ignored": 0,
+      "total": 2918,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 4.027600000000007,
+      "maxMs": 4.496299999999906,
+      "samplesMs": [
+        3.5797999999999774,
+        4.027600000000007,
+        4.496299999999906
+      ]
+    },
+    {
+      "mode": "before",
+      "findings": 3000,
+      "ignored": 100,
+      "total": 2821,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 889.8574999999996,
+      "maxMs": 894.4205999999999,
+      "samplesMs": [
+        887.5074000000001,
+        889.8574999999996,
+        894.4205999999999
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 3000,
+      "ignored": 0,
+      "total": 2918,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 0.9810000000002219,
+      "maxMs": 1.4645000000000437,
+      "samplesMs": [
+        0.9632999999998901,
+        0.9810000000002219,
+        1.4645000000000437
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 3000,
+      "ignored": 100,
+      "total": 2821,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 11.141200000000026,
+      "maxMs": 11.342200000000048,
+      "samplesMs": [
+        11.137000000000171,
+        11.141200000000026,
+        11.342200000000048
+      ]
+    },
+    {
+      "mode": "before",
+      "findings": 30000,
+      "ignored": 0,
+      "total": 29189,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 43.621099999999956,
+      "maxMs": 46.524200000000064,
+      "samplesMs": [
+        40.308599999999956,
+        43.621099999999956,
+        46.524200000000064
+      ]
+    },
+    {
+      "mode": "before",
+      "findings": 30000,
+      "ignored": 100,
+      "total": 29092,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 9929.944499999998,
+      "maxMs": 9982.421900000001,
+      "samplesMs": [
+        9798.7487,
+        9929.944499999998,
+        9982.421900000001
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 30000,
+      "ignored": 0,
+      "total": 29189,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 2.4637999999977183,
+      "maxMs": 4.03349999999773,
+      "samplesMs": [
+        2.336800000000949,
+        2.4637999999977183,
+        4.03349999999773
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 30000,
+      "ignored": 100,
+      "total": 29092,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 91.9380999999994,
+      "maxMs": 93.8752999999997,
+      "samplesMs": [
+        91.35519999999815,
+        91.9380999999994,
+        93.8752999999997
+      ]
+    },
+    {
+      "mode": "before",
+      "findings": 100000,
+      "ignored": 0,
+      "total": 97297,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 498.9863,
+      "maxMs": 506.99260000000004,
+      "samplesMs": [
+        479.16979999999967,
+        498.9863,
+        506.99260000000004
+      ]
+    },
+    {
+      "mode": "before",
+      "findings": 100000,
+      "ignored": 100,
+      "total": 97200,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 33073.9566,
+      "maxMs": 33235.4125,
+      "samplesMs": [
+        32998.40610000001,
+        33073.9566,
+        33235.4125
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 100000,
+      "ignored": 0,
+      "total": 97297,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 7.6181999999971595,
+      "maxMs": 8.276400000002468,
+      "samplesMs": [
+        6.818400000003749,
+        7.6181999999971595,
+        8.276400000002468
+      ]
+    },
+    {
+      "mode": "after",
+      "findings": 100000,
+      "ignored": 100,
+      "total": 97200,
+      "returned": 50,
+      "iterations": 3,
+      "medianMs": 332.4232000000047,
+      "maxMs": 340.3607000000047,
+      "samplesMs": [
+        305.303700000004,
+        332.4232000000047,
+        340.3607000000047
+      ]
+    }
+  ]
+}

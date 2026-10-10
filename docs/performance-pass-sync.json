@@ -1,0 +1,347 @@
+{
+  "normal": {
+    "fixture": {
+      "totalPlex": 2775,
+      "totalRadarr": 2899,
+      "managed": 2636,
+      "networkLatency": "none; generated response stream",
+      "physicalVerification": false
+    },
+    "results": [
+      {
+        "enabled": false,
+        "elapsedMs": 360.5148999999999,
+        "http": {
+          "health": {
+            "samples": 4,
+            "p95Ms": 27.666999999999973,
+            "maxMs": 147.0916
+          },
+          "findings": {
+            "samples": 4,
+            "p95Ms": 27.77260000000001,
+            "maxMs": 147.9769
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 70.82370000000003,
+        "heartbeatGapMaxMs": 72.47450000000003,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 10.243171691894531,
+        "peakHeapMiB": 35.92932891845703,
+        "peakRssMiB": 161.52734375
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 836.6870000000001,
+        "http": {
+          "health": {
+            "samples": 13,
+            "p95Ms": 44.87419999999997,
+            "maxMs": 67.2016
+          },
+          "findings": {
+            "samples": 13,
+            "p95Ms": 45.110000000000014,
+            "maxMs": 62.83879999999999
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 65.44499999999994,
+        "heartbeatGapMaxMs": 71.39979999999991,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 34.69691467285156,
+        "peakHeapMiB": 73.86310577392578,
+        "peakRssMiB": 221.52734375
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 274.4946,
+        "http": {
+          "health": {
+            "samples": 5,
+            "p95Ms": 29.291900000000027,
+            "maxMs": 59.677099999999996
+          },
+          "findings": {
+            "samples": 5,
+            "p95Ms": 29.086600000000004,
+            "maxMs": 55.31230000000001
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 59.59010000000035,
+        "heartbeatGapMaxMs": 59.74969999999985,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 67.2154541015625,
+        "peakHeapMiB": 68.46286010742188,
+        "peakRssMiB": 228.7421875
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 746.3683000000001,
+        "http": {
+          "health": {
+            "samples": 11,
+            "p95Ms": 61.8664,
+            "maxMs": 148.99390000000002
+          },
+          "findings": {
+            "samples": 11,
+            "p95Ms": 57.4773,
+            "maxMs": 148.8165
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 60.872499999999945,
+        "heartbeatGapMaxMs": 70.86879999999974,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 59.16978454589844,
+        "peakHeapMiB": 85.44309997558594,
+        "peakRssMiB": 268.28125
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 326.52559999999994,
+        "http": {
+          "health": {
+            "samples": 5,
+            "p95Ms": 35.025499999999994,
+            "maxMs": 56.4144
+          },
+          "findings": {
+            "samples": 5,
+            "p95Ms": 35.11039999999997,
+            "maxMs": 50.6536
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 62.89989999999989,
+        "heartbeatGapMaxMs": 67.26499999999987,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 41.961708068847656,
+        "peakHeapMiB": 42.50297546386719,
+        "peakRssMiB": 247.73828125
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 866.6149999999998,
+        "http": {
+          "health": {
+            "samples": 10,
+            "p95Ms": 113.6113,
+            "maxMs": 200.46539999999996
+          },
+          "findings": {
+            "samples": 10,
+            "p95Ms": 107.8016,
+            "maxMs": 201.29430000000002
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 61.14669999999978,
+        "heartbeatGapMaxMs": 74.8457000000003,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 51.768165588378906,
+        "peakHeapMiB": 70.88436126708984,
+        "peakRssMiB": 255.03515625
+      }
+    ],
+    "counts": [
+      {
+        "type": "metadata",
+        "count": 39
+      },
+      {
+        "type": "version",
+        "count": 8
+      }
+    ],
+    "databaseBytes": 2670592
+  },
+  "tenfold": {
+    "fixture": {
+      "totalPlex": 27750,
+      "totalRadarr": 28990,
+      "managed": 26360,
+      "networkLatency": "none; generated response stream",
+      "physicalVerification": false
+    },
+    "results": [
+      {
+        "enabled": false,
+        "elapsedMs": 3041.0555999999997,
+        "http": {
+          "health": {
+            "samples": 40,
+            "p95Ms": 133.6894000000002,
+            "maxMs": 147.9176
+          },
+          "findings": {
+            "samples": 40,
+            "p95Ms": 133.42849999999999,
+            "maxMs": 148.0349000000001
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 71.7097,
+        "heartbeatGapMaxMs": 74.82860000000005,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 10.619537353515625,
+        "peakHeapMiB": 95.03709411621094,
+        "peakRssMiB": 273.84765625
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 8848.2677,
+        "http": {
+          "health": {
+            "samples": 122,
+            "p95Ms": 92.07209999999998,
+            "maxMs": 216.3499999999999
+          },
+          "findings": {
+            "samples": 122,
+            "p95Ms": 92.29709999999989,
+            "maxMs": 216.52919999999995
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 70.52469999999994,
+        "heartbeatGapMaxMs": 123.08610000000044,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 80.75233459472656,
+        "peakHeapMiB": 122.13837432861328,
+        "peakRssMiB": 341.6015625
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 3110.146499999999,
+        "http": {
+          "health": {
+            "samples": 38,
+            "p95Ms": 100.38379999999984,
+            "maxMs": 200.44920000000002
+          },
+          "findings": {
+            "samples": 38,
+            "p95Ms": 101.99379999999996,
+            "maxMs": 200.17709999999988
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 75.29529999999977,
+        "heartbeatGapMaxMs": 86.39999999999964,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 55.30980682373047,
+        "peakHeapMiB": 79.15479278564453,
+        "peakRssMiB": 293.55078125
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 8088.3706999999995,
+        "http": {
+          "health": {
+            "samples": 115,
+            "p95Ms": 90.46319999999969,
+            "maxMs": 283.33130000000006
+          },
+          "findings": {
+            "samples": 115,
+            "p95Ms": 90.65080000000034,
+            "maxMs": 282.9716000000001
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 69.43789999999899,
+        "heartbeatGapMaxMs": 119.70669999999882,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 62.157997131347656,
+        "peakHeapMiB": 127.58379364013672,
+        "peakRssMiB": 353.875
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 3114.721099999999,
+        "http": {
+          "health": {
+            "samples": 37,
+            "p95Ms": 105.03999999999996,
+            "maxMs": 300.27459999999996
+          },
+          "findings": {
+            "samples": 37,
+            "p95Ms": 104.80820000000017,
+            "maxMs": 301.0096000000001
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 72.22589999999764,
+        "heartbeatGapMaxMs": 74.7306000000026,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 11.724563598632812,
+        "peakHeapMiB": 114.86075592041016,
+        "peakRssMiB": 321.890625
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 8161.253100000002,
+        "http": {
+          "health": {
+            "samples": 107,
+            "p95Ms": 124.52250000000004,
+            "maxMs": 281.7312999999999
+          },
+          "findings": {
+            "samples": 107,
+            "p95Ms": 124.26980000000003,
+            "maxMs": 282.2532000000001
+          },
+          "errors": 0
+        },
+        "heartbeatGapP95Ms": 72.24590000000171,
+        "heartbeatGapMaxMs": 119.1247000000003,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 100.94248962402344,
+        "peakHeapMiB": 118.75997161865234,
+        "peakRssMiB": 344.453125
+      }
+    ],
+    "counts": [
+      {
+        "type": "metadata",
+        "count": 39
+      },
+      {
+        "type": "version",
+        "count": 8
+      }
+    ],
+    "databaseBytes": 21086208
+  },
+  "method": "Synthetic generated Plex/Radarr streams and temporary migrated SQLite databases. Real movie sync and Missing Content route. Worker sends concurrent localhost health and findings requests every 25 ms after previous pair completes. Three alternating audit-disabled/enabled runs. Empty viewing history; no provider network latency. HTTP sample counts are small at normal scale; percentiles are descriptive, not an SLA. Heap sampled every 5ms; RSS includes probe worker and runtime."
+}

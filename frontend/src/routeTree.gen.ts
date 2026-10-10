@@ -20,6 +20,7 @@ import { Route as UsersRouteImport } from './routes/users.tsx'
 import { Route as DeletionOperationsIdRouteImport } from './routes/deletion-operations.$id.tsx'
 import { Route as SettingsSonarrRadarrRouteImport } from './routes/settings.sonarr-radarr.tsx'
 import { Route as ToolsEpisodeGapsRouteImport } from './routes/tools.episode-gaps.tsx'
+import { Route as ToolsMissingContentRouteImport } from './routes/tools.missing-content.tsx'
 import { Route as LibrariesKeyStaleRouteImport } from './routes/libraries.$key.stale.tsx'
 
 const IndexRoute = IndexRouteImport.update({
@@ -77,6 +78,11 @@ const ToolsEpisodeGapsRoute = ToolsEpisodeGapsRouteImport.update({
   path: '/tools/episode-gaps',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ToolsMissingContentRoute = ToolsMissingContentRouteImport.update({
+  id: '/tools/missing-content',
+  path: '/tools/missing-content',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LibrariesKeyStaleRoute = LibrariesKeyStaleRouteImport.update({
   id: '/libraries/$key/stale',
   path: '/libraries/$key/stale',
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
+  '/tools/missing-content': typeof ToolsMissingContentRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
 }
 export interface FileRoutesByTo {
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
+  '/tools/missing-content': typeof ToolsMissingContentRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
 }
 export interface FileRoutesById {
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/deletion-operations/$id': typeof DeletionOperationsIdRoute
   '/settings/sonarr-radarr': typeof SettingsSonarrRadarrRoute
   '/tools/episode-gaps': typeof ToolsEpisodeGapsRoute
+  '/tools/missing-content': typeof ToolsMissingContentRoute
   '/libraries/$key/stale': typeof LibrariesKeyStaleRoute
 }
 export interface FileRouteTypes {
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/tools/episode-gaps'
+    | '/tools/missing-content'
     | '/libraries/$key/stale'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/tools/episode-gaps'
+    | '/tools/missing-content'
     | '/libraries/$key/stale'
   id:
     | '__root__'
@@ -168,6 +179,7 @@ export interface FileRouteTypes {
     | '/deletion-operations/$id'
     | '/settings/sonarr-radarr'
     | '/tools/episode-gaps'
+    | '/tools/missing-content'
     | '/libraries/$key/stale'
   fileRoutesById: FileRoutesById
 }
@@ -182,6 +194,7 @@ export interface RootRouteChildren {
   UsersRoute: typeof UsersRoute
   DeletionOperationsIdRoute: typeof DeletionOperationsIdRoute
   ToolsEpisodeGapsRoute: typeof ToolsEpisodeGapsRoute
+  ToolsMissingContentRoute: typeof ToolsMissingContentRoute
   LibrariesKeyStaleRoute: typeof LibrariesKeyStaleRoute
 }
 
@@ -264,6 +277,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ToolsEpisodeGapsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/tools/missing-content': {
+      id: '/tools/missing-content'
+      path: '/tools/missing-content'
+      fullPath: '/tools/missing-content'
+      preLoaderRoute: typeof ToolsMissingContentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/libraries/$key/stale': {
       id: '/libraries/$key/stale'
       path: '/libraries/$key/stale'
@@ -297,6 +317,7 @@ const rootRouteChildren: RootRouteChildren = {
   UsersRoute: UsersRoute,
   DeletionOperationsIdRoute: DeletionOperationsIdRoute,
   ToolsEpisodeGapsRoute: ToolsEpisodeGapsRoute,
+  ToolsMissingContentRoute: ToolsMissingContentRoute,
   LibrariesKeyStaleRoute: LibrariesKeyStaleRoute,
 }
 export const routeTree = rootRouteImport

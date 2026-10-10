@@ -421,6 +421,20 @@
       "when": 1789942313786,
       "tag": "0060_yellow_stature",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1791602845575,
+      "tag": "0061_low_pandemic",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1791606296907,
+      "tag": "0062_peaceful_ravenous",
+      "breakpoints": true
     }
   ]
 }

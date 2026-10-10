@@ -424,6 +424,7 @@ export class PlexClient {
     path: string,
     extraHeaders?: Record<string, string>,
     signal?: AbortSignal,
+    maxBytes?: number,
   ): Promise<T> {
     const url = `${this.url}${path}`;
     const headers = { ...extraHeaders, ...buildPlexHeaders(this.clientId, this.token) };
@@ -455,7 +456,26 @@ export class PlexClient {
         continue;
       }
 
-      if (res.ok) return await res.json() as T;
+      if (res.ok) {
+        if (maxBytes === undefined) return await res.json() as T;
+        if (!res.body) throw new Error('Plex inventory response has no body');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let bytes = 0, text = '';
+        try {
+          while (true) {
+            const next = await reader.read();
+            if (next.done) break;
+            bytes += next.value.byteLength;
+            if (bytes > maxBytes) throw new Error('Plex inventory page exceeds response budget');
+            text += decoder.decode(next.value, { stream: true });
+          }
+          return JSON.parse(text + decoder.decode()) as T;
+        } finally {
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+      }
       res.body?.cancel();
 
       if (res.status === 429 || res.status >= 500) {
@@ -1174,26 +1194,38 @@ export class PlexClient {
           'X-Plex-Container-Start': String(start),
           'X-Plex-Container-Size': String(ITEMS_PAGE_SIZE),
         },
+        undefined,
+        8 * 1024 * 1024,
       );
 
     const first = await fetchPage(0);
     const total = first.MediaContainer.totalSize;
-    if (total === undefined) {
+    if (!Number.isSafeInteger(total) || total! < 0) {
       throw new Error(`Plex did not return totalSize for library ${libraryKey}`);
     }
+    const validate = (data: typeof first, start: number) => {
+      const rows = data.MediaContainer.Metadata ?? [];
+      if (
+        data.MediaContainer.totalSize !== total ||
+        rows.length !== Math.min(ITEMS_PAGE_SIZE, total! - start)
+      ) throw new Error(`Incomplete Plex inventory for library ${libraryKey}`);
+      return rows;
+    };
 
-    yield first.MediaContainer.Metadata ?? [];
+    yield validate(first, 0);
 
-    const remainingStarts: number[] = [];
-    for (let s = ITEMS_PAGE_SIZE; s < total; s += ITEMS_PAGE_SIZE) {
-      remainingStarts.push(s);
-    }
-
-    for (let i = 0; i < remainingStarts.length; i += FETCH_CONCURRENCY) {
-      const batch = await Promise.all(
-        remainingStarts.slice(i, i + FETCH_CONCURRENCY).map(fetchPage),
-      );
-      yield batch.flatMap((d) => d.MediaContainer.Metadata ?? []);
+    for (
+      let start = ITEMS_PAGE_SIZE;
+      start < total!;
+      start += ITEMS_PAGE_SIZE * FETCH_CONCURRENCY
+    ) {
+      const starts: number[] = [];
+      for (let i = 0; i < FETCH_CONCURRENCY && start + i * ITEMS_PAGE_SIZE < total!; i++) {
+        starts
+          .push(start + i * ITEMS_PAGE_SIZE);
+      }
+      const batch = await Promise.all(starts.map(fetchPage));
+      yield batch.flatMap((d, j) => validate(d, starts[j]));
     }
   }
 
@@ -1204,13 +1236,19 @@ export class PlexClient {
   async *libraryItems(
     libraryKey: string,
     typeFilter?: number,
-  ): AsyncGenerator<{ items: PlexItem[]; mediaVersions: PlexMediaVersion[] }> {
+  ): AsyncGenerator<
+    { items: PlexItem[]; mediaVersions: PlexMediaVersion[]; auditMetadata?: PlexRawMetadata[] }
+  > {
     // External provider GUIDs are opt-in on Plex's bulk library endpoint. Request them
     // only for item/show syncs: episode and track streams can contain millions of rows
     // and do not need TMDB/TVDB IDs.
     for await (const page of this.paginatedMetadata(libraryKey, typeFilter, true)) {
       const reconciled = await this.reconcileDuplicateCandidates(page, libraryKey, 'movie');
-      yield { items: mapItems(reconciled), mediaVersions: mapMediaVersions(reconciled) };
+      yield {
+        items: mapItems(reconciled),
+        mediaVersions: mapMediaVersions(reconciled),
+        auditMetadata: page,
+      };
     }
   }
 

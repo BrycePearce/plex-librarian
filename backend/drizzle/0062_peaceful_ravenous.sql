@@ -1,0 +1,1 @@
+CREATE INDEX `missing_findings_title_page` ON `missing_findings` (`server_id`,`resolved_at`,`title`,`instance_id`,`library_key`,`movie_id`,`type`,`dismissed`);

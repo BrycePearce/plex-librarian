@@ -1430,3 +1430,37 @@ Deno.test('version path discovery preserves complete live episode coordinates an
     });
   }
 });
+
+Deno.test('movie inventory rejects truncated pages and changed totals', async () => {
+  const row = (id: number) => ({ ratingKey: String(id), title: 'Movie', type: 'movie' });
+  for (const mode of ['short-first', 'changed-total', 'short-next']) {
+    const fetcher = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      const start = Number(new Headers(init?.headers).get('X-Plex-Container-Start'));
+      return Promise.resolve(Response.json({
+        MediaContainer: {
+          totalSize: mode === 'short-first' ? 2 : start && mode === 'changed-total' ? 302 : 301,
+          Metadata: mode === 'short-first'
+            ? [row(1)]
+            : start
+            ? mode === 'short-next' ? [] : [row(301)]
+            : Array.from({ length: 300 }, (_, i) => row(i + 1)),
+        },
+      }));
+    }) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'fixture', undefined, fetcher);
+    await assertRejects(async () => {
+      for await (const _page of client.libraryItems('1')) { /* Drain coverage. */ }
+    });
+  }
+});
+Deno.test('movie inventory rejects over-budget response pages', async () => {
+  const client = new PlexClient(
+    'http://fixture.invalid',
+    'fixture',
+    undefined,
+    (() => Promise.resolve(new Response(' '.repeat(8 * 1024 * 1024 + 1)))) as typeof fetch,
+  );
+  await assertRejects(async () => {
+    for await (const _page of client.libraryItems('1')) { /* Drain coverage. */ }
+  });
+});

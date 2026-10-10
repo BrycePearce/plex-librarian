@@ -1,3 +1,4 @@
+import { withMissingAudit } from '../missingContent/audit.ts';
 import { withTransaction } from '../../db/index.ts';
 import type { PlexClient } from '../../integrations/plex/index.ts';
 import { runLibrarySync, runSync } from './service.ts';
@@ -182,12 +183,13 @@ async function runSyncTask(
   syncId: number,
   serverId: number,
   libraryKey: string | null,
-  task: () => Promise<number | LibrarySyncResult>,
+  task: (signal: AbortSignal) => Promise<number | LibrarySyncResult>,
 ): Promise<void> {
   let result: { ok: true; itemsProcessed: number } | { ok: false; error: string } | null = null;
   const dog = watchdog(syncId);
+  const controller = new AbortController();
   try {
-    const taskResult = await Promise.race([task(), dog.promise]);
+    const taskResult = await Promise.race([task(controller.signal), dog.promise]);
     const itemsProcessed = typeof taskResult === 'number' ? taskResult : taskResult.itemsProcessed;
     await finalizeSyncLog(syncId, serverId, libraryKey, {
       ok: true,
@@ -203,6 +205,7 @@ async function runSyncTask(
     await finalizeSyncLog(syncId, serverId, libraryKey, { ok: false, error });
     result = { ok: false, error };
   } finally {
+    controller.abort();
     dog.cancel();
     await cleanupSync(syncId, result);
   }
@@ -248,7 +251,15 @@ export function triggerFullSync(
     syncId,
     serverId,
     null,
-    () => runSync(plex, serverId, makeReporter(syncId)),
+    (signal) =>
+      withMissingAudit(
+        plex,
+        serverId,
+        syncId,
+        null,
+        signal,
+        (audit) => runSync(plex, serverId, makeReporter(syncId), audit),
+      ),
   );
   return { syncId };
 }
@@ -288,7 +299,15 @@ export function triggerLibrarySync(
     syncId,
     serverId,
     libraryKey,
-    () => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId)),
+    (signal) =>
+      withMissingAudit(
+        plex,
+        serverId,
+        syncId,
+        libraryKey,
+        signal,
+        (audit) => runLibrarySync(plex, serverId, libraryKey, makeReporter(syncId), audit),
+      ),
   );
   return { syncId };
 }

@@ -1,3 +1,4 @@
+import type { AuditSink } from '../missingContent/audit.ts';
 import { and, eq, lt, notInArray, sql } from 'drizzle-orm';
 import { sqliteWriteBatches } from '../../db/batch.ts';
 import { db, withTransaction } from '../../db/index.ts';
@@ -112,6 +113,7 @@ async function syncLibrary(
   now: number,
   serverId: number,
   callbacks?: LibraryCallbacks,
+  audit?: AuditSink,
 ): Promise<LibrarySyncResult> {
   const yieldIfNeeded = createSyncYield();
   callbacks?.onPhase('items');
@@ -151,6 +153,7 @@ async function syncLibrary(
   let oldestItemAddedAt: number | null = null;
 
   for await (const page of plex.libraryItems(lib.key, typeFilter)) {
+    if (lib.type === 'movie') audit?.page(lib.key, page.auditMetadata);
     if (page.items.length === 0) continue;
     for (const item of page.items) {
       const addedAt = item.addedAt;
@@ -376,6 +379,7 @@ async function syncLibrary(
   // data as trustworthy for the current sync attempt (see historySyncedAt in schema.ts).
   await db.update(libraries).set({ historySyncedAt: now }).where(libraryByKey(serverId, lib.key));
 
+  if (lib.type === 'movie') audit?.complete(lib.key);
   callbacks?.onPhase('done');
 
   return { itemsProcessed: itemCount, generation: now, pruneCompleted };
@@ -390,6 +394,7 @@ export async function runSync(
   plex: PlexClient,
   serverId: number,
   reporter?: SyncReporter,
+  audit?: AuditSink,
 ): Promise<number> {
   // Invalidate every coverage marker before the first Plex request. Failures in
   // libraries() or roster reconciliation must not leave a previous successful run
@@ -458,12 +463,15 @@ export async function runSync(
           buildCallbacks(reporter, lib.key, (d) => {
             totalItems += d;
           }),
+          audit,
         ).then(() => undefined));
     }
   }
 
   const workerCount = Math.min(LIBRARY_SYNC_CONCURRENCY, plexLibraries.length);
-  await Promise.all(Array.from({ length: workerCount }, worker));
+  const outcomes = await Promise.allSettled(Array.from({ length: workerCount }, worker));
+  const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
 
   await syncSeerrRequests(serverId, now);
 
@@ -479,6 +487,7 @@ export async function runLibrarySync(
   serverId: number,
   libraryKey: string,
   reporter?: SyncReporter,
+  audit?: AuditSink,
 ): Promise<LibrarySyncResult> {
   const [lib] = await db
     .select({ key: libraries.key, title: libraries.title, type: libraries.type })
@@ -512,6 +521,7 @@ export async function runLibrarySync(
       now,
       serverId,
       buildCallbacks(reporter, libraryKey, () => {}),
+      audit,
     );
   });
   return result!;

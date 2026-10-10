@@ -1,0 +1,179 @@
+{
+  "normal": {
+    "fixture": {
+      "totalPlex": 2775,
+      "totalRadarr": 2899,
+      "managed": 2636,
+      "networkLatency": "none; generated response stream",
+      "physicalVerification": false
+    },
+    "results": [
+      {
+        "enabled": false,
+        "elapsedMs": 364.15240000000006,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 9.135055541992188,
+        "peakHeapMiB": 40.946746826171875,
+        "peakRssMiB": 150.16015625
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 1745.9757,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 45.08405303955078,
+        "peakHeapMiB": 75.21236419677734,
+        "peakRssMiB": 210.93359375
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 293.49360000000024,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 60.14982604980469,
+        "peakHeapMiB": 63.75550079345703,
+        "peakRssMiB": 220.80859375
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 1711.0382,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 82.37483215332031,
+        "peakHeapMiB": 100.03351593017578,
+        "peakRssMiB": 249.44140625
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 326.0541999999996,
+        "plexPages": 10,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 84.27391815185547,
+        "peakHeapMiB": 84.27391815185547,
+        "peakRssMiB": 253.94140625
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 1725.7983999999997,
+        "plexPages": 10,
+        "radarrCalls": 2,
+        "responseBytes": 18007586,
+        "startHeapMiB": 32.037071228027344,
+        "peakHeapMiB": 68.8597412109375,
+        "peakRssMiB": 242.42578125
+      }
+    ],
+    "counts": [
+      {
+        "type": "metadata",
+        "count": 39
+      },
+      {
+        "type": "version",
+        "count": 8
+      }
+    ],
+    "databaseBytes": 2666496
+  },
+  "tenfold": {
+    "fixture": {
+      "totalPlex": 27750,
+      "totalRadarr": 28990,
+      "managed": 26360,
+      "networkLatency": "none; generated response stream",
+      "physicalVerification": false
+    },
+    "results": [
+      {
+        "enabled": false,
+        "elapsedMs": 2990.6444,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 9.149826049804688,
+        "peakHeapMiB": 99.48695373535156,
+        "peakRssMiB": 274.62109375
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 17197.7926,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 106.7054214477539,
+        "peakHeapMiB": 118.05744934082031,
+        "peakRssMiB": 299.30078125
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 2933.1444999999985,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 70.36570739746094,
+        "peakHeapMiB": 123.93494415283203,
+        "peakRssMiB": 322.96875
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 17250.1318,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 40.103126525878906,
+        "peakHeapMiB": 119.55712127685547,
+        "peakRssMiB": 315.71875
+      },
+      {
+        "enabled": false,
+        "elapsedMs": 3070.8787999999986,
+        "plexPages": 93,
+        "radarrCalls": 0,
+        "responseBytes": 0,
+        "startHeapMiB": 93.2574234008789,
+        "peakHeapMiB": 107.76116180419922,
+        "peakRssMiB": 315.0234375
+      },
+      {
+        "enabled": true,
+        "elapsedMs": 18249.117999999995,
+        "plexPages": 93,
+        "radarrCalls": 2,
+        "responseBytes": 180336437,
+        "startHeapMiB": 71.56536865234375,
+        "peakHeapMiB": 124.93135070800781,
+        "peakRssMiB": 317.03125
+      }
+    ],
+    "counts": [
+      {
+        "type": "metadata",
+        "count": 39
+      },
+      {
+        "type": "version",
+        "count": 8
+      }
+    ],
+    "databaseBytes": 21082112
+  },
+  "liveReader": {
+    "instanceId": 2,
+    "status": "complete",
+    "requests": 2,
+    "responseBytes": 16514339,
+    "movies": 2899,
+    "managed": 2636,
+    "queue": 3,
+    "elapsedMs": 1792.1869,
+    "initialHeapMiB": 5.773139953613281,
+    "peakHeapMiB": 23.27368927001953,
+    "peakRssMiB": 121.171875
+  }
+}
