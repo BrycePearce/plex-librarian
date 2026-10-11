@@ -67,7 +67,8 @@ Deno.test("metadata comparison exposes conflicting IDs and Plex action; stale ev
   assertStringIncludes(visible, "Open Plex");
   assertStringIncludes(visible, "tt123");
   assertStringIncludes(visible, "tt456");
-  assertEquals(visible.includes("TMDB"), false);
+  assertStringIncludes(visible, "The TMDB ID matches, but the IMDb IDs differ.");
+  assertEquals(visible.includes(">TMDB</th>"), false);
   assertEquals(visible.includes("Example (2014).mkv"), false);
   assertStringIncludes(visible, "Saved evidence from an earlier audit");
 });

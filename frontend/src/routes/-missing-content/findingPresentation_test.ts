@@ -122,9 +122,17 @@ Deno.test("metadata mismatch distinguishes identity-only and trusted-path eviden
     paths: [],
     exact: false,
   }];
-  assertStringIncludes(findingPresentation(row).summary, "another ID disagrees");
+  assertEquals(
+    findingPresentation(row).summary,
+    "Plex and Radarr disagree on the movie’s identity.",
+  );
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "The TMDB ID matches, but the IMDb IDs differ.",
+  );
+  assertStringIncludes(findingPresentation(row).explanation, "copy is also unverified");
   row.evidence.matches[0].exact = true;
-  assertStringIncludes(findingPresentation(row).summary, "managed path matches");
+  assertStringIncludes(findingPresentation(row).explanation, "managed file path matches");
   row.evidence.reason =
     "Plex lacks imdb identifiers. The exact managed path is present in the catalog.";
   assertEquals(findingPresentation(row).label, "Plex IDs incomplete");
@@ -136,4 +144,45 @@ Deno.test("confirmed absence is scoped to Plex catalog, not physical files", () 
   const presentation = findingPresentation(row);
   assertEquals(presentation.label, "Missing from Plex");
   assertStringIncludes(presentation.explanation, "does not prove the file is missing from disk");
+});
+
+Deno.test("identity explanations name mismatched and missing namespaces without inventing matches", () => {
+  const row = finding();
+  row.type = "metadata";
+  row.evidence.matches = [{
+    ratingKey: "1",
+    title: "A movie",
+    tmdb: ["999"],
+    imdb: ["tt123"],
+    paths: [],
+    exact: true,
+  }];
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "The IMDb ID matches, but the TMDB IDs differ.",
+  );
+  row.evidence.matches[0].imdb = ["tt999"];
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "The TMDB and IMDb IDs differ between Plex and Radarr.",
+  );
+  row.evidence.diagnosis = { code: "metadata_ids_missing" };
+  row.evidence.matches[0].tmdb = ["123"];
+  row.evidence.matches[0].imdb = [];
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "Plex is missing the IMDb ID supplied by Radarr.",
+  );
+  row.evidence.matches[0].tmdb = [];
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "Plex is missing the TMDB and IMDb IDs supplied by Radarr.",
+  );
+  row.evidence.diagnosis = { code: "metadata_conflict" };
+  row.evidence.matches = [];
+  assertStringIncludes(
+    findingPresentation(row).explanation,
+    "Plex and Radarr disagree on the movie’s identity.",
+  );
+  assertEquals(findingPresentation(row).explanation.includes("TMDB ID matches"), false);
 });

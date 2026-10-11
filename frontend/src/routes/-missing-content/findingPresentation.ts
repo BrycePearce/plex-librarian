@@ -34,9 +34,45 @@ function diagnosisCode(row: Row): string {
   return "evidence_incomplete";
 }
 
+/** Describe only the single matched entry; never combine IDs from different movies. */
+function identityComparison(row: Row): { conflict: string; missing: string; matched: string } {
+  const { movie, matches } = row.evidence;
+  const match = matches.length === 1 ? matches[0] : null;
+  const groups = { matched: [] as string[], different: [] as string[], missing: [] as string[] };
+  if (match) {
+    for (const kind of ["tmdb", "imdb"] as const) {
+      const expected = movie[kind];
+      if (!expected) continue;
+      const group = match[kind].includes(expected)
+        ? "matched"
+        : match[kind].length
+        ? "different"
+        : "missing";
+      groups[group].push(kind === "tmdb" ? "TMDB" : "IMDb");
+    }
+  }
+  const subject = (names: string[], plural = false) =>
+    `${names.join(" and ")} ${plural || names.length > 1 ? "IDs" : "ID"}`;
+  const matched = groups.matched.length
+    ? `The ${subject(groups.matched)} ${groups.matched.length > 1 ? "match" : "matches"}`
+    : "";
+  return {
+    conflict: groups.different.length
+      ? matched
+        ? `${matched}, but the ${subject(groups.different, true)} differ.`
+        : `The ${subject(groups.different, true)} differ between Plex and Radarr.`
+      : "Plex and Radarr disagree on the movie’s identity.",
+    missing: groups.missing.length
+      ? `Plex is missing the ${subject(groups.missing)} supplied by Radarr.`
+      : "Plex is missing a TMDB or IMDb ID supplied by Radarr.",
+    matched: matched ? `${matched} between Plex and Radarr.` : "Plex and Radarr share a movie ID.",
+  };
+}
+
 export function findingPresentation(row: Row): FindingPresentation {
   const { movie, matches, comparablePath, diagnosis } = row.evidence;
   const exact = matches.some((match) => match.exact);
+  const identity = identityComparison(row);
   const base = {
     radarrSummary: movie.fileId ? "Managed file reported" : "File details incomplete",
     plexSummary: exact
@@ -65,20 +101,20 @@ export function findingPresentation(row: Row): FindingPresentation {
       return result(
         "IDs disagree",
         "Radarr and Plex disagree on the movie",
-        exact
-          ? "The managed path matches, but the movie IDs disagree."
-          : "A movie ID matches, but another ID disagrees.",
-        exact
-          ? "The managed path matches, but the movie IDs disagree. One service may have matched the wrong title."
-          : "One movie ID matches; another disagrees. The exact managed copy is also unverified.",
+        "Plex and Radarr disagree on the movie’s identity.",
+        `${identity.conflict} ${
+          exact
+            ? "The managed file path matches."
+            : "The exact Radarr-managed copy is also unverified."
+        }`,
         "Correct the match in the service with the wrong movie, then sync Librarian.",
       );
     case "metadata_ids_missing":
       return result(
         "Plex IDs incomplete",
         "Movie found with incomplete Plex metadata",
-        "The managed path matches. Plex is missing a movie ID.",
-        "Plex lists the managed path, but is missing a TMDB or IMDb identifier supplied by Radarr.",
+        identity.missing,
+        `${identity.missing} The managed file path matches.`,
         "Check the match in Plex, refresh or correct its metadata, then sync Librarian.",
       );
     case "copy_unverified":
@@ -87,8 +123,8 @@ export function findingPresentation(row: Row): FindingPresentation {
         "Movie found; exact copy unverified",
         "Plex has this movie. Its Radarr-managed copy is not confirmed.",
         comparablePath
-          ? "The movie IDs match, but Plex’s file path does not match Radarr’s through the configured mappings."
-          : "The movie IDs match. Without file comparison, Librarian cannot confirm the exact Radarr-managed copy.",
+          ? `${identity.matched} Plex’s file path does not match Radarr’s through the configured mappings.`
+          : `${identity.matched} Without file comparison, Librarian cannot confirm the exact Radarr-managed copy.`,
         comparablePath
           ? "Compare file locations in Radarr and Plex to check whether Plex has the intended version."
           : "No movie repair is indicated. Open the movie in Plex if you want to check its version manually.",
@@ -107,7 +143,7 @@ export function findingPresentation(row: Row): FindingPresentation {
         "Multiple Plex matches",
         "More than one Plex entry matches",
         "The evidence does not identify one unambiguous Plex entry.",
-        "Several Plex entries match the movie’s IDs or managed path; no single match could be confirmed.",
+        "Several Plex entries match Radarr’s movie IDs or managed path; no single match could be confirmed.",
         "Correct any wrong matches in Plex. Intentional separate entries may need no change.",
       );
     case "import_pending":
@@ -145,14 +181,14 @@ export function findingPresentation(row: Row): FindingPresentation {
         noIds
           ? "Radarr supplied no usable movie IDs for comparison."
           : noPaths
-          ? "No movie ID matched. File comparison is unavailable."
-          : "No movie ID matched. File evidence is incomplete.",
+          ? "No Plex movie ID matched Radarr’s. File comparison is unavailable."
+          : "No Plex movie ID matched Radarr’s. File evidence is incomplete.",
         noIds
           ? "Radarr supplied no usable TMDB or IMDb ID, so this movie’s presence could not be confirmed."
           : noPaths
-          ? "No movie ID matched in this Plex library. File comparison is unavailable, so this is not a confirmed missing movie."
+          ? "No Plex movie ID matched Radarr’s in this library. File comparison is unavailable, so this is not a confirmed missing movie."
           : incompletePaths
-          ? "No movie ID matched, and Plex file paths could not all be compared. This is not a confirmed missing movie."
+          ? "No Plex movie ID matched Radarr’s, and Plex file paths could not all be compared. This is not a confirmed missing movie."
           : "The saved audit lacks enough file or movie-identity evidence to confirm this movie is missing.",
         noIds
           ? "Check the movie match and IDs in Radarr, then sync Librarian."
