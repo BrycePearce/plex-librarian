@@ -15,7 +15,7 @@ export const Route = createFileRoute("/tools/missing-content")({
 });
 export function MissingContentPage() {
   const [filters, setFilters] = useState({
-    type: "",
+    type: "review",
     library: "",
     instance: "",
     dismissed: false,

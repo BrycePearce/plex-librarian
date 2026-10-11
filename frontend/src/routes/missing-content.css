@@ -1159,3 +1159,25 @@
   gap: .75rem;
   margin-bottom: .55rem;
 }
+
+.missing-unverified-link {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .3rem 0;
+  font-size: .72rem;
+  color: var(--missing-muted);
+  cursor: pointer;
+}
+.missing-unverified-link:hover,
+.missing-unverified-link[aria-pressed="true"] {
+  color: var(--color-base-content);
+}
+.missing-unverified-link svg {
+  width: .75rem;
+}
+.missing-view-note {
+  color: var(--missing-muted);
+  font-size: .78rem;
+  padding-top: .9rem;
+}

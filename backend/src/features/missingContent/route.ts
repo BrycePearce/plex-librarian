@@ -29,7 +29,9 @@ router.get('/', (c) => {
   const library = c.req.query('library') ?? '';
   const offset = Number(c.req.query('offset') || 0);
   if (
-    type && !Object.hasOwn(missingFindingLabels, type) || !Number.isSafeInteger(instance) ||
+    type && !['review', 'inconclusive'].includes(type) &&
+      !Object.hasOwn(missingFindingLabels, type) ||
+    !Number.isSafeInteger(instance) ||
     instance < 0 ||
     !Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000
   ) return c.json({ error: 'Invalid filters' }, 400);
@@ -42,19 +44,34 @@ router.get('/', (c) => {
       includeDismissed: c.req.query('dismissed') === 'true',
       hideSetupLimitations: true,
     });
-    const counts: MissingContentResponse['counts'] = {
+    const overview = findingPredicate(db, serverId, {
+      type: '',
+      instance,
+      library,
+      includeDismissed: c.req.query('dismissed') === 'true',
+      hideSetupLimitations: true,
+    });
+    const overviewCounts: MissingContentResponse['counts'] = {
       missing: 0,
       metadata: 0,
       version: 0,
       unable: 0,
     };
     for (
-      const row of rows<{ type: keyof typeof counts; n: number }>(
+      const row of rows<{ type: keyof typeof overviewCounts; n: number }>(
         db,
-        `SELECT f.type,count(*) n FROM missing_findings f WHERE ${where} GROUP BY f.type`,
-        ...args,
+        `SELECT f.type,count(*) n FROM missing_findings f WHERE ${overview.where} GROUP BY f.type`,
+        ...overview.args,
       )
-    ) counts[row.type] = row.n;
+    ) overviewCounts[row.type] = row.n;
+    const counts = { ...overviewCounts };
+    for (const kind of Object.keys(counts) as Array<keyof typeof counts>) {
+      if (
+        type &&
+        !(type === kind || (type === 'review' && ['missing', 'metadata'].includes(kind)) ||
+          (type === 'inconclusive' && ['version', 'unable'].includes(kind)))
+      ) counts[kind] = 0;
+    }
     const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
     const findings = rows<
       {
@@ -139,6 +156,7 @@ router.get('/', (c) => {
       })),
       total,
       counts,
+      overviewCounts,
       setup: {
         plexConnected: !!config.server,
         unmappedInstances: config.instances.filter((i) =>

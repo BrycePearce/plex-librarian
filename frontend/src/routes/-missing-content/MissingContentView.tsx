@@ -21,19 +21,12 @@ import { findingPresentation } from "./findingPresentation.ts";
 import { FindingDetails } from "./FindingDetails.tsx";
 
 type Row = MissingContentResponse["rows"][number];
-type Kind = Row["type"];
 export type MissingFilters = {
   type: string;
   library: string;
   instance: string;
   dismissed: boolean;
   offset: number;
-};
-const kinds: Record<Kind, { label: string; hint: string }> = {
-  missing: { label: "Missing", hint: "No match in the expected Plex library." },
-  metadata: { label: "Metadata", hint: "The file is present, but its metadata needs review." },
-  version: { label: "Copy unverified", hint: "Movie found. File comparison is inconclusive." },
-  unable: { label: "Needs checking", hint: "Not enough evidence to confirm absence." },
 };
 const date = (value: number | null) =>
   value
@@ -81,7 +74,12 @@ export function MissingContentView(
     : !data.instances.length
     ? "Connect Radarr"
     : "Map libraries";
-  const filtered = !!(filters.type || filters.library || filters.instance || filters.dismissed);
+  const inconclusive = filters.type === "inconclusive";
+  const overview = data.overviewCounts ?? data.counts;
+  const unverifiedCount = overview.version + overview.unable;
+  const filtered =
+    !!((filters.type && filters.type !== "review") || filters.library || filters.instance ||
+      filters.dismissed);
   return (
     <>
       {needsConnection && (
@@ -197,6 +195,16 @@ export function MissingContentView(
             </p>
           </div>
         </details>
+        {(unverifiedCount > 0 || inconclusive) && (
+          <button
+            type="button"
+            className="missing-unverified-link"
+            aria-pressed={inconclusive}
+            onClick={() => update({ type: inconclusive ? "review" : "inconclusive" })}
+          >
+            {unverifiedCount.toLocaleString()} couldn’t be verified<ChevronRight />
+          </button>
+        )}
         <details className="missing-about">
           <summary>
             <CircleHelp />About these findings<ChevronDown />
@@ -207,7 +215,7 @@ export function MissingContentView(
               Episode Gaps checks missing TV episodes; this tool does not check movie collections.
             </p>
             <p>
-              “Needs checking” is inconclusive, not confirmed missing. Recent imports get 24 hours.
+              Unverified checks are separate from findings to review. Recent imports get 24 hours.
               These checks use catalog records, not physical files.
             </p>
           </div>
@@ -230,8 +238,9 @@ export function MissingContentView(
       <section className="missing-results" aria-label="Saved findings">
         <div className="missing-filter-tabs" role="group" aria-label="Finding type">
           {[
-            { value: "", label: "All findings" },
-            ...Object.entries(kinds).map(([value, kind]) => ({ value, label: kind.label })),
+            { value: "review", label: "To review" },
+            { value: "missing", label: "Missing" },
+            { value: "metadata", label: "Metadata" },
           ].map(({ value, label }) => (
             <button
               type="button"
@@ -240,7 +249,7 @@ export function MissingContentView(
               className={filters.type === value ? "is-active" : ""}
               onClick={() => update({ type: value })}
             >
-              {value && <span className={`missing-kind-dot is-${value}`} />}
+              {value !== "review" && <span className={`missing-kind-dot is-${value}`} />}
               {label}
             </button>
           ))}
@@ -289,19 +298,34 @@ export function MissingContentView(
             <button
               type="button"
               className="missing-clear"
-              onClick={() => update({ type: "", library: "", instance: "", dismissed: false })}
+              onClick={() =>
+                update({ type: "review", library: "", instance: "", dismissed: false })}
             >
               Reset
             </button>
           )}
         </div>
+        {inconclusive && (
+          <p className="missing-view-note">
+            Unverified checks · These do not confirm a missing movie. Review is optional.
+          </p>
+        )}
+        {!inconclusive && !busy && !needsConnection && !incomplete && !!data.scopes.length &&
+          overview.missing === 0 && data.rows.length > 0 && (
+          <p className="missing-view-note">
+            No confirmed missing movies{filters.dismissed ? "" : " among visible findings"}.
+            Metadata findings are listed below.
+          </p>
+        )}
         <div className="missing-results-status" role="status" aria-live="polite">
           {busy ? "Updating results…" : (
             <>
               <strong>{data.total.toLocaleString()}</strong>
               <span>
                 {filtered ? "matching " : ""}
-                {data.total === 1 ? "result" : "results"} to review
+                {inconclusive
+                  ? (data.total === 1 ? "unverified check" : "unverified checks")
+                  : (data.total === 1 ? "finding to review" : "findings to review")}
               </span>
               {data.counts && (
                 <span className="missing-result-breakdown">
@@ -345,13 +369,16 @@ export function MissingContentView(
             <div className="missing-empty">
               <span>{incomplete || !data.scopes.length ? <ScanLine /> : <Check />}</span>
               <h2>
-                {filtered
+                {filters.type === "missing" && !needsConnection && !incomplete &&
+                    !!data.scopes.length
+                  ? "No confirmed missing movies"
+                  : filtered
                   ? "No matches"
                   : needsConnection
                   ? "No findings from available checks"
                   : incomplete || !data.scopes.length
                   ? "Your audit is still incomplete"
-                  : "Nothing to review"}
+                  : "No confirmed missing movies"}
               </h2>
               <p>
                 {filtered
@@ -360,12 +387,15 @@ export function MissingContentView(
                   ? "See the setup notice above for checks that aren’t available yet."
                   : incomplete || !data.scopes.length
                   ? "Run a sync to get a complete picture."
-                  : "No visible discrepancies in the last complete audit."}
+                  : unverifiedCount > 0
+                  ? "No visible missing-movie or metadata findings. Some checks remain unverified; see Audit coverage above."
+                  : "No visible missing-movie or metadata findings in the last complete audit."}
               </p>
               {filtered && (
                 <button
                   type="button"
-                  onClick={() => update({ type: "", library: "", instance: "", dismissed: false })}
+                  onClick={() =>
+                    update({ type: "review", library: "", instance: "", dismissed: false })}
                 >
                   Clear filters
                 </button>

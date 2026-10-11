@@ -21,7 +21,13 @@ export function findingPredicate(db: SqliteClient, serverId: number, filters: Fi
       "(f.type<>'version' OR json_extract(f.evidence,'$.comparablePath') IS NOT NULL)",
     );
   }
-  if (filters.type) {
+  if (filters.type === 'review' || filters.type === 'inconclusive') {
+    conditions.push(
+      filters.type === 'review'
+        ? "f.type IN ('missing','metadata')"
+        : "f.type IN ('version','unable')",
+    );
+  } else if (filters.type) {
     conditions.push('f.type=?');
     args.push(filters.type);
   }

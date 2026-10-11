@@ -69,6 +69,8 @@ export interface MissingContentResponse {
   }>;
   total: number;
   counts: Record<keyof typeof missingFindingLabels, number>;
+  /** Counts across types, retaining library, instance and visibility filters. */
+  overviewCounts?: Record<keyof typeof missingFindingLabels, number>;
   setup: {
     plexConnected: boolean;
     unmappedInstances: Array<{ id: number; name: string }>;

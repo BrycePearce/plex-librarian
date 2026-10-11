@@ -363,3 +363,33 @@ Deno.test('saved finding posters use scoped Radarr artwork without exposing cred
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test('review and unverified views filter before pagination and share scoped overview counts', async () => {
+  reset();
+  await audit({ movies: Array.from({ length: 65 }, (_, index) => movie(index + 1)) });
+  withTransaction((db) => {
+    execute(
+      db,
+      "UPDATE missing_findings SET type=CASE WHEN movie_id <= 60 THEN 'unable' ELSE 'metadata' END WHERE library_key='hd'",
+    );
+  });
+  const review = await page('?type=review&library=hd');
+  assertEquals(review.total, 5);
+  assertEquals(review.rows.length, 5);
+  assertEquals(review.rows.every((row) => row.type === 'metadata'), true);
+  assertEquals(review.counts, { missing: 0, metadata: 5, version: 0, unable: 0 });
+  assertEquals(review.overviewCounts, { missing: 0, metadata: 5, version: 0, unable: 60 });
+  const unverified = await page('?type=inconclusive&library=hd&offset=50');
+  assertEquals(unverified.total, 60);
+  assertEquals(unverified.rows.length, 10);
+  assertEquals(unverified.rows.every((row) => row.type === 'unable'), true);
+  assertEquals(unverified.overviewCounts, review.overviewCounts);
+  withTransaction((db) =>
+    execute(db, "UPDATE missing_findings SET dismissed=1 WHERE library_key='hd' AND movie_id=1")
+  );
+  assertEquals((await page('?type=review&library=hd')).overviewCounts?.unable, 59);
+  assertEquals((await page('?type=review&library=hd&dismissed=true')).overviewCounts?.unable, 60);
+  const otherLibrary = await page('?type=review&library=4k');
+  assertEquals(otherLibrary.total, 65);
+  assertEquals(otherLibrary.overviewCounts?.unable, 0);
+});
