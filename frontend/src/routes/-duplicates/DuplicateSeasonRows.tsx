@@ -113,6 +113,7 @@ export function DuplicateSeasonRows({
       <td>
         <div className="inline-flex min-w-0 items-center gap-3">
           <PosterThumb
+            mediaType="tv"
             thumb={season.showThumb}
             width={60}
             height={90}

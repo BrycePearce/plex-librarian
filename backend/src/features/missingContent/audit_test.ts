@@ -125,6 +125,16 @@ Deno.test('complete independent scopes, metadata evidence and version matching',
   ]);
   const saved = await page('?library=hd');
   assertEquals(saved.total, 4);
+  assertEquals(saved.counts, { missing: 1, metadata: 2, version: 1, unable: 0 });
+  assertEquals(saved.rows.map((r) => r.evidence.diagnosis?.code), [
+    'missing_from_plex',
+    'metadata_conflict',
+    'copy_unverified',
+    'metadata_ids_missing',
+  ]);
+  const filtered = await page('?library=hd&type=metadata');
+  assertEquals(filtered.counts, { missing: 0, metadata: 2, version: 0, unable: 0 });
+  assertEquals(filtered.total, 2);
   assertEquals(saved.rows.every((r) => !r.stale), true);
   assertEquals(JSON.stringify(saved).includes('secret'), false);
 });
@@ -222,6 +232,8 @@ Deno.test('dismissals work without Plex keys, ignored matches are hidden, result
   await audit({ movies: Array.from({ length: 60 }, (_, i) => movie(i + 1)) });
   const data = await page('?library=hd');
   assertEquals(data.total, 60);
+  assertEquals(data.counts.missing, 60);
+  assertEquals((await page('?library=hd&offset=50')).counts.missing, 60);
   assertEquals(data.rows.length, 50);
   assertEquals((await page('?library=hd&offset=50')).rows.length, 10);
   const res = await router.request('/dismiss', {

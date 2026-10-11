@@ -117,6 +117,7 @@ export function StaleItemRow({
           className="group/poster inline-flex items-center gap-3 text-left hover:text-primary transition-colors max-w-full rounded focus-visible:outline-2 focus-visible:outline-primary"
         >
           <PosterThumb
+            mediaType={item.type}
             thumb={item.thumb}
             width={60}
             height={90}

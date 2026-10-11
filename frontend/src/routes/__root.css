@@ -96,6 +96,7 @@ html[data-theme="nord"] .app-shell {
 
 .app-sidebar {
   --sidebar-width: 244px;
+  --sidebar-active-color: var(--ambient-primary-color, var(--color-primary));
   position: relative;
   z-index: 30;
   width: var(--sidebar-width);
@@ -200,14 +201,14 @@ html[data-theme="nord"] .app-shell {
 
 .sidebar-link.is-active {
   color: var(--color-base-content);
-  border-color: color-mix(in oklab, var(--color-primary) 20%, transparent);
-  background: linear-gradient(90deg, color-mix(in oklab, var(--color-primary) 18%, transparent), color-mix(in oklab, var(--color-primary) 7%, transparent));
-  box-shadow: inset 3px 0 0 var(--color-primary), 0 8px 24px color-mix(in oklab, var(--color-primary) 8%, transparent);
+  border-color: color-mix(in oklab, var(--sidebar-active-color) 20%, transparent);
+  background: linear-gradient(90deg, color-mix(in oklab, var(--sidebar-active-color) 18%, transparent), color-mix(in oklab, var(--sidebar-active-color) 7%, transparent));
+  box-shadow: inset 3px 0 0 var(--sidebar-active-color), 0 8px 24px color-mix(in oklab, var(--sidebar-active-color) 8%, transparent);
 }
 
 .sidebar-link-icon { display: grid; width: 22px; flex: 0 0 22px; place-items: center; }
-.sidebar-link.is-active .sidebar-link-icon { color: var(--color-primary); filter: drop-shadow(0 0 8px color-mix(in oklab, var(--color-primary) 55%, transparent)); }
-.sidebar-active-dot { width: 5px; height: 5px; margin-left: auto; border-radius: 50%; background: var(--color-primary); box-shadow: 0 0 10px var(--color-primary); opacity: 0; }
+.sidebar-link.is-active .sidebar-link-icon { color: var(--sidebar-active-color); filter: drop-shadow(0 0 8px color-mix(in oklab, var(--sidebar-active-color) 55%, transparent)); }
+.sidebar-active-dot { width: 5px; height: 5px; margin-left: auto; border-radius: 50%; background: var(--sidebar-active-color); box-shadow: 0 0 10px var(--sidebar-active-color); opacity: 0; }
 .sidebar-link.is-active .sidebar-active-dot { opacity: 1; }
 
 .sidebar-footer {
@@ -315,4 +316,3 @@ html[data-theme="nord"] .app-shell {
 }
 
 .app-shell:has(.workspace-page.workspace-tone-coral) { --ambient-primary-color: var(--color-workspace-coral); }
-.sidebar-link[href="/tools/missing-content"] { --color-primary: var(--color-workspace-coral); }

@@ -214,3 +214,13 @@ inside Audit coverage. File comparison requires trusted Arr/Plex path mappings; 
 expose a mapping setup screen. Identity-matched version records without a comparable path are
 treated as a page-level limitation and excluded before result counts and pagination. Other findings
 remain visible, including stale evidence from failed audits.
+
+### Finding explanations
+
+Rows and dialogs use specific evidence-based explanations, including unmatched movie IDs, ambiguous
+Plex entries, missing Radarr file details, and pending queue entries. New audits save a structured
+diagnosis and individual evidence limitations; older saved rows retain compatible presentation
+without requiring a sync. The results summary uses filtered per-type counts before pagination.
+Dialogs show the next step and service links immediately, with only evidence relevant to the finding
+(differing IDs for metadata, filenames for file checks); full paths and audit diagnostics remain
+under Technical details. An inconclusive result never establishes catalog or physical-file absence.

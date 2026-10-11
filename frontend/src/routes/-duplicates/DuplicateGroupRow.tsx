@@ -77,6 +77,7 @@ export function DuplicateGroupRow({
         <div className="inline-flex items-center gap-3 max-w-full">
           {!nested && (
             <PosterThumb
+              mediaType={item.mediaType}
               thumb={item.mediaType === "movie" ? item.thumb : item.showThumb}
               width={60}
               height={90}

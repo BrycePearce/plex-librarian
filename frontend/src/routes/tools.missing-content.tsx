@@ -5,7 +5,7 @@ import type { MissingContentResponse } from "../../../shared/missingContent.ts";
 import { requireAuth } from "../lib/requireAuth.ts";
 import { apiFetch } from "../lib/api/client.ts";
 import { PageHeader, workspaceToneClass } from "../components/Workspace.tsx";
-import { ScanLine } from "lucide-react";
+import { FileQuestion } from "lucide-react";
 import { MissingContentView } from "./-missing-content/MissingContentView.tsx";
 import "./missing-content.css";
 
@@ -54,8 +54,8 @@ export function MissingContentPage() {
       <PageHeader
         eyebrow="Library health"
         title="Missing Content"
-        icon={ScanLine}
-        description="Radarr imports, checked against Plex."
+        icon={FileQuestion}
+        description="Find Radarr imports missing from Plex."
       />
       {query.isPending && (
         <div className="missing-loading" role="status">

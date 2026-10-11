@@ -119,3 +119,33 @@ Deno.test('case-insensitive comparison requires an explicit trusted mapping flag
     null,
   );
 });
+
+Deno.test('structured diagnoses distinguish missing evidence without inventing a cause', () => {
+  assertEquals(run({}, [], false)?.diagnosis, {
+    code: 'evidence_incomplete',
+    limitations: ['path_comparison_unavailable'],
+  });
+  assertEquals(run({}, [], true, false)?.diagnosis, {
+    code: 'evidence_incomplete',
+    limitations: ['plex_paths_incomplete'],
+  });
+  assertEquals(run({ tmdb: null, imdb: null }, [], false, false)?.diagnosis, {
+    code: 'evidence_incomplete',
+    limitations: ['path_comparison_unavailable', 'plex_paths_incomplete', 'movie_ids_missing'],
+  });
+  assertEquals(run()?.diagnosis.code, 'missing_from_plex');
+  assertEquals(run({ fileId: null })?.diagnosis.code, 'radarr_file_incomplete');
+  assertEquals(
+    run({}, Array.from({ length: 31 }, () => match))?.diagnosis.code,
+    'too_many_matches',
+  );
+  assertEquals(run({}, [match, { ...match, ratingKey: '2' }])?.diagnosis.code, 'multiple_matches');
+  assertEquals(run({}, [{ ...match, tmdb: ['99'] }])?.diagnosis.code, 'metadata_conflict');
+  assertEquals(run({}, [{ ...match, tmdb: [] }])?.diagnosis.code, 'metadata_ids_missing');
+  assertEquals(run({}, [{ ...match, exact: false }])?.diagnosis.code, 'copy_unverified');
+});
+Deno.test('queue and grace diagnoses retain their precedence over unavailable comparison', () => {
+  assertEquals(run({ importedAt: null }, [], false, false, true)?.diagnosis.code, 'import_pending');
+  assertEquals(run({ importedAt: 190000 }, [], false, false)?.diagnosis.code, 'import_recent');
+  assertEquals(run({ importedAt: null }, [], false, false)?.diagnosis.code, 'import_time_unknown');
+});

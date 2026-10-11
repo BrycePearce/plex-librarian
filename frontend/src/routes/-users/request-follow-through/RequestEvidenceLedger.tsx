@@ -132,6 +132,7 @@ function RequestItem({ item }: { item: RequestFollowThroughDetailItem }) {
       />
       <div className="flex min-w-0 gap-3">
         <PosterThumb
+          mediaType={item.mediaType}
           thumb={item.thumb}
           width={64}
           height={96}

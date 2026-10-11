@@ -38,6 +38,7 @@ export function SeasonGapRow(
       {palette && <span className="episode-gap-row-ambient" aria-hidden="true" />}
       <div className="episode-gap-show">
         <PosterThumb
+          mediaType="tv"
           thumb={row.showThumb}
           width={96}
           height={144}

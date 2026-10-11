@@ -1,7 +1,7 @@
+import { MediaArtworkFallback } from "../../components/PosterThumb.tsx";
 import { useEffect, useId, useRef, useState } from "react";
 import "../../components/dataSurfaces.css";
 import {
-  ArrowDownToLine,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -10,17 +10,15 @@ import {
   CircleHelp,
   Clock3,
   EyeOff,
-  Film,
   FolderOpen,
   ScanLine,
   Server,
   ShieldCheck,
   X,
 } from "lucide-react";
-import {
-  type MissingContentResponse,
-  missingFindingLabels,
-} from "../../../../shared/missingContent.ts";
+import type { MissingContentResponse } from "../../../../shared/missingContent.ts";
+import { findingPresentation } from "./findingPresentation.ts";
+import { FindingDetails } from "./FindingDetails.tsx";
 
 type Row = MissingContentResponse["rows"][number];
 type Kind = Row["type"];
@@ -35,7 +33,7 @@ const kinds: Record<Kind, { label: string; hint: string }> = {
   missing: { label: "Missing", hint: "No match in the expected Plex library." },
   metadata: { label: "Metadata", hint: "The file is present, but its metadata needs review." },
   version: { label: "Copy unverified", hint: "Movie found. File comparison is inconclusive." },
-  unable: { label: "Unverified", hint: "More evidence is needed before calling this missing." },
+  unable: { label: "Needs checking", hint: "Not enough evidence to confirm absence." },
 };
 const date = (value: number | null) =>
   value
@@ -43,55 +41,6 @@ const date = (value: number | null) =>
     : "Not audited";
 const timestamp = (value: number | null) =>
   value ? new Date(value * 1000).toLocaleString() : "Unknown";
-function versionExplanation(row: Row): string {
-  const samePath = row.evidence.movie.path &&
-    row.evidence.matches.some((match) => match.paths.includes(row.evidence.movie.path!));
-  if (!row.evidence.comparablePath) {
-    return samePath
-      ? "Plex has this movie, and both services report the same path. Librarian cannot yet verify that they refer to the same stored file."
-      : "Plex has this movie. Librarian cannot compare its file location with Radarr until a trusted path mapping is available.";
-  }
-  return "Plex has this movie, but its file path was not matched to the Radarr-managed file through the configured mappings.";
-}
-function nextStep(row: Row): string {
-  if (row.type === "version" && !row.evidence.comparablePath) {
-    return "No movie repair is indicated by this result. File verification needs connection-level path setup, which is not available in this build’s UI. A sync alone will not resolve it.";
-  }
-  if (row.type === "version") {
-    return "Compare the paths below and check the mappings. If Plex has not indexed the expected file, scan the movie library in Plex, then sync Librarian.";
-  }
-  if (row.type === "metadata") {
-    return "Compare the IDs below. Correct the movie match in the service with the wrong metadata, then sync Librarian.";
-  }
-  if (row.type === "missing") {
-    return "Check that Radarr’s file is in the intended Plex library. If it is available, scan that library in Plex, then sync Librarian.";
-  }
-  if (row.evidence.pending || row.evidence.reason.includes("grace")) {
-    return "Let the import finish and allow the 24-hour grace period, then sync Librarian again.";
-  }
-  return "Review the audit coverage and evidence below. Resolve incomplete provider reads or mapping issues, then sync Librarian.";
-}
-function summary(row: Row): string {
-  if (row.type === "version" && !row.evidence.comparablePath) {
-    return "Movie found. Path mapping needs review.";
-  }
-  if (row.type === "metadata") {
-    if (!row.evidence.matches.some((match) => match.exact)) {
-      return "Identity matches; metadata and managed copy need review.";
-    }
-    return row.evidence.reason.includes("lacks")
-      ? "Exact file found. Plex is missing a provider ID."
-      : "Exact file found. Provider IDs disagree.";
-  }
-  if (row.type === "unable" && row.evidence.pending) {
-    return "An import is still in the Radarr queue.";
-  }
-  if (row.type === "unable" && row.evidence.reason.includes("grace")) {
-    return "Recent import. Waiting for the 24-hour grace period.";
-  }
-  return kinds[row.type].hint;
-}
-
 export function MissingContentView(
   { data, filters, busy, update, dismiss, dismissing, dismissalError }: {
     data: MissingContentResponse;
@@ -254,10 +203,12 @@ export function MissingContentView(
           </summary>
           <div>
             <p>
-              Only “Missing” indicates catalog absence. Metadata and version findings need review.
+              Checks movies that Radarr reports as imported against their mapped Plex libraries.
+              Episode Gaps checks missing TV episodes; this tool does not check movie collections.
             </p>
             <p>
-              Recent imports get 24 hours. This audit checks catalog records, not physical files.
+              “Needs checking” is inconclusive, not confirmed missing. Recent imports get 24 hours.
+              These checks use catalog records, not physical files.
             </p>
           </div>
         </details>
@@ -348,7 +299,24 @@ export function MissingContentView(
           {busy ? "Updating results…" : (
             <>
               <strong>{data.total.toLocaleString()}</strong>
-              <span>{filtered ? "matching " : ""}{data.total === 1 ? "finding" : "findings"}</span>
+              <span>
+                {filtered ? "matching " : ""}
+                {data.total === 1 ? "result" : "results"} to review
+              </span>
+              {data.counts && (
+                <span className="missing-result-breakdown">
+                  {[
+                    data.counts.missing ? `${data.counts.missing.toLocaleString()} missing` : "",
+                    data.counts.metadata ? `${data.counts.metadata.toLocaleString()} metadata` : "",
+                    data.counts.version
+                      ? `${data.counts.version.toLocaleString()} copy checks`
+                      : "",
+                    data.counts.unable
+                      ? `${data.counts.unable.toLocaleString()} need checking`
+                      : "",
+                  ].filter(Boolean).join(" · ")}
+                </span>
+              )}
             </>
           )}
         </div>
@@ -442,7 +410,6 @@ export function MissingContentView(
         <div className="modal-box polished-modal missing-dialog-box">
           <header className="missing-dialog-header">
             <div>
-              <span className="missing-eyebrow">Finding details</span>
               <h2 id={dialogTitle}>
                 {selected?.title} <span>{selected?.evidence.movie.year}</span>
               </h2>
@@ -463,7 +430,7 @@ export function MissingContentView(
             </button>
           </header>
           {selected && (
-            <FindingEvidence
+            <FindingDetails
               row={selected}
               disabled={dismissing || busy}
               dismiss={(row) => {
@@ -493,9 +460,7 @@ function FindingRow(
     <div className={`missing-row is-${row.type}`}>
       <button type="button" className="missing-row-summary" aria-haspopup="dialog" onClick={onOpen}>
         <div className="missing-movie">
-          <span className="missing-movie-icon">
-            <Film />
-          </span>
+          <MediaArtworkFallback mediaType="movie" className="missing-movie-icon" />
           <div>
             <div className="missing-movie-title">
               <strong>{row.title}</strong>
@@ -513,9 +478,9 @@ function FindingRow(
         <div className="missing-finding">
           <span className={`missing-kind is-${row.type}`}>
             <span />
-            {kinds[row.type].label}
+            {findingPresentation(row).label}
           </span>
-          <small>{summary(row)}</small>
+          <small>{findingPresentation(row).summary}</small>
         </div>
         <time
           className="missing-checked"
@@ -526,120 +491,6 @@ function FindingRow(
         </time>
         <ChevronRight className="missing-row-chevron" />
       </button>
-    </div>
-  );
-}
-
-function FindingEvidence(
-  { row, dismiss, disabled }: { row: Row; dismiss: (row: Row) => void; disabled: boolean },
-) {
-  return (
-    <div className="missing-evidence">
-      <div className="missing-evidence-intro">
-        <div>
-          <h3 className="missing-problem-title">
-            {row.type === "version"
-              ? (!row.evidence.comparablePath
-                ? "File verification unavailable"
-                : "File match unconfirmed")
-              : missingFindingLabels[row.type]}
-          </h3>
-          <p>{row.type === "version" ? versionExplanation(row) : row.evidence.reason}</p>
-        </div>
-      </div>
-      <div className="missing-next-step">
-        <h3>
-          {row.type === "version" && !row.evidence.comparablePath
-            ? "What this means for you"
-            : "Next step"}
-        </h3>
-        <p>{nextStep(row)}</p>
-      </div>
-      <details className="missing-technical">
-        <summary>
-          Compare paths and IDs <ChevronDown />
-        </summary>
-        <a
-          className="missing-service-link"
-          target="_blank"
-          rel="noreferrer"
-          href={`/api/tools/missing-content/open/${row.instanceId}/${
-            encodeURIComponent(row.libraryKey)
-          }/${row.movieId}`}
-        >
-          Open Radarr<ArrowUpRight />
-        </a>
-        <div className="missing-evidence-grid">
-          <section>
-            <h3>
-              <ArrowDownToLine />Expected copy
-            </h3>
-            <dl>
-              <div>
-                <dt>TMDB / IMDb</dt>
-                <dd>{row.evidence.movie.tmdb ?? "—"} / {row.evidence.movie.imdb ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>Movie / file ID</dt>
-                <dd>{row.movieId} / {row.evidence.movie.fileId ?? "—"}</dd>
-              </div>
-              <div>
-                <dt>Imported</dt>
-                <dd>{timestamp(row.evidence.movie.importedAt)}</dd>
-              </div>
-              <div>
-                <dt>Queue</dt>
-                <dd>{row.evidence.pending ? "Pending" : "No pending entry"}</dd>
-              </div>
-            </dl>
-            <code>{row.evidence.movie.path ?? "No managed path"}</code>
-            <details className="missing-path-detail">
-              <summary>Comparison path</summary>
-              <code>
-                {row.evidence.comparablePath ?? "Trusted mapping unavailable or ambiguous"}
-              </code>
-            </details>
-          </section>
-          <section>
-            <h3>
-              <Film />Plex evidence
-            </h3>
-            {!row.evidence.matches.length && (
-              <p className="missing-no-match">No verified match in this library.</p>
-            )}
-            {row.evidence.matches.map((match) => (
-              <div className="missing-plex-match" key={match.ratingKey}>
-                <a
-                  target="_blank"
-                  rel="noreferrer"
-                  href={`/api/tools/missing-content/plex/${encodeURIComponent(match.ratingKey)}`}
-                >
-                  {match.title}
-                  <ArrowUpRight />
-                </a>
-                <dl>
-                  <div>
-                    <dt>TMDB / IMDb</dt>
-                    <dd>{match.tmdb.join(", ") || "—"} / {match.imdb.join(", ") || "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>Managed path</dt>
-                    <dd>{match.exact ? "Exact match" : "Unverified"}</dd>
-                  </div>
-                </dl>
-                {match.paths.map((path) => <code key={path}>{path}</code>)}
-              </div>
-            ))}
-          </section>
-        </div>
-      </details>
-      <div className="missing-evidence-footer">
-        <span>First seen {timestamp(row.firstSeen)} · Checked {timestamp(row.lastSeen)}</span>
-        <button type="button" disabled={disabled} onClick={() => dismiss(row)}>
-          <EyeOff />
-          {row.dismissed ? "Restore finding" : "Hide finding"}
-        </button>
-      </div>
     </div>
   );
 }

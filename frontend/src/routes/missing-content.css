@@ -325,14 +325,6 @@
 .missing-movie-icon {
   width: 2.35rem;
   height: 2.8rem;
-  border: 1px solid var(--missing-line);
-  background: linear-gradient(150deg,color-mix(in oklab,var(--workspace-color)
-    8%,var(--color-base-200)),var(--color-base-200));
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  color: var(--missing-muted);
-  flex-shrink: 0;
 }
 .missing-movie-title {
   display: flex;
@@ -889,4 +881,281 @@
     flex-direction: column;
     gap: .65rem;
   }
+}
+
+/* The comparison and actions remain visible; diagnostics are secondary. */
+.missing-result-breakdown {
+  margin-left: auto;
+  font-size: .7rem;
+  font-weight: 400;
+  color: var(--missing-muted);
+}
+.missing-results-status {
+  height: auto;
+  min-height: 2.5rem;
+  flex-wrap: wrap;
+  gap: .3rem;
+  padding: .45rem 0;
+}
+.missing-detail {
+  background: linear-gradient(145deg,color-mix(in oklab,var(--workspace-color)
+    3%,var(--color-base-200)),var(--color-base-200));
+}
+.missing-comparison {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: .85rem;
+  margin-top: 1.2rem;
+}
+.missing-service-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--missing-line);
+  border-radius: 12px;
+  background: color-mix(in oklab,var(--color-base-100) 50%,transparent);
+}
+.missing-service-card h3 {
+  color: var(--color-base-content);
+  margin-bottom: .85rem;
+}
+.missing-service-card h3 > span {
+  margin-left: auto;
+  font-size: .6rem;
+  font-weight: 400;
+  color: var(--missing-muted);
+}
+.missing-service-outcome {
+  display: block;
+  font-size: .8rem;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.missing-service-title,
+.missing-file-name {
+  margin-top: .4rem;
+  font-size: .72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--missing-muted);
+}
+.missing-file-name {
+  font-family: ui-monospace,monospace;
+  font-size: .65rem;
+}
+.missing-identity {
+  padding-top: .7rem;
+  margin-top: .7rem;
+  border-top: 1px solid var(--missing-line);
+}
+.missing-evidence .missing-identity > div {
+  grid-template-columns: 3rem minmax(0,1fr);
+}
+.missing-id-conflict dd {
+  color: var(--workspace-color);
+}
+.missing-id-conflict dd > span {
+  display: block;
+  font-size: .6rem;
+  margin-top: .2rem;
+}
+.missing-match-link {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  margin-top: .4rem;
+  font-size: .8rem;
+  color: var(--workspace-color);
+}
+.missing-match-card + .missing-match-card {
+  border-top: 1px solid var(--missing-line);
+  margin-top: .8rem;
+  padding-top: .4rem;
+}
+.missing-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .6rem;
+  margin-top: .85rem;
+}
+.missing-service-link.is-primary {
+  border-color: color-mix(in oklab,var(--workspace-color) 35%,transparent);
+  background: color-mix(in oklab,var(--workspace-color) 12%,transparent);
+  color: var(--color-base-content);
+}
+.missing-stale-notice {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: 1rem;
+  color: var(--color-warning);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+.missing-audit-reason,
+.missing-technical-label {
+  font-size: .68rem;
+  line-height: 1.6;
+  color: var(--missing-muted);
+  margin-top: .85rem;
+}
+.missing-detail .missing-next-step {
+  border-radius: 10px;
+}
+@media (max-width:600px) {
+  .missing-comparison {
+    grid-template-columns: minmax(0,1fr);
+  }
+  .missing-result-breakdown {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+
+/* Keep each finding focused on its distinguishing evidence. */
+.missing-dialog-box {
+  max-width: 44rem;
+}
+.missing-dialog-header {
+  padding-bottom: .55rem;
+}
+.missing-dialog-header h2 {
+  margin-top: 0;
+}
+.missing-dialog .missing-detail {
+  border-top: 0;
+  background: transparent;
+  padding-top: .75rem;
+}
+.missing-detail .missing-problem-title {
+  font-size: .95rem;
+}
+.missing-detail .missing-next-step {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+  margin-top: 1.4rem;
+}
+.missing-detail .missing-next-step h3 {
+  font-size: .7rem;
+  color: var(--missing-muted);
+  margin-bottom: .3rem;
+}
+.missing-detail .missing-next-step p {
+  color: color-mix(in oklab,var(--color-base-content) 75%,transparent);
+}
+.missing-key-evidence {
+  margin-top: 1.1rem;
+}
+.missing-id-table {
+  width: 100%;
+  font-size: .78rem;
+  text-align: left;
+  table-layout: fixed;
+}
+.missing-id-table th {
+  font-weight: 500;
+}
+.missing-id-table thead th {
+  font-size: .65rem;
+  color: var(--missing-muted);
+  padding-bottom: .55rem;
+}
+.missing-id-table td,
+.missing-id-table tbody th {
+  padding: .6rem 0;
+  border-top: 1px solid var(--missing-line);
+  overflow-wrap: anywhere;
+}
+.missing-id-table th:first-child {
+  width: 22%;
+}
+.missing-id-table .missing-id-conflict {
+  color: var(--workspace-color);
+}
+.missing-evidence .missing-key-facts {
+  font-size: .77rem;
+  gap: .55rem;
+  padding: .9rem 0;
+  border-top: 1px solid var(--missing-line);
+  border-bottom: 1px solid var(--missing-line);
+}
+.missing-key-facts dd {
+  line-height: 1.5;
+}
+.missing-candidate-list {
+  display: grid;
+  gap: .2rem;
+}
+.missing-evidence-label {
+  font-size: .68rem;
+  color: var(--missing-muted);
+}
+.missing-detail-footer {
+  position: relative;
+  border-top: 1px solid var(--missing-line);
+  margin-top: 1.4rem;
+  padding-top: .85rem;
+}
+.missing-detail-footer .missing-technical {
+  margin-top: 0;
+}
+.missing-detail-footer .missing-technical > summary {
+  min-height: 1.8rem;
+  width: fit-content;
+  max-width: calc(100% - 8rem);
+  font-size: .68rem;
+}
+.missing-hide-finding {
+  position: absolute;
+  right: 0;
+  top: .85rem;
+  min-height: 1.8rem;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  color: var(--missing-muted);
+  font-size: .68rem;
+  cursor: pointer;
+}
+.missing-hide-finding:hover {
+  color: var(--color-base-content);
+}
+
+.missing-evidence-action {
+  display: inline-flex;
+  align-items: center;
+  gap: .2rem;
+  flex-shrink: 0;
+  min-height: 1.8rem;
+  font-size: .7rem;
+  color: var(--workspace-color);
+  text-decoration: none;
+}
+.missing-evidence-action:hover {
+  text-decoration: underline;
+}
+.missing-evidence-action svg {
+  width: .8rem;
+  height: .8rem;
+}
+.missing-id-table tfoot td {
+  border-top: 0;
+  padding: .05rem 0 0;
+}
+.missing-fact-action {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .65rem;
+}
+.missing-fact-action > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.missing-evidence-heading {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .55rem;
 }

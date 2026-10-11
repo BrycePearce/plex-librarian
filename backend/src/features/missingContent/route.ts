@@ -16,6 +16,7 @@ router.get('/', (c) => {
     return c.json({
       rows: [],
       total: 0,
+      counts: { missing: 0, metadata: 0, version: 0, unable: 0 },
       scopes: [],
       instances: [],
       libraries: [],
@@ -40,11 +41,20 @@ router.get('/', (c) => {
       includeDismissed: c.req.query('dismissed') === 'true',
       hideSetupLimitations: true,
     });
-    const total = rows<{ n: number }>(
-      db,
-      `SELECT count(*) n FROM missing_findings f WHERE ${where}`,
-      ...args,
-    )[0].n;
+    const counts: MissingContentResponse['counts'] = {
+      missing: 0,
+      metadata: 0,
+      version: 0,
+      unable: 0,
+    };
+    for (
+      const row of rows<{ type: keyof typeof counts; n: number }>(
+        db,
+        `SELECT f.type,count(*) n FROM missing_findings f WHERE ${where} GROUP BY f.type`,
+        ...args,
+      )
+    ) counts[row.type] = row.n;
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
     const findings = rows<
       {
         instanceId: number;
@@ -124,6 +134,7 @@ router.get('/', (c) => {
         stale: status !== 'complete' || fingerprint !== config.fingerprint,
       })),
       total,
+      counts,
       setup: {
         plexConnected: !!config.server,
         unmappedInstances: config.instances.filter((i) =>

@@ -1,3 +1,7 @@
+import type {
+  MissingDiagnosis,
+  MissingEvidenceLimitation,
+} from '../../../../shared/missingContent.ts';
 import type { PlexRawMetadata } from '../../integrations/plex/types.ts';
 
 export type FindingType = 'missing' | 'metadata' | 'version' | 'unable';
@@ -89,17 +93,19 @@ export function classify(
   completePaths: boolean,
   pending: boolean,
   now: number,
-): { type: FindingType; reason: string } | null {
+): { type: FindingType; reason: string; diagnosis: MissingDiagnosis } | null {
   if (!movie.fileId) {
     return {
       type: 'unable',
       reason: 'Radarr reports a file but its managed file identity is incomplete.',
+      diagnosis: { code: 'radarr_file_incomplete' },
     };
   }
   if (matches.length > 30) {
     return {
       type: 'unable',
       reason: 'Too many catalog matches to establish an unambiguous identity.',
+      diagnosis: { code: 'too_many_matches' },
     };
   }
   const exact = matches.filter((m) => m.exact);
@@ -108,6 +114,7 @@ export function classify(
     return {
       type: 'unable',
       reason: 'Multiple Plex entries match; catalog identity is ambiguous.',
+      diagnosis: { code: 'multiple_matches' },
     };
   }
   const found = candidates[0];
@@ -119,6 +126,7 @@ export function classify(
     if (conflicts.length || exact.length && missing.length) {
       return {
         type: 'metadata',
+        diagnosis: { code: conflicts.length ? 'metadata_conflict' : 'metadata_ids_missing' },
         reason: `${
           conflicts.length
             ? 'Conflicting ' + conflicts.join('/') + ' identifiers.'
@@ -134,6 +142,7 @@ export function classify(
     return {
       type: 'version',
       reason: 'The movie identity is present; the exact Radarr-managed copy is not verified.',
+      diagnosis: { code: 'copy_unverified' },
     };
   }
   if (pending) {
@@ -141,25 +150,42 @@ export function classify(
       type: 'unable',
       reason:
         'A pending Radarr queue entry may change the managed copy. Rechecked on the next sync.',
+      diagnosis: { code: 'import_pending' },
     };
   }
   if (!movie.importedAt || now - movie.importedAt < 86400) {
     return {
       type: 'unable',
+      diagnosis: { code: movie.importedAt ? 'import_recent' : 'import_time_unknown' },
       reason: movie.importedAt
         ? 'Within the 24-hour import grace period. Rechecked on the next sync.'
         : 'Import time is unknown; missing content cannot yet be established.',
     };
   }
   if (!comparable || !completePaths || !(movie.tmdb || movie.imdb)) {
+    const limitations: MissingEvidenceLimitation[] = [];
+    const reasons: string[] = [];
+    if (!comparable) {
+      limitations.push('path_comparison_unavailable');
+      reasons.push('The Radarr file path cannot be compared with Plex using trusted mappings.');
+    }
+    if (!completePaths) {
+      limitations.push('plex_paths_incomplete');
+      reasons.push('Some Plex file paths were unavailable or could not be compared.');
+    }
+    if (!(movie.tmdb || movie.imdb)) {
+      limitations.push('movie_ids_missing');
+      reasons.push('Radarr supplied neither a TMDB nor an IMDb ID for this movie.');
+    }
     return {
       type: 'unable',
-      reason:
-        'Trusted path comparison or catalog identity evidence is incomplete. No absence is inferred.',
+      diagnosis: { code: 'evidence_incomplete', limitations },
+      reason: reasons.join(' ') + ' This does not establish that the movie is missing.',
     };
   }
   return {
     type: 'missing',
+    diagnosis: { code: 'missing_from_plex' },
     reason:
       'No exact managed path or external identity was found in the completely audited expected Plex library. This is catalog evidence, not physical-file verification.',
   };

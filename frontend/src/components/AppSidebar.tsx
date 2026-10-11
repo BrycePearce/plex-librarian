@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Activity,
   ChevronLeft,
   ChevronRight,
   Copy,
+  FileQuestion,
+  History,
   LayoutDashboard,
   Library,
   Menu,
@@ -30,7 +31,7 @@ const navGroups = [
     items: [
       { label: "Duplicates", to: "/duplicates", icon: Copy, search: { type: "all" } },
       { label: "Users", to: "/users", icon: Users, search: { filter: "all" } },
-      { label: "Activity", to: "/activity", icon: Activity },
+      { label: "Activity", to: "/activity", icon: History },
     ],
   },
   {
@@ -40,7 +41,7 @@ const navGroups = [
       to: "/tools/episode-gaps",
       icon: ScanLine,
       search: { status: "gaps", sort: "missingCount", order: "desc", offset: 0 },
-    }, { label: "Missing Content", to: "/tools/missing-content", icon: ScanLine }],
+    }, { label: "Missing Content", to: "/tools/missing-content", icon: FileQuestion }],
   },
   {
     label: "Manage",

@@ -312,6 +312,7 @@ export async function withMissingAudit<T>(
                         movie,
                         matches: matches.slice(0, 30),
                         reason: finding.reason,
+                        diagnosis: finding.diagnosis,
                         comparablePath: path,
                         pending,
                         auditedAt: now,

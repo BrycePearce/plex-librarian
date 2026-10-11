@@ -267,7 +267,13 @@ function ContentList({
               key={item.ratingKey}
               className="flex items-center gap-3 border-b border-base-content/8 p-3 last:border-b-0"
             >
-              <PosterThumb thumb={item.thumb} width={72} height={108} className="h-14 w-10" />
+              <PosterThumb
+                mediaType={item.type}
+                thumb={item.thumb}
+                width={72}
+                height={108}
+                className="h-14 w-10"
+              />
               <span className="min-w-0 flex-1">
                 <strong className="block truncate text-sm">{item.title}</strong>
                 <small className="mt-0.5 flex items-center gap-1.5 text-base-content/45">
