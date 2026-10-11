@@ -47,6 +47,7 @@ function PosterImage({ url, mediaType, className, loading }: {
 // hoverScope matches the containing link's group/poster or the table row's group.
 export function PosterThumb({
   thumb,
+  src,
   mediaType,
   width,
   height,
@@ -55,6 +56,8 @@ export function PosterThumb({
   loading,
 }: {
   thumb: string | null;
+  /** Same-origin artwork proxy for providers other than Plex. */
+  src?: string;
   mediaType?: string | null;
   width: number;
   height: number;
@@ -62,9 +65,10 @@ export function PosterThumb({
   hoverScope?: "poster" | "row";
   loading?: "eager" | "lazy";
 }) {
-  const url = thumb
-    ? `/api/proxy/thumb?path=${encodeURIComponent(thumb)}&width=${width}&height=${height}`
-    : null;
+  const url = src ??
+    (thumb
+      ? `/api/proxy/thumb?path=${encodeURIComponent(thumb)}&width=${width}&height=${height}`
+      : null);
   if (!hoverScope) {
     return (
       <PosterImage

@@ -1,4 +1,4 @@
-import { MediaArtworkFallback } from "../../components/PosterThumb.tsx";
+import { PosterThumb } from "../../components/PosterThumb.tsx";
 import { useEffect, useId, useRef, useState } from "react";
 import "../../components/dataSurfaces.css";
 import {
@@ -460,7 +460,15 @@ function FindingRow(
     <div className={`missing-row is-${row.type}`}>
       <button type="button" className="missing-row-summary" aria-haspopup="dialog" onClick={onOpen}>
         <div className="missing-movie">
-          <MediaArtworkFallback mediaType="movie" className="missing-movie-icon" />
+          <PosterThumb
+            thumb={null}
+            src={row.posterUrl}
+            mediaType="movie"
+            width={75}
+            height={90}
+            loading="lazy"
+            className="missing-movie-icon"
+          />
           <div>
             <div className="missing-movie-title">
               <strong>{row.title}</strong>

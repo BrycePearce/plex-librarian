@@ -310,3 +310,56 @@ Deno.test('contradictory Plex library ownership cannot establish presence', asyn
   assertEquals(data.rows.length, 1);
   assertEquals(data.rows[0].stale, true);
 });
+
+Deno.test('saved finding posters use scoped Radarr artwork without exposing credentials', async () => {
+  reset();
+  await audit();
+  const saved = await page('?library=hd');
+  const poster = saved.rows[0].posterUrl!;
+  assertEquals(poster, '/api/tools/missing-content/poster/1/1/hd/1');
+  withTransaction((db) =>
+    execute(db, "UPDATE arr_instances SET url='http://radarr.invalid/radarr/api/v3/' WHERE id=1")
+  );
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let status = 200;
+  let type = 'image/jpeg';
+  globalThis.fetch = ((url, init) => {
+    calls++;
+    assertEquals(String(url), 'http://radarr.invalid/radarr/api/v3/mediacover/1/poster-250.jpg');
+    assertEquals(new Headers(init?.headers).get('X-Api-Key'), 'secret');
+    assertEquals(init?.redirect, 'error');
+    return Promise.resolve(
+      new Response(new Uint8Array([255, 216, 255]), { status, headers: { 'Content-Type': type } }),
+    );
+  }) as typeof fetch;
+  try {
+    const local = poster.replace('/api/tools/missing-content', '');
+    const response = await router.request(local);
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get('content-type'), 'image/jpeg');
+    assertEquals(response.headers.get('cache-control'), 'private, max-age=3600');
+    assertEquals(response.headers.get('x-api-key'), null);
+    assertEquals(new Uint8Array(await response.arrayBuffer()), new Uint8Array([255, 216, 255]));
+    for (
+      const path of [
+        '/poster/2/1/hd/1',
+        '/poster/1/1/other/1',
+        '/poster/1/1/hd/999',
+        '/poster/1/1/hd/NaN',
+      ]
+    ) {
+      assertEquals((await router.request(path)).status, 404);
+    }
+    assertEquals(calls, 1);
+    type = 'text/html';
+    assertEquals((await router.request(local)).status, 404);
+    type = 'image/jpeg';
+    status = 401;
+    assertEquals((await router.request(local)).status, 404);
+    globalThis.fetch = () => Promise.reject(new Error('unreachable'));
+    assertEquals((await router.request(local)).status, 404);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { normalizeArrUrl } from '../../integrations/arr/client.ts';
 import { withTransaction } from '../../db/index.ts';
 import { type ActiveServerVariables, withActiveServerId } from '../../middleware/activeServer.ts';
 import { configuration, execute, rows } from './store.ts';
@@ -129,6 +130,9 @@ router.get('/', (c) => {
         { evidence, status, fingerprint, completedAt: _completedAt, dismissed, ...f },
       ) => ({
         ...f,
+        posterUrl: `/api/tools/missing-content/poster/${serverId}/${f.instanceId}/${
+          encodeURIComponent(f.libraryKey)
+        }/${f.movieId}`,
         evidence: JSON.parse(evidence),
         dismissed: !!dismissed,
         stale: status !== 'complete' || fingerprint !== config.fingerprint,
@@ -161,6 +165,55 @@ router.get('/', (c) => {
       ),
     };
   }));
+});
+// Fetch only a saved finding's thumbnail; credentials stay on the server.
+router.get('/poster/:server/:instance/:library/:movie', async (c) => {
+  const serverId = c.get('activeServerId');
+  const instanceId = Number(c.req.param('instance'));
+  const movieId = Number(c.req.param('movie'));
+  if (
+    serverId === null || String(serverId) !== c.req.param('server') ||
+    !Number.isSafeInteger(instanceId) || instanceId <= 0 ||
+    !Number.isSafeInteger(movieId) || movieId <= 0
+  ) return c.notFound();
+  const target = withTransaction((db) =>
+    rows<{ url: string; api_key: string }>(
+      db,
+      "SELECT a.url,a.api_key FROM missing_findings f JOIN arr_instances a ON a.id=f.instance_id AND a.server_id=f.server_id WHERE f.server_id=? AND f.instance_id=? AND f.library_key=? AND f.movie_id=? AND a.type='radarr'",
+      serverId,
+      instanceId,
+      c.req.param('library'),
+      movieId,
+    )[0]
+  );
+  if (!target) return c.notFound();
+  try {
+    const upstream = await fetch(
+      `${normalizeArrUrl(target.url)}/api/v3/mediacover/${movieId}/poster-250.jpg`,
+      {
+        headers: { 'X-Api-Key': target.api_key, Accept: 'image/jpeg' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    const contentType = upstream.headers.get('content-type')?.split(';')[0].trim();
+    if (
+      !upstream.ok ||
+      !['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(contentType ?? '')
+    ) {
+      await upstream.body?.cancel();
+      return c.notFound();
+    }
+    return new Response(upstream.body, {
+      headers: {
+        'Content-Type': contentType!,
+        'Cache-Control': 'private, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    });
+  } catch {
+    return c.notFound();
+  }
 });
 router.post('/dismiss', async (c) => {
   const serverId = c.get('activeServerId');

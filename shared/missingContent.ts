@@ -30,6 +30,7 @@ export interface MissingContentResponse {
     instanceId: number;
     libraryKey: string;
     movieId: number;
+    posterUrl?: string;
     type: keyof typeof missingFindingLabels;
     title: string;
     firstSeen: number;

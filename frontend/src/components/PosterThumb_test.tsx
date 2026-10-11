@@ -59,3 +59,30 @@ for (const hoverScope of [undefined, "row", "poster"] as const) {
     }
   });
 }
+
+Deno.test("provider artwork uses the supplied proxy and retains the movie fallback", async () => {
+  let renderer!: ReturnType<typeof TestRenderer.create>;
+  const src = "/api/tools/missing-content/poster/1/4/1/255";
+  await act(() => {
+    renderer = TestRenderer.create(
+      <PosterThumb
+        thumb={null}
+        src={src}
+        mediaType="movie"
+        width={75}
+        height={90}
+        loading="lazy"
+        className="missing-movie-icon"
+      />,
+    );
+  });
+  try {
+    const image = renderer.root.findByType("img");
+    assertEquals(image.props.src, src);
+    assertEquals(image.props.loading, "lazy");
+    await act(() => image.props.onError());
+    assertEquals(renderer.root.findByType(MediaArtworkFallback).props.mediaType, "movie");
+  } finally {
+    await act(() => renderer.unmount());
+  }
+});
