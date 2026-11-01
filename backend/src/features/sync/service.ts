@@ -173,6 +173,7 @@ async function syncLibrary(
             ratingKey: item.ratingKey,
             libraryKey: lib.key,
             title: item.title,
+            editionTitle: item.editionTitle ?? null,
             type: item.type,
             thumb: item.thumb,
             addedAt: item.addedAt,
@@ -191,6 +192,7 @@ async function syncLibrary(
           set: {
             libraryKey: excl(items.libraryKey),
             title: excl(items.title),
+            editionTitle: excl(items.editionTitle),
             type: excl(items.type),
             thumb: excl(items.thumb),
             addedAt: excl(items.addedAt),

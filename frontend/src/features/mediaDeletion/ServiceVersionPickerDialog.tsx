@@ -1,3 +1,4 @@
+import { titleWithEdition } from "../../lib/editionTitle.ts";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -396,11 +397,15 @@ export function ServiceVersionPickerDialog(
         )
         : "Resolve duplicate versions"}
       summary={season
-        ? `${season.showTitle} — Season ${season.seasonIndex}. Choose the versions to remove.`
+        ? `${
+          titleWithEdition(season.showTitle, season.editionTitle)
+        } — Season ${season.seasonIndex}. Choose the versions to remove.`
         : `${
           first.mediaType === "movie"
-            ? first.title
-            : `${first.showTitle} — S${first.seasonIndex}E${first.episodeIndex} "${first.episodeTitle}"`
+            ? titleWithEdition(first.title, first.editionTitle)
+            : `${
+              titleWithEdition(first.showTitle, first.editionTitle)
+            } — S${first.seasonIndex}E${first.episodeIndex} "${first.episodeTitle}"`
         } has ${first.versions.length} versions synced from Plex. Review exactly where the selected files will be removed.`}
       onClose={onCancel}
       modalBoxClassName="max-w-5xl version-picker-modal"
@@ -429,6 +434,7 @@ export function ServiceVersionPickerDialog(
               return {
                 ...target,
                 title: group.mediaType === "movie" ? group.title : group.episodeTitle,
+                editionTitle: group.editionTitle,
                 ...(group.mediaType === "episode"
                   ? {
                     showTitle: group.showTitle,

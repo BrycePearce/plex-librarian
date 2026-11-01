@@ -240,6 +240,7 @@ router.get('/:key/stale', async (c) => {
       ratingKey: seasons.ratingKey,
       libraryKey: seasons.libraryKey,
       title: items.title,
+      editionTitle: items.editionTitle,
       type: sql<string>`'season'`,
       thumb: items.thumb,
       addedAt: seasons.addedAt,

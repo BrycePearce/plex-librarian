@@ -41,6 +41,7 @@ export interface SeasonVersionAnalysisResponse {
     showRatingKey: string;
     seasonRatingKey: string;
     showTitle: string;
+    editionTitle?: string | null;
     seasonIndex: number;
   };
   analyzedEpisodeCount: number;

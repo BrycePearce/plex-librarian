@@ -244,6 +244,7 @@ function mapItems(raw: PlexRawMetadata[]): PlexItem[] {
     return {
       ratingKey: item.ratingKey,
       title: item.title,
+      editionTitle: item.editionTitle?.trim() || null,
       type: item.type,
       thumb: item.thumb ?? null,
       addedAt: normalizePlexTimestamp(item.addedAt),
@@ -731,6 +732,7 @@ export class PlexClient {
     return {
       ratingKey: item.ratingKey,
       title: item.title,
+      editionTitle: item.editionTitle?.trim() || null,
       type: item.type,
       librarySectionId: item.librarySectionID == null ? null : String(item.librarySectionID),
       tmdbId: externalIds.tmdbId,

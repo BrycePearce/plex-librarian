@@ -2,6 +2,7 @@ import type { MediaVersion } from './versions.ts';
 import type { DuplicateSeasonComparisonSummary } from '../../mediaComparison.ts';
 
 export interface DuplicateMovieGroup {
+  editionTitle?: string | null;
   mediaType: 'movie';
   libraryKey: string;
   ratingKey: string;
@@ -13,6 +14,7 @@ export interface DuplicateMovieGroup {
 }
 
 export interface DuplicateEpisodeGroup {
+  editionTitle?: string | null;
   mediaType: 'episode';
   libraryKey: string;
   episodeRatingKey: string;
@@ -30,6 +32,7 @@ export interface DuplicateEpisodeGroup {
 export type DuplicateGroup = DuplicateMovieGroup | DuplicateEpisodeGroup;
 
 export interface DuplicateSeasonGroup {
+  editionTitle?: string | null;
   mediaType: 'season';
   libraryKey: string;
   showRatingKey: string;

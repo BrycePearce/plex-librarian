@@ -46,6 +46,7 @@ export interface ServiceDeletionPreview {
     mediaId?: number;
     title: string;
     showTitle?: string;
+    editionTitle?: string | null;
     seasonIndex?: number | null;
     episodeIndex?: number | null;
     fileSize?: number | null;

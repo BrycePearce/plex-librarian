@@ -1,3 +1,4 @@
+import { EditionBadge } from "../../components/EditionBadge.tsx";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type DuplicateSeasonGroup, type DuplicateSeasonSummaryGroup } from "../../lib/api.ts";
@@ -122,6 +123,7 @@ export function DuplicateSeasonRows({
           />
           <div className="min-w-0">
             <div className="max-w-xs truncate font-medium">{season.showTitle}</div>
+            <EditionBadge editionTitle={season.editionTitle} />
             <div className="max-w-xs truncate text-xs text-base-content/45">
               Season {season.seasonIndex}
             </div>

@@ -197,6 +197,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
   const liveEvidence = await enrichSeasonEpisodeEvidence(serverId, rowsByEpisode);
   const [show] = await db.select({
     title: items.title,
+    editionTitle: items.editionTitle,
     thumb: items.thumb,
     tvdbId: items.tvdbId,
   }).from(items).where(and(
@@ -216,6 +217,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
       showRatingKey: row.showRatingKey,
       seasonRatingKey: row.seasonRatingKey,
       showTitle,
+      editionTitle: show?.editionTitle ?? null,
       showThumb: show?.thumb ?? null,
       seasonIndex: row.seasonIndex,
       episodeIndex: row.episodeIndex,
@@ -257,6 +259,7 @@ router.post('/seasons/:seasonRatingKey/analysis', async (c) => {
         showRatingKey: first.showRatingKey,
         seasonRatingKey,
         showTitle,
+        editionTitle: show?.editionTitle ?? null,
         seasonIndex: first.seasonIndex,
       },
       analyzedEpisodeCount: episodes.length,

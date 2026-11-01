@@ -1,3 +1,4 @@
+import { EditionBadge } from "../../components/EditionBadge.tsx";
 import { motion } from "motion/react";
 import { Copy, Trash2 } from "lucide-react";
 import type { StaleItem } from "../../lib/api.ts";
@@ -61,6 +62,7 @@ export function StaleItemRow({
     <div className="min-w-0">
       <div className="font-medium max-w-xs flex items-center gap-1.5">
         <span className="truncate min-w-0">{item.title}</span>
+        <EditionBadge editionTitle={item.editionTitle} />
         {hasDuplicates && (
           <span
             className="badge badge-outline badge-sm gap-1 shrink-0"

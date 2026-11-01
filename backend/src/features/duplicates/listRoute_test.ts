@@ -327,3 +327,39 @@ Deno.test('directory retains movie details and workflow ownership and unknown se
   assertEquals(season.reclaimableFileSize, null);
   assertEquals(season.versionCount, 619 * 2);
 });
+
+Deno.test('Plex edition labels follow their own show IDs in directory and episode reviews', async () => {
+  withTransaction((db) =>
+    db.exec(`
+    UPDATE items SET title='Same Show', edition_title='Black and White' WHERE server_id=1 AND rating_key='show-a';
+    UPDATE items SET title='Same Show', edition_title='Color' WHERE server_id=1 AND rating_key='show-b';
+  `)
+  );
+  try {
+    for (const includeSeasonDetails of [true, false]) {
+      const response = await app.request(
+        `/duplicates?type=tv&limit=200&includeSeasonDetails=${includeSeasonDetails}`,
+      );
+      assertEquals(response.status, 200);
+      const body = await response.json() as DuplicatesResponse;
+      const seasons = body.groups as DuplicateSeasonGroup[];
+      assertEquals(seasons.some((season) => season.showRatingKey === 'show-a'), true);
+      assertEquals(seasons.some((season) => season.showRatingKey === 'show-b'), true);
+      for (const season of seasons) {
+        const edition = season.showRatingKey === 'show-a' ? 'Black and White' : 'Color';
+        assertEquals(season.editionTitle, edition);
+        for (const episode of season.episodes ?? []) {
+          assertEquals(episode.showRatingKey, season.showRatingKey);
+          assertEquals(episode.editionTitle, edition);
+        }
+      }
+    }
+  } finally {
+    withTransaction((db) =>
+      db.exec(`
+      UPDATE items SET title='Show A', edition_title=NULL WHERE server_id=1 AND rating_key='show-a';
+      UPDATE items SET title='Show B', edition_title=NULL WHERE server_id=1 AND rating_key='show-b';
+    `)
+    );
+  }
+});

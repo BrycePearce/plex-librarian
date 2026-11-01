@@ -357,6 +357,7 @@ export async function prepare(
       ...requested,
       ...displayFiles,
       linkedExtrasIncluded: plan.actions.some((action) => action.associatedExtras !== undefined),
+      editionTitle: (show ?? live).editionTitle ?? null,
       title: live.title,
       ...(show ? { showTitle: show.title } : {}),
       seasonIndex: live.seasonIndex,

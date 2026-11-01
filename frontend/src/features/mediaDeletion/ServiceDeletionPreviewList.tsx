@@ -22,6 +22,7 @@ export type DeletionSelectionDetails = Pick<
   | "title"
   | "fileSize"
   | "showTitle"
+  | "editionTitle"
   | "seasonIndex"
   | "episodeIndex"
   | "videoResolution"
@@ -83,6 +84,7 @@ export function ServiceDeletionPreviewList(
                     }`
                     : undefined,
                   target.title,
+                  target.editionTitle ? `Edition: ${target.editionTitle}` : undefined,
                 ].filter(Boolean).join(" · ");
                 return (
                   <BasicDeletionRow

@@ -13,6 +13,8 @@ export interface PlexLibraryLocationEvidence {
 export interface PlexItem {
   ratingKey: string;
   title: string;
+  /** Authoritative Plex edition label; never inferred from filenames. */
+  editionTitle?: string | null;
   type: string;
   thumb: string | null;
   addedAt: number | null;
@@ -48,6 +50,8 @@ export interface PlexWebhookPayload {
 export interface PlexRawMetadata {
   ratingKey: string;
   title: string;
+  /** Authoritative Plex edition label; never inferred from filenames. */
+  editionTitle?: string | null;
   type: string;
   thumb?: string;
   addedAt?: number;
@@ -138,6 +142,8 @@ export interface PlexMediaTechnicalDetails {
 export interface PlexMetadataIdentity {
   ratingKey: string;
   title: string;
+  /** Authoritative Plex edition label; never inferred from filenames. */
+  editionTitle?: string | null;
   type: string;
   librarySectionId: string | null;
   tmdbId: number | null;

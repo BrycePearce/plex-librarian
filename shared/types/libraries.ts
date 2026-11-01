@@ -23,6 +23,8 @@ export interface LibrariesResponse {
 }
 
 export interface StaleItem {
+  /** Edition reported by Plex, absent until refreshed by sync. */
+  editionTitle?: string | null;
   ratingKey: string;
   libraryKey: string;
   title: string;

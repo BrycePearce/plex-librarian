@@ -531,6 +531,7 @@ router.get('/', async (c) => {
       ratingKey: items.ratingKey,
       libraryKey: items.libraryKey,
       title: items.title,
+      editionTitle: items.editionTitle,
       year: items.year,
       thumb: items.thumb,
     })
@@ -558,6 +559,7 @@ router.get('/', async (c) => {
   const showRows = showKeys.length === 0 ? [] : await db.select({
     ratingKey: items.ratingKey,
     title: items.title,
+    editionTitle: items.editionTitle,
     thumb: items.thumb,
   })
     .from(items)
@@ -574,6 +576,7 @@ router.get('/', async (c) => {
           libraryKey: item.libraryKey,
           ratingKey: stub.ratingKey,
           title: item.title,
+          editionTitle: item.editionTitle,
           year: item.year,
           thumb: item.thumb,
           combinedFileSize: stub.combinedFileSize,
@@ -588,6 +591,7 @@ router.get('/', async (c) => {
           showRatingKey: stub.showRatingKey,
           seasonRatingKey: stub.seasonRatingKey,
           showTitle: show?.title ?? 'Unknown show',
+          editionTitle: show?.editionTitle ?? null,
           showThumb: show?.thumb ?? null,
           seasonIndex: stub.seasonIndex,
           totalEpisodeCount: stub.totalEpisodeCount,
@@ -608,6 +612,7 @@ router.get('/', async (c) => {
           showRatingKey: episode.showRatingKey,
           seasonRatingKey: episode.seasonRatingKey,
           showTitle: show?.title ?? 'Unknown show',
+          editionTitle: show?.editionTitle ?? null,
           showThumb: show?.thumb ?? null,
           seasonIndex: episode.seasonIndex,
           episodeIndex: episode.episodeIndex,
@@ -624,6 +629,7 @@ router.get('/', async (c) => {
         showRatingKey: stub.showRatingKey,
         seasonRatingKey: stub.seasonRatingKey,
         showTitle: show?.title ?? 'Unknown show',
+        editionTitle: show?.editionTitle ?? null,
         showThumb: show?.thumb ?? null,
         seasonIndex: stub.seasonIndex,
         totalEpisodeCount: stub.totalEpisodeCount,

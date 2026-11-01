@@ -3,7 +3,7 @@ import { assertEquals } from "@std/assert";
 import TestRenderer, { act } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "../../lib/api.ts";
-import { DeletionDialogFooter, DeletionPreview } from "./DeletionDialog.tsx";
+import { DeletionDialogFooter, DeletionModalShell, DeletionPreview } from "./DeletionDialog.tsx";
 import type { DuplicateGroup, MediaVersion } from "../../lib/api.ts";
 import {
   initialServiceVersionSelection,
@@ -187,6 +187,7 @@ Deno.test("season episode selection preserves the picker and expansion across to
     showRatingKey: "show",
     seasonRatingKey: "season",
     showTitle: "Example",
+    editionTitle: "Black and White",
     showThumb: null,
     seasonIndex: 1,
     episodeIndex: 1,
@@ -207,6 +208,7 @@ Deno.test("season episode selection preserves the picker and expansion across to
               showRatingKey: "show",
               seasonRatingKey: "season",
               showTitle: "Example",
+              editionTitle: "Black and White",
               showThumb: null,
               seasonIndex: 1,
               totalEpisodeCount: 1,
@@ -223,6 +225,10 @@ Deno.test("season episode selection preserves the picker and expansion across to
       );
     });
     const row = renderer!.root.findByProps({ className: "version-picker-episode" });
+    assertEquals(
+      renderer!.root.findByType(DeletionModalShell).props.summary,
+      "Example (Black and White) — Season 1. Choose the versions to remove.",
+    );
     assertEquals(renderer!.root.findAllByType(DeletionPreview).length, 0);
     assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);
     assertEquals(row.findByType("strong").children.join(""), "E01 \u2014 Pilot");
@@ -231,7 +237,9 @@ Deno.test("season episode selection preserves the picker and expansion across to
     assertEquals(renderer!.root.findByProps({ className: "version-picker-episode" }), row);
     const review = renderer!.root.findByType(DeletionPreview);
     assertEquals(
-      review.findAllByType("span").some((span) => span.props.title === "Example · S01E01 · Pilot"),
+      review.findAllByType("span").some((span) =>
+        span.props.title === "Example · S01E01 · Pilot · Edition: Black and White"
+      ),
       true,
     );
     assertEquals(renderer!.root.findByType(DeletionDialogFooter).props.confirmDisabled, true);

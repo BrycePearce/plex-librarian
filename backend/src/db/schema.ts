@@ -62,6 +62,7 @@ export const items = sqliteTable(
     ratingKey: text('rating_key').notNull(),
     libraryKey: text('library_key').notNull(),
     title: text('title').notNull(),
+    editionTitle: text('edition_title'),
     type: text('type').notNull(),
     thumb: text('thumb'),
     addedAt: integer('added_at'),

@@ -1,3 +1,4 @@
+import { EditionBadge } from "../../components/EditionBadge.tsx";
 import { compareDuplicateVersions } from "@shared/mediaComparison";
 import type { DuplicateGroup } from "../../lib/api.ts";
 import { formatKilobytes } from "../../lib/format.ts";
@@ -31,6 +32,7 @@ export function DuplicateGroupRow({
     ? (
       <div className="min-w-0">
         <div className="font-medium truncate max-w-xs">{item.title}</div>
+        <EditionBadge editionTitle={item.editionTitle} />
         {item.year && <div className="text-xs text-base-content/40">{item.year}</div>}
       </div>
     )
@@ -46,6 +48,7 @@ export function DuplicateGroupRow({
     : (
       <div className="min-w-0">
         <div className="font-medium truncate max-w-xs">{item.showTitle}</div>
+        <EditionBadge editionTitle={item.editionTitle} />
         <div className="text-xs text-base-content/40 truncate max-w-xs">
           S{item.seasonIndex}E{item.episodeIndex} — {item.episodeTitle}
         </div>

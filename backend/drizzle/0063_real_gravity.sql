@@ -1,0 +1,1 @@
+ALTER TABLE `items` ADD `edition_title` text;

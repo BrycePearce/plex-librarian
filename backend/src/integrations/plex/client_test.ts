@@ -864,6 +864,7 @@ Deno.test('metadata identity captures immutable item, ancestry, and media fields
   assertEquals(await client.metadataIdentity('episode-1'), {
     ratingKey: 'episode-1',
     title: 'Pilot',
+    editionTitle: null,
     type: 'episode',
     librarySectionId: '7',
     tmdbId: null,
@@ -1463,4 +1464,36 @@ Deno.test('movie inventory rejects over-budget response pages', async () => {
   await assertRejects(async () => {
     for await (const _page of client.libraryItems('1')) { /* Drain coverage. */ }
   });
+});
+
+Deno.test('Plex editions are preserved without guessing from titles or media filenames', async () => {
+  for (const type of ['show', 'movie']) {
+    const metadata = [
+      { ratingKey: 'bw', title: 'Example', type, editionTitle: 'Black and White' },
+      { ratingKey: 'color', title: 'Example', type, editionTitle: 'Color' },
+      { ratingKey: 'unknown', title: 'Example.BW', type },
+    ];
+    const mockFetch = (() =>
+      Promise.resolve(Response.json({
+        MediaContainer: { totalSize: metadata.length, Metadata: metadata },
+      }))) as typeof fetch;
+    const client = new PlexClient('http://fixture.invalid', 'token', undefined, mockFetch);
+    const page = await client.libraryItems('1', type === 'show' ? 2 : 1).next();
+    if (page.done) throw new Error('Expected a library page');
+    assertEquals(page.value.items.map((item) => [item.ratingKey, item.title, item.editionTitle]), [
+      ['bw', 'Example', 'Black and White'],
+      ['color', 'Example', 'Color'],
+      ['unknown', 'Example.BW', null],
+    ]);
+    const liveClient = new PlexClient(
+      'http://fixture.invalid',
+      'token',
+      undefined,
+      (() =>
+        Promise.resolve(
+          Response.json({ MediaContainer: { Metadata: [metadata[0]] } }),
+        )) as typeof fetch,
+    );
+    assertEquals((await liveClient.metadataIdentity('bw'))?.editionTitle, 'Black and White');
+  }
 });

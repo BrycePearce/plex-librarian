@@ -109,6 +109,7 @@ type CandidateRow = [
   number | null,
   number | null,
   number,
+  string | null,
 ];
 
 function candidateFromRow(row: CandidateRow): StaleQuickCleanupCandidate {
@@ -119,6 +120,7 @@ function candidateFromRow(row: CandidateRow): StaleQuickCleanupCandidate {
     ratingKey: row[0],
     libraryKey: row[1],
     title: row[2],
+    editionTitle: row[12],
     type: row[3],
     thumb: row[4],
     addedAt,
@@ -202,7 +204,7 @@ export function analyzeStaleQuickCleanup(
     const rows = client.prepare(
       `WITH capped AS MATERIALIZED (
          SELECT i.rating_key, i.library_key, i.title, i.type, i.thumb, i.added_at,
-                i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at
+                i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at, i.edition_title
          FROM items i
          WHERE i.server_id = ? AND i.library_key = ?
            AND ${eligibleSql}
@@ -211,7 +213,7 @@ export function analyzeStaleQuickCleanup(
          LIMIT ?
        )
        SELECT i.rating_key, i.library_key, i.title, i.type, i.thumb, i.added_at,
-              i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at
+              i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at, i.edition_title
        FROM capped i
        ORDER BY ${candidateOrder}, i.title COLLATE NOCASE, i.rating_key`,
     ).values<CandidateRow>(...eligibleParams, STALE_QUICK_CLEANUP_LIMIT);
@@ -253,7 +255,7 @@ export function validateStaleQuickCleanupSelection(
     const placeholders = ratingKeys.map(() => '?').join(', ');
     const rows = client.prepare(
       `SELECT i.rating_key, i.library_key, i.title, i.type, i.thumb, i.added_at,
-              i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at
+              i.last_viewed_at, i.view_count, i.file_size, i.duration, i.year, i.updated_at, i.edition_title
        FROM items i
        WHERE i.server_id = ? AND i.library_key = ?
          AND i.rating_key IN (${placeholders})
