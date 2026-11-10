@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { PlexClient } from '../../integrations/plex/client.ts';
 import type { PlexMetadataIdentity } from '../../integrations/plex/types.ts';
-import type { ArrTorrentAssociation } from '../../integrations/arr/client.ts';
+import type {
+  ArrTorrentAssociation,
+  SonarrSeriesEpisodeFile,
+  SonarrSeriesSnapshot,
+} from '../../integrations/arr/client.ts';
 import type { ArrDeleteTarget } from '../arr/delete.ts';
 interface ServiceOwnedSelection {
   title: string;
@@ -34,6 +38,15 @@ export interface ServiceOwnedPlannedAction extends ServiceOwnedAction {
   ratingKey?: string;
   mediaId?: number;
   episodeIds?: number[];
+  /** Plex leaf anchoring a multi-owner Sonarr file in an entire-show review. */
+  sharedFilePlexOwner?: {
+    ratingKey: string;
+    mediaId: number;
+    season: number;
+    episode: number;
+    path: string;
+    size: number;
+  };
   episodes?: Array<{ id: number; monitored: boolean; seasonNumber: number; episodeNumber: number }>;
   files: Array<{ path: string; size: number | null }>;
   /** Preserve native ownership even when several Plex entries name the same file. */
@@ -143,6 +156,51 @@ export function serviceOwnedPlanFingerprint(plan: Omit<ServiceOwnedPlan, 'finger
 }
 function basename(path: string): string {
   return path.replaceAll('\\', '/').split('/').at(-1)!;
+}
+
+/** Plex can expose a combined episode file under a single leaf of the selected show. */
+function sharedFilePlexOwner(
+  file: SonarrSeriesEpisodeFile,
+  snapshot: SonarrSeriesSnapshot,
+  parts: NonNullable<ServiceOwnedPlannedAction['plexParts']>,
+): ServiceOwnedPlannedAction['sharedFilePlexOwner'] {
+  const pathKey = canonicalPath(file.path);
+  if (
+    snapshot.files.some((other) => other.id !== file.id && canonicalPath(other.path) === pathKey)
+  ) return;
+  const candidates = parts.filter((part) =>
+    canonicalPath(part.path) === pathKey ||
+    (basename(part.path) === basename(file.path) && part.size === file.size)
+  );
+  if (candidates.length !== 1) return;
+  const [part] = candidates;
+  if (
+    part.path !== file.path || part.size !== file.size || part.season === undefined ||
+    part.episode === undefined
+  ) return;
+
+  // The series snapshot validates series IDs and derives episodeIds from native file IDs.
+  const owners = snapshot.episodes.filter((e) => e.episodeFileId === file.id);
+  if (
+    owners.length !== file.episodeIds.length ||
+    !owners.every((e) => file.episodeIds.includes(e.id) && e.seasonNumber === part.season)
+  ) return;
+  const numbers = new Set(owners.map((e) => e.episodeNumber));
+  if (
+    !numbers.has(part.episode) ||
+    parts.some((other) =>
+      other !== part && (other.season === undefined || other.season === part.season) &&
+      (other.episode === undefined || numbers.has(other.episode))
+    )
+  ) return;
+  return {
+    path: part.path,
+    size: part.size,
+    ratingKey: part.ratingKey,
+    mediaId: part.mediaId,
+    season: part.season,
+    episode: part.episode,
+  };
 }
 function canonicalPath(path: string): string {
   return path.includes('\\') ? path.replaceAll('\\', '/').toLowerCase() : path;
@@ -452,7 +510,18 @@ export async function buildServiceOwnedPlan(
                 input.focus!.action.episodes?.some((entry) =>
                   entry.seasonNumber === accepted.season && entry.episodeNumber === accepted.episode
                 );
-              if (accepted && !focused) {
+              // For a shared file, even unrelated leaves must still have the same
+              // ownership in this live list. Incomplete or changed leaves get a
+              // direct identity read, as does the file being deleted.
+              const liveMatchesAccepted = episodeIdentity && accepted &&
+                episodeIdentity.showRatingKey === identity.ratingKey &&
+                episodeIdentity.librarySectionId === input.libraryKey &&
+                episodeIdentity.seasonIndex === accepted.season &&
+                episodeIdentity.episodeIndex === accepted.episode;
+              if (
+                accepted && !focused &&
+                (!input.focus?.action.sharedFilePlexOwner || liveMatchesAccepted)
+              ) {
                 selectedParts.push({ ...part, season: accepted.season, episode: accepted.episode });
                 continue;
               }
@@ -476,8 +545,20 @@ export async function buildServiceOwnedPlan(
                   child.grandparentRatingKey !== identity.ratingKey ||
                   child.librarySectionId !== input.libraryKey
                 ) throw new Error('Plex child changed');
-                season = child.seasonIndex ?? undefined;
-                episode = child.index ?? undefined;
+                if (
+                  episodeIdentity && (
+                    episodeIdentity.showRatingKey !== child.grandparentRatingKey ||
+                    episodeIdentity.librarySectionId !== child.librarySectionId ||
+                    episodeIdentity.seasonIndex !== child.seasonIndex ||
+                    episodeIdentity.episodeIndex !== child.index
+                  )
+                ) throw new Error('Plex list and episode identity disagree');
+                season = Number.isSafeInteger(child.seasonIndex) && child.seasonIndex! >= 0
+                  ? child.seasonIndex!
+                  : undefined;
+                episode = Number.isSafeInteger(child.index) && child.index! > 0
+                  ? child.index!
+                  : undefined;
               }
             }
             selectedParts.push({ ...part, season, episode });
@@ -580,6 +661,10 @@ export async function buildServiceOwnedPlan(
       let extras: Array<{ relativePath: string; fileId: number | null }> = [];
       let extrasComplete = false;
       let ownedFileCount = 0;
+      const sharedFileOwners = new Map<
+        number,
+        NonNullable<ServiceOwnedPlannedAction['sharedFilePlexOwner']>
+      >();
       if (target.instanceType === 'sonarr') {
         const snapshotKey = `${target.instanceId}:${record.id}`;
         const snapshot = input.sonarrSnapshots?.get(snapshotKey) ??
@@ -591,14 +676,26 @@ export async function buildServiceOwnedPlan(
         const coordinate = (e: { seasonNumber: number; episodeNumber: number }) =>
           selectedParts.some((p) => p.season === e.seasonNumber && p.episode === e.episodeNumber);
         const ids = new Set(episodes.filter(coordinate).map((e) => e.id));
-        files = snapshot.files.filter((f) => f.episodeIds.some((id) => ids.has(id)));
+        const selectedFiles = snapshot.files.filter((f) => f.episodeIds.some((id) => ids.has(id)));
+        files = selectedFiles;
+        if (selection.type === 'show' && selection.mediaId === undefined) {
+          // Plex may list only the first episode of a combined file. Require a unique
+          // exact file in both inventories and keep every native Sonarr owner in scope.
+          for (const file of selectedFiles) {
+            if (file.episodeIds.length < 2 || file.episodeIds.every((id) => ids.has(id))) continue;
+            const owner = sharedFilePlexOwner(file, snapshot, selectedParts);
+            if (owner) sharedFileOwners.set(file.id, owner);
+          }
+        }
         for (
           const file of snapshot.files.filter((f) => !files.some((chosen) => chosen.id === f.id))
         ) retain(serviceKey, file.path);
         // Preserve every snapshot-known out-of-scope owner before a live owner
         // check can fail. A conflict in the first file must not hide later ones.
         for (const file of files) {
-          if (file.episodeIds.some((id) => !ids.has(id))) retain(serviceKey, file.path);
+          if (!sharedFileOwners.has(file.id) && file.episodeIds.some((id) => !ids.has(id))) {
+            retain(serviceKey, file.path);
+          }
         }
         for (const file of files) {
           if (input.discovery) continue;
@@ -614,7 +711,7 @@ export async function buildServiceOwnedPlan(
             !owners.length || stable([...owners].sort((a, b) =>
                 a - b
               )) !== stable([...file.episodeIds].sort((a, b) => a - b)) ||
-            owners.some((id) => !ids.has(id))
+            (!sharedFileOwners.has(file.id) && owners.some((id) => !ids.has(id)))
           ) {
             // A failed selection check must not discard a known shared file. Plex or
             // another service could otherwise still delete this same retained entry.
@@ -622,10 +719,16 @@ export async function buildServiceOwnedPlan(
             throw new Error('File includes an unselected owner');
           }
         }
-        if (
-          !input.discovery && !input.boundaryCheck && stable(snapshot) !==
-            stable(await read(() => target.client.sonarrSeriesSnapshot(record.id)))
-        ) throw new Error('Sonarr inventory changed');
+        if (!input.discovery && !input.boundaryCheck) {
+          const next = await read(() => target.client.sonarrSeriesSnapshot(record.id));
+          const orderedSnapshot = (s: SonarrSeriesSnapshot) => ({
+            episodes: [...s.episodes].sort((a, b) => a.id - b.id),
+            files: [...s.files].sort((a, b) => a.id - b.id),
+          });
+          if (stable(orderedSnapshot(snapshot)) !== stable(orderedSnapshot(next))) {
+            throw new Error('Sonarr inventory changed');
+          }
+        }
         // Accept the native EpisodeFile ID boundary, including Sonarr-owned linked extras.
         // This is not an empty sidecar inventory; known retained sidecar risks veto below.
         extrasComplete = true;
@@ -741,14 +844,16 @@ export async function buildServiceOwnedPlan(
           basename(p.path) === basename(file.path) && p.size === file.size
         );
         // IDs/coordinates establish media identity; current filename+size corroborate the exact version.
-        const matched = matches.length > 0 && new Set(matches.map((p) => p.path)).size === 1 &&
-          file.episodeIds.every((id) => {
-            const owner = episodes.find((e) => e.id === id);
-            return owner &&
-              matches.some((p) =>
-                p.season === owner.seasonNumber && p.episode === owner.episodeNumber
-              );
-          });
+        const sharedFileOwner = sharedFileOwners.get(file.id);
+        const matched = sharedFileOwner !== undefined ||
+          matches.length > 0 && new Set(matches.map((p) => p.path)).size === 1 &&
+            file.episodeIds.every((id) => {
+              const owner = episodes.find((e) => e.id === id);
+              return owner &&
+                matches.some((p) =>
+                  p.season === owner.seasonNumber && p.episode === owner.episodeNumber
+                );
+            });
         // A complete, stable remaining version can positively identify the managed
         // file as retained. A mere failure to match the selected version cannot.
         const retainedMatches = unselectedParts.filter((p) =>
@@ -793,6 +898,10 @@ export async function buildServiceOwnedPlan(
         ]);
         current.presence = 'current';
         current.matchedToSelection = matched;
+        if (sharedFileOwner) {
+          current.sharedFilePlexOwner = sharedFileOwner;
+          current.episodes!.sort((a, b) => a.id - b.id);
+        }
         current.effectsComplete = (matched || matchedRetained) && extrasComplete;
         if (matchedRetained) {
           current.retainedOwnership = true;

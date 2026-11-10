@@ -210,6 +210,46 @@ Deno.test('historical access revision invalidates only after a successful Plex m
   }
 });
 
+Deno.test('whole-show deletion verifies a combined Sonarr file with one Plex episode', async () => {
+  for (const ownershipChanged of [false, true]) {
+    reset();
+    addEpisode();
+    configureSonarr();
+    sonarrManagedFileShared = true;
+    live.get('episode-1')!.Media = [{ id: 21, Part: [{ file: sonarrManagedPath, size: 40_000 }] }];
+    const choices = {
+      libraryKey: 'shows',
+      targets: [{ ratingKey: 'show-1' }],
+      arrSelected: true,
+      qbSelected: false,
+    };
+    const preview = await (await rawApp.request('/api/service-deletions/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(choices),
+    })).json();
+    for (const service of ['plex', 'sonarr']) {
+      assertEquals(
+        preview.targets[0].decisions.find((d: { service: string }) => d.service === service)?.state,
+        'delete_candidate',
+      );
+    }
+    const response = await acceptServicePreview({ choices, preview });
+    assertEquals(response.status, 202);
+    const { operationId } = await response.json();
+    const deletedFiles: number[] = [];
+    sonarrEpisodeFileDeleteHook = (id) => deletedFiles.push(id);
+    if (ownershipChanged) sonarrManagedFileShared = false;
+    await settle();
+    assertEquals(deletedFiles, ownershipChanged ? [] : [sonarrManagedFileId]);
+    assertEquals(live.has('show-1'), ownershipChanged);
+    if (!ownershipChanged) {
+      assertEquals(getDeletionOperation(operationId, 1)!.status, 'completed');
+    }
+  }
+  clearPlexClientCache();
+});
+
 Deno.test('service-owned multi-episode request scaling', async () => {
   for (const count of [4, 12, 24, 148]) {
     reset();

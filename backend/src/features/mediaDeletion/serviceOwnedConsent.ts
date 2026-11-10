@@ -21,6 +21,7 @@ export function serviceOwnedEffectScope(action: ServiceOwnedPlannedAction) {
     files,
     plexParts,
     episodeIds,
+    sharedFilePlexOwner,
     episodes,
     catalogOnly,
     recordCleanup,
@@ -40,6 +41,7 @@ export function serviceOwnedEffectScope(action: ServiceOwnedPlannedAction) {
     files,
     plexParts,
     episodeIds,
+    sharedFilePlexOwner,
     episodes,
     catalogOnly,
     recordCleanup,
@@ -54,6 +56,26 @@ export function boundServiceOwnedConsent(
   if (
     serviceOwnedFingerprint(approved.connections) !== serviceOwnedFingerprint(verified.connections)
   ) throw new Error('Service configuration changed after confirmation');
+  // Recognizing a shared file can release a hold on the whole Plex show even
+  // when Sonarr is unchecked. Bind both services to the reviewed ownership.
+  const sharedFiles = (plan: ServiceOwnedPlan) =>
+    plan.actions.filter((action) => action.sharedFilePlexOwner)
+      .sort((left, right) => left.id.localeCompare(right.id)).map((action) => ({
+        id: action.id,
+        recordId: action.recordId,
+        plexOwner: action.sharedFilePlexOwner,
+        episodes: action.episodes?.map(({ id, seasonNumber, episodeNumber }) => ({
+          id,
+          seasonNumber,
+          episodeNumber,
+        })),
+      }));
+  if (
+    serviceOwnedFingerprint(sharedFiles(approved)) !==
+      serviceOwnedFingerprint(sharedFiles(verified))
+  ) {
+    throw new Error('Shared episode file ownership requires a fresh deletion review');
+  }
   const narrowed = new Set<string>();
   for (const decision of verified.retention.decisions) {
     const action = verified.actions.find((a) => a.id === decision.actionId)!;

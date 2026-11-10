@@ -557,6 +557,225 @@ Deno.test('show season and episode use current TVDB coordinates and exact file e
     equal(decisions(p).sonarr, 'delete_candidate');
   }
 });
+Deno.test('shared Sonarr file requires a whole show, exact path and bytes, and a fresh review', async () => {
+  for (const type of ['show', 'season', 'episode'] as const) {
+    const f = tvFixture(type);
+    const snapshot = await f.tvArr.sonarrSeriesSnapshot();
+    const [file] = snapshot.files;
+    file.episodeIds.push(9);
+    snapshot.episodes.push({ ...snapshot.episodes[0], id: 9, episodeNumber: 2 });
+    f.tvArr.sonarrSeriesSnapshot = () => Promise.resolve(snapshot);
+    f.tvArr.sonarrEpisodeFileOwnerIds = () => Promise.resolve(file.episodeIds);
+    f.tvArr.lookup = () => Promise.resolve({ id: 7, title: 'Show', path: '/plex' });
+    file.path = '/plex/other/Show S01E01.mkv';
+    const review = () => buildServiceOwnedPlan({ ...f.input, discovery: true });
+    equal(decisions(await review()).sonarr, 'held');
+    file.path = '/plex/Show S01E01.mkv';
+    file.size++;
+    equal(decisions(await review()).sonarr, 'held');
+    file.size--;
+    const plan = await review();
+    if (type !== 'show') {
+      equal(decisions(plan).sonarr, 'held');
+      equal(decisions(plan).plex, 'kept');
+      continue;
+    }
+    equal(decisions(plan).sonarr, 'delete_candidate');
+    const olderReview = structuredClone(plan);
+    delete olderReview.actions.find((a) => a.service === 'sonarr')!.sharedFilePlexOwner;
+    await rejects(
+      async () => boundServiceOwnedConsent(olderReview, await buildServiceOwnedPlan(f.input)),
+      /fresh deletion review/,
+    );
+    snapshot.episodes[1].seasonNumber++;
+    equal(decisions(await review()).sonarr, 'held');
+  }
+});
+
+async function combinedFileFixture() {
+  const f = tvFixture('show');
+  const snapshot = await f.tvArr.sonarrSeriesSnapshot();
+  const [file] = snapshot.files;
+  file.episodeIds.push(9);
+  snapshot.episodes.push({ ...snapshot.episodes[0], id: 9, episodeNumber: 2 });
+  f.tvArr.sonarrSeriesSnapshot = () => Promise.resolve(snapshot);
+  f.tvArr.sonarrEpisodeFileOwnerIds = () => Promise.resolve(file.episodeIds);
+  const paths = await f.tvPlex.mediaPathPreview();
+  paths.versionFiles[0].path = file.path;
+  paths.versionFiles.push({ ratingKey: 'other', mediaId: 2, path: '/arr/other.mkv', size: 200 });
+  f.tvPlex.mediaPathPreview = () => Promise.resolve(paths);
+  const identity = f.tvPlex.metadataIdentity;
+  const other: { index: number | null; seasonIndex: number | null } = { index: 3, seasonIndex: 1 };
+  f.tvPlex.metadataIdentity = async (key) =>
+    key === 'other' ? { ...await identity('episode'), ratingKey: key, ...other } : identity(key);
+  return { f, other, paths, file, snapshot };
+}
+
+Deno.test('shared-file mutation boundary notices a different Plex leaf renumbered into its scope', async () => {
+  const { f, other } = await combinedFileFixture();
+  const approved = await buildServiceOwnedPlan(f.input);
+  equal(decisions(approved).sonarr, 'delete_candidate');
+  other.index = 2;
+  const current = await buildServiceOwnedPlan({
+    ...f.input,
+    boundaryCheck: true,
+    focus: {
+      action: approved.actions.find((a) => a.service === 'sonarr')!,
+      acceptedPlexParts: approved.actions.find((a) => a.service === 'plex')!.plexParts!,
+    },
+  });
+  equal(decisions(current).sonarr, 'held');
+  equal(decisions(current).plex, 'kept');
+});
+
+Deno.test('shared-file ownership rejects competing Windows and UNC paths with different casing', async () => {
+  for (const root of ['C:\\TV', '\\\\Server\\Share\\TV']) {
+    const { f, paths, file, snapshot } = await combinedFileFixture();
+    file.path = root + '\\Combined.mkv';
+    f.tvArr.lookup = () => Promise.resolve({ id: 7, title: 'Show', path: root });
+    paths.versionFiles[0].path = file.path;
+    const review = () => buildServiceOwnedPlan({ ...f.input, discovery: true });
+    equal(decisions(await review()).sonarr, 'delete_candidate');
+    const alias = file.path.toUpperCase();
+    paths.versionFiles[1].path = alias;
+    equal(decisions(await review()).sonarr, 'held');
+    paths.versionFiles[1].path = root + '\\other.mkv';
+    snapshot.files.push({ ...file, id: 77, path: alias, episodeIds: [] });
+    equal(decisions(await review()).sonarr, 'held');
+  }
+});
+
+Deno.test('incomplete Plex coordinates hold a shared file when another leaf could own it', async () => {
+  const { f, other } = await combinedFileFixture();
+  for (
+    const [season, episode, expected] of [
+      [1, null, 'held'],
+      [1, 0, 'held'],
+      [-1, 2, 'held'],
+      [1, '2' as unknown as number, 'held'],
+      [null, 2, 'held'],
+      [null, null, 'held'],
+      [2, null, 'delete_candidate'],
+      [null, 3, 'delete_candidate'],
+    ] as const
+  ) {
+    other.seasonIndex = season;
+    other.index = episode;
+    for (const discovery of [true, false]) {
+      const current = await buildServiceOwnedPlan({ ...f.input, discovery });
+      equal(decisions(current).sonarr, expected);
+    }
+  }
+});
+
+Deno.test('shared-file boundaries use the live Plex list for unrelated leaves and verify each pending owner', async () => {
+  const { f, paths, file, snapshot } = await combinedFileFixture();
+  snapshot.files.push({
+    ...file,
+    id: 6,
+    path: '/arr/other.mkv',
+    relativePath: 'other.mkv',
+    size: 200,
+    episodeIds: [10, 11],
+  });
+  for (const id of [10, 11]) {
+    snapshot.episodes.push({
+      ...snapshot.episodes[0],
+      id,
+      episodeNumber: id - 7,
+      episodeFileId: 6,
+    });
+  }
+  f.tvArr.sonarrEpisodeFileOwnerIds = (id?: number) =>
+    Promise.resolve(id === 6 ? [10, 11] : file.episodeIds);
+  for (const part of paths.versionFiles) {
+    Object.assign(part, {
+      episodeIdentity: {
+        showRatingKey: 'show',
+        librarySectionId: '1',
+        seasonIndex: 1,
+        episodeIndex: part.ratingKey === 'episode' ? 1 : 3,
+      },
+    });
+  }
+  const approved = await buildServiceOwnedPlan(f.input);
+  const actions = approved.actions.filter((action) => action.sharedFilePlexOwner);
+  equal(actions.length, 2);
+  const reads: string[] = [];
+  const identity = f.tvPlex.metadataIdentity;
+  f.tvPlex.metadataIdentity = (key) => {
+    if (key !== 'show') reads.push(key);
+    return identity(key);
+  };
+  for (const action of actions) {
+    const current = await buildServiceOwnedPlan({
+      ...f.input,
+      boundaryCheck: true,
+      focus: {
+        action,
+        acceptedPlexParts: approved.actions.find((a) => a.service === 'plex')!.plexParts!,
+      },
+    });
+    equal(
+      current.retention.decisions.find((d) => d.actionId === action.id)?.state,
+      'delete_candidate',
+    );
+    equal(reads.splice(0), [action.sharedFilePlexOwner!.ratingKey]);
+  }
+  // The list now assigns the other file to episode 2; its direct read still says 3.
+  Object.assign(paths.versionFiles[1], {
+    episodeIdentity: {
+      showRatingKey: 'show',
+      librarySectionId: '1',
+      seasonIndex: 1,
+      episodeIndex: 2,
+    },
+  });
+  const conflict = await buildServiceOwnedPlan({
+    ...f.input,
+    boundaryCheck: true,
+    focus: {
+      action: actions[0],
+      acceptedPlexParts: approved.actions.find((a) => a.service === 'plex')!.plexParts!,
+    },
+  });
+  equal(decisions(conflict).sonarr, 'held');
+  equal(decisions(conflict).plex, 'held');
+});
+
+Deno.test('reordered Sonarr owners preserve shared-file consent across review and verification', async () => {
+  const { f, snapshot } = await combinedFileFixture();
+  let reverse = false;
+  f.tvArr.sonarrSeriesSnapshot = () => {
+    reverse = !reverse;
+    return Promise.resolve({
+      ...snapshot,
+      episodes: reverse ? [...snapshot.episodes].reverse() : snapshot.episodes,
+    });
+  };
+  for (const arrSelected of [true, false]) {
+    const approved = await buildServiceOwnedPlan({ ...f.input, arrSelected, discovery: true });
+    const current = await buildServiceOwnedPlan({ ...f.input, arrSelected });
+    equal(decisions(boundServiceOwnedConsent(approved, current)), decisions(approved));
+    equal(decisions(current).plex, 'delete_candidate');
+  }
+});
+
+Deno.test('additional Sonarr sidecar evidence uses ordinary retention for a shared file', async () => {
+  const { f } = await combinedFileFixture();
+  for (const arrSelected of [true, false]) {
+    const approved = await buildServiceOwnedPlan({ ...f.input, arrSelected, discovery: true });
+    const current = await buildServiceOwnedPlan({ ...f.input, arrSelected });
+    current.actions.find((a) => a.service === 'sonarr')!.files.push({
+      path: '/arr/Show S01E01.en.srt',
+      size: null,
+    });
+    const bounded = decisions(boundServiceOwnedConsent(approved, current));
+    equal(bounded.sonarr, arrSelected ? 'held' : 'kept');
+    equal(bounded.plex, arrSelected ? 'kept' : 'delete_candidate');
+  }
+});
+
 Deno.test('Plex-only season remains applicable without unchecked Sonarr extras support', async () => {
   const f = tvFixture('season');
   f.input.arrSelected = false;
